@@ -135,7 +135,7 @@ export function Sidebar({
       </div>
 
       <div className="overflow-y-auto py-1" style={{ maxHeight: isStartTask ? "30%" : "55%" }}>
-        {skills.length === 0 && <div className="px-4 py-3 text-xs text-gray-400">暂无已安装 Skill</div>}
+        {skills.length === 0 && <div className="px-4 py-3 text-xs text-gray-400">暂无已安装技能</div>}
         {[...skills]
           .sort((a, b) => {
             if (a.id === "builtin-general") return -1;
@@ -219,7 +219,7 @@ export function Sidebar({
                   onClick={() => onSelectSession(s.id)}
                 >
                   <div className="flex-1 min-w-0">
-                    <div className="truncate text-xs">{s.title || "New Chat"}</div>
+                    <div className="truncate text-xs">{s.title || "未命名任务"}</div>
                   </div>
                   <button
                     onClick={(e) => {
@@ -252,7 +252,7 @@ export function Sidebar({
           onClick={onInstall}
           className="w-full bg-blue-500 hover:bg-blue-600 active:scale-[0.97] text-white text-sm py-1.5 rounded-lg transition-all"
         >
-          + 安装 Skill
+          + 安装技能
         </button>
         <button
           onClick={onSettings}

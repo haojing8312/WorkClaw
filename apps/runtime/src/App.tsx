@@ -502,7 +502,7 @@ export default function App() {
             </div>
           ) : (
             <div className="flex items-center justify-center h-full text-gray-400 text-sm">
-              从左侧选择一个 Skill 开始对话
+              从左侧选择一个技能，开始任务
             </div>
           )}
         </AnimatePresence>

@@ -49,7 +49,7 @@ describe("NewSessionLanding", () => {
     fireEvent.change(screen.getByPlaceholderText("先描述你要完成什么任务..."), {
       target: { value: "请帮我整理下载目录" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "开始新会话" }));
+    fireEvent.click(screen.getByRole("button", { name: "开始任务" }));
 
     expect(onCreate).toHaveBeenCalledWith("请帮我整理下载目录");
   });
@@ -156,7 +156,7 @@ describe("NewSessionLanding", () => {
       "请帮我整理下载目录，把文件按类型分类到子文件夹，并按近30天和更早文件分开。先告诉我你的整理方案。"
     );
     expect(onCreate).not.toHaveBeenCalled();
-    expect(screen.getByText("已填入场景示例，你可以继续修改后再开始会话")).toBeInTheDocument();
+    expect(screen.getByText("已填入场景示例，你可以继续修改后再开始任务")).toBeInTheDocument();
 
     const selected = screen.getByRole("button", { name: /文件整理助手/ });
     expect(selected).toHaveAttribute("aria-pressed", "true");
@@ -164,7 +164,7 @@ describe("NewSessionLanding", () => {
     const unselected = screen.getByRole("button", { name: /本地数据汇总/ });
     expect(unselected).toHaveAttribute("aria-pressed", "false");
 
-    fireEvent.click(screen.getByRole("button", { name: "开始新会话" }));
+    fireEvent.click(screen.getByRole("button", { name: "开始任务" }));
     expect(onCreate).toHaveBeenCalledWith(
       "请帮我整理下载目录，把文件按类型分类到子文件夹，并按近30天和更早文件分开。先告诉我你的整理方案。"
     );

@@ -124,7 +124,7 @@ export function NewSessionLanding({
             className="w-full resize-none bg-transparent text-sm text-gray-800 placeholder-gray-400 focus:outline-none"
           />
           {showFilledHint && (
-            <div className="mt-2 text-xs text-blue-600">已填入场景示例，你可以继续修改后再开始会话</div>
+            <div className="mt-2 text-xs text-blue-600">已填入场景示例，你可以继续修改后再开始任务</div>
           )}
           {error && <div className="mt-2 text-xs text-red-500">{error}</div>}
           <div className="mt-3 flex justify-end">
@@ -133,7 +133,7 @@ export function NewSessionLanding({
               disabled={creating}
               className="h-9 px-4 rounded-lg bg-blue-500 hover:bg-blue-600 disabled:bg-blue-300 text-white text-sm transition-colors"
             >
-              {creating ? "正在创建..." : "开始新会话"}
+              {creating ? "正在创建..." : "开始任务"}
             </button>
           </div>
         </div>
@@ -153,9 +153,9 @@ export function NewSessionLanding({
                   key={session.id}
                   onClick={() => onSelectSession(session.id)}
                   className="text-left rounded-xl border border-gray-200 bg-white hover:border-blue-300 hover:bg-blue-50/30 transition-colors px-4 py-3"
-                  aria-label={session.title || "New Chat"}
+                  aria-label={session.title || "未命名任务"}
                 >
-                  <div className="text-sm text-gray-800 truncate">{session.title || "New Chat"}</div>
+                  <div className="text-sm text-gray-800 truncate">{session.title || "未命名任务"}</div>
                 </button>
               ))}
             </div>
