@@ -2,11 +2,11 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { NewSessionLanding } from "../NewSessionLanding";
 import type { SessionInfo } from "../../types";
 
-function makeSession(id: string, title: string): SessionInfo {
+function makeSession(id: string, title: string, createdAt?: Date): SessionInfo {
   return {
     id,
     title,
-    created_at: new Date().toISOString(),
+    created_at: (createdAt ?? new Date()).toISOString(),
     model_id: "test-model",
   };
 }
@@ -23,6 +23,7 @@ describe("NewSessionLanding", () => {
     );
 
     expect(screen.getByText("把你的电脑任务，交给 AI 助手协作完成")).toBeInTheDocument();
+    expect(screen.getByText(/欢迎回来/)).toBeInTheDocument();
     expect(
       screen.getByText(
         "一句话描述需求，它可以帮你创建和修改文件、分析本地数据、整理文件、操作浏览器，并持续反馈执行过程。"
@@ -106,6 +107,32 @@ describe("NewSessionLanding", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "会话-1" }));
     expect(onSelectSession).toHaveBeenCalledWith("s-1");
+  });
+
+  test("groups recent sessions by time buckets", () => {
+    const now = new Date();
+    const day = 24 * 60 * 60 * 1000;
+    const sessions = [
+      makeSession("today-1", "今天任务", new Date(now.getTime() - 2 * 60 * 60 * 1000)),
+      makeSession("week-1", "周内任务", new Date(now.getTime() - 3 * day)),
+      makeSession("old-1", "更早任务", new Date(now.getTime() - 12 * day)),
+    ];
+
+    render(
+      <NewSessionLanding
+        sessions={sessions}
+        creating={false}
+        onSelectSession={() => {}}
+        onCreateSessionWithInitialMessage={() => {}}
+      />
+    );
+
+    expect(screen.getByText("今天")).toBeInTheDocument();
+    expect(screen.getByText("最近7天")).toBeInTheDocument();
+    expect(screen.getByText("更早")).toBeInTheDocument();
+    expect(screen.getByText("今天任务")).toBeInTheDocument();
+    expect(screen.getByText("周内任务")).toBeInTheDocument();
+    expect(screen.getByText("更早任务")).toBeInTheDocument();
   });
 
   test("shows creating state and error text", () => {

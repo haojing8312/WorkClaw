@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from "react";
+import { motion } from "framer-motion";
 import { SessionInfo } from "../types";
 
 interface Props {
@@ -49,6 +50,43 @@ function getTimeGreeting(date: Date): string {
   return "晚上好，欢迎回来";
 }
 
+type SessionGroup = {
+  key: "today" | "week" | "older";
+  label: string;
+  items: SessionInfo[];
+};
+
+function groupRecentSessions(sessions: SessionInfo[]): SessionGroup[] {
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const weekStart = todayStart - 6 * 24 * 60 * 60 * 1000;
+
+  const groups: SessionGroup[] = [
+    { key: "today", label: "今天", items: [] },
+    { key: "week", label: "最近7天", items: [] },
+    { key: "older", label: "更早", items: [] },
+  ];
+
+  for (const session of sessions.slice(0, 6)) {
+    const ts = new Date(session.created_at).getTime();
+    if (Number.isNaN(ts)) {
+      groups[2].items.push(session);
+      continue;
+    }
+    if (ts >= todayStart) {
+      groups[0].items.push(session);
+      continue;
+    }
+    if (ts >= weekStart) {
+      groups[1].items.push(session);
+      continue;
+    }
+    groups[2].items.push(session);
+  }
+
+  return groups.filter((group) => group.items.length > 0);
+}
+
 export function NewSessionLanding({
   sessions,
   creating,
@@ -63,6 +101,7 @@ export function NewSessionLanding({
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const inputContainerRef = useRef<HTMLDivElement>(null);
   const greeting = useMemo(() => getTimeGreeting(new Date()), []);
+  const recentSessionGroups = useMemo(() => groupRecentSessions(sessions), [sessions]);
 
   const submit = () => {
     if (creating) return;
@@ -79,12 +118,15 @@ export function NewSessionLanding({
     inputRef.current?.focus();
   };
 
-  const recentSessions = sessions.slice(0, 6);
-
   return (
     <div className="h-full overflow-y-auto bg-gradient-to-b from-blue-50/60 via-gray-50 to-gray-50">
       <div className="max-w-5xl mx-auto px-8 pt-12 pb-12">
-        <div className="text-center mb-10">
+        <motion.div
+          className="text-center mb-10"
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.28, ease: "easeOut" }}
+        >
           {onOpenExperts && (
             <div className="mb-3">
               <button
@@ -104,9 +146,14 @@ export function NewSessionLanding({
           <p className="text-sm text-gray-600 max-w-2xl mx-auto">
             一句话描述需求，它可以帮你创建和修改文件、分析本地数据、整理文件、操作浏览器，并持续反馈执行过程。
           </p>
-        </div>
+        </motion.div>
 
-        <div className="flex flex-wrap gap-2 justify-center mb-8">
+        <motion.div
+          className="flex flex-wrap gap-2 justify-center mb-8"
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.28, ease: "easeOut", delay: 0.04 }}
+        >
           {["创建/修改文件", "分析本地文件", "文件整理", "浏览器操作"].map((item) => (
             <span
               key={item}
@@ -115,11 +162,14 @@ export function NewSessionLanding({
               {item}
             </span>
           ))}
-        </div>
+        </motion.div>
 
-        <div
+        <motion.div
           ref={inputContainerRef}
           className="bg-white border border-gray-200 rounded-2xl p-4 md:p-5 shadow-[0_8px_24px_-20px_rgba(59,130,246,0.5)]"
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.3, ease: "easeOut", delay: 0.08 }}
         >
           <textarea
             ref={inputRef}
@@ -153,33 +203,50 @@ export function NewSessionLanding({
               {creating ? "正在创建..." : "开始任务"}
             </button>
           </div>
-        </div>
+        </motion.div>
 
-        <div className="mt-10">
+        <motion.div
+          className="mt-10"
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.28, ease: "easeOut", delay: 0.12 }}
+        >
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-sm font-medium text-gray-700">最近会话</h2>
           </div>
-          {recentSessions.length === 0 ? (
+          {recentSessionGroups.length === 0 ? (
             <div className="rounded-xl border border-dashed border-gray-200 bg-white px-4 py-6 text-center text-sm text-gray-400">
               暂无会话，从上方输入任务开始
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {recentSessions.map((session) => (
-                <button
-                  key={session.id}
-                  onClick={() => onSelectSession(session.id)}
-                  className="text-left rounded-xl border border-gray-200 bg-white hover:border-blue-300 hover:bg-blue-50/30 transition-colors px-4 py-3"
-                  aria-label={session.title || "未命名任务"}
-                >
-                  <div className="text-sm text-gray-800 truncate">{session.title || "未命名任务"}</div>
-                </button>
+            <div className="space-y-4">
+              {recentSessionGroups.map((group) => (
+                <div key={group.key}>
+                  <div className="text-xs text-gray-500 mb-2">{group.label}</div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {group.items.map((session) => (
+                      <button
+                        key={session.id}
+                        onClick={() => onSelectSession(session.id)}
+                        className="text-left rounded-xl border border-gray-200 bg-white hover:border-blue-300 hover:bg-blue-50/30 transition-colors px-4 py-3"
+                        aria-label={session.title || "未命名任务"}
+                      >
+                        <div className="text-sm text-gray-800 truncate">{session.title || "未命名任务"}</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
               ))}
             </div>
           )}
-        </div>
+        </motion.div>
 
-        <div className="mt-10">
+        <motion.div
+          className="mt-10"
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.3, ease: "easeOut", delay: 0.16 }}
+        >
           <div className="mb-3">
             <h2 className="text-sm font-medium text-gray-700">精选任务场景</h2>
             <p className="text-xs text-gray-500 mt-1">选择一个场景，自动填入示例任务后再发起会话</p>
@@ -206,7 +273,7 @@ export function NewSessionLanding({
               );
             })}
           </div>
-        </div>
+        </motion.div>
       </div>
     </div>
   );
