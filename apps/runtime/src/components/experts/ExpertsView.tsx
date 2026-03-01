@@ -2,6 +2,7 @@ import { SkillManifest } from "../../types";
 
 interface Props {
   skills: SkillManifest[];
+  onInstallSkill: () => void;
   onCreate: () => void;
   onOpenPackaging: () => void;
   onStartTaskWithSkill: (skillId: string) => void;
@@ -13,6 +14,7 @@ interface Props {
 
 export function ExpertsView({
   skills,
+  onInstallSkill,
   onCreate,
   onOpenPackaging,
   onStartTaskWithSkill,
@@ -48,6 +50,12 @@ export function ExpertsView({
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              onClick={onInstallSkill}
+              className="h-9 px-4 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 text-sm transition-colors"
+            >
+              安装技能
+            </button>
             <button
               onClick={onOpenPackaging}
               className="h-9 px-4 rounded-lg bg-blue-500 hover:bg-blue-600 text-white text-sm transition-colors"

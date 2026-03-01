@@ -29,6 +29,7 @@ describe("ExpertsView", () => {
           buildSkill({ id: "local-file-organizer", name: "文件整理器" }),
           buildSkill({ id: "encrypted-abc", name: "外部技能" }),
         ]}
+        onInstallSkill={() => {}}
         onCreate={() => {}}
         onOpenPackaging={() => {}}
         onStartTaskWithSkill={startTaskSpy}
@@ -56,6 +57,7 @@ describe("ExpertsView", () => {
     render(
       <ExpertsView
         skills={[buildSkill({ id: "local-file-organizer", name: "文件整理器" })]}
+        onInstallSkill={() => {}}
         onCreate={() => {}}
         onOpenPackaging={() => {}}
         onStartTaskWithSkill={startTaskSpy}

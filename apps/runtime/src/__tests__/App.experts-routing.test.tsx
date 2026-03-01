@@ -49,6 +49,7 @@ vi.mock("../components/experts/ExpertsView", () => ({
   ExpertsView: (props: any) => (
     <div data-testid="experts-view">
       <div>我的技能</div>
+      <button onClick={props.onInstallSkill}>install-skill</button>
       <button onClick={props.onCreate}>create-expert</button>
       <button onClick={() => props.onStartTaskWithSkill?.("local-test-skill")}>start-task-local</button>
       <button onClick={() => props.onRefreshLocalSkill?.("local-test-skill")}>refresh-local</button>
@@ -276,6 +277,20 @@ describe("App experts routing", () => {
           (call) => call[0] === "get_sessions" && call[1]?.skillId === "local-test-skill"
         )
       ).toBe(true);
+    });
+  });
+
+  test("opens install dialog from experts view", async () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "experts" }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "install-skill" })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "install-skill" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("install-dialog")).toBeInTheDocument();
     });
   });
 });

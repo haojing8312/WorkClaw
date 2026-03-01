@@ -10,11 +10,9 @@ interface Props {
   sessions: SessionInfo[];
   selectedSessionId: string | null;
   onSelectSession: (id: string) => void;
-  onNewSession: () => void;
   newSessionPermissionMode: "default" | "accept_edits" | "unrestricted";
   onChangeNewSessionPermissionMode: (mode: "default" | "accept_edits" | "unrestricted") => void;
   onDeleteSession: (id: string) => void;
-  onInstall: () => void;
   onSettings: () => void;
   onSearchSessions: (query: string) => void;
   onExportSession: (sessionId: string) => void;
@@ -30,11 +28,9 @@ export function Sidebar({
   sessions,
   selectedSessionId,
   onSelectSession,
-  onNewSession,
   newSessionPermissionMode,
   onChangeNewSessionPermissionMode,
   onDeleteSession,
-  onInstall,
   onSettings,
   onSearchSessions,
   onExportSession,
@@ -131,13 +127,10 @@ export function Sidebar({
       </div>
 
       <div className="flex-1 overflow-hidden">
-        {isStartTask && selectedSkillId && (
+        {selectedSkillId && (
           <div className="h-full flex flex-col">
-            <div className="px-4 py-2 text-xs font-medium text-gray-500 border-t border-b border-gray-200 flex items-center justify-between">
+            <div className="px-4 py-2 text-xs font-medium text-gray-500 border-t border-b border-gray-200">
               <span>会话历史</span>
-              <button onClick={onNewSession} className="text-blue-400 hover:text-blue-300 text-xs">
-                + 新建
-              </button>
             </div>
             <div className="px-3 py-2 border-b border-gray-200">
               <label className="block text-[11px] text-gray-500 mb-1">操作确认级别</label>
@@ -212,12 +205,6 @@ export function Sidebar({
       </div>
 
       <div className="p-3 space-y-2 border-t border-gray-200">
-        <button
-          onClick={onInstall}
-          className="w-full bg-blue-500 hover:bg-blue-600 active:scale-[0.97] text-white text-sm py-1.5 rounded-lg transition-all"
-        >
-          + 安装技能
-        </button>
         <button
           onClick={onSettings}
           className="w-full bg-gray-100 hover:bg-gray-200 active:scale-[0.97] text-gray-700 text-sm py-1.5 rounded-lg transition-all"

@@ -390,11 +390,9 @@ export default function App() {
         sessions={sessions}
         selectedSessionId={selectedSessionId}
         onSelectSession={setSelectedSessionId}
-        onNewSession={() => handleCreateSession()}
         newSessionPermissionMode={newSessionPermissionMode}
         onChangeNewSessionPermissionMode={setNewSessionPermissionMode}
         onDeleteSession={handleDeleteSession}
-        onInstall={() => setShowInstall(true)}
         onSettings={() => {
           navigate("start-task");
           setShowSettings(true);
@@ -472,6 +470,7 @@ export default function App() {
             >
               <ExpertsView
                 skills={skills}
+                onInstallSkill={() => setShowInstall(true)}
                 onCreate={() => {
                   setExpertCreateError(null);
                   setExpertSavedPath(null);
