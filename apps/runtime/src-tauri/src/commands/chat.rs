@@ -285,23 +285,10 @@ pub async fn send_message(
 
     // 根据 source_type 决定如何读取 SKILL.md 内容
     let raw_prompt = if source_type == "builtin" {
-        // 内置 Skill：使用硬编码的 system prompt
-        "你是一个智能 AI 助手，运行在 SkillMint 平台上。\n\n\
-        ## 可用工具\n\
-        - `read_file` - 读取文件内容\n\
-        - `write_file` - 写入或创建文件\n\
-        - `edit` - 精确替换文件中的文本片段\n\
-        - `glob` - 按模式搜索文件（如 **/*.py）\n\
-        - `grep` - 在文件或目录中搜索文本（正则表达式）\n\
-        - `bash` - 执行 shell 命令（Windows 使用 cmd，Unix 使用 bash）\n\
-        - `todo_write` - 管理任务列表，跟踪多步骤任务进度\n\
-        - `web_search` - 搜索网页获取信息（优先使用此工具搜索）\n\
-        - `web_fetch` - 获取指定 URL 的网页内容\n\
-        - `memory` - 持久化记忆存储，跨会话保留重要信息\n\
-        - `ask_user` - 向用户提问以获取澄清或确认\n\n\
-        ## 工作原则\n\
-        请根据用户的需求，自主分析、规划和执行任务。\n\
-        工作目录为用户指定的目录，所有文件操作限制在该目录范围内。".to_string()
+        // 内置 Skill：从独立的 builtin-skills 目录读取，便于后续迭代
+        crate::builtin_skills::builtin_skill_markdown(&skill_id)
+            .unwrap_or(crate::builtin_skills::builtin_general_skill_markdown())
+            .to_string()
     } else if source_type == "local" {
         // 本地 Skill：直接从目录读取 SKILL.md
         let skill_md_path = std::path::Path::new(&pack_path).join("SKILL.md");

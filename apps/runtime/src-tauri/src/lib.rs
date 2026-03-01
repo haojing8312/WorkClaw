@@ -2,6 +2,7 @@ pub mod agent;
 pub mod sidecar;
 pub mod providers;
 mod adapters;
+mod builtin_skills;
 pub mod commands;
 mod db;
 
@@ -121,6 +122,8 @@ pub fn run() {
             commands::skills::install_skill,
             commands::skills::import_local_skill,
             commands::skills::refresh_local_skill,
+            commands::skills::create_local_skill,
+            commands::skills::render_local_skill_preview,
             commands::skills::list_skills,
             commands::skills::delete_skill,
             commands::models::save_model_config,
