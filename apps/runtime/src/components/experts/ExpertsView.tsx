@@ -19,6 +19,12 @@ export function ExpertsView({
   busySkillId,
   busyAction,
 }: Props) {
+  const totalSkills = skills.length;
+  const localSkills = skills.filter((skill) => skill.id.startsWith("local-")).length;
+  const installedSkills = skills.filter(
+    (skill) => skill.id !== "builtin-general" && !skill.id.startsWith("local-")
+  ).length;
+
   return (
     <div className="h-full overflow-y-auto bg-gray-50">
       <div className="max-w-6xl mx-auto px-8 pt-10 pb-12">
@@ -28,6 +34,17 @@ export function ExpertsView({
             <p className="text-sm text-gray-600 mt-2">
               管理你已安装和创建的技能，通过创建页持续沉淀可复用能力。
             </p>
+            <div className="flex flex-wrap items-center gap-2 mt-3">
+              <span className="inline-flex items-center px-2.5 py-1 rounded-full bg-blue-50 text-blue-700 text-xs border border-blue-100">
+                全部 {totalSkills}
+              </span>
+              <span className="inline-flex items-center px-2.5 py-1 rounded-full bg-green-50 text-green-700 text-xs border border-green-100">
+                本地创建 {localSkills}
+              </span>
+              <span className="inline-flex items-center px-2.5 py-1 rounded-full bg-amber-50 text-amber-700 text-xs border border-amber-100">
+                外部安装 {installedSkills}
+              </span>
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <button

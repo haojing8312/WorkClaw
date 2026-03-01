@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { SessionInfo } from "../types";
 
 interface Props {
@@ -41,6 +41,14 @@ const SCENARIO_CARDS = [
   },
 ] as const;
 
+function getTimeGreeting(date: Date): string {
+  const hour = date.getHours();
+  if (hour < 6) return "夜间好，欢迎回来";
+  if (hour < 12) return "早上好，欢迎回来";
+  if (hour < 18) return "下午好，欢迎回来";
+  return "晚上好，欢迎回来";
+}
+
 export function NewSessionLanding({
   sessions,
   creating,
@@ -54,6 +62,7 @@ export function NewSessionLanding({
   const [showFilledHint, setShowFilledHint] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const inputContainerRef = useRef<HTMLDivElement>(null);
+  const greeting = useMemo(() => getTimeGreeting(new Date()), []);
 
   const submit = () => {
     if (creating) return;
@@ -73,8 +82,8 @@ export function NewSessionLanding({
   const recentSessions = sessions.slice(0, 6);
 
   return (
-    <div className="h-full overflow-y-auto bg-gray-50">
-      <div className="max-w-4xl mx-auto px-8 pt-14 pb-12">
+    <div className="h-full overflow-y-auto bg-gradient-to-b from-blue-50/60 via-gray-50 to-gray-50">
+      <div className="max-w-5xl mx-auto px-8 pt-12 pb-12">
         <div className="text-center mb-10">
           {onOpenExperts && (
             <div className="mb-3">
@@ -86,8 +95,13 @@ export function NewSessionLanding({
               </button>
             </div>
           )}
-          <h1 className="text-3xl font-semibold text-gray-900 mb-3">把你的电脑任务，交给 AI 助手协作完成</h1>
-          <p className="text-sm text-gray-600">
+          <div className="inline-flex items-center h-7 px-3 rounded-full bg-white/90 border border-blue-100 text-blue-700 text-xs mb-3">
+            {greeting}
+          </div>
+          <h1 className="text-3xl md:text-4xl font-semibold tracking-tight text-gray-900 mb-3">
+            把你的电脑任务，交给 AI 助手协作完成
+          </h1>
+          <p className="text-sm text-gray-600 max-w-2xl mx-auto">
             一句话描述需求，它可以帮你创建和修改文件、分析本地数据、整理文件、操作浏览器，并持续反馈执行过程。
           </p>
         </div>
@@ -103,7 +117,10 @@ export function NewSessionLanding({
           ))}
         </div>
 
-        <div ref={inputContainerRef} className="bg-white border border-gray-200 rounded-2xl p-4 shadow-sm">
+        <div
+          ref={inputContainerRef}
+          className="bg-white border border-gray-200 rounded-2xl p-4 md:p-5 shadow-[0_8px_24px_-20px_rgba(59,130,246,0.5)]"
+        >
           <textarea
             ref={inputRef}
             value={input}
@@ -121,7 +138,7 @@ export function NewSessionLanding({
             }}
             placeholder="先描述你要完成什么任务..."
             rows={5}
-            className="w-full resize-none bg-transparent text-sm text-gray-800 placeholder-gray-400 focus:outline-none"
+            className="w-full resize-none bg-transparent text-sm md:text-[15px] text-gray-800 placeholder-gray-400 focus:outline-none"
           />
           {showFilledHint && (
             <div className="mt-2 text-xs text-blue-600">已填入场景示例，你可以继续修改后再开始任务</div>
@@ -131,7 +148,7 @@ export function NewSessionLanding({
             <button
               onClick={submit}
               disabled={creating}
-              className="h-9 px-4 rounded-lg bg-blue-500 hover:bg-blue-600 disabled:bg-blue-300 text-white text-sm transition-colors"
+              className="h-9 px-4 rounded-lg bg-blue-500 hover:bg-blue-600 disabled:bg-blue-300 text-white text-sm transition-colors shadow-sm"
             >
               {creating ? "正在创建..." : "开始任务"}
             </button>
@@ -164,7 +181,7 @@ export function NewSessionLanding({
 
         <div className="mt-10">
           <div className="mb-3">
-            <h2 className="text-sm font-medium text-gray-700">常见任务场景</h2>
+            <h2 className="text-sm font-medium text-gray-700">精选任务场景</h2>
             <p className="text-xs text-gray-500 mt-1">选择一个场景，自动填入示例任务后再发起会话</p>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
@@ -179,7 +196,7 @@ export function NewSessionLanding({
                   className={
                     "text-left rounded-xl border px-4 py-3 transition-colors bg-white " +
                     (selected
-                      ? "border-blue-400 bg-blue-50/40"
+                      ? "border-blue-400 bg-blue-50/40 shadow-[0_8px_20px_-16px_rgba(59,130,246,0.6)]"
                       : "border-gray-200 hover:border-blue-300 hover:bg-blue-50/20")
                   }
                 >
