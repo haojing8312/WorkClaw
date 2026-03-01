@@ -2,6 +2,53 @@ use sqlx::{SqlitePool, sqlite::SqlitePoolOptions};
 use tauri::{AppHandle, Manager};
 use anyhow::Result;
 
+fn build_builtin_general_manifest_json() -> String {
+    let builtin_config = crate::agent::skill_config::SkillConfig::parse(
+        crate::builtin_skills::builtin_general_skill_markdown(),
+    );
+    let builtin_name = builtin_config
+        .name
+        .unwrap_or_else(|| "通用助手".to_string());
+    let builtin_description = builtin_config
+        .description
+        .unwrap_or_else(|| "处理通用任务：创建和修改文件、分析本地文件数据、整理文件结构、执行命令和浏览器操作".to_string());
+
+    serde_json::json!({
+        "id": "builtin-general",
+        "name": builtin_name,
+        "description": builtin_description,
+        "version": "1.0.0",
+        "author": "SkillMint",
+        "recommended_model": "",
+        "tags": [],
+        "created_at": "2026-01-01T00:00:00Z",
+        "username_hint": null,
+        "encrypted_verify": ""
+    })
+    .to_string()
+}
+
+async fn sync_builtin_general_skill(pool: &SqlitePool) -> Result<()> {
+    let builtin_json = build_builtin_general_manifest_json();
+    let now = chrono::Utc::now().to_rfc3339();
+
+    sqlx::query(
+        "INSERT INTO installed_skills (id, manifest, installed_at, username, pack_path, source_type)
+         VALUES ('builtin-general', ?, ?, '', '', 'builtin')
+         ON CONFLICT(id) DO UPDATE SET
+           manifest = excluded.manifest,
+           username = '',
+           pack_path = '',
+           source_type = 'builtin'"
+    )
+    .bind(&builtin_json)
+    .bind(&now)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
 pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
     let app_dir = app.path().app_data_dir()?;
     std::fs::create_dir_all(&app_dir)?;
@@ -198,28 +245,101 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
         .execute(&pool)
         .await;
 
-    // 内置通用 Skill：始终存在，无需用户安装
-    let builtin_manifest = serde_json::json!({
-        "id": "builtin-general",
-        "name": "通用助手",
-        "description": "通用 AI 助手，可以读写文件、执行命令、搜索代码、搜索网页",
-        "version": "1.0.0",
-        "author": "SkillMint",
-        "recommended_model": "",
-        "tags": [],
-        "created_at": "2026-01-01T00:00:00Z",
-        "username_hint": null,
-        "encrypted_verify": ""
-    });
-    let builtin_json = builtin_manifest.to_string();
-    let now = chrono::Utc::now().to_rfc3339();
-    let _ = sqlx::query(
-        "INSERT OR IGNORE INTO installed_skills (id, manifest, installed_at, username, pack_path, source_type) VALUES ('builtin-general', ?, ?, '', '', 'builtin')"
-    )
-    .bind(&builtin_json)
-    .bind(&now)
-    .execute(&pool)
-    .await;
+    // 内置通用 Skill：始终存在，无需用户安装，且每次启动同步最新 metadata
+    let _ = sync_builtin_general_skill(&pool).await;
 
     Ok(pool)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn setup_memory_pool() -> SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("create sqlite memory pool");
+
+        sqlx::query(
+            "CREATE TABLE installed_skills (
+                id TEXT PRIMARY KEY,
+                manifest TEXT NOT NULL,
+                installed_at TEXT NOT NULL,
+                last_used_at TEXT,
+                username TEXT NOT NULL,
+                pack_path TEXT NOT NULL DEFAULT '',
+                source_type TEXT NOT NULL DEFAULT 'encrypted'
+            )"
+        )
+        .execute(&pool)
+        .await
+        .expect("create installed_skills table");
+
+        pool
+    }
+
+    #[tokio::test]
+    async fn sync_builtin_general_skill_upserts_manifest_and_source_type() {
+        let pool = setup_memory_pool().await;
+        let stale_manifest = serde_json::json!({
+            "id": "builtin-general",
+            "name": "旧名称",
+            "description": "旧描述",
+            "version": "0.0.1"
+        })
+        .to_string();
+
+        sqlx::query(
+            "INSERT INTO installed_skills (id, manifest, installed_at, username, pack_path, source_type)
+             VALUES ('builtin-general', ?, '2026-01-01T00:00:00Z', 'x', '/tmp', 'local')"
+        )
+        .bind(stale_manifest)
+        .execute(&pool)
+        .await
+        .expect("seed stale builtin row");
+
+        sync_builtin_general_skill(&pool)
+            .await
+            .expect("sync builtin skill");
+
+        let (manifest_json, source_type, username, pack_path): (String, String, String, String) = sqlx::query_as(
+            "SELECT manifest, source_type, username, pack_path FROM installed_skills WHERE id = 'builtin-general'"
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("query builtin row");
+
+        let manifest: serde_json::Value =
+            serde_json::from_str(&manifest_json).expect("parse manifest json");
+        let expected: serde_json::Value = serde_json::from_str(&build_builtin_general_manifest_json())
+            .expect("parse expected manifest");
+
+        assert_eq!(manifest["name"], expected["name"]);
+        assert_eq!(manifest["description"], expected["description"]);
+        assert_eq!(source_type, "builtin");
+        assert_eq!(username, "");
+        assert_eq!(pack_path, "");
+    }
+
+    #[tokio::test]
+    async fn sync_builtin_general_skill_is_idempotent() {
+        let pool = setup_memory_pool().await;
+        sync_builtin_general_skill(&pool)
+            .await
+            .expect("first sync");
+        sync_builtin_general_skill(&pool)
+            .await
+            .expect("second sync");
+
+        let (count,): (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM installed_skills WHERE id = 'builtin-general'"
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("count builtin rows");
+
+        assert_eq!(count, 1);
+    }
 }

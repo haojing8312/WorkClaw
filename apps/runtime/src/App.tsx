@@ -7,7 +7,36 @@ import { ChatView } from "./components/ChatView";
 import { InstallDialog } from "./components/InstallDialog";
 import { SettingsView } from "./components/SettingsView";
 import { PackagingView } from "./components/packaging/PackagingView";
+import { NewSessionLanding } from "./components/NewSessionLanding";
+import { ExpertsView } from "./components/experts/ExpertsView";
+import {
+  ExpertCreatePayload,
+  ExpertCreateView,
+  ExpertPreviewPayload,
+  ExpertPreviewResult,
+} from "./components/experts/ExpertCreateView";
 import { SkillManifest, ModelConfig, SessionInfo } from "./types";
+
+type MainView = "start-task" | "experts" | "experts-new" | "packaging";
+type SkillAction = "refresh" | "delete";
+
+function extractErrorMessage(error: unknown, fallback: string): string {
+  if (typeof error === "string") {
+    return error;
+  }
+  if (error instanceof Error) {
+    return error.message || fallback;
+  }
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    typeof (error as { message?: unknown }).message === "string"
+  ) {
+    return (error as { message: string }).message;
+  }
+  return fallback;
+}
 
 export default function App() {
   const [skills, setSkills] = useState<SkillManifest[]>([]);
@@ -17,14 +46,35 @@ export default function App() {
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [showInstall, setShowInstall] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [activeMainView, setActiveMainView] = useState<"chat" | "packaging">("chat");
+  const [activeMainView, setActiveMainView] = useState<MainView>("start-task");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [newSessionPermissionMode, setNewSessionPermissionMode] = useState<"default" | "accept_edits" | "unrestricted">("accept_edits");
+  const [creatingSession, setCreatingSession] = useState(false);
+  const [createSessionError, setCreateSessionError] = useState<string | null>(null);
+  const [creatingExpertSkill, setCreatingExpertSkill] = useState(false);
+  const [expertCreateError, setExpertCreateError] = useState<string | null>(null);
+  const [expertSavedPath, setExpertSavedPath] = useState<string | null>(null);
+  const [pendingImportDir, setPendingImportDir] = useState<string | null>(null);
+  const [retryingExpertImport, setRetryingExpertImport] = useState(false);
+  const [skillActionState, setSkillActionState] = useState<{ skillId: string; action: SkillAction } | null>(null);
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function navigate(view: MainView) {
+    setActiveMainView(view);
+    if (typeof window !== "undefined") {
+      window.location.hash = `/${view}`;
+    }
+  }
 
   useEffect(() => {
     loadSkills();
     loadModels();
+    if (typeof window !== "undefined" && window.location.hash) {
+      const raw = window.location.hash.replace(/^#\//, "");
+      if (raw === "experts" || raw === "experts-new" || raw === "packaging" || raw === "start-task") {
+        setActiveMainView(raw);
+      }
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -38,12 +88,16 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedSkillId]);
 
-  async function loadSkills() {
+  async function loadSkills(): Promise<SkillManifest[]> {
     const list = await invoke<SkillManifest[]>("list_skills");
     setSkills(list);
-    if (list.length > 0 && !selectedSkillId) {
-      setSelectedSkillId(list[0].id);
-    }
+    setSelectedSkillId((prev) => {
+      if (prev && list.some((item) => item.id === prev)) {
+        return prev;
+      }
+      return list[0]?.id ?? null;
+    });
+    return list;
   }
 
   async function loadModels() {
@@ -61,14 +115,16 @@ export default function App() {
     }
   }
 
-  async function handleCreateSession() {
+  async function handleCreateSession(initialMessage = "") {
     const modelId = models[0]?.id;
-    if (!selectedSkillId || !modelId) return;
+    if (!selectedSkillId || !modelId || creatingSession) return;
 
     // 弹出目录选择器
     const dir = await open({ directory: true, title: "选择工作目录" });
     if (!dir || typeof dir !== "string") return; // 用户取消
 
+    setCreatingSession(true);
+    setCreateSessionError(null);
     try {
       const id = await invoke<string>("create_session", {
         skillId: selectedSkillId,
@@ -78,8 +134,20 @@ export default function App() {
       });
       setSelectedSessionId(id);
       if (selectedSkillId) await loadSessions(selectedSkillId);
+
+      const firstMessage = initialMessage.trim();
+      if (firstMessage) {
+        try {
+          await invoke("send_message", { sessionId: id, userMessage: firstMessage });
+        } catch (sendError) {
+          console.error("自动发送首条消息失败:", sendError);
+        }
+      }
     } catch (e) {
       console.error("创建会话失败:", e);
+      setCreateSessionError("创建会话失败，请稍后重试");
+    } finally {
+      setCreatingSession(false);
     }
   }
 
@@ -161,6 +229,123 @@ export default function App() {
     }
   }
 
+  async function handlePickSkillDirectory() {
+    const dir = await open({ directory: true, title: "选择技能保存目录" });
+    if (!dir || typeof dir !== "string") return null;
+    return dir;
+  }
+
+  async function handleCreateExpertSkill(payload: ExpertCreatePayload) {
+    setCreatingExpertSkill(true);
+    setExpertCreateError(null);
+    setExpertSavedPath(null);
+    setPendingImportDir(null);
+    try {
+      const skillDir = await invoke<string>("create_local_skill", {
+        name: payload.name,
+        description: payload.description,
+        whenToUse: payload.whenToUse,
+        targetDir: payload.targetDir ?? null,
+      });
+      setExpertSavedPath(skillDir);
+      setPendingImportDir(skillDir);
+
+      try {
+        const importResult = await invoke<{ manifest: SkillManifest }>("import_local_skill", {
+          dirPath: skillDir,
+        });
+        await loadSkills();
+        if (importResult?.manifest?.id) {
+          setSelectedSkillId(importResult.manifest.id);
+        }
+        setExpertSavedPath(null);
+        setPendingImportDir(null);
+        navigate("experts");
+      } catch (importError) {
+        const message = extractErrorMessage(importError, "导入失败，请稍后重试。");
+        setExpertCreateError(`${message}（文件已保存到：${skillDir}）`);
+        return;
+      }
+    } catch (e) {
+      console.error("创建专家技能失败:", e);
+      setExpertCreateError(extractErrorMessage(e, "创建失败，请检查目录权限后重试。"));
+    } finally {
+      setCreatingExpertSkill(false);
+    }
+  }
+
+  async function handleRetryExpertImport() {
+    if (!pendingImportDir || retryingExpertImport) return;
+    setRetryingExpertImport(true);
+    setExpertCreateError(null);
+    try {
+      const importResult = await invoke<{ manifest: SkillManifest }>("import_local_skill", {
+        dirPath: pendingImportDir,
+      });
+      await loadSkills();
+      if (importResult?.manifest?.id) {
+        setSelectedSkillId(importResult.manifest.id);
+      }
+      setPendingImportDir(null);
+      setExpertSavedPath(null);
+      navigate("experts");
+    } catch (e) {
+      const message = extractErrorMessage(e, "导入失败，请稍后重试。");
+      setExpertCreateError(`${message}（文件已保存到：${pendingImportDir}）`);
+    } finally {
+      setRetryingExpertImport(false);
+    }
+  }
+
+  async function handleRefreshLocalSkill(skillId: string) {
+    if (skillActionState) return;
+    setSkillActionState({ skillId, action: "refresh" });
+    try {
+      await invoke("refresh_local_skill", { skillId });
+      await loadSkills();
+    } catch (e) {
+      console.error("刷新本地技能失败:", e);
+    } finally {
+      setSkillActionState(null);
+    }
+  }
+
+  async function handleDeleteSkill(skillId: string) {
+    if (skillActionState) return;
+    setSkillActionState({ skillId, action: "delete" });
+    try {
+      await invoke("delete_skill", { skillId });
+      if (selectedSkillId === skillId) {
+        setSelectedSessionId(null);
+      }
+      await loadSkills();
+    } catch (e) {
+      console.error("移除技能失败:", e);
+    } finally {
+      setSkillActionState(null);
+    }
+  }
+
+  const handleRenderExpertPreview = useCallback(
+    async (payload: ExpertPreviewPayload): Promise<ExpertPreviewResult> => {
+      const result = await invoke<{ markdown: string; save_path: string }>(
+        "render_local_skill_preview",
+        {
+          name: payload.name,
+          description: payload.description,
+          whenToUse: payload.whenToUse,
+          targetDir: payload.targetDir ?? null,
+        }
+      );
+
+      return {
+        markdown: result.markdown,
+        savePath: result.save_path,
+      };
+    },
+    []
+  );
+
   const handleSessionRefresh = useCallback(() => {
     if (selectedSkillId) loadSessions(selectedSkillId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -173,24 +358,21 @@ export default function App() {
     <div className="flex h-screen bg-gray-50 text-gray-800 overflow-hidden">
       <Sidebar
         activeMainView={activeMainView}
-        onOpenChat={() => setActiveMainView("chat")}
-        onOpenPackaging={() => {
-          setShowSettings(false);
-          setActiveMainView("packaging");
-        }}
+        onOpenStartTask={() => navigate("start-task")}
+        onOpenExperts={() => navigate("experts")}
         skills={skills}
         selectedSkillId={selectedSkillId}
         onSelectSkill={setSelectedSkillId}
         sessions={sessions}
         selectedSessionId={selectedSessionId}
         onSelectSession={setSelectedSessionId}
-        onNewSession={handleCreateSession}
+        onNewSession={() => handleCreateSession()}
         newSessionPermissionMode={newSessionPermissionMode}
         onChangeNewSessionPermissionMode={setNewSessionPermissionMode}
         onDeleteSession={handleDeleteSession}
         onInstall={() => setShowInstall(true)}
         onSettings={() => {
-          setActiveMainView("chat");
+          navigate("start-task");
           setShowSettings(true);
         }}
         onSearchSessions={handleSearchSessions}
@@ -227,6 +409,58 @@ export default function App() {
             >
               <PackagingView />
             </motion.div>
+          ) : activeMainView === "experts-new" ? (
+            <motion.div
+              key="experts-new"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              className="h-full"
+            >
+              <ExpertCreateView
+                saving={creatingExpertSkill}
+                error={expertCreateError}
+                savedPath={expertSavedPath}
+                canRetryImport={Boolean(pendingImportDir)}
+                retryingImport={retryingExpertImport}
+                onBack={() => {
+                  setExpertCreateError(null);
+                  setExpertSavedPath(null);
+                  setPendingImportDir(null);
+                  navigate("experts");
+                }}
+                onOpenPackaging={() => navigate("packaging")}
+                onPickDirectory={handlePickSkillDirectory}
+                onSave={handleCreateExpertSkill}
+                onRetryImport={handleRetryExpertImport}
+                onRenderPreview={handleRenderExpertPreview}
+              />
+            </motion.div>
+          ) : activeMainView === "experts" ? (
+            <motion.div
+              key="experts"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              className="h-full"
+            >
+              <ExpertsView
+                skills={skills}
+                onCreate={() => {
+                  setExpertCreateError(null);
+                  setExpertSavedPath(null);
+                  setPendingImportDir(null);
+                  navigate("experts-new");
+                }}
+                onOpenPackaging={() => navigate("packaging")}
+                onRefreshLocalSkill={handleRefreshLocalSkill}
+                onDeleteSkill={handleDeleteSkill}
+                busySkillId={skillActionState?.skillId}
+                busyAction={skillActionState?.action ?? null}
+              />
+            </motion.div>
           ) : selectedSkill && models.length > 0 && selectedSessionId ? (
             <motion.div
               key="chat"
@@ -251,14 +485,16 @@ export default function App() {
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.2 }}
-              className="flex items-center justify-center h-full text-gray-400 text-sm"
+              className="h-full"
             >
-              <button
-                onClick={handleCreateSession}
-                className="bg-blue-500 hover:bg-blue-600 active:scale-[0.97] px-4 py-2 rounded-lg text-white text-sm transition-all"
-              >
-                新建会话
-              </button>
+              <NewSessionLanding
+                sessions={sessions}
+                creating={creatingSession}
+                error={createSessionError}
+                onSelectSession={setSelectedSessionId}
+                onCreateSessionWithInitialMessage={handleCreateSession}
+                onOpenExperts={() => navigate("experts")}
+              />
             </motion.div>
           ) : selectedSkill && models.length === 0 ? (
             <div className="flex items-center justify-center h-full text-gray-400 text-sm">

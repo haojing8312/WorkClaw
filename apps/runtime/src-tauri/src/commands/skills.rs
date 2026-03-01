@@ -2,6 +2,9 @@ use sqlx::SqlitePool;
 use tauri::State;
 use skillpack_rs::{verify_and_unpack, SkillManifest};
 use chrono::Utc;
+use std::path::{Path, PathBuf};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 pub struct DbState(pub SqlitePool);
 
@@ -10,6 +13,175 @@ pub struct DbState(pub SqlitePool);
 pub struct ImportResult {
     pub manifest: skillpack_rs::SkillManifest,
     pub missing_mcp: Vec<String>,
+}
+
+#[derive(serde::Serialize)]
+pub struct LocalSkillPreview {
+    pub markdown: String,
+    pub save_path: String,
+}
+
+fn sanitize_slug(name: &str) -> String {
+    let mut out = String::new();
+    let mut last_dash = false;
+    for c in name.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+            last_dash = false;
+        } else if !last_dash {
+            out.push('-');
+            last_dash = true;
+        }
+    }
+    let trimmed = out.trim_matches('-').to_string();
+    if trimmed.is_empty() {
+        let mut hasher = DefaultHasher::new();
+        name.hash(&mut hasher);
+        format!("expert-skill-{:x}", hasher.finish())
+    } else {
+        trimmed
+    }
+}
+
+fn sanitize_slug_stable(name: &str) -> String {
+    let mut out = String::new();
+    let mut last_dash = false;
+    for c in name.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+            last_dash = false;
+        } else if !last_dash {
+            out.push('-');
+            last_dash = true;
+        }
+    }
+    let trimmed = out.trim_matches('-').to_string();
+    if trimmed.is_empty() {
+        "skill".to_string()
+    } else {
+        trimmed
+    }
+}
+
+fn build_local_skill_id(seed: &str, dir_path: &str) -> String {
+    let slug = sanitize_slug_stable(seed);
+    if slug != "skill" {
+        return format!("local-{}", slug);
+    }
+
+    let mut hasher = DefaultHasher::new();
+    dir_path.hash(&mut hasher);
+    format!("local-skill-{:x}", hasher.finish())
+}
+
+fn default_skill_base_dir() -> PathBuf {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| ".".to_string());
+    Path::new(&home).join(".skillmint").join("skills")
+}
+
+fn normalize_skill_description(description: &str, when_to_use: &str) -> String {
+    let trimmed = description.trim();
+    let fallback = format!("Use when {}", when_to_use.trim());
+
+    if trimmed.is_empty() {
+        return fallback;
+    }
+
+    if trimmed.to_ascii_lowercase().starts_with("use when") {
+        trimmed.to_string()
+    } else {
+        format!("Use when {}", trimmed)
+    }
+}
+
+fn render_local_skill_markdown(name: &str, description: &str, when_to_use: &str) -> String {
+    let normalized_description = normalize_skill_description(description, when_to_use);
+    let overview = if description.trim().is_empty() {
+        "该技能用于稳定处理特定任务流程。"
+    } else {
+        description.trim()
+    };
+
+    crate::builtin_skills::local_skill_template_markdown()
+        .replace("{{SKILL_NAME}}", name)
+        .replace("{{SKILL_DESCRIPTION}}", &normalized_description)
+        .replace("{{SKILL_TITLE}}", name)
+        .replace("{{SKILL_OVERVIEW}}", overview)
+        .replace("{{SKILL_WHEN_TO_USE}}", when_to_use.trim())
+}
+
+#[tauri::command]
+pub async fn render_local_skill_preview(
+    name: String,
+    description: String,
+    when_to_use: String,
+    target_dir: Option<String>,
+) -> Result<LocalSkillPreview, String> {
+    let preview_name = if name.trim().is_empty() {
+        "expert-skill".to_string()
+    } else {
+        name.trim().to_string()
+    };
+    let preview_when = if when_to_use.trim().is_empty() {
+        "需要在特定任务场景中提供稳定执行能力".to_string()
+    } else {
+        when_to_use.trim().to_string()
+    };
+
+    let base_dir = match target_dir.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        Some(dir) => PathBuf::from(dir),
+        None => default_skill_base_dir(),
+    };
+    let save_path = base_dir.join(sanitize_slug(&preview_name));
+
+    Ok(LocalSkillPreview {
+        markdown: render_local_skill_markdown(
+            &preview_name,
+            description.trim(),
+            &preview_when,
+        ),
+        save_path: save_path.to_string_lossy().to_string(),
+    })
+}
+
+#[tauri::command]
+pub async fn create_local_skill(
+    name: String,
+    description: String,
+    when_to_use: String,
+    target_dir: Option<String>,
+) -> Result<String, String> {
+    let clean_name = name.trim();
+    let clean_when = when_to_use.trim();
+    if clean_name.is_empty() {
+        return Err("技能名称不能为空".to_string());
+    }
+    if clean_when.is_empty() {
+        return Err("使用场景不能为空".to_string());
+    }
+
+    let slug = sanitize_slug(clean_name);
+    let base_dir = match target_dir.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        Some(dir) => PathBuf::from(dir),
+        None => default_skill_base_dir(),
+    };
+
+    let skill_dir = base_dir.join(&slug);
+    if skill_dir.exists() {
+        return Err(format!("技能目录已存在: {}", skill_dir.to_string_lossy()));
+    }
+    std::fs::create_dir_all(&skill_dir)
+        .map_err(|e| format!("创建目录失败: {}", e))?;
+
+    let content = render_local_skill_markdown(clean_name, description.trim(), clean_when);
+
+    let skill_md = skill_dir.join("SKILL.md");
+    std::fs::write(&skill_md, content)
+        .map_err(|e| format!("写入 SKILL.md 失败: {}", e))?;
+
+    Ok(skill_dir.to_string_lossy().to_string())
 }
 
 #[tauri::command]
@@ -62,7 +234,12 @@ pub async fn import_local_skill(
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| "unnamed-skill".to_string())
     });
-    let skill_id = format!("local-{}", name);
+    let id_seed = std::path::Path::new(&dir_path)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .filter(|n| !n.trim().is_empty())
+        .unwrap_or_else(|| name.clone());
+    let skill_id = build_local_skill_id(&id_seed, &dir_path);
 
     let manifest = SkillManifest {
         id: skill_id.clone(),
