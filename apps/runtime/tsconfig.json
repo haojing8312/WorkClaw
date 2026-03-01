@@ -11,6 +11,7 @@
     "isolatedModules": true,
     "noEmit": true,
     "jsx": "react-jsx",
+    "types": ["vitest/globals"],
     "strict": true,
     "noUnusedLocals": false,
     "noUnusedParameters": false,
