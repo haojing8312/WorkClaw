@@ -13,6 +13,7 @@ use crate::agent::permissions::PermissionMode;
 use crate::agent::tools::{
     CompactTool, TaskTool, MemoryTool, WebSearchTool, AskUserTool, AskUserResponder,
     BashTool, BashOutputTool, BashKillTool, ProcessManager, SkillInvokeTool,
+    ClawhubSearchTool, ClawhubRecommendTool,
     browser_tools::register_browser_tools,
 };
 use crate::agent::tools::search_providers::cache::SearchCache;
@@ -533,6 +534,8 @@ pub async fn send_message(
     )
     .with_app_handle(app.clone(), session_id.clone());
     agent_executor.registry().register(Arc::new(task_tool));
+    agent_executor.registry().register(Arc::new(ClawhubSearchTool));
+    agent_executor.registry().register(Arc::new(ClawhubRecommendTool));
 
     // 注册 WebSearch 工具（从 DB 加载搜索 Provider 配置，使用全局缓存）
     {
