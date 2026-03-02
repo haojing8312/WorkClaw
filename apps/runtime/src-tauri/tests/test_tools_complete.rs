@@ -77,17 +77,17 @@ fn test_l3_process_management_tools() {
 fn test_l4_browser_tools_registration() {
     let registry = ToolRegistry::with_standard_tools();
 
-    // 注册 15 个浏览器工具
+    // 注册 17 个浏览器工具
     register_browser_tools(&registry, "http://localhost:8765");
 
     let browser_tools = registry.tools_with_prefix("browser_");
-    assert_eq!(browser_tools.len(), 15, "应注册 15 个浏览器工具");
+    assert_eq!(browser_tools.len(), 17, "应注册 17 个浏览器工具");
 
-    // 15 标准 + 15 浏览器 = 30
-    assert_eq!(registry.get_tool_definitions().len(), 30);
+    // 15 标准 + 17 浏览器 = 32
+    assert_eq!(registry.get_tool_definitions().len(), 32);
 }
 
-/// 验证全量注册：L1-L5 静态 + L3 动态 + L4 动态 = 32 个工具
+/// 验证全量注册：L1-L5 静态 + L3 动态 + L4 动态 = 34 个工具
 #[test]
 fn test_full_tool_registration() {
     let registry = ToolRegistry::with_standard_tools();
@@ -102,9 +102,9 @@ fn test_full_tool_registration() {
     // L4: 浏览器工具
     register_browser_tools(&registry, "http://localhost:8765");
 
-    // 总数：15 标准 + 2 进程管理 + 15 浏览器 = 32
+    // 总数：15 标准 + 2 进程管理 + 17 浏览器 = 34
     let total = registry.get_tool_definitions().len();
-    assert_eq!(total, 32, "全量注册后应有 32 个工具，实际 {}", total);
+    assert_eq!(total, 34, "全量注册后应有 34 个工具，实际 {}", total);
 }
 
 /// 验证每个工具都有名称、描述和 input_schema

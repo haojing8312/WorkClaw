@@ -15,10 +15,22 @@ pub enum PermissionMode {
 impl PermissionMode {
     /// 判断指定工具是否需要用户确认
     pub fn needs_confirmation(&self, tool_name: &str) -> bool {
+        // 浏览器高风险动作：可能触发提交、外发、状态变更等副作用
+        let browser_risky = matches!(
+            tool_name,
+            "browser_act"
+                | "browser_click"
+                | "browser_type"
+                | "browser_press_key"
+                | "browser_evaluate"
+                | "browser_launch"
+                | "browser_navigate"
+        );
+
         match self {
             Self::Unrestricted => false,
-            Self::AcceptEdits => matches!(tool_name, "bash"),
-            Self::Default => matches!(tool_name, "write_file" | "edit" | "bash"),
+            Self::AcceptEdits => matches!(tool_name, "bash") || browser_risky,
+            Self::Default => matches!(tool_name, "write_file" | "edit" | "bash") || browser_risky,
         }
     }
 }
@@ -108,5 +120,16 @@ mod tests {
         let parent = vec!["read_file".to_string(), "glob".to_string()];
         let narrowed = narrow_allowed_tools(Some(&parent), None);
         assert_eq!(narrowed, parent);
+    }
+
+    #[test]
+    fn test_permission_mode_browser_risky_tools_need_confirmation() {
+        // Default 与 AcceptEdits 下浏览器高风险工具都应要求确认
+        assert!(PermissionMode::Default.needs_confirmation("browser_act"));
+        assert!(PermissionMode::Default.needs_confirmation("browser_click"));
+        assert!(PermissionMode::AcceptEdits.needs_confirmation("browser_act"));
+        assert!(PermissionMode::AcceptEdits.needs_confirmation("browser_evaluate"));
+        // Unrestricted 模式不需要确认
+        assert!(!PermissionMode::Unrestricted.needs_confirmation("browser_act"));
     }
 }

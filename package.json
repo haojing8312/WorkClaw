@@ -6,7 +6,9 @@
     "runtime": "pnpm --filter runtime tauri dev",
     "build:app": "pnpm --filter runtime tauri build",
     "build:runtime": "pnpm --filter runtime tauri build",
-    "sync:codex-skills": "node scripts/sync-codex-skills.mjs"
+    "sync:codex-skills": "node scripts/sync-codex-skills.mjs",
+    "test:sidecar": "pnpm --dir apps/runtime/sidecar test",
+    "test:browser-automation": "pnpm --dir apps/runtime/sidecar test && cd apps/runtime/src-tauri && cargo test --test test_browser_tools -- --nocapture"
   },
   "devDependencies": {
     "turbo": "^2.0.0"

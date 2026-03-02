@@ -2,19 +2,19 @@ use sqlx::{SqlitePool, sqlite::SqlitePoolOptions};
 use tauri::{AppHandle, Manager};
 use anyhow::Result;
 
-fn build_builtin_general_manifest_json() -> String {
+fn build_builtin_manifest_json(skill_id: &str, skill_markdown: &str) -> String {
     let builtin_config = crate::agent::skill_config::SkillConfig::parse(
-        crate::builtin_skills::builtin_general_skill_markdown(),
+        skill_markdown,
     );
     let builtin_name = builtin_config
         .name
-        .unwrap_or_else(|| "通用助手".to_string());
+        .unwrap_or_else(|| skill_id.to_string());
     let builtin_description = builtin_config
         .description
-        .unwrap_or_else(|| "处理通用任务：创建和修改文件、分析本地文件数据、整理文件结构、执行命令和浏览器操作".to_string());
+        .unwrap_or_default();
 
     serde_json::json!({
-        "id": "builtin-general",
+        "id": skill_id,
         "name": builtin_name,
         "description": builtin_description,
         "version": "1.0.0",
@@ -28,23 +28,25 @@ fn build_builtin_general_manifest_json() -> String {
     .to_string()
 }
 
-async fn sync_builtin_general_skill(pool: &SqlitePool) -> Result<()> {
-    let builtin_json = build_builtin_general_manifest_json();
+async fn sync_builtin_skills(pool: &SqlitePool) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
-
-    sqlx::query(
-        "INSERT INTO installed_skills (id, manifest, installed_at, username, pack_path, source_type)
-         VALUES ('builtin-general', ?, ?, '', '', 'builtin')
-         ON CONFLICT(id) DO UPDATE SET
-           manifest = excluded.manifest,
-           username = '',
-           pack_path = '',
-           source_type = 'builtin'"
-    )
-    .bind(&builtin_json)
-    .bind(&now)
-    .execute(pool)
-    .await?;
+    for entry in crate::builtin_skills::builtin_skill_entries() {
+        let builtin_json = build_builtin_manifest_json(entry.id, entry.markdown);
+        sqlx::query(
+            "INSERT INTO installed_skills (id, manifest, installed_at, username, pack_path, source_type)
+             VALUES (?, ?, ?, '', '', 'builtin')
+             ON CONFLICT(id) DO UPDATE SET
+               manifest = excluded.manifest,
+               username = '',
+               pack_path = '',
+               source_type = 'builtin'"
+        )
+        .bind(entry.id)
+        .bind(&builtin_json)
+        .bind(&now)
+        .execute(pool)
+        .await?;
+    }
 
     Ok(())
 }
@@ -214,6 +216,137 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
     .execute(&pool)
     .await?;
 
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS im_event_dedup (
+            event_id TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL
+        )"
+    )
+    .execute(&pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS im_thread_bindings (
+            thread_id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL DEFAULT '',
+            scenario_template TEXT NOT NULL DEFAULT 'opportunity_review',
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )"
+    )
+    .execute(&pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS im_thread_roles (
+            thread_id TEXT NOT NULL,
+            role_id TEXT NOT NULL,
+            role_order INTEGER NOT NULL DEFAULT 0,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            PRIMARY KEY (thread_id, role_id)
+        )"
+    )
+    .execute(&pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS im_inbox_events (
+            id TEXT PRIMARY KEY,
+            event_id TEXT NOT NULL,
+            thread_id TEXT NOT NULL,
+            message_id TEXT NOT NULL DEFAULT '',
+            text_preview TEXT NOT NULL DEFAULT '',
+            source TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+        )"
+    )
+    .execute(&pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS agent_employees (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            role_id TEXT NOT NULL,
+            persona TEXT NOT NULL DEFAULT '',
+            feishu_open_id TEXT NOT NULL DEFAULT '',
+            feishu_app_id TEXT NOT NULL DEFAULT '',
+            feishu_app_secret TEXT NOT NULL DEFAULT '',
+            primary_skill_id TEXT NOT NULL DEFAULT '',
+            default_work_dir TEXT NOT NULL DEFAULT '',
+            enabled INTEGER NOT NULL DEFAULT 1,
+            is_default INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )"
+    )
+    .execute(&pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS agent_employee_skills (
+            employee_id TEXT NOT NULL,
+            skill_id TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (employee_id, skill_id)
+        )"
+    )
+    .execute(&pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS im_thread_employee_bindings (
+            thread_id TEXT NOT NULL,
+            employee_id TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            role_order INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (thread_id, employee_id)
+        )"
+    )
+    .execute(&pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS im_thread_sessions (
+            thread_id TEXT NOT NULL,
+            employee_id TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (thread_id, employee_id)
+        )"
+    )
+    .execute(&pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS im_message_links (
+            id TEXT PRIMARY KEY,
+            thread_id TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            employee_id TEXT NOT NULL DEFAULT '',
+            direction TEXT NOT NULL,
+            im_event_id TEXT NOT NULL DEFAULT '',
+            im_message_id TEXT NOT NULL DEFAULT '',
+            app_message_id TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+        )"
+    )
+    .execute(&pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS skill_i18n_cache (
+            cache_key TEXT PRIMARY KEY,
+            source_text TEXT NOT NULL,
+            translated_text TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )"
+    )
+    .execute(&pool)
+    .await?;
+
     // Migration: add api_key column for databases created before this column existed
     let _ = sqlx::query("ALTER TABLE model_configs ADD COLUMN api_key TEXT NOT NULL DEFAULT ''")
         .execute(&pool)
@@ -234,6 +367,14 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
         .execute(&pool)
         .await;
 
+    // Migration: employee-level Feishu credentials
+    let _ = sqlx::query("ALTER TABLE agent_employees ADD COLUMN feishu_app_id TEXT NOT NULL DEFAULT ''")
+        .execute(&pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE agent_employees ADD COLUMN feishu_app_secret TEXT NOT NULL DEFAULT ''")
+        .execute(&pool)
+        .await;
+
     // 默认路由配置
     let _ = sqlx::query("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('route_max_call_depth', '4')")
         .execute(&pool)
@@ -245,8 +386,8 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
         .execute(&pool)
         .await;
 
-    // 内置通用 Skill：始终存在，无需用户安装，且每次启动同步最新 metadata
-    let _ = sync_builtin_general_skill(&pool).await;
+    // 内置 Skill：始终存在，无需用户安装，且每次启动同步最新 metadata
+    let _ = sync_builtin_skills(&pool).await;
 
     Ok(pool)
 }
@@ -281,7 +422,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sync_builtin_general_skill_upserts_manifest_and_source_type() {
+    async fn sync_builtin_skills_upserts_manifest_and_source_type() {
         let pool = setup_memory_pool().await;
         let stale_manifest = serde_json::json!({
             "id": "builtin-general",
@@ -300,9 +441,9 @@ mod tests {
         .await
         .expect("seed stale builtin row");
 
-        sync_builtin_general_skill(&pool)
+        sync_builtin_skills(&pool)
             .await
-            .expect("sync builtin skill");
+            .expect("sync builtin skills");
 
         let (manifest_json, source_type, username, pack_path): (String, String, String, String) = sqlx::query_as(
             "SELECT manifest, source_type, username, pack_path FROM installed_skills WHERE id = 'builtin-general'"
@@ -313,7 +454,10 @@ mod tests {
 
         let manifest: serde_json::Value =
             serde_json::from_str(&manifest_json).expect("parse manifest json");
-        let expected: serde_json::Value = serde_json::from_str(&build_builtin_general_manifest_json())
+        let expected: serde_json::Value = serde_json::from_str(&build_builtin_manifest_json(
+            crate::builtin_skills::BUILTIN_GENERAL_SKILL_ID,
+            crate::builtin_skills::builtin_general_skill_markdown(),
+        ))
             .expect("parse expected manifest");
 
         assert_eq!(manifest["name"], expected["name"]);
@@ -324,22 +468,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sync_builtin_general_skill_is_idempotent() {
+    async fn sync_builtin_skills_is_idempotent() {
         let pool = setup_memory_pool().await;
-        sync_builtin_general_skill(&pool)
+        sync_builtin_skills(&pool)
             .await
             .expect("first sync");
-        sync_builtin_general_skill(&pool)
+        sync_builtin_skills(&pool)
             .await
             .expect("second sync");
 
         let (count,): (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM installed_skills WHERE id = 'builtin-general'"
+            "SELECT COUNT(*) FROM installed_skills WHERE source_type = 'builtin'"
         )
         .fetch_one(&pool)
         .await
-        .expect("count builtin rows");
+        .expect("count builtin skills");
 
-        assert_eq!(count, 1);
+        assert_eq!(count, crate::builtin_skills::builtin_skill_entries().len() as i64);
     }
 }

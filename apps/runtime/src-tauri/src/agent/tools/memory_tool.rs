@@ -56,7 +56,7 @@ impl Tool for MemoryTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["read", "write", "list", "delete"],
+                    "enum": ["read", "write", "list", "delete", "capture_im", "recall_im"],
                     "description": "操作类型"
                 },
                 "key": {
@@ -66,6 +66,30 @@ impl Tool for MemoryTool {
                 "content": {
                     "type": "string",
                     "description": "写入内容（仅 write 操作需要）"
+                },
+                "thread_id": {
+                    "type": "string",
+                    "description": "IM 线程 ID（capture_im / recall_im）"
+                },
+                "role_id": {
+                    "type": "string",
+                    "description": "角色 ID（capture_im / recall_im）"
+                },
+                "category": {
+                    "type": "string",
+                    "description": "记忆分类（fact/decision/risk/rule）"
+                },
+                "confirmed": {
+                    "type": "boolean",
+                    "description": "是否已确认"
+                },
+                "source_msg_id": {
+                    "type": "string",
+                    "description": "来源消息 ID"
+                },
+                "confidence": {
+                    "type": "number",
+                    "description": "置信度 0-1"
                 }
             },
             "required": ["action"]
@@ -137,6 +161,53 @@ impl Tool for MemoryTool {
                 }
                 fs::remove_file(&path)?;
                 Ok(format!("已删除内存键 '{}'", key))
+            }
+            "capture_im" => {
+                let thread_id = input["thread_id"]
+                    .as_str()
+                    .ok_or_else(|| anyhow!("capture_im 操作缺少 thread_id 参数"))?;
+                let role_id = input["role_id"]
+                    .as_str()
+                    .ok_or_else(|| anyhow!("capture_im 操作缺少 role_id 参数"))?;
+                let category = input["category"].as_str().unwrap_or("fact").to_string();
+                let content = input["content"]
+                    .as_str()
+                    .ok_or_else(|| anyhow!("capture_im 操作缺少 content 参数"))?
+                    .to_string();
+                let confirmed = input["confirmed"].as_bool().unwrap_or(false);
+                let source_msg_id = input["source_msg_id"]
+                    .as_str()
+                    .unwrap_or("unknown")
+                    .to_string();
+                let confidence = input["confidence"].as_f64().unwrap_or(0.6) as f32;
+
+                let entry = crate::im::memory::MemoryEntry {
+                    category,
+                    content,
+                    confirmed,
+                    source_msg_id,
+                    author_role: role_id.to_string(),
+                    confidence,
+                };
+                let result = crate::im::memory::capture_entry(&self.memory_dir, thread_id, role_id, &entry)?;
+                Ok(format!(
+                    "IM 记忆写入完成: session_written={}, long_term_written={}",
+                    result.session_written, result.long_term_written
+                ))
+            }
+            "recall_im" => {
+                let thread_id = input["thread_id"]
+                    .as_str()
+                    .ok_or_else(|| anyhow!("recall_im 操作缺少 thread_id 参数"))?;
+                let role_id = input["role_id"]
+                    .as_str()
+                    .ok_or_else(|| anyhow!("recall_im 操作缺少 role_id 参数"))?;
+                let recalled = crate::im::memory::recall_context(&self.memory_dir, thread_id, role_id)?;
+                if recalled.trim().is_empty() {
+                    Ok("无可召回 IM 记忆".to_string())
+                } else {
+                    Ok(recalled)
+                }
             }
             _ => Err(anyhow!("未知操作: {}", action)),
         }

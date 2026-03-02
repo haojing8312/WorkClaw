@@ -3,11 +3,15 @@ import { cors } from 'hono/cors';
 import { serve } from '@hono/node-server';
 import { BrowserController } from './browser.js';
 import { MCPManager } from './mcp.js';
+import { FeishuClient } from './feishu.js';
+import { FeishuLongConnectionManager } from './feishu_ws.js';
 import type { ApiResponse } from './types.js';
 
 const app = new Hono();
 const browser = new BrowserController();
 const mcp = new MCPManager();
+const feishu = new FeishuClient();
+const feishuWs = new FeishuLongConnectionManager();
 
 app.use('/*', cors());
 
@@ -156,6 +160,28 @@ app.post('/api/browser/get_state', async (c) => {
   }
 });
 
+// 页面快照（本地生成，返回 ref -> selector 映射）
+app.post('/api/browser/snapshot', async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({}));
+    const result = await browser.snapshot(body);
+    return c.json({ output: result } as ApiResponse);
+  } catch (e: any) {
+    return c.json({ error: e.message } as ApiResponse, 500);
+  }
+});
+
+// 动作执行（支持基于 ref 的本地自动化）
+app.post('/api/browser/act', async (c) => {
+  try {
+    const body = await c.req.json();
+    const result = await browser.act(body);
+    return c.json({ output: result } as ApiResponse);
+  } catch (e: any) {
+    return c.json({ error: e.message } as ApiResponse, 500);
+  }
+});
+
 // 截取页面截图
 app.post('/api/browser/screenshot', async (c) => {
   try {
@@ -281,6 +307,65 @@ app.post('/api/web/search', async (c) => {
       .join('\n\n');
 
     return c.json({ output: output || '未找到搜索结果' } as ApiResponse);
+  } catch (e: any) {
+    return c.json({ error: e.message } as ApiResponse, 500);
+  }
+});
+
+// ─── Feishu (official SDK) ───────────────────────────────────────
+app.post('/api/feishu/send-message', async (c) => {
+  try {
+    const body = await c.req.json();
+    const result = await feishu.sendMessage(body);
+    return c.json({ output: JSON.stringify(result) } as ApiResponse);
+  } catch (e: any) {
+    return c.json({ error: e.message } as ApiResponse, 500);
+  }
+});
+
+app.post('/api/feishu/list-chats', async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({}));
+    const result = await feishu.listChats(body || {});
+    return c.json({ output: JSON.stringify(result) } as ApiResponse);
+  } catch (e: any) {
+    return c.json({ error: e.message } as ApiResponse, 500);
+  }
+});
+
+app.post('/api/feishu/ws/start', async (c) => {
+  try {
+    const body = await c.req.json();
+    const result = feishuWs.start(body || {});
+    return c.json({ output: JSON.stringify(result) } as ApiResponse);
+  } catch (e: any) {
+    return c.json({ error: e.message } as ApiResponse, 500);
+  }
+});
+
+app.post('/api/feishu/ws/stop', async (_c) => {
+  try {
+    const result = feishuWs.stop();
+    return _c.json({ output: JSON.stringify(result) } as ApiResponse);
+  } catch (e: any) {
+    return _c.json({ error: e.message } as ApiResponse, 500);
+  }
+});
+
+app.post('/api/feishu/ws/status', async (_c) => {
+  try {
+    const result = feishuWs.status();
+    return _c.json({ output: JSON.stringify(result) } as ApiResponse);
+  } catch (e: any) {
+    return _c.json({ error: e.message } as ApiResponse, 500);
+  }
+});
+
+app.post('/api/feishu/ws/drain-events', async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({}));
+    const result = feishuWs.drain(Number(body?.limit || 50));
+    return c.json({ output: JSON.stringify(result) } as ApiResponse);
   } catch (e: any) {
     return c.json({ error: e.message } as ApiResponse, 500);
   }

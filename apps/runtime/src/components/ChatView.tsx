@@ -4,7 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
-import { SkillManifest, ModelConfig, Message, StreamItem, FileAttachment, SkillRouteEvent } from "../types";
+import { SkillManifest, ModelConfig, Message, StreamItem, FileAttachment, SkillRouteEvent, ImRoleTimelineEvent, ImRoleDispatchRequest } from "../types";
 import { motion, AnimatePresence } from "framer-motion";
 import { ToolIsland } from "./ToolIsland";
 
@@ -65,6 +65,7 @@ export function ChatView({ skill, models, sessionId, workDir, onSessionUpdate }:
   const [sidePanelOpen, setSidePanelOpen] = useState(false);
   const [sidePanelTab, setSidePanelTab] = useState<"assets" | "routing">("assets");
   const [routeEvents, setRouteEvents] = useState<SkillRouteEvent[]>([]);
+  const [imRoleEvents, setImRoleEvents] = useState<ImRoleTimelineEvent[]>([]);
 
   // File Upload: 读取文件为文本
   const readFileAsText = (file: File): Promise<string> => {
@@ -189,6 +190,7 @@ export function ChatView({ skill, models, sessionId, workDir, onSessionUpdate }:
     setAgentState(null);
     setToolConfirm(null);
     setRouteEvents([]);
+    setImRoleEvents([]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
@@ -272,6 +274,36 @@ export function ChatView({ skill, models, sessionId, workDir, onSessionUpdate }:
         }
         return [...prev, payload];
       });
+    });
+    return () => {
+      unlistenPromise.then((fn) => fn());
+    };
+  }, [sessionId]);
+
+  useEffect(() => {
+    const unlistenPromise = listen<ImRoleTimelineEvent>("im-role-event", ({ payload }) => {
+      if (payload.session_id !== sessionId) return;
+      setImRoleEvents((prev) => [...prev, payload]);
+    });
+    return () => {
+      unlistenPromise.then((fn) => fn());
+    };
+  }, [sessionId]);
+
+  useEffect(() => {
+    const unlistenPromise = listen<ImRoleDispatchRequest>("im-role-dispatch-request", ({ payload }) => {
+      if (payload.session_id !== sessionId) return;
+      setImRoleEvents((prev) => [
+        ...prev,
+        {
+          session_id: payload.session_id,
+          thread_id: payload.thread_id,
+          role_id: payload.role_id,
+          role_name: payload.role_name,
+          status: "running",
+          summary: `任务已分发(${payload.agent_type})`,
+        },
+      ]);
     });
     return () => {
       unlistenPromise.then((fn) => fn());
@@ -864,6 +896,35 @@ export function ChatView({ skill, models, sessionId, workDir, onSessionUpdate }:
                       <div className="p-2 rounded bg-gray-50 text-red-500">失败: {routeFailed}</div>
                       <div className="p-2 rounded bg-gray-50 text-gray-600">总耗时: {routeTotalDuration}ms</div>
                     </div>
+                  </div>
+
+                  <div className="p-3 bg-white rounded-lg border border-gray-200 shadow-sm">
+                    <div className="text-xs text-gray-500 mb-2">IM 协作时间线</div>
+                    {imRoleEvents.length === 0 ? (
+                      <div className="text-xs text-gray-400">暂无 IM 协作事件</div>
+                    ) : (
+                      <div className="space-y-2">
+                        {imRoleEvents.slice(-8).map((evt, idx) => (
+                          <div key={`${evt.thread_id}-${evt.role_id}-${idx}`} className="text-xs bg-gray-50 rounded p-2">
+                            <div className="flex items-center justify-between">
+                              <span className="font-mono text-gray-700">{evt.role_name}</span>
+                              <span
+                                className={`px-1.5 py-0.5 rounded ${
+                                  evt.status === "completed"
+                                    ? "bg-green-100 text-green-700"
+                                    : evt.status === "failed"
+                                    ? "bg-red-100 text-red-600"
+                                    : "bg-blue-100 text-blue-600"
+                                }`}
+                              >
+                                {evt.status}
+                              </span>
+                            </div>
+                            {evt.summary && <div className="text-gray-500 mt-1">{evt.summary}</div>}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
                   <div>

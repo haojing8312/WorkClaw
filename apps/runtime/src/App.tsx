@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { motion, AnimatePresence } from "framer-motion";
 import { Sidebar } from "./components/Sidebar";
@@ -9,16 +10,17 @@ import { SettingsView } from "./components/SettingsView";
 import { PackagingView } from "./components/packaging/PackagingView";
 import { NewSessionLanding } from "./components/NewSessionLanding";
 import { ExpertsView } from "./components/experts/ExpertsView";
+import { EmployeeHubView } from "./components/employees/EmployeeHubView";
 import {
   ExpertCreatePayload,
   ExpertCreateView,
   ExpertPreviewPayload,
   ExpertPreviewResult,
 } from "./components/experts/ExpertCreateView";
-import { SkillManifest, ModelConfig, SessionInfo } from "./types";
+import { SkillManifest, ModelConfig, SessionInfo, ImRoleDispatchRequest, Message, AgentEmployee, UpsertAgentEmployeeInput } from "./types";
 
-type MainView = "start-task" | "experts" | "experts-new" | "packaging";
-type SkillAction = "refresh" | "delete";
+type MainView = "start-task" | "experts" | "experts-new" | "packaging" | "employees";
+type SkillAction = "refresh" | "delete" | "check-update" | "update";
 const BUILTIN_GENERAL_SKILL_ID = "builtin-general";
 
 function extractErrorMessage(error: unknown, fallback: string): string {
@@ -66,6 +68,9 @@ export default function App() {
   const [pendingImportDir, setPendingImportDir] = useState<string | null>(null);
   const [retryingExpertImport, setRetryingExpertImport] = useState(false);
   const [skillActionState, setSkillActionState] = useState<{ skillId: string; action: SkillAction } | null>(null);
+  const [clawhubUpdateStatus, setClawhubUpdateStatus] = useState<Record<string, { hasUpdate: boolean; message: string }>>({});
+  const [employees, setEmployees] = useState<AgentEmployee[]>([]);
+  const [selectedEmployeeId, setSelectedEmployeeId] = useState<string | null>(null);
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   function navigate(view: MainView) {
@@ -78,13 +83,59 @@ export default function App() {
   useEffect(() => {
     loadSkills();
     loadModels();
+    loadEmployees();
     if (typeof window !== "undefined" && window.location.hash) {
       const raw = window.location.hash.replace(/^#\//, "");
-      if (raw === "experts" || raw === "experts-new" || raw === "packaging" || raw === "start-task") {
+      if (raw === "experts" || raw === "experts-new" || raw === "packaging" || raw === "start-task" || raw === "employees") {
         setActiveMainView(raw);
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (
+      typeof window === "undefined" ||
+      !(window as unknown as { __TAURI_INTERNALS__?: { transformCallback?: unknown } })
+        .__TAURI_INTERNALS__?.transformCallback
+    ) {
+      return;
+    }
+    const seen = new Set<string>();
+    const unlistenPromise = listen<ImRoleDispatchRequest>("im-role-dispatch-request", async ({ payload }) => {
+      const key = `${payload.session_id}|${payload.role_id}|${payload.prompt}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      try {
+        await invoke("send_message", {
+          sessionId: payload.session_id,
+          userMessage: payload.prompt,
+        });
+
+        const messages = await invoke<Message[]>("get_messages", {
+          sessionId: payload.session_id,
+        });
+        const latestAssistant = [...messages]
+          .reverse()
+          .find((m) => m.role === "assistant" && m.content?.trim().length > 0);
+        if (latestAssistant) {
+          await invoke("send_feishu_text_message", {
+            chatId: payload.thread_id,
+            text: `${payload.role_name}: ${latestAssistant.content.slice(0, 1800)}`,
+            appId: null,
+            appSecret: null,
+            sidecarBaseUrl: null,
+          });
+        }
+      } catch (e) {
+        console.error("IM 分发执行失败:", e);
+      } finally {
+        setTimeout(() => seen.delete(key), 30_000);
+      }
+    });
+    return () => {
+      unlistenPromise.then((fn) => fn());
+    };
   }, []);
 
   useEffect(() => {
@@ -114,6 +165,21 @@ export default function App() {
     setModels(list);
   }
 
+  async function loadEmployees(): Promise<AgentEmployee[]> {
+    try {
+      const list = await invoke<AgentEmployee[]>("list_agent_employees");
+      setEmployees(list);
+      setSelectedEmployeeId((prev) => {
+        if (prev && list.some((e) => e.id === prev)) return prev;
+        return list.find((e) => e.is_default)?.id ?? list[0]?.id ?? null;
+      });
+      return list;
+    } catch {
+      setEmployees([]);
+      return [];
+    }
+  }
+
   async function loadSessions(skillId: string) {
     try {
       const list = await invoke<SessionInfo[]>("get_sessions", { skillId });
@@ -135,8 +201,10 @@ export default function App() {
     setCreatingSession(true);
     setCreateSessionError(null);
     try {
+      const selectedEmployee = employees.find((e) => e.id === selectedEmployeeId);
+      const chosenSkill = selectedSkillId || selectedEmployee?.primary_skill_id || BUILTIN_GENERAL_SKILL_ID;
       const id = await invoke<string>("create_session", {
-        skillId: selectedSkillId,
+        skillId: chosenSkill,
         modelId,
         workDir: dir,
         permissionMode: newSessionPermissionMode,
@@ -335,6 +403,75 @@ export default function App() {
     }
   }
 
+  async function handleCheckClawhubUpdate(skillId: string) {
+    if (skillActionState) return;
+    setSkillActionState({ skillId, action: "check-update" });
+    try {
+      const result = await invoke<{ has_update: boolean; message: string }>("check_clawhub_skill_update", {
+        skillId,
+      });
+      setClawhubUpdateStatus((prev) => ({
+        ...prev,
+        [skillId]: {
+          hasUpdate: result.has_update,
+          message: result.message,
+        },
+      }));
+    } catch (e) {
+      console.error("检查 ClawHub 更新失败:", e);
+      setClawhubUpdateStatus((prev) => ({
+        ...prev,
+        [skillId]: {
+          hasUpdate: false,
+          message: "检查失败，请稍后重试",
+        },
+      }));
+    } finally {
+      setSkillActionState(null);
+    }
+  }
+
+  async function handleUpdateClawhubSkill(skillId: string) {
+    if (skillActionState) return;
+    setSkillActionState({ skillId, action: "update" });
+    try {
+      const result = await invoke<{ manifest: SkillManifest }>("update_clawhub_skill", { skillId });
+      await loadSkills();
+      if (result?.manifest?.id) {
+        setSelectedSkillId(result.manifest.id);
+      }
+      setClawhubUpdateStatus((prev) => ({
+        ...prev,
+        [skillId]: {
+          hasUpdate: false,
+          message: "已更新到最新版本",
+        },
+      }));
+    } catch (e) {
+      console.error("更新 ClawHub 技能失败:", e);
+      setClawhubUpdateStatus((prev) => ({
+        ...prev,
+        [skillId]: {
+          hasUpdate: true,
+          message: "更新失败，请稍后重试",
+        },
+      }));
+    } finally {
+      setSkillActionState(null);
+    }
+  }
+
+  async function handleInstallFromLibrary(slug: string) {
+    const result = await invoke<{ manifest: SkillManifest; missing_mcp: string[] }>("install_clawhub_skill", {
+      slug,
+      githubUrl: null,
+    });
+    await loadSkills();
+    if (result?.manifest?.id) {
+      setSelectedSkillId(result.manifest.id);
+    }
+  }
+
   const handleRenderExpertPreview = useCallback(
     async (payload: ExpertPreviewPayload): Promise<ExpertPreviewResult> => {
       const result = await invoke<{ markdown: string; save_path: string }>(
@@ -361,12 +498,65 @@ export default function App() {
   }, [selectedSkillId]);
 
   function handleOpenStartTask() {
+    const mainEmployee = employees.find((e) => e.is_default) ?? employees[0];
+    if (mainEmployee) {
+      setSelectedEmployeeId(mainEmployee.id);
+      if (mainEmployee.primary_skill_id) {
+        setSelectedSkillId(mainEmployee.primary_skill_id);
+      }
+    }
     setSelectedSkillId((prev) => {
       if (prev && skills.some((item) => item.id === prev)) {
         return prev;
       }
       return getDefaultSkillId(skills);
     });
+    navigate("start-task");
+  }
+
+  async function handleSaveEmployee(input: UpsertAgentEmployeeInput) {
+    await invoke<string>("upsert_agent_employee", { input });
+    const latest = await loadEmployees();
+    const target = input.id
+      ? latest.find((e) => e.id === input.id)
+      : latest.find((e) => e.name === input.name && e.role_id === input.role_id);
+    if (target) {
+      setSelectedEmployeeId(target.id);
+      if (target.is_default && target.primary_skill_id) {
+        setSelectedSkillId(target.primary_skill_id);
+      }
+    }
+  }
+
+  async function handleDeleteEmployee(employeeId: string) {
+    await invoke("delete_agent_employee", { employeeId });
+    await loadEmployees();
+  }
+
+  async function handleSetAsMainAndEnter(employeeId: string) {
+    const employee = employees.find((e) => e.id === employeeId);
+    if (!employee) return;
+    await invoke<string>("upsert_agent_employee", {
+      input: {
+        id: employee.id,
+        name: employee.name,
+        role_id: employee.role_id,
+        persona: employee.persona,
+        feishu_open_id: employee.feishu_open_id,
+        feishu_app_id: employee.feishu_app_id,
+        feishu_app_secret: employee.feishu_app_secret,
+        primary_skill_id: employee.primary_skill_id,
+        default_work_dir: employee.default_work_dir,
+        enabled: employee.enabled,
+        is_default: true,
+        skill_ids: employee.skill_ids,
+      } as UpsertAgentEmployeeInput,
+    });
+    await loadEmployees();
+    setSelectedEmployeeId(employeeId);
+    if (employee.primary_skill_id) {
+      setSelectedSkillId(employee.primary_skill_id);
+    }
     navigate("start-task");
   }
 
@@ -386,6 +576,7 @@ export default function App() {
         activeMainView={activeMainView}
         onOpenStartTask={handleOpenStartTask}
         onOpenExperts={() => navigate("experts")}
+        onOpenEmployees={() => navigate("employees")}
         selectedSkillId={selectedSkillId}
         sessions={sessions}
         selectedSessionId={selectedSessionId}
@@ -478,11 +669,34 @@ export default function App() {
                   navigate("experts-new");
                 }}
                 onOpenPackaging={() => navigate("packaging")}
+                onInstallFromLibrary={handleInstallFromLibrary}
                 onStartTaskWithSkill={handleStartTaskWithSkill}
                 onRefreshLocalSkill={handleRefreshLocalSkill}
+                onCheckClawhubUpdate={handleCheckClawhubUpdate}
+                onUpdateClawhubSkill={handleUpdateClawhubSkill}
                 onDeleteSkill={handleDeleteSkill}
+                clawhubUpdateStatus={clawhubUpdateStatus}
                 busySkillId={skillActionState?.skillId}
                 busyAction={skillActionState?.action ?? null}
+              />
+            </motion.div>
+          ) : activeMainView === "employees" ? (
+            <motion.div
+              key="employees"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              className="h-full"
+            >
+              <EmployeeHubView
+                employees={employees}
+                skills={skills}
+                selectedEmployeeId={selectedEmployeeId}
+                onSelectEmployee={setSelectedEmployeeId}
+                onSaveEmployee={handleSaveEmployee}
+                onDeleteEmployee={handleDeleteEmployee}
+                onSetAsMainAndEnter={handleSetAsMainAndEnter}
               />
             </motion.div>
           ) : selectedSkill && models.length > 0 && selectedSessionId ? (

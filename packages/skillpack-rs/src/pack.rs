@@ -10,6 +10,43 @@ use anyhow::{Result, anyhow};
 use crate::crypto::{derive_key, encrypt, make_verify_token};
 use crate::types::{PackConfig, SkillManifest};
 
+fn has_root_skill_markdown(skill_dir: &Path) -> bool {
+    if skill_dir.join("SKILL.md").exists() || skill_dir.join("skill.md").exists() {
+        return true;
+    }
+
+    let entries = match fs::read_dir(skill_dir) {
+        Ok(entries) => entries,
+        Err(_) => return false,
+    };
+
+    entries
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.path().is_file())
+        .any(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .eq_ignore_ascii_case("skill.md")
+        })
+}
+
+fn canonical_rel_path(rel: &Path) -> String {
+    let mut rel_str = rel.to_string_lossy().replace('\\', "/");
+    if rel
+        .parent()
+        .map(|p| p.as_os_str().is_empty())
+        .unwrap_or(true)
+        && rel
+            .file_name()
+            .map(|name| name.to_string_lossy().eq_ignore_ascii_case("skill.md"))
+            .unwrap_or(false)
+    {
+        rel_str = "SKILL.md".to_string();
+    }
+    rel_str
+}
+
 /// Parse SKILL.md front matter (---\n...\n---\n)
 pub fn parse_front_matter(content: &str) -> crate::types::FrontMatter {
     let mut fm = crate::types::FrontMatter {
@@ -40,8 +77,7 @@ pub fn parse_front_matter(content: &str) -> crate::types::FrontMatter {
 
 pub fn pack(config: &PackConfig) -> Result<()> {
     let skill_dir = Path::new(&config.dir_path);
-    let skill_md = skill_dir.join("SKILL.md");
-    if !skill_md.exists() {
+    if !has_root_skill_markdown(skill_dir) {
         return Err(anyhow!("SKILL.md not found in {:?}", skill_dir));
     }
 
@@ -75,7 +111,7 @@ pub fn pack(config: &PackConfig) -> Result<()> {
         if entry.file_type().is_dir() { continue; }
         let abs_path = entry.path();
         let rel = abs_path.strip_prefix(skill_dir)?;
-        let rel_str = rel.to_string_lossy().replace('\\', "/");
+        let rel_str = canonical_rel_path(rel);
 
         let plaintext = fs::read(abs_path)?;
         let ciphertext = encrypt(&plaintext, &key)?;
@@ -94,6 +130,7 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
     use std::fs;
+    use std::io::Read;
 
     fn make_test_skill_dir(dir: &Path) {
         fs::write(dir.join("SKILL.md"), "---\nname: Test Skill\nversion: 1.0.0\n---\n\n# Test\nYou are a test assistant.").unwrap();
@@ -138,5 +175,43 @@ mod tests {
             output_path: dir.path().join("out.skillpack").to_string_lossy().to_string(),
         };
         assert!(pack(&config).is_err());
+    }
+
+    #[test]
+    fn test_pack_normalizes_lowercase_skill_md_path() {
+        let dir = tempdir().unwrap();
+        let skill_dir = dir.path().join("skill");
+        fs::create_dir(&skill_dir).unwrap();
+        fs::write(skill_dir.join("skill.md"), "---\nname: Lower\n---\n").unwrap();
+
+        let output = dir.path().join("lower.skillpack");
+        let config = PackConfig {
+            dir_path: skill_dir.to_string_lossy().to_string(),
+            name: "Lower".to_string(),
+            description: "".to_string(),
+            version: "1.0.0".to_string(),
+            author: "tester".to_string(),
+            username: "alice".to_string(),
+            recommended_model: "claude-3-5-sonnet-20241022".to_string(),
+            output_path: output.to_string_lossy().to_string(),
+        };
+        pack(&config).unwrap();
+
+        let file = fs::File::open(output).unwrap();
+        let mut zip = zip::ZipArchive::new(file).unwrap();
+        let mut has_upper = false;
+        for i in 0..zip.len() {
+            let entry = zip.by_index(i).unwrap();
+            if entry.name() == "encrypted/SKILL.md.enc" {
+                has_upper = true;
+                break;
+            }
+        }
+        assert!(has_upper, "expected encrypted/SKILL.md.enc in archive");
+
+        let mut skill_entry = zip.by_name("encrypted/SKILL.md.enc").unwrap();
+        let mut encrypted_bytes = Vec::new();
+        skill_entry.read_to_end(&mut encrypted_bytes).unwrap();
+        assert!(!encrypted_bytes.is_empty());
     }
 }

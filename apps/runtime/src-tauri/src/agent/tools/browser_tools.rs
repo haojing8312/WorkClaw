@@ -3,7 +3,7 @@ use crate::agent::tools::SidecarBridgeTool;
 use serde_json::json;
 use std::sync::Arc;
 
-/// 注册 15 个浏览器工具到 ToolRegistry
+/// 注册 17 个浏览器工具到 ToolRegistry
 ///
 /// 所有浏览器工具通过 SidecarBridgeTool 桥接到 Node.js Sidecar 的 Playwright 端点。
 /// 这些工具不在 `with_file_tools()` 中注册，而是在 chat.rs 中动态注册，
@@ -305,10 +305,88 @@ pub fn register_browser_tools(registry: &ToolRegistry, sidecar_url: &str) {
             "properties": {}
         }),
     )));
+
+    // 16. browser_snapshot - 获取页面快照
+    registry.register(Arc::new(SidecarBridgeTool::new(
+        sidecar_url.to_string(),
+        "/api/browser/snapshot".to_string(),
+        "browser_snapshot".to_string(),
+        "获取页面快照。支持 ai/aria 格式，返回 ref 映射用于后续 browser_act。".to_string(),
+        json!({
+            "type": "object",
+            "properties": {
+                "format": {
+                    "type": "string",
+                    "enum": ["ai", "aria"],
+                    "description": "快照格式，ai 或 aria"
+                },
+                "targetId": { "type": "string", "description": "目标标签页 ID" },
+                "limit": { "type": "integer", "description": "快照节点数量限制" },
+                "maxChars": { "type": "integer", "description": "快照文本最大长度" },
+                "mode": { "type": "string", "description": "快照模式（如 efficient）" },
+                "refs": { "type": "string", "enum": ["role", "aria"], "description": "ref 生成模式" },
+                "interactive": { "type": "boolean", "description": "是否交互式快照" },
+                "compact": { "type": "boolean", "description": "是否压缩快照输出" },
+                "depth": { "type": "integer", "description": "快照深度" },
+                "selector": { "type": "string", "description": "限制快照的 CSS 选择器" },
+                "frame": { "type": "string", "description": "限制快照的 frame 选择器" },
+                "labels": { "type": "boolean", "description": "是否返回标签信息" }
+            }
+        }),
+    )));
+
+    // 17. browser_act - 执行动作
+    registry.register(Arc::new(SidecarBridgeTool::new(
+        sidecar_url.to_string(),
+        "/api/browser/act".to_string(),
+        "browser_act".to_string(),
+        "执行浏览器动作。支持 click/type/press/hover/select/wait/evaluate/close 等。".to_string(),
+        json!({
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "type": "string",
+                    "enum": ["click", "type", "press", "hover", "drag", "select", "fill", "resize", "wait", "evaluate", "close"],
+                    "description": "动作类型"
+                },
+                "targetId": { "type": "string", "description": "目标标签页 ID" },
+                "ref": { "type": "string", "description": "快照引用或选择器（回退模式）" },
+                "selector": { "type": "string", "description": "CSS 选择器（回退模式）" },
+                "startRef": { "type": "string", "description": "拖拽起点 ref（drag）" },
+                "endRef": { "type": "string", "description": "拖拽终点 ref（drag）" },
+                "startSelector": { "type": "string", "description": "拖拽起点选择器（drag）" },
+                "endSelector": { "type": "string", "description": "拖拽终点选择器（drag）" },
+                "fields": {
+                    "type": "array",
+                    "description": "批量填充字段（fill）",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "selector": { "type": "string" },
+                            "ref": { "type": "string" },
+                            "text": { "type": "string" }
+                        }
+                    }
+                },
+                "text": { "type": "string", "description": "输入文本（type）" },
+                "key": { "type": "string", "description": "按键（press）" },
+                "values": { "type": "array", "items": { "type": "string" }, "description": "选择值（select）" },
+                "width": { "type": "integer", "description": "视口宽度（resize）" },
+                "height": { "type": "integer", "description": "视口高度（resize）" },
+                "timeMs": { "type": "integer", "description": "等待时长（wait）" },
+                "timeoutMs": { "type": "integer", "description": "等待时长（wait）" },
+                "textGone": { "type": "string", "description": "等待文本消失（wait）" },
+                "fn": { "type": "string", "description": "执行脚本（evaluate）" },
+                "submit": { "type": "boolean", "description": "输入后是否回车提交（type）" },
+                "slowly": { "type": "boolean", "description": "是否慢速输入（type）" }
+            },
+            "required": ["kind"]
+        }),
+    )));
 }
 
 /// 所有浏览器工具名称列表，用于白名单或批量操作
-pub const BROWSER_TOOL_NAMES: [&str; 15] = [
+pub const BROWSER_TOOL_NAMES: [&str; 17] = [
     "browser_launch",
     "browser_navigate",
     "browser_click",
@@ -324,4 +402,6 @@ pub const BROWSER_TOOL_NAMES: [&str; 15] = [
     "browser_go_forward",
     "browser_reload",
     "browser_get_state",
+    "browser_snapshot",
+    "browser_act",
 ];

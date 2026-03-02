@@ -3,9 +3,10 @@ import { motion, AnimatePresence } from "framer-motion";
 import { SessionInfo } from "../types";
 
 interface Props {
-  activeMainView: "start-task" | "experts" | "experts-new" | "packaging";
+  activeMainView: "start-task" | "experts" | "experts-new" | "packaging" | "employees";
   onOpenStartTask: () => void;
   onOpenExperts: () => void;
+  onOpenEmployees: () => void;
   selectedSkillId: string | null;
   sessions: SessionInfo[];
   selectedSessionId: string | null;
@@ -24,6 +25,7 @@ export function Sidebar({
   activeMainView,
   onOpenStartTask,
   onOpenExperts,
+  onOpenEmployees,
   selectedSkillId,
   sessions,
   selectedSessionId,
@@ -41,6 +43,7 @@ export function Sidebar({
 
   const isStartTask = activeMainView === "start-task";
   const isExperts = activeMainView === "experts" || activeMainView === "experts-new";
+  const isEmployees = activeMainView === "employees";
 
   function handleSearchChange(value: string) {
     setSearchQuery(value);
@@ -79,6 +82,16 @@ export function Sidebar({
           ◆
         </button>
         <button
+          onClick={onOpenEmployees}
+          className={`w-8 h-8 flex items-center justify-center rounded transition-colors ${
+            isEmployees ? "bg-blue-50 text-blue-600" : "text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+          }`}
+          title="智能体员工"
+          aria-label="智能体员工"
+        >
+          ◎
+        </button>
+        <button
           onClick={onSettings}
           className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded transition-colors mt-auto"
           title="设置"
@@ -104,7 +117,7 @@ export function Sidebar({
       </div>
 
       <div className="px-3 py-2 border-b border-gray-200">
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-3 gap-2">
           <button
             onClick={onOpenStartTask}
             className={
@@ -122,6 +135,15 @@ export function Sidebar({
             }
           >
             专家技能
+          </button>
+          <button
+            onClick={onOpenEmployees}
+            className={
+              "text-xs py-1.5 rounded-md transition-colors " +
+              (isEmployees ? "bg-blue-500 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200")
+            }
+          >
+            智能体员工
           </button>
         </div>
       </div>

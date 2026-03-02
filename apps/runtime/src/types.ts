@@ -10,6 +10,35 @@ export interface SkillManifest {
   username_hint?: string;
 }
 
+export interface ClawhubSkillSummary {
+  name: string;
+  slug: string;
+  description: string;
+  github_url?: string | null;
+  source_url?: string | null;
+  stars: number;
+}
+
+export interface ClawhubLibraryItem {
+  slug: string;
+  name: string;
+  summary: string;
+  tags: string[];
+  stars: number;
+  downloads: number;
+}
+
+export interface ClawhubSkillRecommendation {
+  slug: string;
+  name: string;
+  description: string;
+  stars: number;
+  score: number;
+  reason: string;
+  github_url?: string | null;
+  source_url?: string | null;
+}
+
 export interface ModelConfig {
   id: string;
   name: string;
@@ -157,6 +186,106 @@ export interface SkillRouteEvent {
   duration_ms?: number;
   error_code?: string;
   error_message?: string;
+}
+
+export interface ImRoleTimelineEvent {
+  session_id: string;
+  thread_id: string;
+  role_id: string;
+  role_name: string;
+  status: "running" | "completed" | "failed" | string;
+  summary?: string;
+  duration_ms?: number;
+}
+
+export interface ImRoleDispatchRequest {
+  session_id: string;
+  thread_id: string;
+  role_id: string;
+  role_name: string;
+  prompt: string;
+  agent_type: string;
+}
+
+export interface FeishuGatewaySettings {
+  app_id: string;
+  app_secret: string;
+  ingress_token: string;
+  encrypt_key: string;
+  sidecar_base_url: string;
+}
+
+export interface FeishuWsStatus {
+  running: boolean;
+  started_at?: string | null;
+  queued_events: number;
+}
+
+export interface FeishuEventRelayStatus {
+  running: boolean;
+  generation: number;
+  interval_ms: number;
+  total_accepted: number;
+  last_error?: string | null;
+}
+
+export interface FeishuChatInfo {
+  chat_id: string;
+  name: string;
+  description?: string;
+  owner_id?: string;
+}
+
+export interface RecentImThread {
+  thread_id: string;
+  source: string;
+  last_text_preview: string;
+  last_seen_at: string;
+}
+
+export interface ThreadRoleConfig {
+  thread_id: string;
+  tenant_id: string;
+  scenario_template: string;
+  status: string;
+  roles: string[];
+}
+
+export interface AgentEmployee {
+  id: string;
+  name: string;
+  role_id: string;
+  persona: string;
+  feishu_open_id: string;
+  feishu_app_id: string;
+  feishu_app_secret: string;
+  primary_skill_id: string;
+  default_work_dir: string;
+  enabled: boolean;
+  is_default: boolean;
+  skill_ids: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UpsertAgentEmployeeInput {
+  id?: string;
+  name: string;
+  role_id: string;
+  persona: string;
+  feishu_open_id: string;
+  feishu_app_id: string;
+  feishu_app_secret: string;
+  primary_skill_id: string;
+  default_work_dir: string;
+  enabled: boolean;
+  is_default: boolean;
+  skill_ids: string[];
+}
+
+export interface ThreadEmployeeBinding {
+  thread_id: string;
+  employee_ids: string[];
 }
 
 /// 文件附件（用于 File Upload 功能）

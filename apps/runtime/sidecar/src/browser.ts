@@ -30,6 +30,46 @@ interface BrowserState {
   running: boolean;
   url: string | null;
   title: string | null;
+  backend: 'playwright';
+  snapshotRefs: number;
+}
+
+interface SnapshotOptions {
+  format?: 'ai' | 'aria';
+  targetId?: string;
+  limit?: number;
+  maxChars?: number;
+  mode?: string;
+  refs?: 'role' | 'aria';
+  interactive?: boolean;
+  compact?: boolean;
+  depth?: number;
+  selector?: string;
+  frame?: string;
+  labels?: boolean;
+}
+
+interface BrowserActRequest {
+  kind: 'click' | 'type' | 'press' | 'hover' | 'drag' | 'select' | 'fill' | 'resize' | 'wait' | 'evaluate' | 'close';
+  targetId?: string;
+  ref?: string;
+  selector?: string;
+  startRef?: string;
+  endRef?: string;
+  startSelector?: string;
+  endSelector?: string;
+  fields?: Array<{ selector?: string; ref?: string; text?: string }>;
+  text?: string;
+  key?: string;
+  values?: string[];
+  width?: number;
+  height?: number;
+  timeMs?: number;
+  timeoutMs?: number;
+  textGone?: string;
+  fn?: string;
+  submit?: boolean;
+  slowly?: boolean;
 }
 
 /**
@@ -42,6 +82,8 @@ export class BrowserController {
   private browser: Browser | null = null;
   private context: BrowserContext | null = null;
   private page: Page | null = null;
+  private backend: 'playwright' = 'playwright';
+  private refToSelector = new Map<string, string>();
 
   // ─── stealth 反检测脚本 ───────────────────────────────────────────
   // 参考 puppeteer-extra-plugin-stealth 的核心技术，
@@ -150,7 +192,6 @@ export class BrowserController {
 
     const headless = options?.headless ?? false;
     const viewport = options?.viewport ?? { width: 1280, height: 720 };
-
     this.browser = await chromium.launch({
       headless,
       args: [
@@ -161,19 +202,26 @@ export class BrowserController {
         '--no-default-browser-check',
       ],
     });
+    this.backend = 'playwright';
 
-    this.context = await this.browser.newContext({
-      viewport,
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-      locale: 'zh-CN',
-    });
+    const existingContext = this.browser.contexts()[0];
+    if (existingContext) {
+      this.context = existingContext;
+    } else {
+      this.context = await this.browser.newContext({
+        viewport,
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        locale: 'zh-CN',
+      });
+    }
 
     // 注入 stealth 反检测脚本
     await this.applyStealthToContext(this.context);
 
-    this.page = await this.context.newPage();
+    const existingPage = this.context.pages()[0];
+    this.page = existingPage ?? await this.context.newPage();
 
-    return `浏览器已启动 (headless=${headless}, viewport=${viewport.width}x${viewport.height})`;
+    return `浏览器已启动 (backend=playwright, headless=${headless}, viewport=${viewport.width}x${viewport.height})`;
   }
 
   /**
@@ -182,6 +230,7 @@ export class BrowserController {
   async navigate(url: string): Promise<string> {
     await this.ensureBrowser();
     await this.page!.goto(url, { waitUntil: 'domcontentloaded' });
+    this.refToSelector.clear();
     return `已导航到 ${url}`;
   }
 
@@ -358,6 +407,7 @@ export class BrowserController {
   async goBack(): Promise<string> {
     await this.ensureBrowser();
     await this.page!.goBack({ waitUntil: 'domcontentloaded' });
+    this.refToSelector.clear();
     const url = this.page!.url();
     return `已后退到 ${url}`;
   }
@@ -368,6 +418,7 @@ export class BrowserController {
   async goForward(): Promise<string> {
     await this.ensureBrowser();
     await this.page!.goForward({ waitUntil: 'domcontentloaded' });
+    this.refToSelector.clear();
     const url = this.page!.url();
     return `已前进到 ${url}`;
   }
@@ -378,6 +429,7 @@ export class BrowserController {
   async reload(): Promise<string> {
     await this.ensureBrowser();
     await this.page!.reload({ waitUntil: 'domcontentloaded' });
+    this.refToSelector.clear();
     return `已刷新页面: ${this.page!.url()}`;
   }
 
@@ -389,8 +441,193 @@ export class BrowserController {
       running: this.browser !== null,
       url: this.page ? this.page.url() : null,
       title: this.page ? await this.page.title() : null,
+      backend: this.backend,
+      snapshotRefs: this.refToSelector.size,
     };
     return JSON.stringify(state);
+  }
+
+  async snapshot(options?: SnapshotOptions): Promise<string> {
+    await this.ensureBrowser();
+    const opts = options ?? {};
+    const limit = opts.limit ?? 200;
+    const interactiveOnly = opts.interactive ?? false;
+
+    const raw = await this.page!.evaluate(
+      ({ selector, limit, interactiveOnly }: { selector?: string; limit: number; interactiveOnly: boolean }) => {
+        function isVisible(el: Element): boolean {
+          const style = window.getComputedStyle(el);
+          if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+          const rect = el.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0;
+        }
+
+        function toSelector(el: Element): string {
+          if (el.id) return `#${CSS.escape(el.id)}`;
+          const testId = el.getAttribute('data-testid');
+          if (testId) return `[data-testid="${testId}"]`;
+          const name = el.getAttribute('name');
+          if (name) return `${el.tagName.toLowerCase()}[name="${name}"]`;
+
+          const parts: string[] = [];
+          let cur: Element | null = el;
+          while (cur && cur !== document.body) {
+            const tag = cur.tagName.toLowerCase();
+            const parent: Element | null = cur.parentElement;
+            if (!parent) break;
+            const siblings = Array.from(parent.children as unknown as Element[]).filter(
+              (child: Element) => child.tagName === cur!.tagName,
+            );
+            const index = siblings.indexOf(cur) + 1;
+            parts.unshift(`${tag}:nth-of-type(${index})`);
+            cur = parent;
+          }
+          return `body > ${parts.join(' > ')}`;
+        }
+
+        const root = selector ? document.querySelector(selector) : document.body;
+        if (!root) return { error: `未找到匹配 "${selector}" 的元素` };
+
+        const interactiveSelector = 'a,button,input,textarea,select,[role="button"],[role="link"],[onclick],[tabindex]';
+        const candidates = interactiveOnly
+          ? Array.from(root.querySelectorAll(interactiveSelector))
+          : Array.from(root.querySelectorAll('*'));
+
+        const items: Array<{ tag: string; text: string; selector: string }> = [];
+        for (const el of candidates) {
+          if (items.length >= limit) break;
+          if (!isVisible(el)) continue;
+          const text = ((el as HTMLElement).innerText || el.getAttribute('aria-label') || '').trim().replace(/\s+/g, ' ');
+          items.push({
+            tag: el.tagName.toLowerCase(),
+            text: text.slice(0, 120),
+            selector: toSelector(el),
+          });
+        }
+
+        return {
+          url: location.href,
+          title: document.title,
+          items,
+        };
+      },
+      { selector: opts.selector, limit, interactiveOnly },
+    );
+
+    if ((raw as any).error) {
+      throw new Error((raw as any).error);
+    }
+
+    this.refToSelector.clear();
+    const refs: Record<string, string> = {};
+    const lines: string[] = [];
+    (raw as any).items.forEach((item: { tag: string; text: string; selector: string }, idx: number) => {
+      const ref = `e${idx + 1}`;
+      this.refToSelector.set(ref, item.selector);
+      refs[ref] = item.selector;
+      const label = item.text ? ` "${item.text}"` : '';
+      lines.push(`[${ref}] <${item.tag}>${label}`);
+    });
+
+    return JSON.stringify({
+      format: opts.format ?? 'ai',
+      targetId: opts.targetId ?? null,
+      url: (raw as any).url,
+      title: (raw as any).title,
+      refs,
+      stats: {
+        refs: Object.keys(refs).length,
+        interactive: interactiveOnly,
+      },
+      snapshot: lines.join('\n'),
+    });
+  }
+
+  async act(request: BrowserActRequest): Promise<string> {
+    await this.ensureBrowser();
+    const selector = this.resolveSelector(request.selector, request.ref);
+    switch (request.kind) {
+      case 'click':
+        if (!selector) throw new Error('click 需要 selector 或 ref');
+        await this.page!.click(selector);
+        return `已点击 ${selector}`;
+      case 'type':
+        if (!selector) throw new Error('type 需要 selector 或 ref');
+        if (request.slowly) {
+          await this.page!.click(selector);
+          await this.page!.type(selector, request.text ?? '', { delay: 60 });
+        } else {
+          await this.page!.fill(selector, request.text ?? '');
+        }
+        if (request.submit) {
+          await this.page!.keyboard.press('Enter');
+        }
+        return `已在 ${selector} 输入文本`;
+      case 'press':
+        if (!request.key) throw new Error('press 需要 key');
+        await this.page!.keyboard.press(request.key);
+        return `已按下 ${request.key}`;
+      case 'hover':
+        if (!selector) throw new Error('hover 需要 selector 或 ref');
+        await this.page!.hover(selector);
+        return `已悬停 ${selector}`;
+      case 'select':
+        if (!selector) throw new Error('select 需要 selector 或 ref');
+        await this.page!.selectOption(selector, request.values ?? []);
+        return `已在 ${selector} 选择选项`;
+      case 'wait':
+        if (request.textGone) {
+          await this.page!.waitForFunction(
+            (text: string) => !document.body.innerText.includes(text),
+            request.textGone,
+            { timeout: request.timeoutMs ?? request.timeMs ?? 30000 },
+          );
+          return `已等待文本消失: ${request.textGone}`;
+        }
+        await this.page!.waitForTimeout(request.timeoutMs ?? request.timeMs ?? 1000);
+        return `已等待 ${request.timeoutMs ?? request.timeMs ?? 1000}ms`;
+      case 'drag': {
+        const start = this.resolveSelector(request.startSelector, request.startRef);
+        const end = this.resolveSelector(request.endSelector, request.endRef);
+        if (!start || !end) throw new Error('drag 需要 startRef/startSelector 和 endRef/endSelector');
+        await this.page!.dragAndDrop(start, end);
+        return `已拖拽 ${start} -> ${end}`;
+      }
+      case 'fill': {
+        const fields = request.fields ?? [];
+        for (const field of fields) {
+          const fieldSelector = this.resolveSelector(field.selector, field.ref);
+          if (!fieldSelector) continue;
+          await this.page!.fill(fieldSelector, field.text ?? '');
+        }
+        return `已批量填充 ${fields.length} 个字段`;
+      }
+      case 'resize':
+        await this.page!.setViewportSize({
+          width: request.width ?? 1280,
+          height: request.height ?? 720,
+        });
+        return `已调整视口为 ${request.width ?? 1280}x${request.height ?? 720}`;
+      case 'evaluate': {
+        if (!request.fn) throw new Error('evaluate 需要 fn');
+        const result = await this.page!.evaluate(request.fn);
+        return JSON.stringify(result);
+      }
+      case 'close':
+        await this.close();
+        return '浏览器已关闭';
+      default:
+        throw new Error(`暂不支持的 act.kind: ${request.kind}`);
+    }
+  }
+
+  private resolveSelector(selector?: string, ref?: string): string | undefined {
+    if (selector && selector.trim()) return selector;
+    if (!ref) return undefined;
+    if (ref.startsWith('e')) {
+      return this.refToSelector.get(ref);
+    }
+    return ref;
   }
 
   /**
@@ -428,6 +665,7 @@ export class BrowserController {
       this.browser = null;
       this.context = null;
       this.page = null;
+      this.refToSelector.clear();
     }
   }
 }

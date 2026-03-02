@@ -1,15 +1,22 @@
+import { useMemo, useState } from "react";
 import { SkillManifest } from "../../types";
+import { SkillLibraryView } from "./SkillLibraryView";
+import { FindSkillsView } from "./FindSkillsView";
 
 interface Props {
   skills: SkillManifest[];
   onInstallSkill: () => void;
   onCreate: () => void;
   onOpenPackaging: () => void;
+  onInstallFromLibrary: (slug: string) => Promise<void>;
   onStartTaskWithSkill: (skillId: string) => void;
   onRefreshLocalSkill: (skillId: string) => void;
+  onCheckClawhubUpdate: (skillId: string) => void;
+  onUpdateClawhubSkill: (skillId: string) => void;
   onDeleteSkill: (skillId: string) => void;
+  clawhubUpdateStatus?: Record<string, { hasUpdate: boolean; message: string }>;
   busySkillId?: string;
-  busyAction?: "refresh" | "delete" | null;
+  busyAction?: "refresh" | "delete" | "check-update" | "update" | null;
 }
 
 export function ExpertsView({
@@ -17,16 +24,28 @@ export function ExpertsView({
   onInstallSkill,
   onCreate,
   onOpenPackaging,
+  onInstallFromLibrary,
   onStartTaskWithSkill,
   onRefreshLocalSkill,
+  onCheckClawhubUpdate,
+  onUpdateClawhubSkill,
   onDeleteSkill,
+  clawhubUpdateStatus,
   busySkillId,
   busyAction,
 }: Props) {
+  const [activeTab, setActiveTab] = useState<"mine" | "library" | "finder">("mine");
   const visibleSkills = skills.filter((skill) => skill.id !== "builtin-general");
   const totalSkills = visibleSkills.length;
+  const builtinSkills = visibleSkills.filter((skill) => skill.id.startsWith("builtin-")).length;
   const localSkills = visibleSkills.filter((skill) => skill.id.startsWith("local-")).length;
-  const installedSkills = visibleSkills.filter((skill) => !skill.id.startsWith("local-")).length;
+  const installedSkills = visibleSkills.filter(
+    (skill) => !skill.id.startsWith("local-") && !skill.id.startsWith("builtin-")
+  ).length;
+  const installedSkillIds = useMemo(
+    () => new Set(visibleSkills.map((skill) => skill.id)),
+    [visibleSkills]
+  );
 
   return (
     <div className="h-full overflow-y-auto bg-gray-50">
@@ -43,6 +62,9 @@ export function ExpertsView({
               </span>
               <span className="inline-flex items-center px-2.5 py-1 rounded-full bg-green-50 text-green-700 text-xs border border-green-100">
                 本地创建 {localSkills}
+              </span>
+              <span className="inline-flex items-center px-2.5 py-1 rounded-full bg-purple-50 text-purple-700 text-xs border border-purple-100">
+                产品内置 {builtinSkills}
               </span>
               <span className="inline-flex items-center px-2.5 py-1 rounded-full bg-amber-50 text-amber-700 text-xs border border-amber-100">
                 外部安装 {installedSkills}
@@ -72,20 +94,52 @@ export function ExpertsView({
         </div>
 
         <div className="border-b border-gray-200 mb-5">
-          <div className="inline-flex items-center px-2 py-2 text-sm font-medium text-blue-600 border-b-2 border-blue-500">
-            我的技能
+          <div className="inline-flex items-center">
+            <button
+              onClick={() => setActiveTab("mine")}
+              className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === "mine"
+                  ? "text-blue-600 border-blue-500"
+                  : "text-gray-500 border-transparent hover:text-gray-700"
+              }`}
+            >
+              我的技能
+            </button>
+            <button
+              onClick={() => setActiveTab("library")}
+              className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === "library"
+                  ? "text-blue-600 border-blue-500"
+                  : "text-gray-500 border-transparent hover:text-gray-700"
+              }`}
+            >
+              技能库
+            </button>
+            <button
+              onClick={() => setActiveTab("finder")}
+              className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === "finder"
+                  ? "text-blue-600 border-blue-500"
+                  : "text-gray-500 border-transparent hover:text-gray-700"
+              }`}
+            >
+              找技能
+            </button>
           </div>
         </div>
 
-        {visibleSkills.length === 0 ? (
+        {activeTab === "mine" && visibleSkills.length === 0 ? (
           <div className="rounded-xl border border-dashed border-gray-200 bg-white px-4 py-10 text-center text-sm text-gray-400">
             暂无技能，点击右上角“创建”开始沉淀你的第一个专家技能。
           </div>
-        ) : (
+        ) : activeTab === "mine" ? (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
             {visibleSkills.map((skill) => {
+              const isBuiltin = skill.id.startsWith("builtin-");
               const isLocal = skill.id.startsWith("local-");
-              const source = isLocal ? "本地" : "已安装";
+              const isClawhub = skill.id.startsWith("clawhub-");
+              const source = isBuiltin ? "内置" : isLocal ? "本地" : "已安装";
+              const updateState = clawhubUpdateStatus?.[skill.id];
               return (
                 <div key={skill.id} className="bg-white border border-gray-200 rounded-xl p-4">
                   <div className="flex items-center justify-between gap-2 mb-2">
@@ -96,6 +150,14 @@ export function ExpertsView({
                   </div>
                   <div className="text-xs text-gray-500 line-clamp-2 min-h-[32px]">{skill.description || "暂无描述"}</div>
                   <div className="text-[11px] text-gray-400 mt-2">版本 {skill.version}</div>
+                  {isClawhub && updateState && (
+                    <div className={`text-[11px] mt-1 ${updateState.hasUpdate ? "text-amber-600" : "text-emerald-600"}`}>
+                      {updateState.message}
+                    </div>
+                  )}
+                  {isBuiltin && (
+                    <div className="text-[11px] text-gray-400 mt-1">系统预置，不支持移除</div>
+                  )}
                   <div className="mt-3 flex items-center gap-2 flex-wrap">
                     <button
                       onClick={() => onStartTaskWithSkill(skill.id)}
@@ -112,18 +174,50 @@ export function ExpertsView({
                         {busySkillId === skill.id && busyAction === "refresh" ? "刷新中..." : "刷新"}
                       </button>
                     )}
-                    <button
-                      onClick={() => onDeleteSkill(skill.id)}
-                      disabled={busySkillId === skill.id && busyAction === "delete"}
-                      className="h-7 px-3 rounded bg-red-50 hover:bg-red-100 disabled:bg-red-100 text-red-600 text-xs transition-colors"
-                    >
-                      {busySkillId === skill.id && busyAction === "delete" ? "移除中..." : "移除"}
-                    </button>
+                    {isClawhub && (
+                      <button
+                        onClick={() => onCheckClawhubUpdate(skill.id)}
+                        disabled={busySkillId === skill.id && busyAction === "check-update"}
+                        className="h-7 px-3 rounded bg-sky-50 hover:bg-sky-100 disabled:bg-sky-100 text-sky-700 text-xs transition-colors"
+                      >
+                        {busySkillId === skill.id && busyAction === "check-update" ? "检查中..." : "检查更新"}
+                      </button>
+                    )}
+                    {isClawhub && updateState?.hasUpdate && (
+                      <button
+                        onClick={() => onUpdateClawhubSkill(skill.id)}
+                        disabled={busySkillId === skill.id && busyAction === "update"}
+                        className="h-7 px-3 rounded bg-emerald-50 hover:bg-emerald-100 disabled:bg-emerald-100 text-emerald-700 text-xs transition-colors"
+                      >
+                        {busySkillId === skill.id && busyAction === "update" ? "更新中..." : "更新"}
+                      </button>
+                    )}
+                    {!isBuiltin && (
+                      <button
+                        onClick={() => onDeleteSkill(skill.id)}
+                        disabled={busySkillId === skill.id && busyAction === "delete"}
+                        className="h-7 px-3 rounded bg-red-50 hover:bg-red-100 disabled:bg-red-100 text-red-600 text-xs transition-colors"
+                      >
+                        {busySkillId === skill.id && busyAction === "delete" ? "移除中..." : "移除"}
+                      </button>
+                    )}
                   </div>
                 </div>
               );
             })}
           </div>
+        ) : (
+          activeTab === "library" ? (
+            <SkillLibraryView
+              installedSkillIds={installedSkillIds}
+              onInstall={onInstallFromLibrary}
+            />
+          ) : (
+            <FindSkillsView
+              installedSkillIds={installedSkillIds}
+              onInstall={onInstallFromLibrary}
+            />
+          )
         )}
       </div>
     </div>

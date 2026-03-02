@@ -26,6 +26,8 @@ regex = "1"
 urlencoding = "2"
 wait-timeout = "0.2"
 walkdir = "2"
+sha2 = "0.10"
+zip = "0.6"
 
 [dev-dependencies]
 tempfile = "3"

@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod sidecar;
 pub mod providers;
+pub mod im;
 mod adapters;
 mod builtin_skills;
 pub mod commands;
@@ -12,6 +13,7 @@ use agent::tools::search_providers::cache::SearchCache;
 use commands::chat::{AskUserState, CancelFlagState, ToolConfirmState, ToolConfirmResponder, SearchCacheState};
 use commands::skills::DbState;
 use std::sync::Arc;
+use sidecar::SidecarManager;
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -23,7 +25,7 @@ pub fn run() {
             let pool = tauri::async_runtime::block_on(db::init_db(app.handle()))
                 .expect("failed to init db");
             let pool_for_mcp = pool.clone();
-            app.manage(DbState(pool));
+            app.manage(DbState(pool.clone()));
 
             // 初始化 AgentExecutor（包含标准工具集）
             let registry = Arc::new(ToolRegistry::with_standard_tools());
@@ -48,6 +50,28 @@ pub fn run() {
                 100,
             ));
             app.manage(SearchCacheState(search_cache));
+            let sidecar_manager = Arc::new(SidecarManager::new());
+            app.manage(sidecar_manager.clone());
+            let feishu_relay_state = commands::feishu_gateway::FeishuEventRelayState::default();
+            app.manage(feishu_relay_state.clone());
+
+            // 启动 Sidecar（重试），确保后续 Feishu/MCP 调用有可用网关。
+            let sidecar_for_boot = sidecar_manager.clone();
+            std::thread::spawn(move || {
+                tauri::async_runtime::block_on(async move {
+                    for i in 0..20 {
+                        if sidecar_for_boot.health_check().await.is_ok() {
+                            break;
+                        }
+                        if let Err(e) = sidecar_for_boot.start().await {
+                            eprintln!("[sidecar] start attempt {} failed: {}", i + 1, e);
+                        } else {
+                            break;
+                        }
+                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    }
+                });
+            });
 
             // 恢复已保存的 MCP 服务器连接
             let registry_for_mcp = Arc::clone(&registry);
@@ -116,6 +140,50 @@ pub fn run() {
                 }
             });
 
+            // 自动恢复飞书长连接与事件同步 relay（若已配置凭据）
+            let pool_for_feishu = pool.clone();
+            let relay_for_feishu = feishu_relay_state.clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+                let (app_id_opt, app_secret_opt) = commands::feishu_gateway::resolve_feishu_app_credentials(
+                    &pool_for_feishu,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap_or((None, None));
+                let app_id = app_id_opt.unwrap_or_default();
+                let app_secret = app_secret_opt.unwrap_or_default();
+                if app_id.trim().is_empty() || app_secret.trim().is_empty() {
+                    return;
+                }
+
+                // Sidecar 启动时机可能晚于 runtime，做重试恢复。
+                for _ in 0..30 {
+                    let ws_ok = commands::feishu_gateway::start_feishu_long_connection_with_pool(
+                        &pool_for_feishu,
+                        None,
+                        None,
+                        None,
+                    )
+                    .await
+                    .is_ok();
+                    if ws_ok {
+                        let _ = commands::feishu_gateway::start_feishu_event_relay_with_pool(
+                            &pool_for_feishu,
+                            relay_for_feishu.clone(),
+                            None,
+                            Some(1500),
+                            Some(50),
+                        )
+                        .await;
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                }
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -126,6 +194,13 @@ pub fn run() {
             commands::skills::render_local_skill_preview,
             commands::skills::list_skills,
             commands::skills::delete_skill,
+            commands::clawhub::search_clawhub_skills,
+            commands::clawhub::recommend_clawhub_skills,
+            commands::clawhub::list_clawhub_library,
+            commands::clawhub::translate_clawhub_texts,
+            commands::clawhub::install_clawhub_skill,
+            commands::clawhub::check_clawhub_skill_update,
+            commands::clawhub::update_clawhub_skill,
             commands::models::save_model_config,
             commands::models::list_model_configs,
             commands::models::get_model_api_key,
@@ -166,6 +241,29 @@ pub fn run() {
             commands::chat::confirm_tool_execution,
             commands::chat::cancel_agent,
             commands::chat::compact_context,
+            commands::feishu_gateway::handle_feishu_event,
+            commands::feishu_gateway::send_feishu_text_message,
+            commands::feishu_gateway::list_feishu_chats,
+            commands::feishu_gateway::push_role_summary_to_feishu,
+            commands::feishu_gateway::set_feishu_gateway_settings,
+            commands::feishu_gateway::get_feishu_gateway_settings,
+            commands::feishu_gateway::start_feishu_long_connection,
+            commands::feishu_gateway::stop_feishu_long_connection,
+            commands::feishu_gateway::get_feishu_long_connection_status,
+            commands::feishu_gateway::sync_feishu_ws_events,
+            commands::feishu_gateway::start_feishu_event_relay,
+            commands::feishu_gateway::stop_feishu_event_relay,
+            commands::feishu_gateway::get_feishu_event_relay_status,
+            commands::openclaw_gateway::handle_openclaw_event,
+            commands::im_gateway::handle_feishu_callback,
+            commands::im_gateway::list_recent_im_threads,
+            commands::im_config::bind_thread_roles,
+            commands::im_config::get_thread_role_config,
+            commands::employee_agents::list_agent_employees,
+            commands::employee_agents::upsert_agent_employee,
+            commands::employee_agents::delete_agent_employee,
+            commands::employee_agents::bind_thread_employees,
+            commands::employee_agents::get_thread_employee_bindings,
             commands::mcp::add_mcp_server,
             commands::mcp::list_mcp_servers,
             commands::mcp::remove_mcp_server,

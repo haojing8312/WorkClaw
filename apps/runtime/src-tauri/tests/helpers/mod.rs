@@ -182,6 +182,135 @@ pub async fn setup_test_db() -> (SqlitePool, TempDir) {
     .await
     .unwrap();
 
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS im_event_dedup (
+            event_id TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL
+        )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS im_thread_bindings (
+            thread_id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL DEFAULT '',
+            scenario_template TEXT NOT NULL DEFAULT 'opportunity_review',
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS im_thread_roles (
+            thread_id TEXT NOT NULL,
+            role_id TEXT NOT NULL,
+            role_order INTEGER NOT NULL DEFAULT 0,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            PRIMARY KEY (thread_id, role_id)
+        )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS im_inbox_events (
+            id TEXT PRIMARY KEY,
+            event_id TEXT NOT NULL,
+            thread_id TEXT NOT NULL,
+            message_id TEXT NOT NULL DEFAULT '',
+            text_preview TEXT NOT NULL DEFAULT '',
+            source TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+        )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS agent_employees (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            role_id TEXT NOT NULL,
+            persona TEXT NOT NULL DEFAULT '',
+            feishu_open_id TEXT NOT NULL DEFAULT '',
+            feishu_app_id TEXT NOT NULL DEFAULT '',
+            feishu_app_secret TEXT NOT NULL DEFAULT '',
+            primary_skill_id TEXT NOT NULL DEFAULT '',
+            default_work_dir TEXT NOT NULL DEFAULT '',
+            enabled INTEGER NOT NULL DEFAULT 1,
+            is_default INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS agent_employee_skills (
+            employee_id TEXT NOT NULL,
+            skill_id TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (employee_id, skill_id)
+        )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS im_thread_employee_bindings (
+            thread_id TEXT NOT NULL,
+            employee_id TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            role_order INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (thread_id, employee_id)
+        )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS im_thread_sessions (
+            thread_id TEXT NOT NULL,
+            employee_id TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (thread_id, employee_id)
+        )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS im_message_links (
+            id TEXT PRIMARY KEY,
+            thread_id TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            employee_id TEXT NOT NULL DEFAULT '',
+            direction TEXT NOT NULL,
+            im_event_id TEXT NOT NULL DEFAULT '',
+            im_message_id TEXT NOT NULL DEFAULT '',
+            app_message_id TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+        )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
     (pool, tmp)
 }
 

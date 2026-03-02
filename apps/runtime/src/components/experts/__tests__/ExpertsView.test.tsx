@@ -18,7 +18,7 @@ function buildSkill(partial: Partial<SkillManifest>): SkillManifest {
 }
 
 describe("ExpertsView", () => {
-  test("hides builtin skill and shows actions by source type", () => {
+  test("hides builtin general skill and shows source-specific actions", () => {
     const refreshSpy = vi.fn();
     const deleteSpy = vi.fn();
     const startTaskSpy = vi.fn();
@@ -26,28 +26,37 @@ describe("ExpertsView", () => {
       <ExpertsView
         skills={[
           buildSkill({ id: "builtin-general", name: "通用助手" }),
+          buildSkill({ id: "builtin-skill-creator", name: "创建技能" }),
           buildSkill({ id: "local-file-organizer", name: "文件整理器" }),
           buildSkill({ id: "encrypted-abc", name: "外部技能" }),
         ]}
         onInstallSkill={() => {}}
         onCreate={() => {}}
         onOpenPackaging={() => {}}
+        onInstallFromLibrary={async () => {}}
         onStartTaskWithSkill={startTaskSpy}
         onRefreshLocalSkill={refreshSpy}
+        onCheckClawhubUpdate={() => {}}
+        onUpdateClawhubSkill={() => {}}
         onDeleteSkill={deleteSpy}
       />
     );
 
     expect(screen.queryByText("通用助手")).not.toBeInTheDocument();
+    expect(screen.queryByText("创建技能")).toBeInTheDocument();
     expect(screen.queryByText("文件整理器")).toBeInTheDocument();
     expect(screen.queryByText("外部技能")).toBeInTheDocument();
 
     const startTaskButtons = screen.getAllByRole("button", { name: "开始任务" });
     const refreshButtons = screen.getAllByRole("button", { name: "刷新" });
     const deleteButtons = screen.getAllByRole("button", { name: "移除" });
-    expect(startTaskButtons.length).toBe(2);
+    expect(startTaskButtons.length).toBe(3);
     expect(refreshButtons.length).toBe(1);
     expect(deleteButtons.length).toBe(2);
+    expect(screen.getByText("内置")).toBeInTheDocument();
+    expect(screen.getByText("本地")).toBeInTheDocument();
+    expect(screen.getByText("已安装")).toBeInTheDocument();
+    expect(screen.getByText("系统预置，不支持移除")).toBeInTheDocument();
   });
 
   test("triggers start-task/refresh/delete callbacks", () => {
@@ -60,8 +69,11 @@ describe("ExpertsView", () => {
         onInstallSkill={() => {}}
         onCreate={() => {}}
         onOpenPackaging={() => {}}
+        onInstallFromLibrary={async () => {}}
         onStartTaskWithSkill={startTaskSpy}
         onRefreshLocalSkill={refreshSpy}
+        onCheckClawhubUpdate={() => {}}
+        onUpdateClawhubSkill={() => {}}
         onDeleteSkill={deleteSpy}
       />
     );

@@ -6,9 +6,9 @@ fn test_register_browser_tools_count() {
     let registry = ToolRegistry::new();
     register_browser_tools(&registry, "http://localhost:8765");
 
-    // 验证注册了 15 个浏览器工具
+    // 验证注册了 17 个浏览器工具
     let defs = registry.get_tool_definitions();
-    assert_eq!(defs.len(), 15, "应注册 15 个浏览器工具");
+    assert_eq!(defs.len(), 17, "应注册 17 个浏览器工具");
 }
 
 #[test]
@@ -130,8 +130,8 @@ fn test_browser_tools_with_prefix() {
     let browser_tools = registry.tools_with_prefix("browser_");
     assert_eq!(
         browser_tools.len(),
-        15,
-        "tools_with_prefix(\"browser_\") 应返回 15 个工具"
+        17,
+        "tools_with_prefix(\"browser_\") 应返回 17 个工具"
     );
 }
 
@@ -165,6 +165,7 @@ fn test_browser_tools_no_required_for_optional_tools() {
         "browser_go_forward",
         "browser_reload",
         "browser_get_state",
+        "browser_snapshot",
     ];
 
     for name in &optional_tools {
@@ -181,5 +182,67 @@ fn test_browser_tools_no_required_for_optional_tools() {
             }
         }
         // 如果没有 required 字段也是正确的
+    }
+}
+
+#[test]
+fn test_browser_launch_schema_is_local_playwright_only() {
+    let registry = ToolRegistry::new();
+    register_browser_tools(&registry, "http://localhost:8765");
+
+    let tool = registry.get("browser_launch").expect("browser_launch 应已注册");
+    let schema = tool.input_schema();
+    assert!(schema["properties"]["headless"].is_object(), "应包含 headless");
+    assert!(schema["properties"]["viewport"].is_object(), "应包含 viewport");
+    assert!(
+        schema["properties"].get("provider").is_none(),
+        "browser_launch schema 不应包含 provider"
+    );
+}
+
+#[test]
+fn test_browser_act_schema_requires_kind() {
+    let registry = ToolRegistry::new();
+    register_browser_tools(&registry, "http://localhost:8765");
+
+    let tool = registry.get("browser_act").expect("browser_act 应已注册");
+    let schema = tool.input_schema();
+
+    let required = schema["required"].as_array().expect("应有 required 数组");
+    assert!(
+        required.iter().any(|v| v.as_str() == Some("kind")),
+        "kind 应在 required 列表中"
+    );
+    assert!(
+        schema["properties"]["kind"]["enum"].is_array(),
+        "kind 应有 enum 约束"
+    );
+}
+
+#[test]
+fn test_browser_act_schema_covers_extended_local_actions() {
+    let registry = ToolRegistry::new();
+    register_browser_tools(&registry, "http://localhost:8765");
+
+    let tool = registry.get("browser_act").expect("browser_act 应已注册");
+    let schema = tool.input_schema();
+    let props = &schema["properties"];
+
+    for field in [
+        "startRef",
+        "endRef",
+        "startSelector",
+        "endSelector",
+        "fields",
+        "width",
+        "height",
+        "timeMs",
+        "textGone",
+    ] {
+        assert!(
+            props[field].is_object(),
+            "browser_act schema 应包含扩展字段: {}",
+            field
+        );
     }
 }

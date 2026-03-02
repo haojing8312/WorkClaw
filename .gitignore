@@ -17,3 +17,6 @@ nul
 apps/runtime/sidecar/nul
 temp/
 scripts/sync-codex-skills.mjs
+.pnpm-store/
+sidecar.log
+.claude/settings.local.json

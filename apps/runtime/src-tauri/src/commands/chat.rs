@@ -161,6 +161,59 @@ fn parse_fallback_chain_targets(raw: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+fn extract_skill_prompt_from_decrypted_files(
+    files: &std::collections::HashMap<String, Vec<u8>>,
+) -> Option<String> {
+    for key in ["SKILL.md", "skill.md"] {
+        if let Some(bytes) = files.get(key) {
+            return Some(String::from_utf8_lossy(bytes).to_string());
+        }
+    }
+
+    let candidate = files
+        .iter()
+        .find(|(path, _)| path.eq_ignore_ascii_case("SKILL.md"))
+        .or_else(|| {
+            files.iter().find(|(path, _)| {
+                path.rsplit('/')
+                    .next()
+                    .map(|name| name.eq_ignore_ascii_case("skill.md"))
+                    .unwrap_or(false)
+            })
+        });
+
+    candidate.map(|(_, bytes)| String::from_utf8_lossy(bytes).to_string())
+}
+
+fn read_local_skill_prompt(pack_path: &str) -> Option<String> {
+    let base = std::path::Path::new(pack_path);
+
+    for file_name in ["SKILL.md", "skill.md"] {
+        let candidate = base.join(file_name);
+        if let Ok(content) = std::fs::read_to_string(&candidate) {
+            return Some(content);
+        }
+    }
+
+    let entries = std::fs::read_dir(base).ok()?;
+    for entry in entries.flatten() {
+        if !entry.path().is_file() {
+            continue;
+        }
+        if entry
+            .file_name()
+            .to_string_lossy()
+            .eq_ignore_ascii_case("skill.md")
+        {
+            if let Ok(content) = std::fs::read_to_string(entry.path()) {
+                return Some(content);
+            }
+        }
+    }
+
+    None
+}
+
 #[derive(serde::Serialize, Clone)]
 struct StreamToken {
     session_id: String,
@@ -291,22 +344,21 @@ pub async fn send_message(
             .to_string()
     } else if source_type == "local" {
         // 本地 Skill：直接从目录读取 SKILL.md
-        let skill_md_path = std::path::Path::new(&pack_path).join("SKILL.md");
-        std::fs::read_to_string(&skill_md_path)
-            .unwrap_or_else(|_| {
-                // 读取失败时回退到 manifest 描述
-                serde_json::from_str::<skillpack_rs::SkillManifest>(&manifest_json)
-                    .map(|m| m.description)
-                    .unwrap_or_default()
-            })
+        read_local_skill_prompt(&pack_path).unwrap_or_else(|| {
+            // 读取失败时回退到 manifest 描述
+            serde_json::from_str::<skillpack_rs::SkillManifest>(&manifest_json)
+                .map(|m| m.description)
+                .unwrap_or_default()
+        })
     } else {
         // 加密 Skill：重新解包获取 SKILL.md
         match skillpack_rs::verify_and_unpack(&pack_path, &username) {
-            Ok(unpacked) => {
-                String::from_utf8_lossy(
-                    unpacked.files.get("SKILL.md").map(|v| v.as_slice()).unwrap_or_default()
-                ).to_string()
-            }
+            Ok(unpacked) => extract_skill_prompt_from_decrypted_files(&unpacked.files)
+                .unwrap_or_else(|| {
+                    serde_json::from_str::<skillpack_rs::SkillManifest>(&manifest_json)
+                        .map(|m| m.description)
+                        .unwrap_or_default()
+                }),
             Err(_) => {
                 // 解包失败时回退到 manifest 描述
                 let manifest: skillpack_rs::SkillManifest = serde_json::from_str(&manifest_json)
@@ -1097,8 +1149,9 @@ mod tests {
         classify_model_route_error, is_supported_protocol, normalize_permission_mode_for_storage,
         parse_fallback_chain_targets, should_retry_same_candidate, infer_capability_from_user_message,
         parse_permission_mode,
-        permission_mode_label_for_display, ModelRouteErrorKind,
+        permission_mode_label_for_display, extract_skill_prompt_from_decrypted_files, ModelRouteErrorKind,
     };
+    use std::collections::HashMap;
     use crate::agent::permissions::PermissionMode;
 
     #[test]
@@ -1208,6 +1261,14 @@ mod tests {
         assert_eq!(infer_capability_from_user_message("这段音频做语音转文字"), "audio_stt");
         assert_eq!(infer_capability_from_user_message("这段文案做文字转语音"), "audio_tts");
         assert_eq!(infer_capability_from_user_message("解释这个报错"), "chat");
+    }
+
+    #[test]
+    fn extract_skill_prompt_supports_lowercase_skill_md() {
+        let mut files = HashMap::new();
+        files.insert("skill.md".to_string(), b"# lowercase skill".to_vec());
+        let content = extract_skill_prompt_from_decrypted_files(&files);
+        assert_eq!(content.as_deref(), Some("# lowercase skill"));
     }
 }
 

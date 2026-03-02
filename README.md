@@ -1,408 +1,408 @@
 # SkillMint
 
-[English](README.md) | [简体中文](README.zh-CN.md)
+[简体中文](README.md) | [English](README.en.md)
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Tauri](https://img.shields.io/badge/Tauri-2.0-orange.svg)](https://tauri.app/)
 [![React](https://img.shields.io/badge/React-18-blue.svg)](https://reactjs.org/)
 
-**SkillMint** = Agent Runtime + Encrypted Skill System
+**SkillMint** = Agent 运行时 + 加密技能系统
 
-An open-source platform to **package, encrypt, and distribute AI Skills** as secure desktop applications. Create once, distribute anywhere.
+一个开源平台，用于**打包、加密和分发 AI 技能**，以安全的桌面应用形式交付。创建一次，随处分发。
 
-> **🧪 AI-Powered Development Experiment**
-> This project is an experimental demonstration of **100% AI-driven development** - the entire codebase is designed and implemented by AI (Claude Code, GPT-5.3-Codex) without manual code inspection by the developer. This serves as a real-world test of AI's capability to build production-grade software autonomously.
+> **🧪 AI 驱动开发实验**
+> 本项目是一个 **100% AI 自主开发**的实验性项目 - 整个代码库由 AI（Claude Code、GPT-5.3-Codex）设计和实现，开发者完全不查看代码。这是对 AI 自主构建生产级软件能力的真实世界测试。
 
-## What is SkillMint?
+## 什么是 SkillMint？
 
-SkillMint helps AI Skill creators:
-- **Package**: Transform Skills (Markdown with prompts/examples) into encrypted `.skillpack` files
-- **Protect**: Military-grade encryption protects your intellectual property
-- **Distribute**: Users run Skills in a secure local sandbox environment
-- **Monetize**: Control access and distribution of your premium Skills
+SkillMint 帮助 AI 技能创作者：
+- **打包**：将技能（包含提示词/示例的 Markdown）转换为加密的 `.skillpack` 文件
+- **保护**：军事级加密保护你的知识产权
+- **分发**：用户在安全的本地沙箱环境中运行技能
+- **变现**：控制你的高级技能的访问和分发
 
-**For Creators**: Package and sell your Skills securely
-**For Users**: Run powerful AI Skills locally without exposing sensitive data
+**对于创作者**：安全地打包和销售你的技能
+**对于用户**：在本地运行强大的 AI 技能，无需暴露敏感数据
 
-## Core Product Highlights
+## 核心产品功能速览
 
-- **Start tasks in one sentence**: Use the landing page to start local automation and coding tasks quickly.
-- **Agent + tools in one chat loop**: The assistant can read/write files, run commands, and show tool traces while responding.
-- **Expert Skills workflow**: Create reusable local skills with guided input and real-time `SKILL.md` preview.
-- **Built-in packaging flow**: Package skills from the app for secure sharing and distribution.
-- **Unified settings control**: Manage models, provider routing, search providers, MCP servers, and runtime options.
+- **一句话开始任务**：通过首页输入任务，快速启动本地自动化和开发协作。
+- **对话中直接执行工具**：聊天过程中可读写文件、执行命令，并展示工具调用过程。
+- **专家技能生产流程**：引导式创建可复用本地技能，并实时预览 `SKILL.md`。
+- **内置技能打包闭环**：在应用内完成技能打包，便于安全分发与交付。
+- **统一设置中心**：集中管理模型、路由策略、搜索引擎、MCP 服务器与运行参数。
 
-## Product Screenshots
+## 产品截图
 
-### 1) Task Landing
-![Task Landing](docs/screenshots/app-home.png)
+### 1) 任务首页
+![任务首页](docs/screenshots/app-home.png)
 
-### 2) Expert Skills Hub
-![Expert Skills Hub](docs/screenshots/experts-hub.png)
+### 2) 专家技能中心
+![专家技能中心](docs/screenshots/experts-hub.png)
 
-### 3) Skill Packaging
-![Skill Packaging](docs/screenshots/skill-packaging.png)
+### 3) 技能打包
+![技能打包](docs/screenshots/skill-packaging.png)
 
-### 4) Settings
-![Settings](docs/screenshots/settings-page.png)
+### 4) 设置中心
+![设置中心](docs/screenshots/settings-page.png)
 
-### 5) Packaging Flow (GIF)
-![Packaging Flow](docs/screenshots/skill-packaging-demo.gif)
+### 5) 打包流程（GIF）
+![打包流程](docs/screenshots/skill-packaging-demo.gif)
 
-## Architecture
+## 架构
 
-SkillMint is delivered as a single integrated desktop application:
+SkillMint 以单一集成桌面应用交付：
 
-### Business Architecture
+### 业务架构
 
-![Business Architecture](docs/diagrams/business-architecture.svg)
+![业务架构](docs/diagrams/business-architecture.svg)
 
-The business architecture showcases the complete value stream from creator to user, organized in 4 layers:
-- **Creator Value Chain**: Skill development → package/encrypt → publish
-- **Core Platform**: Agent engine, security, tool capabilities, model integration
-- **User Value Chain**: Personal (browse → install → run) + Enterprise (team/RBAC → unified config/SSO → Agent employees)
-- **Ecosystem Integration**: EvoMap evolution, SkillMint marketplace + ClawHub compatibility, IM remote calling
+业务架构展示了从创作者到用户的完整价值流，分为 4 层：
+- **创作者价值链**：技能开发 → 打包/加密 → 发布
+- **核心平台**：Agent 引擎、安全系统、工具能力、模型集成
+- **用户价值链**：个人用户（浏览 → 安装 → 运行）+ 企业用户（团队/RBAC → 统一配置/SSO → Agent 员工）
+- **生态集成**：EvoMap 进化、SkillMint 市场 + ClawHub 兼容、IM 远程调用
 
-### Technical Architecture
+### 技术架构
 
-![Technical Architecture](docs/diagrams/technical-architecture.svg)
+![技术架构](docs/diagrams/technical-architecture.svg)
 
-The technical stack is organized in 6 layers:
-- **Layer 1 - User Interface**: React 18 + TypeScript, shadcn/ui + Tailwind, Tauri 2.0 WebView
-- **Layer 2 - Application Services**: Rust Backend, Node.js Sidecar (localhost:8765)
-- **Layer 3 - Agent Runtime**: ReAct engine, Sub-Agent isolation, Context management, skillpack-rs encryption
-- **Layer 4 - Tool Capabilities**: Native Tools (Read/Write/Glob/Grep), Bash/PowerShell, Browser automation, MCP protocol
-- **Layer 5 - Model Integration**: Anthropic API, OpenAI Compatible, Chinese models (MiniMax, DeepSeek, GLM, Qwen, Moonshot)
-- **Layer 6 - Data Persistence**: SQLite, .skillpack files, Secure workspace folders
+技术栈分为 6 层：
+- **第 1 层 - 用户界面**：React 18 + TypeScript, shadcn/ui + Tailwind, Tauri 2.0 WebView
+- **第 2 层 - 应用服务**：Rust 后端, Node.js Sidecar (localhost:8765)
+- **第 3 层 - Agent 运行时**：ReAct 引擎、子 Agent 隔离、上下文管理、skillpack-rs 加密
+- **第 4 层 - 工具能力**：原生工具（Read/Write/Glob/Grep）、Bash/PowerShell、浏览器自动化、MCP 协议
+- **第 5 层 - 模型集成**：Anthropic API、OpenAI 兼容、国产模型（MiniMax、DeepSeek、GLM、Qwen、Moonshot）
+- **第 6 层 - 数据持久化**：SQLite、.skillpack 文件、安全工作区文件夹
 
-### SkillMint Application
-The integrated environment where users can package, install, and run encrypted Skills:
+### SkillMint 应用
+统一的 Agent 执行环境，用户可在同一应用内打包、安装和运行加密技能：
 
-**Core Agent Capabilities**:
-- ✅ **File Operations**: Read, write, edit files with permission control
-- ✅ **Code Execution**: Cross-platform Bash/PowerShell command execution
-- ✅ **Browser Automation**: Playwright integration for web scraping and automation (via Sidecar)
-- ✅ **MCP Integration**: Model Context Protocol server support for extended capabilities
-- ✅ **Multi-Agent System**: Sub-Agent task distribution with isolated contexts
-- ✅ **Memory Management**: TodoWrite for task tracking, context compression
-- ✅ **Web Search**: DuckDuckGo integration for real-time information
-- ✅ **Permission System**: Multi-layer security validation
+**核心 Agent 能力**：
+- ✅ **文件操作**：带权限控制的读取、写入、编辑文件
+- ✅ **代码执行**：跨平台 Bash/PowerShell 命令执行
+- ✅ **浏览器自动化**：Playwright 集成，用于网页抓取和自动化（通过 Sidecar）
+- ✅ **MCP 集成**：模型上下文协议服务器支持，扩展能力
+- ✅ **多 Agent 系统**：子 Agent 任务分发，独立上下文隔离
+- ✅ **内存管理**：TodoWrite 任务跟踪，上下文压缩
+- ✅ **网页搜索**：DuckDuckGo 集成，获取实时信息
+- ✅ **权限系统**：多层安全验证
 
-**User Features**:
-- Install `.skillpack` files via drag-and-drop or file picker
-- Clean chat interface with real-time streaming responses
-- No-session landing page with capability intro and scenario templates
-- Expert Skills hub (`我的技能`) with guided two-column creation workflow
-- Skill packaging entry moved into the Expert Skills domain
-- Session history with searchable conversation archives
-- Multi-model support (Claude 4.6, GPT-4, MiniMax M2.5, GLM-4, DeepSeek)
-- Local secure workspace folder configuration
-- No command line required
+**用户功能**：
+- 通过拖放或文件选择器安装 `.skillpack` 文件
+- 简洁的聊天界面，实时流式响应
+- 无会话首页入口（能力介绍 + 场景模板填充）
+- 专家技能中心（我的技能）与左右分栏引导创建页
+- 技能打包入口已并入“专家技能”域
+- 会话历史，可搜索的对话存档
+- 多模型支持（Claude 4.6、GPT-4、MiniMax M2.5、GLM-4、DeepSeek）
+- 本地安全工作区文件夹配置
+- 无需命令行操作
 
-### Creator Workflow
-Creators can develop Skills with **Claude Code** or **VS Code**, then package directly inside the SkillMint app (no separate Studio client).
+### 创作者工作流
+创作者可使用 **Claude Code** 或 **VS Code** 开发技能，并直接在 SkillMint 应用内完成打包，无需额外客户端。
 
-## Key Features
+## 核心特性
 
-### Security & Privacy
-- **Military-Grade Encryption**: AES-256-GCM with deterministic key derivation from username
-- **Secure Workspace**: Configure trusted local folders for file operations
-- **Permission Control**: Multi-layer validation for sensitive operations
-- **No Cloud Dependency**: All processing happens locally
+### 安全与隐私
+- **军事级加密**：AES-256-GCM，基于用户名的确定性密钥推导
+- **安全工作区**：为文件操作配置可信任的本地文件夹
+- **权限控制**：敏感操作的多层验证
+- **无云依赖**：所有处理均在本地进行
 
-### Agent Capabilities
-- **ReAct Loop Engine**: Advanced reasoning and action planning
-- **Sub-Agent System**: Parallel task execution with isolated contexts
-- **Context Compression**: Smart truncation to stay within token limits
-- **Tool Registry**: Dynamic tool registration including MCP servers
-- **Memory Persistence**: TodoWrite for task tracking across sessions
+### Agent 能力
+- **ReAct 循环引擎**：高级推理和行动规划
+- **子 Agent 系统**：并行任务执行，独立上下文隔离
+- **上下文压缩**：智能截断以保持在 token 限制内
+- **工具注册表**：动态工具注册，包括 MCP 服务器
+- **内存持久化**：TodoWrite 跨会话任务跟踪
 
-### Developer Experience
-- **Multi-Model Support**: 15+ models across 9 providers
-- **Hot Reload**: Real-time Skill updates during development
-- **Comprehensive Logging**: Tool call tracing and error diagnostics
-- **Cross-Platform**: Windows, macOS, Linux support
+### 开发者体验
+- **多模型支持**：9 个提供商的 15+ 模型
+- **热重载**：开发期间实时技能更新
+- **全面日志**：工具调用追踪和错误诊断
+- **跨平台**：支持 Windows、macOS、Linux
 
-## Tech Stack
+## 技术栈
 
-### App Backend
-- **Framework**: Tauri 2.0 (Rust)
-- **Database**: SQLite (sqlx)
-- **Encryption**: AES-256-GCM (aes-gcm + ring crates)
-- **HTTP Client**: reqwest (for LLM APIs)
-- **Sidecar**: Node.js 20+ (Playwright, MCP)
+### 应用后端
+- **框架**：Tauri 2.0 (Rust)
+- **数据库**：SQLite (sqlx)
+- **加密**：AES-256-GCM (aes-gcm + ring crates)
+- **HTTP 客户端**：reqwest（用于 LLM API）
+- **Sidecar**：Node.js 20+（Playwright、MCP）
 
-### App Frontend
-- **UI**: React 18 + TypeScript
-- **Components**: shadcn/ui + Tailwind CSS
-- **Markdown**: react-markdown + syntax highlighting
-- **State**: React hooks (useState, useEffect)
+### 应用前端
+- **UI**：React 18 + TypeScript
+- **组件**：shadcn/ui + Tailwind CSS
+- **Markdown**：react-markdown + 语法高亮
+- **状态**：React hooks (useState, useEffect)
 
-### Shared Packages
-- **skillpack-rs**: Encryption, pack/unpack (Rust)
-- **model-adapters**: LLM API adapters (future TS package)
+### 共享包
+- **skillpack-rs**：加密、打包/解包 (Rust)
+- **model-adapters**：LLM API 适配器（未来 TS 包）
 
-## Supported Models
+## 支持的模型
 
-### Latest Cutting-Edge Models (2026)
+### 最新尖端模型（2026）
 
-**Anthropic Claude**:
-- Claude 4.6 Sonnet (latest, best reasoning)
+**Anthropic Claude**：
+- Claude 4.6 Sonnet（最新，最佳推理）
 
-**OpenAI**:
-- o1 (latest reasoning model)
-- GPT-5.3-Codex (latest coding model, 2026)
+**OpenAI**：
+- o1（最新推理模型）
+- GPT-5.3-Codex（最新编程模型，2026）
 
-**Chinese Leading Models**:
-- **MiniMax M2.5** (SWE-Bench 80.2%, code generation)
-- **GLM-4** (Zhipu AI, strong Chinese comprehension)
-- **DeepSeek V3** (math and reasoning)
-- **Qwen 2.5** (Alibaba Cloud, multilingual)
-- **Moonshot Kimi** (long context)
+**国产领先模型**：
+- **MiniMax M2.5**（SWE-Bench 80.2%，代码生成）
+- **GLM-4**（智谱 AI，强中文理解）
+- **DeepSeek V3**（数学和推理）
+- **Qwen 2.5**（阿里云，多语言）
+- **Moonshot Kimi**（长上下文）
 
-**Custom Endpoints**: Any OpenAI-compatible API
+**自定义端点**：任何 OpenAI 兼容 API
 
-## Project Structure
+## 项目结构
 
 ```
 skillmint/
 ├── apps/
-│   └── runtime/              # SkillMint desktop application
-│       ├── src/              # React frontend
-│       ├── src-tauri/        # Rust backend
+│   └── runtime/              # SkillMint 桌面应用
+│       ├── src/              # React 前端
+│       ├── src-tauri/        # Rust 后端
 │       │   ├── src/
-│       │   │   ├── agent/    # Agent system (executor, tools, registry)
-│       │   │   ├── adapters/ # LLM adapters (Anthropic, OpenAI)
-│       │   │   ├── commands/ # Tauri commands (skills, chat, models, mcp, packaging)
+│       │   │   ├── agent/    # Agent 系统（executor, tools, registry）
+│       │   │   ├── adapters/ # LLM 适配器（Anthropic, OpenAI）
+│       │   │   ├── commands/ # Tauri 命令（skills, chat, models, mcp, packaging）
 │       │   │   └── db.rs     # SQLite schema
-│       │   └── tests/        # Integration tests
-│       └── sidecar/          # Node.js sidecar (Playwright, MCP)
+│       │   └── tests/        # 集成测试
+│       └── sidecar/          # Node.js sidecar（Playwright, MCP）
 ├── packages/
-│   └── skillpack-rs/         # Encryption library (Rust)
-├── docs/                     # Documentation
-├── reference/                # Open-source project analysis
-└── examples/                 # Example Skills
+│   └── skillpack-rs/         # 加密库 (Rust)
+├── docs/                     # 文档
+├── reference/                # 开源项目分析
+└── examples/                 # 示例技能
 ```
 
-## Getting Started
+## 快速开始
 
-### Prerequisites
+### 前置要求
 
 - Rust 1.75+
 - Node.js 20+
 - pnpm
 
-### Development
+### 开发
 
 ```bash
-# Install dependencies
+# 安装依赖
 pnpm install
 
-# Run app in dev mode
+# 以开发模式运行应用
 pnpm app
 
-# Build for production
+# 构建生产版本
 pnpm build:app
 
-# Run tests
+# 运行测试
 cd apps/runtime/src-tauri
 cargo test
 ```
 
-### Installing a Skill
+### 安装技能
 
-1. Open Runtime application
-2. Click "Install Skill" or drag `.skillpack` file to window
-3. Enter username (used for decryption key derivation)
-4. Configure API keys if needed
-5. Start chatting!
+1. 打开 SkillMint 应用
+2. 点击"安装技能"或拖动 `.skillpack` 文件到窗口
+3. 输入用户名（用于密钥推导）
+4. 根据需要配置 API 密钥
+5. 开始聊天！
 
-## Roadmap
+## 路线图
 
-### Milestone 1: Agent Runtime MVP ✨ (Current Focus)
+### 里程碑 1：Agent Runtime MVP ✨（当前专注）
 
-**Core Agent Capabilities** (80% Complete):
-- [x] ReAct loop executor with Tool trait abstraction
-- [x] File operations: Read, Write, Glob, Grep, Edit
-- [x] Bash/PowerShell execution with cross-platform support
-- [x] Sub-Agent system (Task tool) for parallel task distribution
-- [x] TodoWrite for task management and memory
-- [x] Context compression (token budget management)
-- [x] Web Search (DuckDuckGo)
-- [x] WebFetch for URL content retrieval
-- [x] AskUser for interactive user input
-- [x] Tool output truncation (30k char limit)
-- [x] Permission system (planned, multi-layer validation)
-- [ ] Local secure workspace folder configuration
-- [ ] MCP server dynamic registration UI (70% - backend done)
+**核心 Agent 能力**（80% 完成）：
+- [x] ReAct 循环执行器，Tool trait 抽象
+- [x] 文件操作：Read、Write、Glob、Grep、Edit
+- [x] Bash/PowerShell 执行，跨平台支持
+- [x] 子 Agent 系统（Task 工具）用于并行任务分发
+- [x] TodoWrite 任务管理和内存
+- [x] 上下文压缩（token 预算管理）
+- [x] 网页搜索（DuckDuckGo）
+- [x] WebFetch 用于 URL 内容获取
+- [x] AskUser 用于交互式用户输入
+- [x] 工具输出截断（30k 字符限制）
+- [x] 权限系统（计划中，多层验证）
+- [ ] 本地安全工作区文件夹配置
+- [ ] MCP 服务器动态注册 UI（70% - 后端已完成）
 
-**Skill System**:
-- [x] Skill YAML frontmatter parsing
-- [x] .skillpack encryption/decryption (Rust)
-- [x] Install, list, delete Skill commands
-- [x] Dynamic Skill loading from `.claude/skills/` directory
-- [x] Skill-based system prompt injection
-- [ ] Hot reload during development
+**技能系统**：
+- [x] 技能 YAML frontmatter 解析
+- [x] .skillpack 加密/解密 (Rust)
+- [x] 安装、列出、删除技能命令
+- [x] 从 `.claude/skills/` 目录动态加载技能
+- [x] 基于技能的系统提示词注入
+- [ ] 开发期间热重载
 
-**Sidecar Integration**:
-- [x] Node.js sidecar manager (lifecycle control)
-- [x] Hono HTTP server (localhost:8765)
-- [ ] Playwright browser automation (15+ tools)
-- [x] MCP client integration (connect, list tools, invoke)
-- [ ] Browser controller with normalized coordinates
+**Sidecar 集成**：
+- [x] Node.js sidecar 管理器（生命周期控制）
+- [x] Hono HTTP 服务器（localhost:8765）
+- [ ] Playwright 浏览器自动化（15+ 工具）
+- [x] MCP 客户端集成（连接、列出工具、调用）
+- [ ] 带归一化坐标的浏览器控制器
 
-**Multi-Model Support**:
-- [x] Anthropic Messages API adapter (Claude models)
-- [x] OpenAI-compatible adapter (GPT, MiniMax, DeepSeek, etc.)
-- [x] Reasoning content filtering (DeepSeek, MiniMax)
-- [x] Model configuration UI (API key, base URL, model name)
-- [x] 9 provider presets (Claude, OpenAI, MiniMax, DeepSeek, Qwen, Moonshot, GLM, Yi, Custom)
+**多模型支持**：
+- [x] Anthropic Messages API 适配器（Claude 模型）
+- [x] OpenAI 兼容适配器（GPT、MiniMax、DeepSeek 等）
+- [x] 推理内容过滤（DeepSeek、MiniMax）
+- [x] 模型配置 UI（API 密钥、基础 URL、模型名称）
+- [x] 9 个提供商预设（Claude、OpenAI、MiniMax、DeepSeek、Qwen、Moonshot、GLM、Yi、自定义）
 
-**User Interface**:
-- [x] Chat view with streaming messages
-- [x] Markdown rendering with syntax highlighting
-- [x] Tool call visualization cards
-- [x] Sub-Agent nested display
-- [x] Session history sidebar
-- [x] Settings view (models, MCP servers)
-- [x] AskUser interactive input cards
-- [ ] File upload support
-- [ ] Secure workspace configuration UI
+**用户界面**：
+- [x] 带流式消息的聊天视图
+- [x] Markdown 渲染，语法高亮
+- [x] 工具调用可视化卡片
+- [x] 子 Agent 嵌套显示
+- [x] 会话历史侧边栏
+- [x] 设置视图（模型、MCP 服务器）
+- [x] AskUser 交互式输入卡片
+- [ ] 文件上传支持
+- [ ] 安全工作区配置 UI
 
-### Milestone 2: Distribution & Updates 🚀
+### 里程碑 2：分发与更新 🚀
 
-**Auto-Update**:
-- [ ] Application auto-update mechanism (Tauri updater)
-- [ ] Update server infrastructure
-- [ ] Version check and notification
-- [ ] Background download and install
+**自动更新**：
+- [ ] 应用自动更新机制（Tauri updater）
+- [ ] 更新服务器基础设施
+- [ ] 版本检查和通知
+- [ ] 后台下载和安装
 
-**Skill Version Control**:
-- [ ] Skill versioning system (semver)
-- [ ] Upgrade/downgrade capabilities
-- [ ] Dependency resolution
-- [ ] Breaking change detection
+**技能版本控制**：
+- [ ] 技能版本系统（semver）
+- [ ] 升级/降级能力
+- [ ] 依赖解析
+- [ ] 破坏性变更检测
 
-**Packaging & Installers**:
-- [ ] Windows: NSIS installer + code signing
-- [ ] macOS: DMG + notarization
-- [ ] Linux: AppImage + deb/rpm packages
+**打包与安装程序**：
+- [ ] Windows：NSIS 安装程序 + 代码签名
+- [ ] macOS：DMG + 公证
+- [ ] Linux：AppImage + deb/rpm 包
 
-**Distribution**:
-- [ ] Official download server
-- [ ] Mirror CDN setup
-- [ ] Update channels (stable, beta, dev)
+**分发**：
+- [ ] 官方下载服务器
+- [ ] 镜像 CDN 设置
+- [ ] 更新通道（stable、beta、dev）
 
-### Milestone 3: Ecosystem & Enterprise 🏢
+### 里程碑 3：生态与企业版 🏢
 
-**Creator Capabilities (Built into SkillMint App)**:
-- [ ] Monaco Editor integration
-- [ ] Skill structure visual editor
-- [ ] Embedded testing chat (Claude Code integration)
-- [ ] One-click packaging UI
-- [ ] Template library
-- [ ] Publishing workflow
+**创作者能力（已并入 SkillMint 应用）**：
+- [ ] Monaco 编辑器集成
+- [ ] 技能结构可视化编辑器
+- [ ] 嵌入式测试聊天（Claude Code 集成）
+- [ ] 一键打包 UI
+- [ ] 模板库
+- [ ] 发布工作流
 
-**Marketplace**:
-- [ ] Web-based Skill marketplace
-- [ ] Search and browse functionality
-- [ ] User reviews and ratings
-- [ ] Payment integration (Stripe/Alipay)
-- [ ] Creator analytics dashboard
+**市场**：
+- [ ] 基于 Web 的技能市场
+- [ ] 搜索和浏览功能
+- [ ] 用户评价和评分
+- [ ] 支付集成（Stripe/支付宝）
+- [ ] 创作者分析仪表板
 
-**Enterprise Features** (Inspired by enterprise agent architecture):
-- [ ] User registration and authentication (JWT)
-- [ ] Multi-tenant support (team workspaces)
-- [ ] Unified model configuration management
-- [ ] Usage quota and billing
-- [ ] Admin dashboard with analytics
-- [ ] SSO integration (LDAP, OAuth)
-- [ ] Audit logging and compliance
-- [ ] Private Skill repositories
-- [ ] Role-based access control (RBAC)
-- [ ] Resource usage monitoring
+**企业功能**（参考企业 Agent 架构）：
+- [ ] 用户注册和认证（JWT）
+- [ ] 多租户支持（团队工作区）
+- [ ] 统一模型配置管理
+- [ ] 使用配额和计费
+- [ ] 管理员仪表板和分析
+- [ ] SSO 集成（LDAP、OAuth）
+- [ ] 审计日志和合规性
+- [ ] 私有技能仓库
+- [ ] 基于角色的访问控制（RBAC）
+- [ ] 资源使用监控
 
-### Milestone 4: Agent Evolution & Ecosystem Integration 🧬
+### 里程碑 4：Agent 进化与生态集成 🧬
 
-**EvoMap Integration** (Agent Self-Evolution):
-- [ ] GEP (Genome Evolution Protocol) support
-- [ ] Gene and Capsule data structures
-- [ ] Six-step evolution cycle (Scan → Signal → Intent → Mutate → Validate → Solidify)
-- [ ] A2A (Agent-to-Agent) protocol client
-- [ ] Automatic capability inheritance from global gene pool
-- [ ] Local evolution history and audit logs
-- [ ] 70/30 resource allocation (repair vs exploration)
+**EvoMap 集成**（Agent 自进化）：
+- [ ] GEP（基因组进化协议）支持
+- [ ] Gene 和 Capsule 数据结构
+- [ ] 六步进化循环（扫描 → 信号 → 意图 → 变异 → 验证 → 固化）
+- [ ] A2A（Agent-to-Agent）协议客户端
+- [ ] 从全球基因池自动继承能力
+- [ ] 本地进化历史和审计日志
+- [ ] 70/30 资源分配（修复 vs 探索）
 
-**OpenClaw Ecosystem Integration**:
-- [ ] ClawHub Skill marketplace browser
-- [ ] One-click Skill import from ClawHub
-- [ ] Skill quality scoring and security scanning
-- [ ] Community Skill discovery and installation
+**OpenClaw 生态集成**：
+- [ ] ClawHub 技能市场浏览器
+- [ ] 从 ClawHub 一键导入技能
+- [ ] 技能质量评分和安全扫描
+- [ ] 社区技能发现和安装
 
-**Remote Access via IM** (Instant Messaging Integration):
-- [ ] WeChat Work / DingTalk bot adapters
-- [ ] Secure command relay with authentication
-- [ ] Mobile-to-desktop Skill execution
-- [ ] Task status notification and streaming results
-- [ ] Multi-user permission isolation
+**IM 远程调用**（即时通讯集成）：
+- [ ] 企业微信 / 钉钉机器人适配器
+- [ ] 带身份验证的安全命令中继
+- [ ] 移动端到桌面端技能执行
+- [ ] 任务状态通知和流式结果推送
+- [ ] 多用户权限隔离
 
-## Why "SkillMint"?
+## 为什么叫"SkillMint"？
 
-**Skill**: The core unit of AI capability - a packaged, reusable instruction set
-**Mint**: To create and distribute (like minting coins or NFTs)
+**Skill**：AI 能力的核心单元 - 一个打包好的、可重用的指令集
+**Mint**：铸造、创建并分发（类似铸币或 NFT）
 
-Think of it as **"Minting AI Skills"** - create, package, and distribute Skills as easily as npm packages.
+可以理解为 **"铸造 AI 技能"** - 像 npm 包一样轻松创建、打包和分发技能。
 
-## Inspiration
+## 灵感来源
 
-Similar to how Cursor and Claude Code democratized AI-assisted coding, SkillMint aims to democratize AI Skill distribution. Package your expertise once, distribute securely to thousands.
+正如 Cursor 和 Claude Code 使 AI 辅助编码民主化一样，SkillMint 旨在使 AI 技能分发民主化。打包一次你的专业知识，安全地分发给成千上万的人。
 
-## Future Integration Roadmap
+## 未来集成路线图
 
-**Agent Evolution**:
-- EvoMap's GEP (Genome Evolution Protocol) and A2A communication
-- Agent capability inheritance and evolution mechanisms
+**Agent 进化**：
+- EvoMap 的 GEP（基因组进化协议）和 A2A 通信
+- Agent 能力继承和进化机制
 
-**Ecosystem Integration**:
-- ClawHub marketplace integration strategies
-- Community Skill discovery and distribution
+**生态集成**：
+- ClawHub 市场集成策略
+- 社区技能发现和分发
 
-## ⚠️ Security Disclaimer
+## ⚠️ 安全免责声明
 
-**IMPORTANT - READ BEFORE USE**
+**重要 - 使用前必读**
 
-Desktop Agents have powerful capabilities including file system access and command execution. This creates inherent security risks:
+桌面 Agent 具有强大的能力，包括文件系统访问和命令执行。这带来固有的安全风险：
 
-- **Malicious Skills**: Third parties may distribute `.skillpack` files containing harmful code
-- **System Access**: Installed Skills can read, modify, or delete files on your computer
-- **Command Execution**: Skills can execute arbitrary shell commands with your user permissions
-- **Data Exposure**: Skills may access sensitive data in your workspace folders
+- **恶意技能**：第三方可能会分发包含有害代码的 `.skillpack` 文件
+- **系统访问**：已安装的技能可以读取、修改或删除您计算机上的文件
+- **命令执行**：技能可以使用您的用户权限执行任意 Shell 命令
+- **数据暴露**：技能可能访问工作区文件夹中的敏感数据
 
-**By downloading, installing, or running this software, you acknowledge:**
-1. You understand the security risks associated with desktop AI Agents
-2. You will only install Skills from trusted sources
-3. You will review and configure workspace permissions carefully
-4. **The developers assume NO LIABILITY for any damages, data loss, or security breaches** resulting from the use of this software or any Skills installed through it
+**下载、安装或运行本软件即表示您确认：**
+1. 您理解桌面 AI Agent 相关的安全风险
+2. 您只会从可信来源安装技能
+3. 您会仔细审查和配置工作区权限
+4. **开发者对使用本软件或通过本软件安装的任何技能所导致的任何损害、数据丢失或安全漏洞不承担任何责任**
 
-**If you do not agree to these terms, DO NOT download, install, or run this software.**
+**如果您不同意这些条款，请勿下载、安装或运行本软件。**
 
-For security best practices, see [SECURITY.md](SECURITY.md).
+安全最佳实践请参见 [SECURITY.md](SECURITY.md)。
 
-## License
+## 许可证
 
-Apache 2.0 - see [LICENSE](LICENSE)
+Apache 2.0 - 详见 [LICENSE](LICENSE)
 
-## Contributing
+## 贡献
 
-Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+欢迎贡献！请阅读 [CONTRIBUTING.md](CONTRIBUTING.md) 了解详情。
 
-## Community
+## 社区
 
-- GitHub Issues: Bug reports and feature requests
-- Documentation: [docs/](docs/)
-- Examples: [examples/](examples/)
-- Reference: [reference/](reference/) - Open-source project analysis
+- GitHub Issues：错误报告和功能请求
+- 文档：[docs/](docs/)
+- 示例：[examples/](examples/)
+- 参考：[reference/](reference/) - 开源项目分析
 
 ---
 
-**Built with Tauri, React, and Rust** | Inspired by Claude Code, Gemini CLI, and the open-source Agent community
+**使用 Tauri、React 和 Rust 构建** | 灵感来自 Claude Code、Gemini CLI 和开源 Agent 社区

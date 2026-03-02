@@ -1,6 +1,6 @@
 # SkillMint
 
-[English](README.md) | [简体中文](README.zh-CN.md)
+[简体中文](README.md) | [English](README.en.md)
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Tauri](https://img.shields.io/badge/Tauri-2.0-orange.svg)](https://tauri.app/)
@@ -387,6 +387,28 @@ cargo test
 **如果您不同意这些条款，请勿下载、安装或运行本软件。**
 
 安全最佳实践请参见 [SECURITY.md](SECURITY.md)。
+
+## 飞书多角色协作（MVP）
+
+当前版本已支持：
+- 飞书官方 SDK 直连（Sidecar）
+- 长连接接收 `im.message.receive_v1`
+- 群聊/线程发现（可获取 `chat_id`）
+- 线程多角色绑定（`bind_thread_roles`）
+- 事件 relay 自动恢复（应用启动后自动拉起长连接与同步）
+- 聊天页实时展示 `im-role-event` / `im-role-dispatch-request`
+
+快速使用：
+1. 打开 `设置 -> 飞书协作`。
+2. 填写并保存 `App ID / App Secret`（长连接模式下 `Ingress Token / Encrypt Key` 可空）。
+3. 点击“启动长连接”和“启动 Relay”。
+4. 在“群聊与线程”中选择线程并保存角色绑定（如 `presales,project_manager,business_consultant,architect`）。
+5. 在飞书群里 `@机器人` 发消息，观察桌面端时间线。
+
+飞书后台要求：
+- 订阅方式：长连接
+- 事件：`im.message.receive_v1`
+- 权限需发布生效（聊天相关 scope）
 
 ## 许可证
 

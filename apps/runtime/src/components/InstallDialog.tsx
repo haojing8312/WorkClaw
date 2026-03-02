@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { SkillManifest } from "../types";
+import { ClawhubSkillSummary, SkillManifest } from "../types";
 
-type InstallMode = "skillpack" | "local";
+type InstallMode = "skillpack" | "local" | "clawhub";
 
 interface Props {
   onInstalled: (skillId: string) => void;
@@ -18,6 +18,10 @@ export function InstallDialog({ onInstalled, onClose }: Props) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [mcpWarning, setMcpWarning] = useState<string[]>([]);
+  const [clawhubQuery, setClawhubQuery] = useState("");
+  const [clawhubLoading, setClawhubLoading] = useState(false);
+  const [clawhubResults, setClawhubResults] = useState<ClawhubSkillSummary[]>([]);
+  const [selectedClawhubSlug, setSelectedClawhubSlug] = useState<string>("");
 
   // 选择 .skillpack 文件
   async function pickFile() {
@@ -38,6 +42,32 @@ export function InstallDialog({ onInstalled, onClose }: Props) {
     setMcpWarning([]);
   }
 
+  async function searchClawhub() {
+    const q = clawhubQuery.trim();
+    if (!q) {
+      setClawhubResults([]);
+      setSelectedClawhubSlug("");
+      return;
+    }
+    setClawhubLoading(true);
+    setError("");
+    try {
+      const results = await invoke<ClawhubSkillSummary[]>("search_clawhub_skills", {
+        query: q,
+        page: 1,
+        limit: 20,
+      });
+      setClawhubResults(results);
+      setSelectedClawhubSlug(results[0]?.slug ?? "");
+    } catch (e: unknown) {
+      setError(String(e));
+      setClawhubResults([]);
+      setSelectedClawhubSlug("");
+    } finally {
+      setClawhubLoading(false);
+    }
+  }
+
   async function handleInstall() {
     setError("");
     setMcpWarning([]);
@@ -54,23 +84,43 @@ export function InstallDialog({ onInstalled, onClose }: Props) {
         onInstalled(manifest.id);
         onClose();
       } else {
-        if (!localDir) {
-          setError("请选择包含 SKILL.md 的目录");
-          setLoading(false);
-          return;
-        }
-        const result = await invoke<{ manifest: { id: string }; missing_mcp: string[] }>("import_local_skill", { dirPath: localDir });
+        if (mode === "local") {
+          if (!localDir) {
+            setError("请选择包含 SKILL.md 的目录");
+            setLoading(false);
+            return;
+          }
+          const result = await invoke<{ manifest: { id: string }; missing_mcp: string[] }>("import_local_skill", { dirPath: localDir });
 
-        if (result.missing_mcp.length > 0) {
-          setMcpWarning(result.missing_mcp);
-          // Skill 已安装成功，通知父组件切换
+          if (result.missing_mcp.length > 0) {
+            setMcpWarning(result.missing_mcp);
+            // Skill 已安装成功，通知父组件切换
+            onInstalled(result.manifest.id);
+            // 保持对话框打开以展示 MCP 警告
+            return;
+          }
+
           onInstalled(result.manifest.id);
-          // 保持对话框打开以展示 MCP 警告
-          return;
+          onClose();
+        } else {
+          const skill = clawhubResults.find((item) => item.slug === selectedClawhubSlug);
+          if (!skill) {
+            setError("请先搜索并选择要安装的 ClawHub Skill");
+            setLoading(false);
+            return;
+          }
+          const result = await invoke<{ manifest: { id: string }; missing_mcp: string[] }>(
+            "install_clawhub_skill",
+            { slug: skill.slug, githubUrl: skill.github_url ?? skill.source_url ?? null }
+          );
+          if (result.missing_mcp.length > 0) {
+            setMcpWarning(result.missing_mcp);
+            onInstalled(result.manifest.id);
+            return;
+          }
+          onInstalled(result.manifest.id);
+          onClose();
         }
-
-        onInstalled(result.manifest.id);
-        onClose();
       }
     } catch (e: unknown) {
       setError(String(e));
@@ -102,6 +152,12 @@ export function InstallDialog({ onInstalled, onClose }: Props) {
             onClick={() => switchMode("local")}
           >
             本地目录
+          </button>
+          <button
+            className={`${tabBase} ${mode === "clawhub" ? tabActive : tabInactive}`}
+            onClick={() => switchMode("clawhub")}
+          >
+            ClawHub
           </button>
         </div>
 
@@ -151,6 +207,57 @@ export function InstallDialog({ onInstalled, onClose }: Props) {
               本地 Skill 无需加密，可直接导入使用。
             </div>
           </>
+        )}
+
+        {mode === "clawhub" && (
+          <div className="space-y-2">
+            <div className="flex gap-2">
+              <input
+                className="flex-1 bg-gray-50 border border-gray-200 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
+                value={clawhubQuery}
+                onChange={(e) => setClawhubQuery(e.target.value)}
+                placeholder="输入关键词搜索 ClawHub 技能"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    void searchClawhub();
+                  }
+                }}
+              />
+              <button
+                onClick={() => void searchClawhub()}
+                disabled={clawhubLoading}
+                className="px-3 rounded bg-blue-50 hover:bg-blue-100 disabled:bg-gray-100 text-blue-700 text-xs"
+              >
+                {clawhubLoading ? "搜索中..." : "搜索"}
+              </button>
+            </div>
+
+            {clawhubResults.length > 0 ? (
+              <div className="max-h-48 overflow-auto border border-gray-200 rounded">
+                {clawhubResults.map((skill) => (
+                  <button
+                    key={skill.slug}
+                    onClick={() => setSelectedClawhubSlug(skill.slug)}
+                    className={`w-full text-left px-3 py-2 border-b border-gray-100 last:border-b-0 ${
+                      selectedClawhubSlug === skill.slug ? "bg-blue-50" : "hover:bg-gray-50"
+                    }`}
+                  >
+                    <div className="text-sm text-gray-800 font-medium truncate">{skill.name}</div>
+                    <div className="text-[11px] text-gray-500 truncate">
+                      {skill.description || "暂无描述"}
+                    </div>
+                    <div className="text-[10px] text-gray-400 mt-1">
+                      slug: {skill.slug} · stars: {skill.stars ?? 0}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="text-xs text-gray-400">
+                通过关键字搜索 ClawHub 公共技能后可直接安装。
+              </div>
+            )}
+          </div>
         )}
 
         {error && <div className="text-red-500 text-sm">{error}</div>}
