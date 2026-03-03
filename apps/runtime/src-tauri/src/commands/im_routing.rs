@@ -168,10 +168,8 @@ pub async fn upsert_im_routing_binding_with_pool(
     Ok(id)
 }
 
-pub async fn delete_im_routing_binding_with_pool(
-    pool: &SqlitePool,
-    id: &str,
-) -> Result<(), String> {
+<<<<<<< HEAD
+pub async fn delete_im_routing_binding_with_pool(pool: &SqlitePool, id: &str) -> Result<(), String> {
     sqlx::query("DELETE FROM im_routing_bindings WHERE id = ?")
         .bind(id)
         .execute(pool)
