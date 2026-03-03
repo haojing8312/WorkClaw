@@ -272,7 +272,7 @@ app.post('/api/web/search', async (c) => {
     const { query, count = 5 } = await c.req.json();
     const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
     const resp = await fetch(url, {
-      headers: { 'User-Agent': 'SkillMint/1.0' },
+      headers: { 'User-Agent': 'WorkClaw/1.0' },
     });
     const html = await resp.text();
 

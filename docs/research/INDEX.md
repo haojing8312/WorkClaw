@@ -71,7 +71,7 @@
 ---
 
 ### 🚀 4. IMPLEMENTATION_QUICK_START.md (Step-by-Step Guide)
-**What**: Ready-to-implement code for SkillMint
+**What**: Ready-to-implement code for WorkClaw
 **Length**: ~4,000 words
 **Time to Read**: 30 minutes (implementation: 1-2 weeks)
 **Content**:
@@ -123,7 +123,7 @@
 - 博查搜索 (Bocha) API response format (Section 3)
 - SerpAPI organic_results structure (Section 4)
 - Unified field mapping table (Section 5)
-- SkillMint standard search result interface (Section 5)
+- WorkClaw standard search result interface (Section 5)
 - Provider adaptation layer design (Section 6)
 - Error handling by API (Section 6)
 - Caching strategy recommendations (Section 6)
@@ -171,7 +171,7 @@
 - Recommended API combinations
 - Integration checklist
 - Common integration patterns
-- SkillMint standard data structure
+- WorkClaw standard data structure
 
 **Start here if**: You need instant reference while coding
 

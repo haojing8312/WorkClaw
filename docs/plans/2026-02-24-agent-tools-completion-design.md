@@ -2,11 +2,11 @@
 
 **日期**: 2026-02-24
 **状态**: 已批准
-**目标**: 将 SkillMint Agent 从 8 个注册工具扩展到 37 个，覆盖文件操作、Shell 进程管理、浏览器自动化、系统工具等完整桌面 Agent 能力。
+**目标**: 将 WorkClaw Agent 从 8 个注册工具扩展到 37 个，覆盖文件操作、Shell 进程管理、浏览器自动化、系统工具等完整桌面 Agent 能力。
 
 ## 背景
 
-对比 MiniMax Agent（60+ IPC 通道）后发现 SkillMint 在以下方面存在显著差距：
+对比 MiniMax Agent（60+ IPC 通道）后发现 WorkClaw 在以下方面存在显著差距：
 
 - 文件操作缺少 `listDir`, `delete`, `move`, `copy`, `stat`
 - Shell 无后台进程管理能力

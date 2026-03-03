@@ -25,7 +25,7 @@ describe("IndustryPackView", () => {
     openMock.mockResolvedValueOnce("C:\\skills");
     saveMock.mockResolvedValueOnce("C:\\packs\\teacher-suite.industrypack");
     invokeMock.mockImplementation((command: string) => {
-      if (command === "scan_skillmint_dirs") {
+      if (command === "scan_workclaw_dirs") {
         return Promise.resolve([
           {
             dir_path: "C:\\skills\\teacher-helper",

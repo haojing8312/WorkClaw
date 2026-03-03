@@ -90,7 +90,7 @@ const content = files.length > 0
 ALTER TABLE sessions ADD COLUMN workspace_path TEXT;
 ```
 
-**默认值**：`C:\Users\<用户名>\.skillmint\projects`
+**默认值**：`C:\Users\<用户名>\.workclaw\projects`
 
 ### UI/UX 设计
 
@@ -131,7 +131,7 @@ fn validate_workspace(path: &Path, workspace: &Path) -> bool {
 ### 行为
 
 1. **新建对话**：继承上一个对话的工作空间
-2. **首次使用**：使用默认路径 `C:\Users\<用户名>\.skillmint\projects`
+2. **首次使用**：使用默认路径 `C:\Users\<用户名>\.workclaw\projects`
 3. **目录不存在**：自动创建
 4. **越权访问**：返回错误提示
 

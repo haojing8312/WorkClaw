@@ -82,7 +82,7 @@ mod tests {
     #[test]
     fn test_encrypt_decrypt_roundtrip() {
         let key = derive_key("alice", "skill-id-123", "test");
-        let plaintext = b"Hello, SkillMint!";
+        let plaintext = b"Hello, WorkClaw!";
         let encrypted = encrypt(plaintext, &key).unwrap();
         let decrypted = decrypt(&encrypted, &key).unwrap();
         assert_eq!(decrypted, plaintext);

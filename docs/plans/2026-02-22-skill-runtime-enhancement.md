@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** 将 SkillMint Runtime 从基础 ReAct 引擎提升到接近 Claude Code 体验，分 4 个 Phase、17 个 Task 逐步实现。
+**Goal:** 将 WorkClaw Runtime 从基础 ReAct 引擎提升到接近 Claude Code 体验，分 4 个 Phase、17 个 Task 逐步实现。
 
 **Architecture:** 自底向上：Phase 1 补齐工具层 → Phase 2 Skill 元数据加载 → Phase 3 多 Agent 协调 → Phase 4 高级特性（权限/Web/Memory/AskUser）。
 
@@ -1543,7 +1543,7 @@ impl Tool for WebFetchTool {
         let url = input["url"].as_str().ok_or(anyhow!("缺少 url"))?;
         let client = reqwest::blocking::Client::new();
         let resp = client.get(url)
-            .header("User-Agent", "SkillMint/1.0")
+            .header("User-Agent", "WorkClaw/1.0")
             .send()?;
         let body = resp.text()?;
         // 去除 script/style 标签
@@ -1594,7 +1594,7 @@ app.post('/api/web/search', async (c) => {
     const { query, count = 5 } = await c.req.json();
     // 使用 fetch 调用 DuckDuckGo HTML
     const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-    const resp = await fetch(url, { headers: { 'User-Agent': 'SkillMint/1.0' }});
+    const resp = await fetch(url, { headers: { 'User-Agent': 'WorkClaw/1.0' }});
     const html = await resp.text();
     // 解析结果...
     return c.json({ output: results });

@@ -1,4 +1,4 @@
-# Unified Design Language Design (SkillMint Runtime)
+# Unified Design Language Design (WorkClaw Runtime)
 
 - Date: 2026-03-03
 - Scope: `apps/runtime/src/App.tsx`, `apps/runtime/src/components/Sidebar.tsx`, `apps/runtime/src/components/ChatView.tsx`, `apps/runtime/src/components/SettingsView.tsx`, `apps/runtime/src/index.css`

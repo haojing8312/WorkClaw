@@ -4,7 +4,7 @@
 
 Current runtime UX enters chat mainly through sidebar session operations. For first-time or light users, this does not clearly explain product value or the kinds of tasks the assistant can handle.
 
-Goal for phase 1 is to introduce a new-session landing page in the `chat` main view, inspired by MiniMax layout structure but not visual copy. The UI language must remain in SkillMint's existing blue style system.
+Goal for phase 1 is to introduce a new-session landing page in the `chat` main view, inspired by MiniMax layout structure but not visual copy. The UI language must remain in WorkClaw's existing blue style system.
 
 ## 2. Product Positioning and Terminology
 

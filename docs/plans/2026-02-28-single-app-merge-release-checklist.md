@@ -1,10 +1,10 @@
-# SkillMint 单端合并发布验收清单
+# WorkClaw 单端合并发布验收清单
 
 ## A. 核心目标验收
 
 - [x] 仅保留一个客户端应用（`apps/runtime`）
 - [x] `apps/studio` 已从仓库移除
-- [x] 应用窗口标题统一为 `SkillMint`
+- [x] 应用窗口标题统一为 `WorkClaw`
 - [x] 打包能力已并入单端应用（可在应用内完成技能打包）
 
 ## B. 功能对等验收
@@ -26,7 +26,7 @@
 
 - [x] 产品窗口与页面标题不再出现 `Runtime/Studio`
 - [x] 用户可见权限模式文案不再显示 `accept_edits/unrestricted`
-- [x] README 对外叙述已切换为单端 SkillMint 口径
+- [x] README 对外叙述已切换为单端 WorkClaw 口径
 
 ## E. 构建与测试验收（本次执行结果）
 

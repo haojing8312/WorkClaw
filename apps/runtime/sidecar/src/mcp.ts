@@ -22,7 +22,7 @@ export class MCPManager {
 
     const client = new Client(
       {
-        name: 'skillmint-runtime',
+        name: 'workclaw-runtime',
         version: '1.0.0',
       },
       {

@@ -9,7 +9,7 @@
 
 ## 执行摘要
 
-本研究针对 SkillMint 项目调查了 4 个主流搜索引擎 API 的官方响应格式。通过详细的文档分析和代码示例，确立了统一的标准化格式，便于在 SkillMint 中集成多个搜索 Provider。
+本研究针对 WorkClaw 项目调查了 4 个主流搜索引擎 API 的官方响应格式。通过详细的文档分析和代码示例，确立了统一的标准化格式，便于在 WorkClaw 中集成多个搜索 Provider。
 
 ### 核心发现
 
@@ -104,7 +104,7 @@
 
 ### 字段映射表
 
-| SkillMint 标准 | Brave | Tavily | Bocha | SerpAPI |
+| WorkClaw 标准 | Brave | Tavily | Bocha | SerpAPI |
 |--------------|-------|---------|-------|----------|
 | **title** | title | title | name | title |
 | **url** | url | url | url | link |
@@ -137,7 +137,7 @@ SerpAPI: response.organic_results[i]
 
 ---
 
-## SkillMint 标准化方案
+## WorkClaw 标准化方案
 
 ### 推荐的标准搜索结果接口
 
@@ -309,7 +309,7 @@ pub fn create_provider(
 ### 短期行动（1-2 周）
 1. ⏳ 完成 4 个 Provider 实现
 2. ⏳ 编写单元测试
-3. ⏳ 集成到 SkillMint Agent 系统
+3. ⏳ 集成到 WorkClaw Agent 系统
 4. ⏳ 性能基准测试
 
 ### 中期行动（2-4 周）
@@ -334,7 +334,7 @@ pub fn create_provider(
 - [Bocha Search MCP](https://github.com/BochaAI/bocha-search-mcp)
 - [SerpAPI Python](https://github.com/serpapi/google-search-results-python)
 
-### 相关 SkillMint 文档
+### 相关 WorkClaw 文档
 - 搜索 API 响应格式详解: `search_api_response_formats.md`
 - 实现指南（含代码）: `search_api_implementation_guide.md`
 - 快速参考表: `search_api_quick_reference.md`
@@ -391,7 +391,7 @@ pub fn create_provider(
 
 **A**: 大部分可以。建议：
 1. 使用 `search_api_implementation_guide.md` 的代码作为参考
-2. 根据 SkillMint 的具体需求调整
+2. 根据 WorkClaw 的具体需求调整
 3. 添加错误处理和日志
 4. 编写测试用例
 
@@ -413,7 +413,7 @@ pub fn create_provider(
 
 ## 结论
 
-通过本研究，我们确立了在 SkillMint 中集成多个搜索引擎 API 的可行方案：
+通过本研究，我们确立了在 WorkClaw 中集成多个搜索引擎 API 的可行方案：
 
 1. ✅ **标准化是可行的** - 虽然 API 格式差异大，但通过适配层可以统一
 2. ✅ **性能可优化** - 支持缓存、限流、并行查询

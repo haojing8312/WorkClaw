@@ -1,4 +1,4 @@
-# SkillMint Runtime Agent Capabilities 设计文档
+# WorkClaw Runtime Agent Capabilities 设计文档
 
 **日期**: 2026-02-20
 **状态**: 已批准
@@ -10,7 +10,7 @@
 ## 1. 背景与目标
 
 ### 1.1 当前状态
-SkillMint Runtime MVP 已完成基础聊天能力：
+WorkClaw Runtime MVP 已完成基础聊天能力：
 - ✅ Tauri 2 桌面应用框架
 - ✅ SQLite 数据持久化 (installed_skills, sessions, messages, model_configs)
 - ✅ LLM 适配器支持 9 大提供商 (OpenAI, Claude, MiniMax×2, DeepSeek, Qwen×2, Moonshot, Yi)
@@ -18,7 +18,7 @@ SkillMint Runtime MVP 已完成基础聊天能力：
 - ✅ Provider Preset 系统
 
 ### 1.2 目标
-为 SkillMint Runtime 添加完整的 Agent 执行能力，使其能够：
+为 WorkClaw Runtime 添加完整的 Agent 执行能力，使其能够：
 1. **Tool Calling**: 支持 Anthropic `tool_use` 和 OpenAI `function_calling` 格式
 2. **文件操作**: ReadFile, WriteFile, Glob, Grep
 3. **Bash 执行**: 跨平台命令执行 (Windows PowerShell / Unix bash)
@@ -908,7 +908,7 @@ export class MCPManager {
     });
 
     const client = new Client({
-      name: 'skillmint-runtime',
+      name: 'workclaw-runtime',
       version: '1.0.0',
     }, {
       capabilities: {},
@@ -1149,7 +1149,7 @@ Content-Type: application/json
 4. 用户文档和示例
 5. 发布准备
 
-**交付物**: 生产就绪的 SkillMint Runtime Agent 系统
+**交付物**: 生产就绪的 WorkClaw Runtime Agent 系统
 
 ---
 
@@ -1167,7 +1167,7 @@ regex = "1"
 ### Node.js Sidecar 依赖
 ```json
 {
-  "name": "skillmint-runtime-sidecar",
+  "name": "workclaw-runtime-sidecar",
   "version": "1.0.0",
   "dependencies": {
     "hono": "^4.0.0",

@@ -6,7 +6,7 @@
 
 ## 1. Product Intent
 
-Build a production-ready Runtime experience for automatic parent-to-child Skill routing, while preserving SkillMint's existing target users and security posture.
+Build a production-ready Runtime experience for automatic parent-to-child Skill routing, while preserving WorkClaw's existing target users and security posture.
 
 Constraints confirmed:
 - Routing mode: automatic only

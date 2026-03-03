@@ -18,7 +18,7 @@ fn build_builtin_manifest_json(skill_id: &str, skill_markdown: &str) -> String {
         "name": builtin_name,
         "description": builtin_description,
         "version": "1.0.0",
-        "author": "SkillMint",
+        "author": "WorkClaw",
         "recommended_model": "",
         "tags": [],
         "created_at": "2026-01-01T00:00:00Z",
@@ -54,7 +54,7 @@ async fn sync_builtin_skills(pool: &SqlitePool) -> Result<()> {
 pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
     let app_dir = app.path().app_data_dir()?;
     std::fs::create_dir_all(&app_dir)?;
-    let db_path = app_dir.join("skillmint.db");
+    let db_path = app_dir.join("workclaw.db");
     let db_url = format!("sqlite://{}?mode=rwc", db_path.to_string_lossy());
 
     let pool = SqlitePoolOptions::new()

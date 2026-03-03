@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Add complete Agent execution capabilities to SkillMint Runtime, enabling tool calling (file, bash, browser, MCP) with a ReAct loop supporting both Anthropic and OpenAI LLM formats.
+**Goal:** Add complete Agent execution capabilities to WorkClaw Runtime, enabling tool calling (file, bash, browser, MCP) with a ReAct loop supporting both Anthropic and OpenAI LLM formats.
 
 **Architecture:** Hybrid Rust + Node.js sidecar. Rust handles the Agent executor, ReAct loop, file/bash tools, and LLM adapters. Node.js sidecar (Hono server on localhost:8765) handles Playwright browser control and MCP client management. Communication via HTTP REST.
 
@@ -1392,7 +1392,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 
 ```json
 {
-  "name": "skillmint-runtime-sidecar",
+  "name": "workclaw-runtime-sidecar",
   "version": "1.0.0",
   "type": "module",
   "scripts": {
@@ -2063,7 +2063,7 @@ export class MCPManager {
 
     const client = new Client(
       {
-        name: 'skillmint-runtime',
+        name: 'workclaw-runtime',
         version: '1.0.0',
       },
       {

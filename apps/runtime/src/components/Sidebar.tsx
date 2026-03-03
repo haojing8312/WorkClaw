@@ -148,7 +148,7 @@ export function Sidebar({
   return (
     <div className="sm-surface sm-divider w-64 flex flex-col h-full border-r flex-shrink-0">
       <div className="sm-surface sm-divider px-4 py-3 text-xs font-medium sm-text-muted border-b flex items-center justify-between">
-        <span>SkillMint</span>
+        <span>WorkClaw</span>
         <button
           onClick={onCollapse}
           className="sm-btn sm-btn-ghost h-7 w-7 text-sm rounded-md"

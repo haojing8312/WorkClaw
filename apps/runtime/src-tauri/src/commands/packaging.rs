@@ -17,7 +17,7 @@ pub struct SkillDirInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SkillMintDirSummary {
+pub struct WorkClawDirSummary {
     pub dir_path: String,
     pub slug: String,
     pub front_matter: FrontMatter,
@@ -214,7 +214,7 @@ fn default_industry_pack_root() -> PathBuf {
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .unwrap_or_else(|_| ".".to_string());
-    Path::new(&home).join(".skillmint").join("industry-packs")
+    Path::new(&home).join(".workclaw").join("industry-packs")
 }
 
 fn read_industry_manifest_from_zip(path: &Path) -> Result<IndustryPackManifest, String> {
@@ -280,7 +280,7 @@ pub async fn read_skill_dir(dir_path: String) -> Result<SkillDirInfo, String> {
 }
 
 #[tauri::command]
-pub async fn scan_skillmint_dirs(root_dir: String) -> Result<Vec<SkillMintDirSummary>, String> {
+pub async fn scan_workclaw_dirs(root_dir: String) -> Result<Vec<WorkClawDirSummary>, String> {
     let root = Path::new(&root_dir);
     if !root.exists() {
         return Err("目录不存在".to_string());
@@ -306,7 +306,7 @@ pub async fn scan_skillmint_dirs(root_dir: String) -> Result<Vec<SkillMintDirSum
             .map(sanitize_slug)
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "skill".to_string());
-        out.push(SkillMintDirSummary {
+        out.push(WorkClawDirSummary {
             dir_path: dir.to_string_lossy().to_string(),
             slug: slug_base,
             front_matter: fm,

@@ -103,7 +103,7 @@ fn default_skill_base_dir() -> PathBuf {
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .unwrap_or_else(|_| ".".to_string());
-    Path::new(&home).join(".skillmint").join("skills")
+    Path::new(&home).join(".workclaw").join("skills")
 }
 
 fn normalize_skill_description(description: &str, when_to_use: &str) -> String {

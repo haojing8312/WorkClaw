@@ -467,7 +467,7 @@ Example (100K searches/month):
 
 ## 7. Final Recommendation Matrix
 
-### For SkillMint Runtime
+### For WorkClaw Runtime
 
 | Dimension | Recommendation | Rationale |
 |-----------|---------------|-----------|

@@ -47,7 +47,7 @@ interface Props {
   onRenderPreview: (payload: ExpertPreviewPayload) => Promise<ExpertPreviewResult>;
 }
 
-const DEFAULT_DIR = "~/.skillmint/skills/";
+const DEFAULT_DIR = "~/.workclaw/skills/";
 
 function sanitizeSlug(input: string): string {
   const slug = input

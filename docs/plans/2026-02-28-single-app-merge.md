@@ -1,8 +1,8 @@
-# SkillMint Single-App Merge Implementation Plan
+# WorkClaw Single-App Merge Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Merge Studio + Runtime into one user-facing SkillMint app with zero data loss, no feature regression, and non-technical UX naming.
+**Goal:** Merge Studio + Runtime into one user-facing WorkClaw app with zero data loss, no feature regression, and non-technical UX naming.
 
 **Architecture:** Keep one Tauri app (`apps/runtime`) as the only client, migrate Studio packaging UI/commands into it, and preserve storage compatibility via mapping layers. Use phased delivery: capability merge, UX renaming, migration hardening, cleanup.
 
@@ -199,7 +199,7 @@ Expected: PASS without Studio scripts.
 
 ```bash
 git add package.json pnpm-workspace.yaml README.md README.zh-CN.md docs/diagrams/technical-architecture.svg docs/diagrams/business-architecture.svg
-git commit -m "chore(docs): switch architecture and scripts to single SkillMint app"
+git commit -m "chore(docs): switch architecture and scripts to single WorkClaw app"
 ```
 
 ### Task 6: Remove Studio App After All Tests Pass

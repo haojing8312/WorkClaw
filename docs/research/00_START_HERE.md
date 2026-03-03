@@ -403,7 +403,7 @@ This research is ready to use. Pick a path above and start:
 **5 minutes from now**: You'll know which search API to use
 **30 minutes from now**: You'll know the full cost implications
 **2 hours from now**: You'll understand all options and be ready to decide
-**1 week from now**: You'll have working web search in SkillMint
+**1 week from now**: You'll have working web search in WorkClaw
 
 ---
 

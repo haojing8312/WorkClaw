@@ -1,6 +1,6 @@
 # 搜索引擎 API 响应格式对比
 
-本文档总结了主流搜索引擎 API 的响应格式，用于在 SkillMint 中统一标准化的搜索结果格式。
+本文档总结了主流搜索引擎 API 的响应格式，用于在 WorkClaw 中统一标准化的搜索结果格式。
 
 ## 1. Brave Search API
 
@@ -258,10 +258,10 @@ results['related_questions']    # 相关问题
 
 ## 字段映射与标准化
 
-### 为了在 SkillMint 中统一标准，推荐的字段映射如下：
+### 为了在 WorkClaw 中统一标准，推荐的字段映射如下：
 
 ```typescript
-// SkillMint 标准搜索结果格式
+// WorkClaw 标准搜索结果格式
 interface StandardSearchResult {
   title: string;              // 结果标题
   url: string;               // 结果链接
@@ -355,7 +355,7 @@ impl From<SerpApiResult> for SearchResult { /* ... */ }
 - [Bocha Search MCP](https://github.com/BochaAI/bocha-search-mcp)
 - [SerpAPI Python](https://github.com/serpapi/google-search-results-python)
 
-### 相关 SkillMint 代码
+### 相关 WorkClaw 代码
 - Provider 预设配置：`docs/plans/2026-02-19-llm-adapter-provider-presets-design.md`
 - 搜索工具注册：`apps/runtime/src-tauri/src/agent/tools/`
 

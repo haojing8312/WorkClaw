@@ -284,7 +284,7 @@ pub fn run() {
             commands::mcp::remove_mcp_server,
             commands::dialog::select_directory,
             commands::packaging::read_skill_dir,
-            commands::packaging::scan_skillmint_dirs,
+            commands::packaging::scan_workclaw_dirs,
             commands::packaging::update_skill_dir_tags,
             commands::packaging::pack_skill,
             commands::packaging::pack_industry_bundle,

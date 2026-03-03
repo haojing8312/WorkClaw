@@ -7,7 +7,7 @@
 
 ## Confirmed Decisions
 
-- 全局默认工作目录：`C:\Users\<username>\SkillMint\workspace`
+- 全局默认工作目录：`C:\Users\<username>\WorkClaw\workspace`
 - 默认目录不存在时：自动创建并直接使用
 - 新建会话：不再先弹目录选择，自动应用默认目录；用户可在会话内再改
 - 员工 `feishu_open_id`：非必填，仅用于飞书精准路由
@@ -24,7 +24,7 @@
   - `resolve_default_work_dir`
 - 统一管理 `app_settings` 中的运行时偏好（默认目录、后续可扩展项）。
 - `resolve_default_work_dir` 负责：
-  - 读取配置或生成默认 `USERPROFILE\\SkillMint\\workspace`
+  - 读取配置或生成默认 `USERPROFILE\\WorkClaw\\workspace`
   - 确保目录存在（不存在则创建）
   - 失败时返回明确错误
 

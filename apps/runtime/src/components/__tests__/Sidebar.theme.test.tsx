@@ -24,7 +24,7 @@ describe("Sidebar semantic theme", () => {
       />
     );
 
-    const title = screen.getByText("SkillMint");
+    const title = screen.getByText("WorkClaw");
     expect(title.closest("div")).toHaveClass("sm-surface");
     expect(screen.getByRole("button", { name: "开始任务" })).toHaveClass("sm-btn");
     expect(screen.getByPlaceholderText("搜索会话...")).toHaveClass("sm-input");

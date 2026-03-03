@@ -1,4 +1,4 @@
-# SkillMint
+# WorkClaw
 
 [简体中文](README.md) | [English](README.en.md)
 
@@ -6,23 +6,24 @@
 [![Tauri](https://img.shields.io/badge/Tauri-2.0-orange.svg)](https://tauri.app/)
 [![React](https://img.shields.io/badge/React-18-blue.svg)](https://reactjs.org/)
 
-**SkillMint** = Agent Runtime + Encrypted Skill System
+**Help Everyone Quickly Build Their Own AI Employee Team**
 
-An open-source platform to **package, encrypt, and distribute AI Skills** as secure desktop applications. Create once, distribute anywhere.
+WorkClaw is a beginner-friendly OpenClaw desktop agent distribution that removes command-line and config-file friction. Through conversational interaction, users can install and configure the system, create skills, encrypt/package skills, discover skills across the web, and direct AI teams from mobile via Feishu and other IM channels.
+
+⭐ If you believe AI employee teams should be accessible to everyone, please Star this repository.
 
 > **🧪 AI-Powered Development Experiment**
 > This project is an experimental demonstration of **100% AI-driven development** - the entire codebase is designed and implemented by AI (Claude Code, GPT-5.3-Codex) without manual code inspection by the developer. This serves as a real-world test of AI's capability to build production-grade software autonomously.
 
-## What is SkillMint?
+## What is WorkClaw?
 
-SkillMint helps AI Skill creators:
-- **Package**: Transform Skills (Markdown with prompts/examples) into encrypted `.skillpack` files
-- **Protect**: Military-grade encryption protects your intellectual property
-- **Distribute**: Users run Skills in a secure local sandbox environment
-- **Monetize**: Control access and distribution of your premium Skills
+WorkClaw's core mission is to make AI employee teams usable by everyone, not just technical experts:
+- **For non-technical users**: no command line, no manual config editing; complete setup and usage through chat-like interaction
+- **For skill creators**: create, test, encrypt, package, and distribute skills through user-friendly agent workflows
+- **For software companies (OEM)**: build and monetize B2B offerings on top of the open-source base
+- **For individual users**: easily install, configure, and run a personal AI employee team
 
-**For Creators**: Package and sell your Skills securely
-**For Users**: Run powerful AI Skills locally without exposing sensitive data
+WorkClaw also benchmarks against Claude Cowork-style desktop agent experiences with a focus on local control, mobile command capability through IM, and team collaboration.
 
 ## Core Product Highlights
 
@@ -51,7 +52,7 @@ SkillMint helps AI Skill creators:
 
 ## Architecture
 
-SkillMint is delivered as a single integrated desktop application:
+WorkClaw is delivered as a single integrated desktop application:
 
 ### Business Architecture
 
@@ -61,7 +62,7 @@ The business architecture showcases the complete value stream from creator to us
 - **Creator Value Chain**: Skill development → package/encrypt → publish
 - **Core Platform**: Agent engine, security, tool capabilities, model integration
 - **User Value Chain**: Personal (browse → install → run) + Enterprise (team/RBAC → unified config/SSO → Agent employees)
-- **Ecosystem Integration**: EvoMap evolution, SkillMint marketplace + ClawHub compatibility, IM remote calling
+- **Ecosystem Integration**: EvoMap evolution, WorkClaw marketplace + ClawHub compatibility, IM remote calling
 
 ### Technical Architecture
 
@@ -75,7 +76,7 @@ The technical stack is organized in 6 layers:
 - **Layer 5 - Model Integration**: Anthropic API, OpenAI Compatible, Chinese models (MiniMax, DeepSeek, GLM, Qwen, Moonshot)
 - **Layer 6 - Data Persistence**: SQLite, .skillpack files, Secure workspace folders
 
-### SkillMint Application
+### WorkClaw Application
 The integrated environment where users can package, install, and run encrypted Skills:
 
 **Core Agent Capabilities**:
@@ -100,7 +101,7 @@ The integrated environment where users can package, install, and run encrypted S
 - No command line required
 
 ### Creator Workflow
-Creators can develop Skills with **Claude Code** or **VS Code**, then package directly inside the SkillMint app (no separate Studio client).
+Creators can develop Skills with **Claude Code** or **VS Code**, then package directly inside the WorkClaw app (no separate Studio client).
 
 ## Key Features
 
@@ -165,9 +166,9 @@ Creators can develop Skills with **Claude Code** or **VS Code**, then package di
 ## Project Structure
 
 ```
-skillmint/
+workclaw/
 ├── apps/
-│   └── runtime/              # SkillMint desktop application
+│   └── runtime/              # WorkClaw desktop application
 │       ├── src/              # React frontend
 │       ├── src-tauri/        # Rust backend
 │       │   ├── src/
@@ -308,7 +309,7 @@ Before publishing, CI validates that `tag(vX.Y.Z)` matches `tauri.conf.json` `ve
 
 ### Milestone 3: Ecosystem & Enterprise 🏢
 
-**Creator Capabilities (Built into SkillMint App)**:
+**Creator Capabilities (Built into WorkClaw App)**:
 - [ ] Monaco Editor integration
 - [ ] Skill structure visual editor
 - [ ] Embedded testing chat (Claude Code integration)
@@ -359,16 +360,16 @@ Before publishing, CI validates that `tag(vX.Y.Z)` matches `tauri.conf.json` `ve
 - [ ] Task status notification and streaming results
 - [ ] Multi-user permission isolation
 
-## Why "SkillMint"?
+## Why "WorkClaw"?
 
-**Skill**: The core unit of AI capability - a packaged, reusable instruction set
-**Mint**: To create and distribute (like minting coins or NFTs)
+**Work**: Focuses on real task execution, delivery, and team collaboration  
+**Claw**: Draws from the OpenClaw ecosystem and the "lobster crew" metaphor for controllable AI workers
 
-Think of it as **"Minting AI Skills"** - create, package, and distribute Skills as easily as npm packages.
+Think of it as **"putting your AI employee team to work under your command."**
 
 ## Inspiration
 
-Similar to how Cursor and Claude Code democratized AI-assisted coding, SkillMint aims to democratize AI Skill distribution. Package your expertise once, distribute securely to thousands.
+Similar to how Cursor and Claude Code democratized AI-assisted coding, WorkClaw aims to democratize AI Skill distribution. Package your expertise once, distribute securely to thousands.
 
 ## Future Integration Roadmap
 
@@ -415,6 +416,10 @@ Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for de
 - Documentation: [docs/](docs/)
 - Examples: [examples/](examples/)
 - Reference: [reference/](reference/) - Open-source project analysis
+
+## Acknowledgements
+
+- Thanks to the [OpenClaw](https://github.com/openclaw/openclaw) open-source ecosystem for the foundational ideas and capabilities that WorkClaw builds on.
 
 ---
 

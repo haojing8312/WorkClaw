@@ -31,7 +31,7 @@ fn home_dir_from_env() -> Option<PathBuf> {
 fn compute_default_work_dir() -> String {
     let fallback = PathBuf::from("C:\\Users\\Default");
     let base = home_dir_from_env().unwrap_or(fallback);
-    base.join("SkillMint")
+    base.join("WorkClaw")
         .join("workspace")
         .to_string_lossy()
         .to_string()

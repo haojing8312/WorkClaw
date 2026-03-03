@@ -6,7 +6,7 @@
 
 ## 项目概述
 
-**SkillMint** 是一个开源的 AI Skill 打包与桌面应用发布平台。项目由两个 Tauri 桌面应用组成：**Studio**（供创作者打包 Skill）和 **Runtime**（供用户安装和运行 Skill）。Skill 使用 AES-256-GCM 加密打包成 `.skillpack` 文件。
+**WorkClaw** 是一个开源的 AI Skill 打包与桌面应用发布平台。项目由两个 Tauri 桌面应用组成：**Studio**（供创作者打包 Skill）和 **Runtime**（供用户安装和运行 Skill）。Skill 使用 AES-256-GCM 加密打包成 `.skillpack` 文件。
 
 ## Monorepo 结构
 
@@ -129,7 +129,7 @@ pub trait Tool: Send + Sync {
 
 ### 5. 数据库结构 (SQLite)
 
-**位置**: `{app_data_dir}/skillmint.db`
+**位置**: `{app_data_dir}/workclaw.db`
 
 ```sql
 installed_skills (id, manifest, installed_at, last_used_at, username, pack_path)
@@ -195,7 +195,7 @@ let resp = reqwest::Client::new()
 
 ### Runtime 应用
 - **Tauri 配置**: `apps/runtime/src-tauri/tauri.conf.json`
-  - App ID: `dev.skillmint.runtime`
+  - App ID: `dev.workclaw.runtime`
   - 开发端口: 5174
   - 窗口尺寸: 1200x750
 - **Rust 依赖**: `apps/runtime/src-tauri/Cargo.toml`
@@ -248,21 +248,21 @@ strip = true
 
 ## 参考开源项目
 
-**重要**：`reference/` 目录包含了三个优秀的 AI Agent 开源项目作为技术参考。在实现 SkillMint 功能时，强烈建议先查阅相关项目的实现方案。
+**重要**：`reference/` 目录包含了三个优秀的 AI Agent 开源项目作为技术参考。在实现 WorkClaw 功能时，强烈建议先查阅相关项目的实现方案。
 
 ⚠️ **使用原则**：
 - ✅ **参考设计思路和架构模式** - 学习其设计理念、架构选择、问题解决方案
 - ✅ **借鉴最佳实践** - 错误处理、安全机制、性能优化等经验
 - ✅ **理解实现细节** - 深入了解具体功能的实现方式
-- ❌ **不要直接复制代码** - 必须根据 SkillMint 的实际需求重新设计和实现
-- ❌ **不要照搬架构** - SkillMint 有自己独特的定位（加密 Skill 打包分发平台）
+- ❌ **不要直接复制代码** - 必须根据 WorkClaw 的实际需求重新设计和实现
+- ❌ **不要照搬架构** - WorkClaw 有自己独特的定位（加密 Skill 打包分发平台）
 - ⚠️ **注意许可证差异** - WorkAny (Community License), Gemini CLI (Apache 2.0), OpenClaw (MIT)
 
 **正确的参考方式**：
-1. 先理解 SkillMint 的需求和约束
+1. 先理解 WorkClaw 的需求和约束
 2. 查看参考项目如何解决类似问题
 3. 分析其方案的优缺点
-4. 结合 SkillMint 特点重新设计
+4. 结合 WorkClaw 特点重新设计
 5. 用自己的代码实现，不直接复制
 
 ### 快速索引
@@ -291,7 +291,7 @@ strip = true
 ### 生产级应用参考
 
 1. **[WorkAny](reference/docs/workany.md)** (811 ⭐) - 桌面 AI Agent，Tauri + Claude Code
-   - ✅ 与 SkillMint 架构最相似（Tauri + React + Rust）
+   - ✅ 与 WorkClaw 架构最相似（Tauri + React + Rust）
    - ✅ externalBin 打包策略可直接应用于 Sidecar
    - ✅ Artifact 实时预览设计
 
@@ -348,7 +348,7 @@ cat reference/docs/learn-claude-code.md | grep -A 30 "核心模式"
 cd reference/learn-claude-code
 python agents/s01_agent_loop.py
 
-# 3. 对比 SkillMint 的 executor.rs
+# 3. 对比 WorkClaw 的 executor.rs
 cat apps/runtime/src-tauri/src/agent/executor.rs
 ```
 
@@ -373,7 +373,7 @@ cat reference/docs/claude-code-reverse.md | grep -A 30 "Sub Agent 设计模式"
 # 2. 查看 Task Tool 定义
 cat reference/claude-code-reverse/results/tools/Task.tool.yaml
 
-# 3. 在 SkillMint 中实现
+# 3. 在 WorkClaw 中实现
 # → apps/runtime/src-tauri/src/agent/tools/ 添加 task_agent.rs
 ```
 
@@ -399,7 +399,7 @@ cat reference/docs/learn-claude-code.md | grep -A 30 "TodoWrite 与任务管理"
 # 2. 运行示例
 python reference/learn-claude-code/agents/s03_todo_write.py
 
-# 3. 在 SkillMint 中添加 TodoWrite 工具
+# 3. 在 WorkClaw 中添加 TodoWrite 工具
 # → apps/runtime/src-tauri/src/agent/tools/todo_write.rs
 ```
 
@@ -411,7 +411,7 @@ cat reference/docs/open-claude-cowork.md | grep -A 30 "Composio Tool Router"
 # 2. 查看源码实现
 cat reference/open-claude-cowork/server/providers/claude-provider.js | grep -A 20 "Composio"
 
-# 3. 在 SkillMint Sidecar 中集成
+# 3. 在 WorkClaw Sidecar 中集成
 # → apps/runtime/sidecar/src/composio.ts
 ```
 
@@ -423,7 +423,7 @@ cat reference/docs/open-claude-cowork.md | grep -A 30 "实时流式输出"
 # 2. 查看前端代码
 cat reference/open-claude-cowork/renderer/chat.js
 
-# 3. 对比 SkillMint 的实现
+# 3. 对比 WorkClaw 的实现
 cat apps/runtime/src/components/ChatView.tsx
 ```
 
@@ -436,7 +436,7 @@ cat reference/claude-code-reverse/results/prompts/system-workflow.prompt.md
 cat reference/claude-code-reverse/results/prompts/system-reminder-start.prompt.md
 cat reference/claude-code-reverse/results/prompts/system-reminder-end.prompt.md
 
-# 3. 应用到 SkillMint Skill 的 SKILL.md 设计
+# 3. 应用到 WorkClaw Skill 的 SKILL.md 设计
 ```
 
 ## 文档阅读顺序
@@ -445,10 +445,10 @@ cat reference/claude-code-reverse/results/prompts/system-reminder-end.prompt.md
 
 1. **README.md** - 项目概述、技术栈、路线图
 2. **reference/README.md** - 参考开源项目总览（⭐ 新增）
-3. **docs/plans/2026-02-19-skillmint-mvp-design.md** - MVP 架构、数据库 schema
+3. **docs/plans/2026-02-19-workclaw-mvp-design.md** - MVP 架构、数据库 schema
 4. **docs/plans/2026-02-19-llm-adapter-provider-presets-design.md** - 多模型设计
 5. **docs/plans/2026-02-20-agent-capabilities-design.md** - Agent 系统架构
-6. **SkillMint_PRD.md** - 产品需求文档
+6. **WorkClaw_PRD.md** - 产品需求文档
 
 ## 当前开发状态
 

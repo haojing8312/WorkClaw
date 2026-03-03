@@ -297,7 +297,7 @@ let builtin_manifest = serde_json::json!({
     "name": "通用助手",
     "description": "通用 AI 助手，可以读写文件、执行命令、搜索代码、搜索网页",
     "version": "1.0.0",
-    "author": "SkillMint",
+    "author": "WorkClaw",
     "recommended_model": "",
     "tags": [],
     "created_at": "2026-01-01T00:00:00Z",

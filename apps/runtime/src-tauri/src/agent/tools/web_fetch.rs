@@ -41,7 +41,7 @@ impl Tool for WebFetchTool {
 
         let resp = client
             .get(url)
-            .header("User-Agent", "SkillMint/1.0")
+            .header("User-Agent", "WorkClaw/1.0")
             .send()?;
 
         let status = resp.status();

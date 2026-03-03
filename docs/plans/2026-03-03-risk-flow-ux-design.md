@@ -1,4 +1,4 @@
-# High-Risk Flow UX Standardization Design (SkillMint Runtime)
+# High-Risk Flow UX Standardization Design (WorkClaw Runtime)
 
 - Date: 2026-03-03
 - Scope: Runtime frontend only

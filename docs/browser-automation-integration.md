@@ -1,6 +1,6 @@
 # 浏览器自动化集成（本地实现）
 
-本文档说明 SkillMint 当前版本的浏览器自动化能力（纯本地 sidecar + Playwright），不依赖任何外部 OpenClaw 服务。
+本文档说明 WorkClaw 当前版本的浏览器自动化能力（纯本地 sidecar + Playwright），不依赖任何外部 OpenClaw 服务。
 
 ## 能力范围
 

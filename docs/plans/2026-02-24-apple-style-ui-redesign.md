@@ -1,4 +1,4 @@
-# SkillMint Runtime UI 重设计 — Apple 风格浅色清新
+# WorkClaw Runtime UI 重设计 — Apple 风格浅色清新
 
 **日期**: 2026-02-24
 **状态**: 已确认，待实施

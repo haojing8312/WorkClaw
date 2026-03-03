@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { FrontMatter } from "../../types";
 
-interface SkillMintDirSummary {
+interface WorkClawDirSummary {
   dir_path: string;
   slug: string;
   front_matter: FrontMatter;
@@ -12,7 +12,7 @@ interface SkillMintDirSummary {
 
 export function IndustryPackView() {
   const [rootDir, setRootDir] = useState("");
-  const [skills, setSkills] = useState<SkillMintDirSummary[]>([]);
+  const [skills, setSkills] = useState<WorkClawDirSummary[]>([]);
   const [selectedMap, setSelectedMap] = useState<Record<string, boolean>>({});
   const [tagDraftMap, setTagDraftMap] = useState<Record<string, string>>({});
   const [packName, setPackName] = useState("");
@@ -47,7 +47,7 @@ export function IndustryPackView() {
     setStatus("idle");
     setMessage("");
     try {
-      const list = await invoke<SkillMintDirSummary[]>("scan_skillmint_dirs", {
+      const list = await invoke<WorkClawDirSummary[]>("scan_workclaw_dirs", {
         rootDir: selected,
       });
       const nextSelected: Record<string, boolean> = {};
@@ -68,7 +68,7 @@ export function IndustryPackView() {
     }
   }
 
-  async function handleSaveTags(skill: SkillMintDirSummary) {
+  async function handleSaveTags(skill: WorkClawDirSummary) {
     const raw = tagDraftMap[skill.dir_path] ?? "";
     const tags = raw
       .split(",")
@@ -224,7 +224,7 @@ export function IndustryPackView() {
 
       {visibleSkills.length === 0 ? (
         <div className="rounded-xl border border-dashed border-gray-200 bg-white px-4 py-8 text-center text-sm text-gray-400">
-          请选择技能根目录并加载 SkillMint 列表
+          请选择技能根目录并加载 WorkClaw 列表
         </div>
       ) : (
         <div className="space-y-2">

@@ -46,7 +46,7 @@ test("uses semantic theme classes for shell and controls", () => {
     />
   );
 
-  expect(screen.getByText("SkillMint").closest("div")).toHaveClass("sm-surface");
+  expect(screen.getByText("WorkClaw").closest("div")).toHaveClass("sm-surface");
   expect(screen.getByRole("button", { name: "开始任务" })).toHaveClass("sm-btn");
   expect(screen.getByPlaceholderText("搜索会话...")).toHaveClass("sm-input");
 });

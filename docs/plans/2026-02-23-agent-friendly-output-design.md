@@ -3,7 +3,7 @@
 ## 问题背景
 
 ### 当前问题
-从用户截图 `temp/82480422f7658b3c46274f308aa85c26.png` 可以看到，SkillMint Agent 在执行工具时缺少说明性文字：
+从用户截图 `temp/82480422f7658b3c46274f308aa85c26.png` 可以看到，WorkClaw Agent 在执行工具时缺少说明性文字：
 
 ```
 执行工具: write_file
@@ -38,7 +38,7 @@ I've found some existing telemetry code. Let me mark the first todo as in_progre
 
 ## 设计目标
 
-1. **系统级控制**：输出风格由 SkillMint 系统控制，Skill 开发者无需关心
+1. **系统级控制**：输出风格由 WorkClaw 系统控制，Skill 开发者无需关心
 2. **所有 Skill 受益**：现有和未来的 Skill 自动获得友好输出
 3. **可维护性**：系统级 Prompt 统一管理，易于升级优化
 4. **参考最佳实践**：借鉴 Claude Code 的成熟 Prompt 工程
@@ -53,7 +53,7 @@ I've found some existing telemetry code. Let me mark the first todo as in_progre
 ├─────────────────────────────────────────────────────┤
 │                                                     │
 │  ┌───────────────────────────────────────────┐    │
-│  │   系统级 Prompt（SkillMint 控制）           │    │
+│  │   系统级 Prompt（WorkClaw 控制）           │    │
 │  ├───────────────────────────────────────────┤    │
 │  │  1. Agent Workflow（工作流程）            │    │
 │  │  2. Output Style（输出风格）              │    │
@@ -236,7 +236,7 @@ pub const OUTPUT_STYLE_PROMPT: &str = r#"# 输出风格
 /// 参考 Claude Code 的核心 workflow prompt
 pub const AGENT_WORKFLOW_PROMPT: &str = r#"# Agent 工作流程
 
-你是一个智能 AI 助手，运行在 SkillMint 平台上。你的目标是帮助用户完成各种任务。
+你是一个智能 AI 助手，运行在 WorkClaw 平台上。你的目标是帮助用户完成各种任务。
 
 ## 核心原则
 
@@ -438,7 +438,7 @@ glob pattern: **/*.py
 
 ### 对比 Claude Code
 
-| 特性 | Claude Code | SkillMint（实施后） |
+| 特性 | Claude Code | WorkClaw（实施后） |
 |------|-------------|-------------------|
 | 工具调用说明 | ✅ | ✅ |
 | 自然语言流畅性 | ✅ | ✅ |

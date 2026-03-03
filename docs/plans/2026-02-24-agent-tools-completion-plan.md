@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** 将 SkillMint Agent 从 8 个注册工具扩展到 37 个完整桌面 Agent 工具集。
+**Goal:** 将 WorkClaw Agent 从 8 个注册工具扩展到 37 个完整桌面 Agent 工具集。
 
 **Architecture:** 分 5 层渐进实现。L2（文件工具）和 L3（Shell 进程管理）为纯 Rust 原生工具；L4（浏览器自动化）在 Node.js Sidecar 中用 Playwright 实现，Rust 侧通过 SidecarBridgeTool 动态注册；L5（系统工具）利用系统命令实现。
 
@@ -29,8 +29,8 @@ use std::fs;
 use tempfile::TempDir;
 
 // 引入被测工具
-use skillmint_runtime::agent::tools::ListDirTool;
-use skillmint_runtime::agent::types::{Tool, ToolContext};
+use workclaw_runtime::agent::tools::ListDirTool;
+use workclaw_runtime::agent::types::{Tool, ToolContext};
 
 #[test]
 fn test_list_dir_basic() {
@@ -202,8 +202,8 @@ use serde_json::json;
 use std::fs;
 use tempfile::TempDir;
 
-use skillmint_runtime::agent::tools::FileStatTool;
-use skillmint_runtime::agent::types::{Tool, ToolContext};
+use workclaw_runtime::agent::tools::FileStatTool;
+use workclaw_runtime::agent::types::{Tool, ToolContext};
 
 #[test]
 fn test_file_stat_file() {
@@ -344,8 +344,8 @@ use serde_json::json;
 use std::fs;
 use tempfile::TempDir;
 
-use skillmint_runtime::agent::tools::FileDeleteTool;
-use skillmint_runtime::agent::types::{Tool, ToolContext};
+use workclaw_runtime::agent::tools::FileDeleteTool;
+use workclaw_runtime::agent::types::{Tool, ToolContext};
 
 #[test]
 fn test_delete_file() {
@@ -509,8 +509,8 @@ use serde_json::json;
 use std::fs;
 use tempfile::TempDir;
 
-use skillmint_runtime::agent::tools::FileMoveTool;
-use skillmint_runtime::agent::types::{Tool, ToolContext};
+use workclaw_runtime::agent::tools::FileMoveTool;
+use workclaw_runtime::agent::types::{Tool, ToolContext};
 
 #[test]
 fn test_move_file() {
@@ -641,8 +641,8 @@ use serde_json::json;
 use std::fs;
 use tempfile::TempDir;
 
-use skillmint_runtime::agent::tools::FileCopyTool;
-use skillmint_runtime::agent::types::{Tool, ToolContext};
+use workclaw_runtime::agent::tools::FileCopyTool;
+use workclaw_runtime::agent::types::{Tool, ToolContext};
 
 #[test]
 fn test_copy_file() {
@@ -866,7 +866,7 @@ git commit -m "feat(agent): L2 完成 — 5 个文件扩展工具全部注册，
 
 ```rust
 // tests/test_process_manager.rs
-use skillmint_runtime::agent::tools::process_manager::ProcessManager;
+use workclaw_runtime::agent::tools::process_manager::ProcessManager;
 use std::thread;
 use std::time::Duration;
 
@@ -1176,9 +1176,9 @@ use serde_json::json;
 use std::thread;
 use std::time::Duration;
 
-use skillmint_runtime::agent::tools::{BashTool, BashOutputTool, BashKillTool};
-use skillmint_runtime::agent::tools::process_manager::ProcessManager;
-use skillmint_runtime::agent::types::{Tool, ToolContext};
+use workclaw_runtime::agent::tools::{BashTool, BashOutputTool, BashKillTool};
+use workclaw_runtime::agent::tools::process_manager::ProcessManager;
+use workclaw_runtime::agent::types::{Tool, ToolContext};
 use std::sync::Arc;
 
 #[test]
@@ -1530,8 +1530,8 @@ git commit -m "feat(sidecar): 浏览器自动化扩展 — 15 个端点 + stealt
 
 ```rust
 // tests/test_browser_tools.rs
-use skillmint_runtime::agent::registry::ToolRegistry;
-use skillmint_runtime::agent::tools::browser_tools::register_browser_tools;
+use workclaw_runtime::agent::registry::ToolRegistry;
+use workclaw_runtime::agent::tools::browser_tools::register_browser_tools;
 
 #[test]
 fn test_browser_tools_registered() {
@@ -1705,8 +1705,8 @@ git commit -m "feat(agent): L4 完成 — 15 个浏览器工具 Rust 侧动态�
 use serde_json::json;
 use tempfile::TempDir;
 
-use skillmint_runtime::agent::tools::{ScreenshotTool, OpenInFolderTool};
-use skillmint_runtime::agent::types::{Tool, ToolContext};
+use workclaw_runtime::agent::tools::{ScreenshotTool, OpenInFolderTool};
+use workclaw_runtime::agent::types::{Tool, ToolContext};
 
 #[test]
 fn test_screenshot_schema() {
@@ -1952,10 +1952,10 @@ git commit -m "refactor(agent): 注册表重构 with_standard_tools + chat.rs �
 
 ```rust
 // tests/test_tools_complete.rs
-use skillmint_runtime::agent::registry::ToolRegistry;
-use skillmint_runtime::agent::tools::browser_tools::register_browser_tools;
-use skillmint_runtime::agent::tools::process_manager::ProcessManager;
-use skillmint_runtime::agent::tools::{BashOutputTool, BashKillTool};
+use workclaw_runtime::agent::registry::ToolRegistry;
+use workclaw_runtime::agent::tools::browser_tools::register_browser_tools;
+use workclaw_runtime::agent::tools::process_manager::ProcessManager;
+use workclaw_runtime::agent::tools::{BashOutputTool, BashKillTool};
 use std::sync::Arc;
 
 /// 验证完整 Agent 工具集（不含需要运行时依赖的 5 个高级工具）

@@ -71,7 +71,7 @@ async fn render_local_skill_preview_has_default_values_for_empty_input() {
 
     assert!(preview.markdown.contains("name: expert-skill"));
     assert!(preview.markdown.contains("Use when 需要在特定任务场景中提供稳定执行能力"));
-    assert!(preview.save_path.contains(".skillmint"));
+    assert!(preview.save_path.contains(".workclaw"));
     assert!(Path::new(&preview.save_path).ends_with("expert-skill"));
 }
 

@@ -1,4 +1,4 @@
-# SkillMint MVP 设计文档
+# WorkClaw MVP 设计文档
 
 **日期**：2026-02-19
 **范围**：MVP — Studio（打包工具）+ Runtime（运行客户端）
@@ -30,7 +30,7 @@
 ## 2. 项目结构
 
 ```
-skillmint/
+workclaw/
 ├── apps/
 │   ├── studio/               # Studio 桌面应用（创作者）
 │   │   ├── src/              # React + TypeScript 前端
@@ -149,7 +149,7 @@ async fn pack_skill(config: PackConfig) -> Result<()>;
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│  SkillMint Studio                          [− □ ×]   │
+│  WorkClaw Studio                          [− □ ×]   │
 ├─────────────────────────────────────────────────────┤
 │  [选择 Skill 目录]  已选择：/skills/contract-review  │
 │                                                     │

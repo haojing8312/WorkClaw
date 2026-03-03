@@ -15,7 +15,7 @@ The comprehensive research document covering:
 - Token management and truncation strategies
 - Multi-layer caching architecture
 - Best practices checklist
-- Framework-specific recommendations for SkillMint
+- Framework-specific recommendations for WorkClaw
 
 **Read this first for context and best practices.**
 
@@ -28,12 +28,12 @@ Detailed cost analysis and pricing comparison:
 - Token saving strategies (70-80% reduction possible)
 - Multi-layer caching savings (90% reduction at scale)
 - Recommended cost-optimized architecture by tier
-- Cost projection for SkillMint (estimated $45/month)
+- Cost projection for WorkClaw (estimated $45/month)
 
 **Read this for pricing decisions and cost optimization.**
 
 ### 3. **IMPLEMENTATION_QUICK_START.md** 🚀 BUILD NOW
-Step-by-step implementation guide for SkillMint:
+Step-by-step implementation guide for WorkClaw:
 - Phase 1: Tavily integration (Rust + tool trait)
 - Phase 2: SQLite caching layer
 - Phase 3: Brave fallback provider
@@ -51,7 +51,7 @@ Step-by-step implementation guide for SkillMint:
 
 ### 1. Search API Recommendations
 
-**For SkillMint, use this stack** (in priority order):
+**For WorkClaw, use this stack** (in priority order):
 
 ```
 ┌─ Tavily Search (primary)
@@ -154,7 +154,7 @@ With summary:   1,000 tokens × $0.003 = $0.003 (78% reduction)
 
 ---
 
-## Implementation Timeline for SkillMint
+## Implementation Timeline for WorkClaw
 
 ### MVP (Week 1-2): $0-30/month
 - Tavily search (basic setup)
@@ -302,7 +302,7 @@ Check `web-search-web-fetch-implementation-guide.md`:
 
 ---
 
-## Next Actions for SkillMint Team
+## Next Actions for WorkClaw Team
 
 ### Immediate (This Week)
 - [ ] Review all three documents

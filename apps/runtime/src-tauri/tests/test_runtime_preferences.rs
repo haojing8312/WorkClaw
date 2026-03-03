@@ -12,7 +12,7 @@ async fn runtime_preferences_returns_default_when_not_configured() {
         .await
         .expect("get runtime preferences");
     assert!(!prefs.default_work_dir.trim().is_empty());
-    assert!(prefs.default_work_dir.contains("SkillMint"));
+    assert!(prefs.default_work_dir.contains("WorkClaw"));
 }
 
 #[tokio::test]

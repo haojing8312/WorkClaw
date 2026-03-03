@@ -19,7 +19,7 @@ Phase 1 and 2 completed the task landing experience for normal users. Phase 3 in
   - left: guided chat-like creation flow
   - right: real-time preview
 - Save target path is selected by user; if not selected, fallback to:
-  - `~/.skillmint/skills/`
+  - `~/.workclaw/skills/`
 
 ## 3. IA and Navigation
 
@@ -90,7 +90,7 @@ Prompting and structure should align with:
 User chooses save directory during flow.
 
 If skipped/cancelled:
-- fallback to `~/.skillmint/skills/`.
+- fallback to `~/.workclaw/skills/`.
 
 Persist as:
 - `<base-dir>/<slug>/SKILL.md`

@@ -1,12 +1,12 @@
 ---
 name: creating-local-skills
-description: Use when designing or iterating SkillMint local skill templates and dialog-based creation flow for end users.
+description: Use when designing or iterating WorkClaw local skill templates and dialog-based creation flow for end users.
 ---
 
 # Creating Local Skills
 
 ## Overview
-This built-in guide defines how SkillMint generates local skills in a stable, maintainable way.
+This built-in guide defines how WorkClaw generates local skills in a stable, maintainable way.
 Use it as the single source of truth for skill scaffold structure and quality checks.
 
 ## Core Principles

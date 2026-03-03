@@ -321,7 +321,7 @@ Ok(result)
 
 ---
 
-## 数据字段映射（SkillMint 标准）
+## 数据字段映射（WorkClaw 标准）
 
 ```typescript
 interface SearchResult {

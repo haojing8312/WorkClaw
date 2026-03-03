@@ -1,6 +1,6 @@
 use runtime_lib::commands::packaging::{
     pack_industry_bundle, pack_skill, read_industry_bundle_manifest, read_skill_dir,
-    scan_skillmint_dirs, unpack_industry_bundle, update_skill_dir_tags,
+    scan_workclaw_dirs, unpack_industry_bundle, update_skill_dir_tags,
 };
 
 #[tokio::test]
@@ -59,7 +59,7 @@ async fn pack_skill_creates_skillpack() {
 }
 
 #[tokio::test]
-async fn scan_skillmint_dirs_reads_skill_tags() {
+async fn scan_workclaw_dirs_reads_skill_tags() {
     let tmp = tempfile::tempdir().expect("create temp dir");
     let root = tmp.path().join("skills");
     std::fs::create_dir_all(&root).expect("create root");
@@ -80,7 +80,7 @@ async fn scan_skillmint_dirs_reads_skill_tags() {
     )
     .expect("write math skill");
 
-    let list = scan_skillmint_dirs(root.to_string_lossy().to_string())
+    let list = scan_workclaw_dirs(root.to_string_lossy().to_string())
         .await
         .expect("scan skill dirs");
 

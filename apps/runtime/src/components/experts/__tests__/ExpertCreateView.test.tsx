@@ -19,7 +19,7 @@ function renderPreviewMock() {
       ? desc
       : `Use when ${desc}`;
     const when = payload.whenToUse || "需要在特定任务场景中提供稳定执行能力";
-    const targetDir = payload.targetDir || "~/.skillmint/skills/";
+    const targetDir = payload.targetDir || "~/.workclaw/skills/";
 
     return {
       markdown: `---\nname: ${name}\ndescription: ${normalizedDescription}\n---\n\n## When to Use\n- ${when}\n`,

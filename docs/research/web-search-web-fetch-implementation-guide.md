@@ -591,7 +591,7 @@ results2, source2 = semantic_cache.get_or_search(
 
 ## 7. Framework-Specific Recommendations
 
-### 7.1 For SkillMint Runtime Integration
+### 7.1 For WorkClaw Runtime Integration
 
 Based on your Rust + Sidecar architecture, recommended approach:
 
@@ -702,7 +702,7 @@ export default router;
 | **Google Search** | High | Official | Web | Hard | ❌ Enterprise only; rigid |
 | **DuckDuckGo** | Low | Good | Fair | Medium | ✅ Privacy priority |
 
-**Recommendation for SkillMint**:
+**Recommendation for WorkClaw**:
 - **Primary**: Tavily (AI-optimized, cheapest for agents)
 - **Secondary**: Brave Search (independent index, fallback for different results)
 - **Caching layer**: In-memory + SQLite + semantic

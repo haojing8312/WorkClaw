@@ -45,7 +45,7 @@ jobs:
         with:
           projectPath: apps/runtime/src-tauri
           tagName: ${{ github.ref_name }}
-          releaseName: SkillMint ${{ github.ref_name }}
+          releaseName: WorkClaw ${{ github.ref_name }}
           releaseBody: Automated Windows release for ${{ github.ref_name }}.
           releaseDraft: false
           prerelease: false

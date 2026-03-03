@@ -2,7 +2,7 @@
 
 ## 1. Background
 
-Phase 1 introduced a no-session landing page for chat mode. Phase 2 extends this landing page with a capability gallery inspired by MiniMax "explore experts" structure, but adapted to SkillMint's product language and visual system.
+Phase 1 introduced a no-session landing page for chat mode. Phase 2 extends this landing page with a capability gallery inspired by MiniMax "explore experts" structure, but adapted to WorkClaw's product language and visual system.
 
 The target audience is general users. The UI should not expose internal terms such as "Skill".
 

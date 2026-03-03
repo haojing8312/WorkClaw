@@ -1,6 +1,6 @@
 # Web Search & Fetch Tools: Quick Start Implementation Guide
 
-**For SkillMint Runtime**
+**For WorkClaw Runtime**
 **Version**: 1.0
 **Date**: February 24, 2026
 
@@ -18,7 +18,7 @@ Need to search web?
 └─ Production scale → Add semantic cache + Redis
 ```
 
-**Recommended Stack for SkillMint**:
+**Recommended Stack for WorkClaw**:
 1. **Search**: Tavily (primary) + Brave (fallback)
 2. **Extraction**: Trafilatura (free) + Firecrawl (for JS)
 3. **Caching**: In-Memory → SQLite → Semantic
@@ -707,7 +707,7 @@ TAVILY_API_KEY=your-tavily-api-key
 BRAVE_SEARCH_API_KEY=your-brave-search-api-key
 
 # Database
-DATABASE_URL=sqlite:./skillmint.db
+DATABASE_URL=sqlite:./workclaw.db
 
 # Search Caching
 SEARCH_CACHE_TTL_DAYS=7

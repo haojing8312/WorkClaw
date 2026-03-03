@@ -96,7 +96,7 @@ fn default_market_skill_base_dir(app: &AppHandle) -> PathBuf {
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .unwrap_or_else(|_| ".".to_string());
-    Path::new(&home).join(".skillmint").join("market-skills")
+    Path::new(&home).join(".workclaw").join("market-skills")
 }
 
 fn normalize_skill(item: &Value) -> Option<ClawhubSkillSummary> {

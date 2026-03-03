@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Vendor OpenClaw multi-agent routing core into SkillMint, wire it to Feishu-only employee routing, and ship a user-friendly routing wizard without external OpenClaw runtime dependency.
+**Goal:** Vendor OpenClaw multi-agent routing core into WorkClaw, wire it to Feishu-only employee routing, and ship a user-friendly routing wizard without external OpenClaw runtime dependency.
 
 **Architecture:** Keep OpenClaw logic in a vendor boundary under sidecar, expose a stable bridge API for route resolution/simulation, persist routing rules in SQLite via Tauri commands, then integrate Feishu ingress/dispatch and frontend wizard/trace using those commands.
 

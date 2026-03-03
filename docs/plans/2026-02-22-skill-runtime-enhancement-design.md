@@ -1,6 +1,6 @@
 # Skill Runtime 增强设计文档
 
-**目标**：将 SkillMint Runtime 的 Agent 系统从基础 ReAct 执行引擎提升到接近 Claude Code 的 Skill 运行体验。
+**目标**：将 WorkClaw Runtime 的 Agent 系统从基础 ReAct 执行引擎提升到接近 Claude Code 的 Skill 运行体验。
 
 **背景**：当前 Agent 有 5 个文件工具 + Bash + MCP 集成，能完成基本的工具调用循环。但与 Claude Code 对比，缺少 Edit 精确编辑、多 Agent 协调、Skill 元数据解析、权限模型、上下文管理等关键能力，无法完整运行 `.claude/skills` 下的 18 个 skill。
 
@@ -396,13 +396,13 @@ pub trait Tool: Send + Sync {
 
 ## 与 Claude Code 的对比（实现后）
 
-| 能力 | Claude Code | SkillMint (实现后) | 差异 |
+| 能力 | Claude Code | WorkClaw (实现后) | 差异 |
 |------|-----------|-------------------|------|
 | 核心工具 | 17 个 | 14 个 | 缺少 LS/NotebookEdit/EnterPlanMode |
 | Skill 元数据 | 完整 frontmatter | 基础 frontmatter | 缺少 `context: fork`、`memory` 等高级字段 |
 | 多 Agent | Subagent + Teams | Subagent（基础） | 无 Agent Teams |
 | 权限模型 | 5 种模式 + 沙箱 | 3 种模式 | 无沙箱隔离 |
 | 上下文管理 | 自动压缩 | 裁剪 | 无智能压缩 |
-| 加密分发 | 无 | 有（.skillpack） | SkillMint 独有优势 |
+| 加密分发 | 无 | 有（.skillpack） | WorkClaw 独有优势 |
 
 实现后覆盖 Claude Code 约 80% 的核心能力，足以运行绝大多数 skill。

@@ -5,7 +5,7 @@ pub mod workflow;
 
 /// 系统级 Prompt 组合器
 ///
-/// 将 SkillMint 系统级 prompt 与 Skill 开发者提供的 prompt 组合，
+/// 将 WorkClaw 系统级 prompt 与 Skill 开发者提供的 prompt 组合，
 /// 确保所有 Skill 自动获得友好的输出风格和工作流程引导。
 pub struct SystemPromptBuilder {
     include_workflow: bool,

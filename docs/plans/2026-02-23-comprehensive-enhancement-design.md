@@ -1,4 +1,4 @@
-# SkillMint 全面增强设计文档
+# WorkClaw 全面增强设计文档
 
 **日期**: 2026-02-23
 **范围**: Studio 打包修复、Claude Code 兼容 Skill 支持、Runtime UI 打磨、E2E 测试、构建配置
@@ -31,7 +31,7 @@
 
 ### 设计目标
 
-凡是 Claude Code 支持的 Skill 格式，SkillMint Runtime 都能直接导入运行。
+凡是 Claude Code 支持的 Skill 格式，WorkClaw Runtime 都能直接导入运行。
 
 ### Skill 目录格式
 

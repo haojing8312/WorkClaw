@@ -2270,12 +2270,12 @@ export function SettingsView({ onClose }: Props) {
               <div className="text-xs text-gray-500">全局默认工作目录（新建会话默认使用）</div>
               <input
                 className={inputCls}
-                placeholder="例如 D:\\workspace\\skillmint"
+                placeholder="例如 D:\\workspace\\workclaw"
                 value={globalDefaultWorkDir}
                 onChange={(e) => setGlobalDefaultWorkDir(e.target.value)}
               />
               <div className="text-[11px] text-gray-400">
-                默认：C:\Users\&lt;用户名&gt;\SkillMint\workspace。支持 C/D/E 盘，目录不存在自动创建。
+                默认：C:\Users\&lt;用户名&gt;\WorkClaw\workspace。支持 C/D/E 盘，目录不存在自动创建。
               </div>
               <button
                 onClick={handleSaveGlobalDefaultWorkDir}

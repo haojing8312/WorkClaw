@@ -127,7 +127,7 @@ Expected: PASS
 **Step 1: Write failing backend test**
 
 Cover:
-- when `target_dir` empty -> fallback `~/.skillmint/skills/`
+- when `target_dir` empty -> fallback `~/.workclaw/skills/`
 - creates `<slug>/SKILL.md`
 - writes valid frontmatter + content
 

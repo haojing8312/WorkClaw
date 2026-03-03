@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** 将 SkillMint Runtime 前端从深色技术风格改造为浅色清新的 Apple 设计语言，包含动态岛工具调用展示和 framer-motion 动效。
+**Goal:** 将 WorkClaw Runtime 前端从深色技术风格改造为浅色清新的 Apple 设计语言，包含动态岛工具调用展示和 framer-motion 动效。
 
 **Architecture:** 纯前端改造，不涉及 Rust 后端。在现有 Tailwind CSS 基础上切换配色体系，引入 framer-motion 处理动画，新建 ToolIsland 组件替换 ToolCallCard。所有改动限制在 `apps/runtime/src/` 目录。
 

@@ -12,10 +12,10 @@ describe("EmployeeHubView risk flow", () => {
     invokeMock.mockReset();
     invokeMock.mockImplementation((command: string) => {
       if (command === "get_runtime_preferences") {
-        return Promise.resolve({ default_work_dir: "C:\\Users\\test\\SkillMint\\workspace" });
+        return Promise.resolve({ default_work_dir: "C:\\Users\\test\\WorkClaw\\workspace" });
       }
       if (command === "set_runtime_preferences") return Promise.resolve(null);
-      if (command === "resolve_default_work_dir") return Promise.resolve("C:\\Users\\test\\SkillMint\\workspace");
+      if (command === "resolve_default_work_dir") return Promise.resolve("C:\\Users\\test\\WorkClaw\\workspace");
       return Promise.resolve(null);
     });
   });

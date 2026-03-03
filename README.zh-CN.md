@@ -1,4 +1,4 @@
-# SkillMint
+# WorkClaw
 
 [简体中文](README.md) | [English](README.en.md)
 
@@ -6,23 +6,21 @@
 [![Tauri](https://img.shields.io/badge/Tauri-2.0-orange.svg)](https://tauri.app/)
 [![React](https://img.shields.io/badge/React-18-blue.svg)](https://reactjs.org/)
 
-**SkillMint** = Agent 运行时 + 加密技能系统
+**让所有人快速拥有自己的 AI 员工团队**
 
-一个开源平台，用于**打包、加密和分发 AI 技能**，以安全的桌面应用形式交付。创建一次，随处分发。
+WorkClaw 是对新手友好的 OpenClaw 桌面智能体产品：无需命令行和配置文件，通过对话式交互即可完成安装配置、技能创建、加密打包、全网找技能，并结合飞书等 IM 在移动端指挥 AI 团队。
 
-> **🧪 AI 驱动开发实验**
-> 本项目是一个 **100% AI 自主开发**的实验性项目 - 整个代码库由 AI（Claude Code、GPT-5.3-Codex）设计和实现，开发者完全不查看代码。这是对 AI 自主构建生产级软件能力的真实世界测试。
+⭐ 如果你认同“让 AI 员工团队人人可用”的方向，欢迎 Star 本仓库。
 
-## 什么是 SkillMint？
+## 什么是 WorkClaw？
 
-SkillMint 帮助 AI 技能创作者：
-- **打包**：将技能（包含提示词/示例的 Markdown）转换为加密的 `.skillpack` 文件
-- **保护**：军事级加密保护你的知识产权
-- **分发**：用户在安全的本地沙箱环境中运行技能
-- **变现**：控制你的高级技能的访问和分发
+WorkClaw 的核心目标是把 AI 员工团队从“技术人才专属”变成“所有人都能用”：
+- **面向非技术用户**：不写命令行、不改配置文件，用对话完成安装、配置、使用
+- **面向技能创作者**：用对话创建技能、调试技能、加密打包技能并安全分发
+- **面向软件公司（OEM）**：可基于开源版快速二开，交付 B 端智能体产品并实现商业化
+- **面向个人用户**：低门槛安装后即可拥有自己的 AI 员工团队
 
-**对于创作者**：安全地打包和销售你的技能
-**对于用户**：在本地运行强大的 AI 技能，无需暴露敏感数据
+同时，WorkClaw 对标 Claude Cowork 的桌面智能体体验，强调“本地可控 + 移动端可指挥 + 团队化协作”。
 
 ## 核心产品功能速览
 
@@ -51,7 +49,7 @@ SkillMint 帮助 AI 技能创作者：
 
 ## 架构
 
-SkillMint 以单一集成桌面应用交付：
+WorkClaw 以单一集成桌面应用交付：
 
 ### 业务架构
 
@@ -61,7 +59,7 @@ SkillMint 以单一集成桌面应用交付：
 - **创作者价值链**：技能开发 → 打包/加密 → 发布
 - **核心平台**：Agent 引擎、安全系统、工具能力、模型集成
 - **用户价值链**：个人用户（浏览 → 安装 → 运行）+ 企业用户（团队/RBAC → 统一配置/SSO → Agent 员工）
-- **生态集成**：EvoMap 进化、SkillMint 市场 + ClawHub 兼容、IM 远程调用
+- **生态集成**：EvoMap 进化、WorkClaw 市场 + ClawHub 兼容、IM 远程调用
 
 ### 技术架构
 
@@ -75,7 +73,7 @@ SkillMint 以单一集成桌面应用交付：
 - **第 5 层 - 模型集成**：Anthropic API、OpenAI 兼容、国产模型（MiniMax、DeepSeek、GLM、Qwen、Moonshot）
 - **第 6 层 - 数据持久化**：SQLite、.skillpack 文件、安全工作区文件夹
 
-### SkillMint 应用
+### WorkClaw 应用
 统一的 Agent 执行环境，用户可在同一应用内打包、安装和运行加密技能：
 
 **核心 Agent 能力**：
@@ -100,7 +98,7 @@ SkillMint 以单一集成桌面应用交付：
 - 无需命令行操作
 
 ### 创作者工作流
-创作者可使用 **Claude Code** 或 **VS Code** 开发技能，并直接在 SkillMint 应用内完成打包，无需额外客户端。
+创作者可使用 **Claude Code** 或 **VS Code** 开发技能，并直接在 WorkClaw 应用内完成打包，无需额外客户端。
 
 ## 核心特性
 
@@ -165,9 +163,9 @@ SkillMint 以单一集成桌面应用交付：
 ## 项目结构
 
 ```
-skillmint/
+workclaw/
 ├── apps/
-│   └── runtime/              # SkillMint 桌面应用
+│   └── runtime/              # WorkClaw 桌面应用
 │       ├── src/              # React 前端
 │       ├── src-tauri/        # Rust 后端
 │       │   ├── src/
@@ -224,7 +222,7 @@ git push origin v0.1.0
 
 ### 安装技能
 
-1. 打开 SkillMint 应用
+1. 打开 WorkClaw 应用
 2. 点击"安装技能"或拖动 `.skillpack` 文件到窗口
 3. 输入用户名（用于密钥推导）
 4. 根据需要配置 API 密钥
@@ -308,7 +306,7 @@ git push origin v0.1.0
 
 ### 里程碑 3：生态与企业版 🏢
 
-**创作者能力（已并入 SkillMint 应用）**：
+**创作者能力（已并入 WorkClaw 应用）**：
 - [ ] Monaco 编辑器集成
 - [ ] 技能结构可视化编辑器
 - [ ] 嵌入式测试聊天（Claude Code 集成）
@@ -359,16 +357,16 @@ git push origin v0.1.0
 - [ ] 任务状态通知和流式结果推送
 - [ ] 多用户权限隔离
 
-## 为什么叫"SkillMint"？
+## 为什么叫"WorkClaw"？
 
-**Skill**：AI 能力的核心单元 - 一个打包好的、可重用的指令集
-**Mint**：铸造、创建并分发（类似铸币或 NFT）
+**Work**：强调任务执行、协作交付和真实业务产出  
+**Claw**：源自 OpenClaw 生态与“小龙虾团队”意象，代表可指挥、可协作的智能体员工
 
-可以理解为 **"铸造 AI 技能"** - 像 npm 包一样轻松创建、打包和分发技能。
+可以理解为 **"让 AI 员工团队在你的指挥下高效工作"**。
 
 ## 灵感来源
 
-正如 Cursor 和 Claude Code 使 AI 辅助编码民主化一样，SkillMint 旨在使 AI 技能分发民主化。打包一次你的专业知识，安全地分发给成千上万的人。
+正如 Cursor 和 Claude Code 使 AI 辅助编码民主化一样，WorkClaw 旨在使 AI 技能分发民主化。打包一次你的专业知识，安全地分发给成千上万的人。
 
 ## 未来集成路线图
 
@@ -470,6 +468,19 @@ Apache 2.0 - 详见 [LICENSE](LICENSE)
 - 文档：[docs/](docs/)
 - 示例：[examples/](examples/)
 - 参考：[reference/](reference/) - 开源项目分析
+
+## 作者
+
+- WorkClaw 项目作者（个人开发者）
+- 个人主页：https://my.feishu.cn/wiki/O62Pwtb94ikFEJkYHuEcxaWanQb
+
+## 开发说明（补充）
+
+本项目包含 AI 驱动开发实践：核心代码由 AI（Claude Code、GPT-5.3-Codex）参与设计与实现，用于持续验证 AI 构建生产级软件的可行性。
+
+## 致谢
+
+- 感谢 [OpenClaw](https://github.com/openclaw/openclaw) 开源生态提供的重要基础能力与灵感，WorkClaw 在其生态基础上持续面向新手友好和企业落地进行增强。
 
 ---
 

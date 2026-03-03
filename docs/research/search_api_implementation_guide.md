@@ -1,6 +1,6 @@
 # 搜索引擎 API 集成实现指南
 
-本文档提供了在 SkillMint 中集成各搜索引擎 API 的实现指南和最佳实践。
+本文档提供了在 WorkClaw 中集成各搜索引擎 API 的实现指南和最佳实践。
 
 ## 快速参考表
 
@@ -804,7 +804,7 @@ async fn search_multiple(
 - [Tavily API 官方文档](https://docs.tavily.com/)
 - [博查搜索平台](https://open.bochaai.com/)
 - [SerpAPI 官方文档](https://serpapi.com/search-api)
-- [SkillMint 搜索 API 响应格式对比](./search_api_response_formats.md)
+- [WorkClaw 搜索 API 响应格式对比](./search_api_response_formats.md)
 
 ---
 
