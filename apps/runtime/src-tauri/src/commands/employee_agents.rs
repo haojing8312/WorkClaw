@@ -1211,7 +1211,7 @@ pub async fn ensure_employee_sessions_for_event_with_pool(
 
     let mut results = Vec::with_capacity(employees.len());
     for employee in employees {
-        let route_session_key = build_route_session_key(event);
+        let route_session_key = build_route_session_key(event, &employee);
         let existing = sqlx::query_as::<_, (String, i64)>(
             "SELECT ts.session_id,
                     CASE WHEN s.id IS NULL THEN 0 ELSE 1 END AS session_exists
@@ -1313,44 +1313,80 @@ pub async fn ensure_employee_sessions_for_event_with_pool(
             .map_err(|e| e.to_string())?;
             (session_id, false)
         } else {
-            let now = chrono::Utc::now().to_rfc3339();
-            let session_id = Uuid::new_v4().to_string();
-            let skill_id = if employee.primary_skill_id.trim().is_empty() {
-                "builtin-general".to_string()
-            } else {
-                employee.primary_skill_id.clone()
-            };
-
-            sqlx::query(
-                "INSERT INTO sessions (id, skill_id, title, created_at, model_id, permission_mode, work_dir, employee_id)
-                 VALUES (?, ?, ?, ?, ?, 'accept_edits', ?, ?)",
+            let by_route = sqlx::query_as::<_, (String,)>(
+                "SELECT ts.session_id
+                 FROM im_thread_sessions ts
+                 INNER JOIN sessions s ON s.id = ts.session_id
+                 WHERE ts.employee_id = ? AND ts.route_session_key = ?
+                 ORDER BY ts.updated_at DESC
+                 LIMIT 1",
             )
-            .bind(&session_id)
-            .bind(&skill_id)
-            .bind(format!("IM:{}@{}", employee.name, event.thread_id))
-            .bind(&now)
-            .bind(&default_model_id)
-            .bind(employee.default_work_dir.trim())
-            .bind(employee.employee_id.trim())
-            .execute(pool)
-            .await
-            .map_err(|e| e.to_string())?;
-
-            sqlx::query(
-                "INSERT INTO im_thread_sessions (thread_id, employee_id, session_id, route_session_key, created_at, updated_at)
-                 VALUES (?, ?, ?, ?, ?, ?)",
-            )
-            .bind(&event.thread_id)
             .bind(&employee.id)
-            .bind(&session_id)
             .bind(&route_session_key)
-            .bind(&now)
-            .bind(&now)
-            .execute(pool)
+            .fetch_optional(pool)
             .await
             .map_err(|e| e.to_string())?;
+            if let Some((session_id,)) = by_route {
+                let now = chrono::Utc::now().to_rfc3339();
+                sqlx::query(
+                    "INSERT INTO im_thread_sessions (thread_id, employee_id, session_id, route_session_key, created_at, updated_at)
+                     VALUES (?, ?, ?, ?, ?, ?)
+                     ON CONFLICT(thread_id, employee_id) DO UPDATE SET
+                        session_id = excluded.session_id,
+                        route_session_key = excluded.route_session_key,
+                        updated_at = excluded.updated_at",
+                )
+                .bind(&event.thread_id)
+                .bind(&employee.id)
+                .bind(&session_id)
+                .bind(&route_session_key)
+                .bind(&now)
+                .bind(&now)
+                .execute(pool)
+                .await
+                .map_err(|e| e.to_string())?;
 
-            (session_id, true)
+                (session_id, false)
+            } else {
+                let now = chrono::Utc::now().to_rfc3339();
+                let session_id = Uuid::new_v4().to_string();
+                let skill_id = if employee.primary_skill_id.trim().is_empty() {
+                    "builtin-general".to_string()
+                } else {
+                    employee.primary_skill_id.clone()
+                };
+
+                sqlx::query(
+                    "INSERT INTO sessions (id, skill_id, title, created_at, model_id, permission_mode, work_dir, employee_id)
+                     VALUES (?, ?, ?, ?, ?, 'accept_edits', ?, ?)",
+                )
+                .bind(&session_id)
+                .bind(&skill_id)
+                .bind(format!("IM:{}@{}", employee.name, event.thread_id))
+                .bind(&now)
+                .bind(&default_model_id)
+                .bind(employee.default_work_dir.trim())
+                .bind(employee.employee_id.trim())
+                .execute(pool)
+                .await
+                .map_err(|e| e.to_string())?;
+
+                sqlx::query(
+                    "INSERT INTO im_thread_sessions (thread_id, employee_id, session_id, route_session_key, created_at, updated_at)
+                     VALUES (?, ?, ?, ?, ?, ?)",
+                )
+                .bind(&event.thread_id)
+                .bind(&employee.id)
+                .bind(&session_id)
+                .bind(&route_session_key)
+                .bind(&now)
+                .bind(&now)
+                .execute(pool)
+                .await
+                .map_err(|e| e.to_string())?;
+
+                (session_id, true)
+            }
         };
 
         if shared_thread_session_id.is_none() {
@@ -1375,15 +1411,19 @@ pub async fn ensure_employee_sessions_for_event_with_pool(
     Ok(results)
 }
 
-fn build_route_session_key(event: &ImEvent) -> String {
+fn build_route_session_key(event: &ImEvent, employee: &AgentEmployee) -> String {
     let tenant = event
         .tenant_id
         .as_ref()
         .map(|v| v.trim().to_lowercase())
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| "default".to_string());
-    let thread = event.thread_id.trim().to_lowercase();
-    format!("feishu:{}:thread:{}", tenant, thread)
+    let agent_id = if employee.openclaw_agent_id.trim().is_empty() {
+        employee.role_id.trim().to_lowercase()
+    } else {
+        employee.openclaw_agent_id.trim().to_lowercase()
+    };
+    format!("feishu:{}:{}", tenant, agent_id)
 }
 
 pub async fn link_inbound_event_to_session_with_pool(

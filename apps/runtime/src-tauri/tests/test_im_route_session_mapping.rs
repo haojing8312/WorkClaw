@@ -7,7 +7,7 @@ use runtime_lib::commands::employee_agents::{
 use runtime_lib::im::types::{ImEvent, ImEventType};
 
 #[tokio::test]
-async fn different_threads_do_not_share_session_in_one_to_one_mode() {
+async fn same_route_session_key_reuses_existing_session() {
     let (pool, _tmp) = helpers::setup_test_db().await;
 
     sqlx::query(
@@ -74,8 +74,8 @@ async fn different_threads_do_not_share_session_in_one_to_one_mode() {
     .await
     .expect("second ensure");
     assert_eq!(second.len(), 1);
-    assert!(second[0].created);
-    assert_ne!(second[0].session_id, first[0].session_id);
+    assert!(!second[0].created);
+    assert_eq!(second[0].session_id, first[0].session_id);
 
     let (count,): (i64,) =
         sqlx::query_as("SELECT COUNT(*) FROM im_thread_sessions WHERE session_id = ?")
@@ -83,7 +83,7 @@ async fn different_threads_do_not_share_session_in_one_to_one_mode() {
             .fetch_one(&pool)
             .await
             .expect("count mappings");
-    assert_eq!(count, 1);
+    assert_eq!(count, 2);
 }
 
 #[tokio::test]
