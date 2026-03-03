@@ -7,6 +7,7 @@ import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { SkillManifest, ModelConfig, Message, StreamItem, FileAttachment, SkillRouteEvent, ImRoleTimelineEvent, ImRoleDispatchRequest } from "../types";
 import { motion, AnimatePresence } from "framer-motion";
 import { ToolIsland } from "./ToolIsland";
+import { RiskConfirmDialog } from "./RiskConfirmDialog";
 
 type ClawhubInstallCandidate = {
   slug: string;
@@ -78,6 +79,7 @@ export function ChatView({
   const [showInstallConfirm, setShowInstallConfirm] = useState(false);
   const [installingSlug, setInstallingSlug] = useState<string | null>(null);
   const [installError, setInstallError] = useState<string | null>(null);
+  const installInFlightRef = useRef(false);
   const [subAgentBuffer, setSubAgentBuffer] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -700,7 +702,8 @@ export function ChatView({
   }
 
   async function handleConfirmInstall() {
-    if (!pendingInstallSkill || installingSlug) return;
+    if (!pendingInstallSkill || installInFlightRef.current) return;
+    installInFlightRef.current = true;
     setInstallError(null);
     setInstallingSlug(pendingInstallSkill.slug);
     try {
@@ -717,8 +720,15 @@ export function ChatView({
       setInstallError("安装失败，请重试。");
       console.error("安装 ClawHub 技能失败:", e);
     } finally {
+      installInFlightRef.current = false;
       setInstallingSlug(null);
     }
+  }
+
+  function handleCancelInstallConfirm() {
+    if (installInFlightRef.current) return;
+    setShowInstallConfirm(false);
+    setPendingInstallSkill(null);
   }
 
   // Markdown 渲染组件配置
@@ -1021,36 +1031,19 @@ export function ChatView({
             </div>
           </div>
         )}
-        {showInstallConfirm && pendingInstallSkill && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 px-4">
-            <div className="w-full max-w-md rounded-2xl border border-gray-200 bg-white p-5 shadow-xl">
-              <div className="text-base font-semibold text-gray-900">安装技能</div>
-              <div className="mt-2 text-sm text-gray-600">
-                是否安装「{pendingInstallSkill.name}」？
-              </div>
-              <div className="mt-1 text-xs text-gray-400">slug: {pendingInstallSkill.slug}</div>
-              <div className="mt-4 flex justify-end gap-2">
-                <button
-                  onClick={() => {
-                    if (installingSlug) return;
-                    setShowInstallConfirm(false);
-                    setPendingInstallSkill(null);
-                  }}
-                  className="h-9 px-4 rounded-lg border border-gray-200 text-gray-600 text-sm hover:bg-gray-50"
-                >
-                  取消
-                </button>
-                <button
-                  onClick={handleConfirmInstall}
-                  disabled={Boolean(installingSlug)}
-                  className="h-9 px-4 rounded-lg bg-blue-500 hover:bg-blue-600 disabled:bg-blue-200 text-white text-sm"
-                >
-                  {installingSlug ? "安装中..." : "确认安装"}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
+        <RiskConfirmDialog
+          open={showInstallConfirm && Boolean(pendingInstallSkill)}
+          level="medium"
+          title="安装技能"
+          summary={pendingInstallSkill ? `是否安装「${pendingInstallSkill.name}」？` : "是否安装该技能？"}
+          impact={pendingInstallSkill ? `slug: ${pendingInstallSkill.slug}` : undefined}
+          irreversible={false}
+          confirmLabel="确认安装"
+          cancelLabel="取消"
+          loading={Boolean(installingSlug)}
+          onConfirm={handleConfirmInstall}
+          onCancel={handleCancelInstallConfirm}
+        />
         <div ref={bottomRef} />
       </div>
 
