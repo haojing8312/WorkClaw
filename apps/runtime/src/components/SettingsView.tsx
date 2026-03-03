@@ -12,13 +12,17 @@ import { openExternalUrl } from "../utils/openExternalUrl";
 import {
   CapabilityRouteTemplateInfo,
   CapabilityRoutingPolicy,
+  ImRouteSimulationPayload,
+  ImRoutingBinding,
   ModelConfig,
   ProviderConfig,
   ProviderHealthInfo,
   RuntimePreferences,
   RouteAttemptLog,
   RouteAttemptStat,
+  UpsertImRoutingBindingInput,
 } from "../types";
+import { FeishuRoutingWizard } from "./employees/FeishuRoutingWizard";
 
 const MCP_PRESETS = [
   { label: "— 快速选择 —", value: "", name: "", command: "", args: "", env: "" },
@@ -154,7 +158,7 @@ export function SettingsView({
   const [mcpError, setMcpError] = useState("");
   const [showMcpEnvJson, setShowMcpEnvJson] = useState(false);
   const [activeTab, setActiveTab] = useState<
-    "models" | "desktop" | "capabilities" | "health" | "mcp" | "search" | "routing"
+    "models" | "desktop" | "capabilities" | "health" | "mcp" | "search" | "routing" | "feishu"
   >("models");
 
   // 搜索引擎配置
@@ -211,6 +215,7 @@ export function SettingsView({
   const [routeStatsLoading, setRouteStatsLoading] = useState(false);
   const [routeStatsCapability, setRouteStatsCapability] = useState("all");
   const [routeStatsHours, setRouteStatsHours] = useState(24);
+  const [routingBindings, setRoutingBindings] = useState<ImRoutingBinding[]>([]);
   const [runtimePreferences, setRuntimePreferences] = useState<RuntimePreferences>(
     DEFAULT_RUNTIME_PREFERENCES,
   );
@@ -358,6 +363,12 @@ export function SettingsView({
     if (SHOW_HEALTH_SETTINGS && activeTab === "health") {
       loadRecentRouteLogs(false);
       loadRouteStats();
+    }
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab === "feishu") {
+      void loadRoutingBindings();
     }
   }, [activeTab]);
 
@@ -638,6 +649,16 @@ export function SettingsView({
     }
   }
 
+  async function loadRoutingBindings() {
+    try {
+      const list = await invoke<ImRoutingBinding[]>("list_im_routing_bindings");
+      setRoutingBindings(Array.isArray(list) ? list : []);
+    } catch (e) {
+      console.warn("加载飞书路由规则失败:", e);
+      setRoutingBindings([]);
+    }
+  }
+
   async function loadChatPrimaryModels(providerId: string, capability: string) {
     if (!providerId) {
       setChatPrimaryModels([]);
@@ -858,6 +879,20 @@ export function SettingsView({
       setRouteError("保存自动路由设置失败: " + String(e));
       setRouteSaveState("error");
     }
+  }
+
+  async function handleSaveRoutingRule(input: UpsertImRoutingBindingInput) {
+    await invoke<string>("upsert_im_routing_binding", { input });
+    await loadRoutingBindings();
+  }
+
+  async function handleDeleteRoutingRule(id: string) {
+    await invoke("delete_im_routing_binding", { id });
+    await loadRoutingBindings();
+  }
+
+  function handleSimulateRoute(payload: ImRouteSimulationPayload) {
+    return invoke("simulate_im_route", { payload });
   }
 
   // 加载已保存的模型配置到表单（用于编辑）
@@ -1199,6 +1234,13 @@ export function SettingsView({
               (activeTab === "search" ? "text-[var(--sm-primary-strong)] border-[var(--sm-primary)]" : "sm-text-muted border-transparent hover:text-[var(--sm-text)]")}
           >
             搜索引擎
+          </button>
+          <button
+            onClick={() => setActiveTab("feishu")}
+              className={"sm-btn h-8 px-2 rounded-none border-b-2 text-sm font-medium transition-colors " +
+              (activeTab === "feishu" ? "text-[var(--sm-primary-strong)] border-[var(--sm-primary)]" : "sm-text-muted border-transparent hover:text-[var(--sm-text)]")}
+          >
+            飞书协作
           </button>
           {SHOW_AUTO_ROUTING_SETTINGS && (
             <button
@@ -2561,6 +2603,15 @@ export function SettingsView({
           </div>
         </div>
       </>)}
+
+      {activeTab === "feishu" && (
+        <FeishuRoutingWizard
+          bindings={routingBindings}
+          onSaveRule={handleSaveRoutingRule}
+          onDeleteRule={handleDeleteRoutingRule}
+          onSimulate={handleSimulateRoute}
+        />
+      )}
 
       {SHOW_AUTO_ROUTING_SETTINGS && activeTab === "routing" && (
         <div className="bg-white rounded-lg p-4 space-y-3">
