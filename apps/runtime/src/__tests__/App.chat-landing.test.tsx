@@ -110,6 +110,8 @@ describe("App chat landing", () => {
     await waitFor(() => {
       expect(screen.getByTestId("new-session-landing")).toBeInTheDocument();
     });
+
+    expect(document.querySelector(".sm-app")).toBeInTheDocument();
   });
 
   test("renders chat view after selecting a session", async () => {

@@ -1172,8 +1172,8 @@ export function SettingsView({ onClose }: Props) {
     loadSearchConfigs();
   }
 
-  const inputCls = "w-full bg-gray-50 border border-gray-200 rounded px-3 py-1.5 text-sm focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400";
-  const labelCls = "block text-xs text-gray-500 mb-1";
+  const inputCls = "sm-input w-full text-sm py-1.5";
+  const labelCls = "sm-field-label";
 
   // 眼睛图标：显示状态（可见）
   function EyeOpenIcon() {
@@ -1195,62 +1195,62 @@ export function SettingsView({ onClose }: Props) {
   }
 
   return (
-    <div className="flex flex-col h-full p-6 overflow-y-auto">
+    <div className="sm-surface flex flex-col h-full p-6 overflow-y-auto">
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-4">
           <button
             onClick={() => setActiveTab("models")}
-            className={"text-sm font-medium pb-1 border-b-2 transition-colors " +
-              (activeTab === "models" ? "text-gray-800 border-blue-500" : "text-gray-500 border-transparent hover:text-gray-700")}
+              className={"sm-btn h-8 px-2 rounded-none border-b-2 text-sm font-medium transition-colors " +
+              (activeTab === "models" ? "text-[var(--sm-primary-strong)] border-[var(--sm-primary)]" : "sm-text-muted border-transparent hover:text-[var(--sm-text)]")}
           >
             模型配置
           </button>
           <button
             onClick={() => setActiveTab("providers")}
-            className={"text-sm font-medium pb-1 border-b-2 transition-colors " +
-              (activeTab === "providers" ? "text-gray-800 border-blue-500" : "text-gray-500 border-transparent hover:text-gray-700")}
+              className={"sm-btn h-8 px-2 rounded-none border-b-2 text-sm font-medium transition-colors " +
+              (activeTab === "providers" ? "text-[var(--sm-primary-strong)] border-[var(--sm-primary)]" : "sm-text-muted border-transparent hover:text-[var(--sm-text)]")}
           >
             Providers
           </button>
           <button
             onClick={() => setActiveTab("capabilities")}
-            className={"text-sm font-medium pb-1 border-b-2 transition-colors " +
-              (activeTab === "capabilities" ? "text-gray-800 border-blue-500" : "text-gray-500 border-transparent hover:text-gray-700")}
+              className={"sm-btn h-8 px-2 rounded-none border-b-2 text-sm font-medium transition-colors " +
+              (activeTab === "capabilities" ? "text-[var(--sm-primary-strong)] border-[var(--sm-primary)]" : "sm-text-muted border-transparent hover:text-[var(--sm-text)]")}
           >
             能力路由
           </button>
           <button
             onClick={() => setActiveTab("health")}
-            className={"text-sm font-medium pb-1 border-b-2 transition-colors " +
-              (activeTab === "health" ? "text-gray-800 border-blue-500" : "text-gray-500 border-transparent hover:text-gray-700")}
+              className={"sm-btn h-8 px-2 rounded-none border-b-2 text-sm font-medium transition-colors " +
+              (activeTab === "health" ? "text-[var(--sm-primary-strong)] border-[var(--sm-primary)]" : "sm-text-muted border-transparent hover:text-[var(--sm-text)]")}
           >
             健康检查
           </button>
           <button
             onClick={() => setActiveTab("mcp")}
-            className={"text-sm font-medium pb-1 border-b-2 transition-colors " +
-              (activeTab === "mcp" ? "text-gray-800 border-blue-500" : "text-gray-500 border-transparent hover:text-gray-700")}
+              className={"sm-btn h-8 px-2 rounded-none border-b-2 text-sm font-medium transition-colors " +
+              (activeTab === "mcp" ? "text-[var(--sm-primary-strong)] border-[var(--sm-primary)]" : "sm-text-muted border-transparent hover:text-[var(--sm-text)]")}
           >
             MCP 服务器
           </button>
           <button
             onClick={() => setActiveTab("search")}
-            className={"text-sm font-medium pb-1 border-b-2 transition-colors " +
-              (activeTab === "search" ? "text-gray-800 border-blue-500" : "text-gray-500 border-transparent hover:text-gray-700")}
+              className={"sm-btn h-8 px-2 rounded-none border-b-2 text-sm font-medium transition-colors " +
+              (activeTab === "search" ? "text-[var(--sm-primary-strong)] border-[var(--sm-primary)]" : "sm-text-muted border-transparent hover:text-[var(--sm-text)]")}
           >
             搜索引擎
           </button>
           <button
             onClick={() => setActiveTab("routing")}
-            className={"text-sm font-medium pb-1 border-b-2 transition-colors " +
-              (activeTab === "routing" ? "text-gray-800 border-blue-500" : "text-gray-500 border-transparent hover:text-gray-700")}
+              className={"sm-btn h-8 px-2 rounded-none border-b-2 text-sm font-medium transition-colors " +
+              (activeTab === "routing" ? "text-[var(--sm-primary-strong)] border-[var(--sm-primary)]" : "sm-text-muted border-transparent hover:text-[var(--sm-text)]")}
           >
             自动路由
           </button>
           <button
             onClick={() => setActiveTab("feishu")}
-            className={"text-sm font-medium pb-1 border-b-2 transition-colors " +
-              (activeTab === "feishu" ? "text-gray-800 border-blue-500" : "text-gray-500 border-transparent hover:text-gray-700")}
+              className={"sm-btn h-8 px-2 rounded-none border-b-2 text-sm font-medium transition-colors " +
+              (activeTab === "feishu" ? "text-[var(--sm-primary-strong)] border-[var(--sm-primary)]" : "sm-text-muted border-transparent hover:text-[var(--sm-text)]")}
           >
             飞书协作
           </button>
@@ -2152,19 +2152,19 @@ export function SettingsView({ onClose }: Props) {
             <div className="flex gap-2">
               <button
                 onClick={handleSaveFeishuSettings}
-                className="bg-blue-500 hover:bg-blue-600 text-white text-sm py-1.5 px-3 rounded-lg"
+                className="sm-btn sm-btn-primary text-sm py-1.5 px-3 rounded-lg"
               >
                 保存配置
               </button>
               <button
                 onClick={handleVerifyFeishuConnection}
-                className="bg-blue-500 hover:bg-blue-600 text-white text-sm py-1.5 px-3 rounded-lg"
+                className="sm-btn sm-btn-primary text-sm py-1.5 px-3 rounded-lg"
               >
                 保存并校验连接
               </button>
               <button
                 onClick={refreshFeishuConsole}
-                className="bg-gray-100 hover:bg-gray-200 text-sm py-1.5 px-3 rounded-lg"
+                className="sm-btn sm-btn-secondary text-sm py-1.5 px-3 rounded-lg"
               >
                 刷新状态
               </button>

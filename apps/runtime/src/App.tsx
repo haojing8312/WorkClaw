@@ -574,7 +574,7 @@ export default function App() {
   const selectedSession = sessions.find((s) => s.id === selectedSessionId);
 
   return (
-    <div className="flex h-screen bg-gray-50 text-gray-800 overflow-hidden">
+    <div className="sm-app flex h-screen overflow-hidden">
       <Sidebar
         activeMainView={activeMainView}
         onOpenStartTask={handleOpenStartTask}
@@ -749,11 +749,11 @@ export default function App() {
               />
             </motion.div>
           ) : selectedSkill && models.length === 0 ? (
-            <div className="flex items-center justify-center h-full text-gray-400 text-sm">
+            <div className="flex items-center justify-center h-full sm-text-muted text-sm">
               请先在设置中配置模型和 API Key
             </div>
           ) : (
-            <div className="flex items-center justify-center h-full text-gray-400 text-sm">
+            <div className="flex items-center justify-center h-full sm-text-muted text-sm">
               从左侧选择一个技能，开始任务
             </div>
           )}

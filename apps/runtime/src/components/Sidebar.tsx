@@ -52,10 +52,10 @@ export function Sidebar({
 
   if (collapsed) {
     return (
-      <div className="w-12 bg-white flex flex-col h-full border-r border-gray-200 items-center py-3 gap-3 flex-shrink-0">
+      <div className="sm-surface sm-divider w-12 flex flex-col h-full border-r items-center py-3 gap-3 flex-shrink-0">
         <button
           onClick={onCollapse}
-          className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded transition-colors"
+          className="sm-btn sm-btn-ghost w-8 h-8 rounded-md"
           title="展开侧边栏"
           aria-label="展开侧边栏"
         >
@@ -63,8 +63,8 @@ export function Sidebar({
         </button>
         <button
           onClick={onOpenStartTask}
-          className={`w-8 h-8 flex items-center justify-center rounded transition-colors ${
-            isStartTask ? "bg-blue-50 text-blue-600" : "text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+          className={`sm-btn w-8 h-8 rounded-md ${
+            isStartTask ? "sm-btn-primary" : "sm-btn-ghost"
           }`}
           title="开始任务"
           aria-label="开始任务"
@@ -73,8 +73,8 @@ export function Sidebar({
         </button>
         <button
           onClick={onOpenExperts}
-          className={`w-8 h-8 flex items-center justify-center rounded transition-colors ${
-            isExperts ? "bg-blue-50 text-blue-600" : "text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+          className={`sm-btn w-8 h-8 rounded-md ${
+            isExperts ? "sm-btn-primary" : "sm-btn-ghost"
           }`}
           title="专家技能"
           aria-label="专家技能"
@@ -83,8 +83,8 @@ export function Sidebar({
         </button>
         <button
           onClick={onOpenEmployees}
-          className={`w-8 h-8 flex items-center justify-center rounded transition-colors ${
-            isEmployees ? "bg-blue-50 text-blue-600" : "text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+          className={`sm-btn w-8 h-8 rounded-md ${
+            isEmployees ? "sm-btn-primary" : "sm-btn-ghost"
           }`}
           title="智能体员工"
           aria-label="智能体员工"
@@ -93,7 +93,7 @@ export function Sidebar({
         </button>
         <button
           onClick={onSettings}
-          className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded transition-colors mt-auto"
+          className="sm-btn sm-btn-ghost w-8 h-8 rounded-md mt-auto"
           title="设置"
           aria-label="设置"
         >
@@ -104,25 +104,25 @@ export function Sidebar({
   }
 
   return (
-    <div className="w-60 bg-white flex flex-col h-full border-r border-gray-200 flex-shrink-0">
-      <div className="px-4 py-3 text-xs font-medium text-gray-500 border-b border-gray-200 flex items-center justify-between">
+    <div className="sm-surface sm-divider w-60 flex flex-col h-full border-r flex-shrink-0">
+      <div className="sm-surface sm-divider px-4 py-3 text-xs font-medium sm-text-muted border-b flex items-center justify-between">
         <span>SkillMint</span>
         <button
           onClick={onCollapse}
-          className="text-gray-500 hover:text-gray-600 text-sm transition-colors"
+          className="sm-btn sm-btn-ghost h-7 w-7 text-sm rounded-md"
           title="折叠侧边栏"
         >
           ◀
         </button>
       </div>
 
-      <div className="px-3 py-2 border-b border-gray-200">
+      <div className="sm-divider px-3 py-2 border-b">
         <div className="grid grid-cols-3 gap-2">
           <button
             onClick={onOpenStartTask}
             className={
-              "text-xs py-1.5 rounded-md transition-colors " +
-              (isStartTask ? "bg-blue-500 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200")
+              "sm-btn text-xs py-1.5 rounded-md " +
+              (isStartTask ? "sm-btn-primary" : "sm-btn-secondary")
             }
           >
             开始任务
@@ -130,8 +130,8 @@ export function Sidebar({
           <button
             onClick={onOpenExperts}
             className={
-              "text-xs py-1.5 rounded-md transition-colors " +
-              (isExperts ? "bg-blue-500 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200")
+              "sm-btn text-xs py-1.5 rounded-md " +
+              (isExperts ? "sm-btn-primary" : "sm-btn-secondary")
             }
           >
             专家技能
@@ -139,8 +139,8 @@ export function Sidebar({
           <button
             onClick={onOpenEmployees}
             className={
-              "text-xs py-1.5 rounded-md transition-colors " +
-              (isEmployees ? "bg-blue-500 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200")
+              "sm-btn text-xs py-1.5 rounded-md " +
+              (isEmployees ? "sm-btn-primary" : "sm-btn-secondary")
             }
           >
             智能体员工
@@ -151,35 +151,35 @@ export function Sidebar({
       <div className="flex-1 overflow-hidden">
         {selectedSkillId && (
           <div className="h-full flex flex-col">
-            <div className="px-4 py-2 text-xs font-medium text-gray-500 border-t border-b border-gray-200">
+            <div className="sm-divider px-4 py-2 text-xs font-medium sm-text-muted border-t border-b">
               <span>会话历史</span>
             </div>
-            <div className="px-3 py-2 border-b border-gray-200">
-              <label className="block text-[11px] text-gray-500 mb-1">操作确认级别</label>
+            <div className="sm-divider px-3 py-2 border-b">
+              <label className="sm-field-label text-[11px]">操作确认级别</label>
               <select
                 value={newSessionPermissionMode}
                 onChange={(e) =>
                   onChangeNewSessionPermissionMode(e.target.value as "default" | "accept_edits" | "unrestricted")
                 }
-                className="w-full bg-gray-50 border border-gray-200 rounded px-2 py-1 text-xs text-gray-800 focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
+                className="sm-select w-full py-1 text-xs"
               >
                 <option value="accept_edits">推荐模式（常见改动自动处理）</option>
                 <option value="default">谨慎模式（关键操作先确认）</option>
                 <option value="unrestricted">全自动模式（高风险）</option>
               </select>
             </div>
-            <div className="px-3 py-2 border-b border-gray-200">
+            <div className="sm-divider px-3 py-2 border-b">
               <input
                 type="text"
                 value={searchQuery}
                 onChange={(e) => handleSearchChange(e.target.value)}
                 placeholder="搜索会话..."
-                className="w-full bg-gray-50 border border-gray-200 rounded px-2 py-1 text-xs text-gray-800 placeholder-gray-400 focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
+                className="sm-input w-full py-1 text-xs"
               />
             </div>
             <div className="flex-1 overflow-y-auto py-1">
               {sessions.length === 0 && (
-                <div className="px-4 py-3 text-xs text-gray-400">{searchQuery ? "未找到匹配会话" : "暂无会话"}</div>
+                <div className="px-4 py-3 text-xs sm-text-muted">{searchQuery ? "未找到匹配会话" : "暂无会话"}</div>
               )}
               <AnimatePresence>
                 {sessions.map((s) => (
@@ -191,8 +191,8 @@ export function Sidebar({
                     whileHover={{ scale: 1.01 }}
                     transition={{ duration: 0.2 }}
                     className={
-                      "group flex items-center px-4 py-2 text-sm cursor-pointer transition-colors " +
-                      (selectedSessionId === s.id ? "bg-blue-50 text-blue-600" : "text-gray-700 hover:bg-gray-50")
+                      "group flex items-center px-4 py-2 text-sm cursor-pointer rounded-md mx-1 transition-colors " +
+                      (selectedSessionId === s.id ? "bg-[var(--sm-primary-soft)] text-[var(--sm-primary-strong)]" : "sm-text-primary hover:bg-[var(--sm-surface-soft)]")
                     }
                     onClick={() => onSelectSession(s.id)}
                   >
@@ -204,7 +204,7 @@ export function Sidebar({
                         e.stopPropagation();
                         onExportSession(s.id);
                       }}
-                      className="hidden group-hover:block text-gray-400 hover:text-gray-600 text-xs ml-1 flex-shrink-0"
+                      className="hidden group-hover:block sm-btn sm-btn-ghost h-6 w-6 text-xs ml-1 flex-shrink-0"
                       title="导出会话"
                     >
                       ↓
@@ -214,7 +214,7 @@ export function Sidebar({
                         e.stopPropagation();
                         onDeleteSession(s.id);
                       }}
-                      className="hidden group-hover:block text-red-400 hover:text-red-300 text-xs ml-1 flex-shrink-0"
+                      className="hidden group-hover:block sm-btn sm-btn-danger h-6 w-6 text-xs ml-1 flex-shrink-0"
                     >
                       ×
                     </button>
@@ -226,10 +226,10 @@ export function Sidebar({
         )}
       </div>
 
-      <div className="p-3 space-y-2 border-t border-gray-200">
+      <div className="sm-divider p-3 space-y-2 border-t">
         <button
           onClick={onSettings}
-          className="w-full bg-gray-100 hover:bg-gray-200 active:scale-[0.97] text-gray-700 text-sm py-1.5 rounded-lg transition-all"
+          className="sm-btn sm-btn-secondary w-full text-sm py-1.5 rounded-lg"
         >
           设置
         </button>

@@ -1272,7 +1272,7 @@ export function ChatView({
       </div>
 
       {/* 输入区域 */}
-      <div className="px-6 py-3 bg-gray-50/80">
+      <div className="px-6 py-3 bg-[var(--sm-surface-muted)]/80">
         {routeEvents.length > 0 && (
           <div className="max-w-3xl mx-auto mb-2">
             <button
@@ -1280,13 +1280,13 @@ export function ChatView({
                 setSidePanelOpen(true);
                 setSidePanelTab("routing");
               }}
-              className="w-full text-left px-3 py-2 rounded-xl bg-white border border-gray-200 text-xs text-gray-600 hover:bg-gray-50 transition-colors"
+              className="sm-btn sm-btn-secondary w-full text-left px-3 py-2 rounded-xl text-xs justify-start"
             >
               已自动路由 {routeEvents.length} 个子 Skill · 成功 {routeCompleted} · 失败 {routeFailed} · {routeTotalDuration}ms
             </button>
           </div>
         )}
-        <div className="max-w-3xl mx-auto bg-white border border-gray-200 rounded-2xl shadow-sm focus-within:border-blue-400 focus-within:ring-1 focus-within:ring-blue-400 transition-all">
+        <div className="sm-panel max-w-3xl mx-auto focus-within:border-[var(--sm-primary)] focus-within:shadow-[var(--sm-focus-ring)] transition-all">
           {/* 隐藏的文件输入 */}
           <input
             type="file"
@@ -1315,7 +1315,7 @@ export function ChatView({
             }}
             placeholder="输入消息，Shift+Enter 换行..."
             rows={3}
-            className="w-full bg-transparent pl-4 pr-4 pt-3 pb-2 text-sm resize-none focus:outline-none placeholder-gray-400 min-h-[80px] max-h-[200px]"
+            className="sm-textarea w-full border-0 bg-transparent min-h-[80px] max-h-[200px] focus:shadow-none focus:border-0"
           />
           {/* 底部工具栏 */}
           <div className="flex items-center justify-between px-3 pb-2.5">
@@ -1330,7 +1330,7 @@ export function ChatView({
               {/* 附件按钮 */}
               <label
                 htmlFor="file-upload"
-                className="h-8 px-3 flex items-center justify-center gap-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 active:scale-[0.97] text-gray-600 text-xs font-medium transition-all cursor-pointer"
+                className="sm-btn sm-btn-secondary h-8 px-3 gap-1.5 text-xs rounded-lg cursor-pointer"
               >
                 <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
@@ -1341,7 +1341,7 @@ export function ChatView({
               <button
                 onClick={handleCompact}
                 disabled={compacting}
-                className="h-8 px-3 flex items-center justify-center gap-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 active:scale-[0.97] disabled:opacity-50 text-gray-600 text-xs font-medium transition-all"
+                className="sm-btn sm-btn-secondary h-8 px-3 gap-1.5 rounded-lg text-xs disabled:opacity-50"
               >
                 <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
@@ -1351,7 +1351,7 @@ export function ChatView({
               {streaming ? (
                 <button
                   onClick={handleCancel}
-                  className="h-8 px-3 flex items-center justify-center gap-1.5 rounded-lg bg-red-500 hover:bg-red-600 active:scale-[0.97] text-white text-xs font-medium transition-all"
+                  className="sm-btn sm-btn-danger h-8 px-3 gap-1.5 rounded-lg text-xs"
                 >
                   <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
                     <rect x="6" y="6" width="12" height="12" rx="2" />
@@ -1362,7 +1362,7 @@ export function ChatView({
                 <button
                   onClick={handleSend}
                   disabled={!input.trim() && attachedFiles.length === 0}
-                  className="h-8 px-3 flex items-center justify-center gap-1.5 rounded-lg bg-blue-500 hover:bg-blue-600 active:scale-[0.97] disabled:bg-gray-100 disabled:text-gray-400 text-white text-xs font-medium transition-all"
+                  className="sm-btn sm-btn-primary h-8 px-3 gap-1.5 rounded-lg text-xs disabled:bg-[var(--sm-surface-muted)] disabled:text-[var(--sm-text-muted)]"
                 >
                   <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14M12 5l7 7-7 7" />
