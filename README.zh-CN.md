@@ -209,6 +209,19 @@ cd apps/runtime/src-tauri
 cargo test
 ```
 
+### Windows 自动 Release（GitHub）
+
+已支持 `tag` 自动发布 Windows 安装包到 GitHub Release。
+
+```bash
+# 1) 确保版本与 tag 一致（apps/runtime/src-tauri/tauri.conf.json -> version）
+# 2) 推送语义化 tag（触发 .github/workflows/release-windows.yml）
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+发布前会执行版本一致性校验：`tag(vX.Y.Z)` 必须与 `tauri.conf.json` 的 `version` 相同。
+
 ### 安装技能
 
 1. 打开 SkillMint 应用

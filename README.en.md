@@ -209,6 +209,19 @@ cd apps/runtime/src-tauri
 cargo test
 ```
 
+### Windows Auto Release (GitHub)
+
+Tag-driven Windows release is enabled via GitHub Actions.
+
+```bash
+# 1) Keep versions aligned (apps/runtime/src-tauri/tauri.conf.json -> version)
+# 2) Push a semantic version tag (triggers .github/workflows/release-windows.yml)
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Before publishing, CI validates that `tag(vX.Y.Z)` matches `tauri.conf.json` `version`.
+
 ### Installing a Skill
 
 1. Open Runtime application
