@@ -4,7 +4,7 @@
     "module": "ESNext",
     "lib": ["ES2022", "DOM"],
     "outDir": "./dist",
-    "rootDir": "./src",
+    "rootDir": ".",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
@@ -12,6 +12,20 @@
     "moduleResolution": "node",
     "resolveJsonModule": true
   },
-  "include": ["src/**/*"],
+  "include": [
+    "index.ts",
+    "src/**/*",
+    "vendor/openclaw-core/src/agents/agent-scope-lite.ts",
+    "vendor/openclaw-core/src/channels/chat-type.ts",
+    "vendor/openclaw-core/src/config/config.ts",
+    "vendor/openclaw-core/src/globals.ts",
+    "vendor/openclaw-core/src/logger.ts",
+    "vendor/openclaw-core/src/infra/prototype-keys.ts",
+    "vendor/openclaw-core/src/sessions/session-key-utils.ts",
+    "vendor/openclaw-core/src/routing/account-id.ts",
+    "vendor/openclaw-core/src/routing/bindings.ts",
+    "vendor/openclaw-core/src/routing/resolve-route.ts",
+    "vendor/openclaw-core/src/routing/session-key.ts"
+  ],
   "exclude": ["node_modules", "dist"]
 }
