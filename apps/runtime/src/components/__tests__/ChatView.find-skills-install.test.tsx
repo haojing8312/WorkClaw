@@ -175,4 +175,73 @@ describe("ChatView find-skills install flow", () => {
       expect(screen.getByRole("button", { name: "已安装" })).toBeDisabled();
     });
   });
+
+  test("shows duplicate-name error when install conflicts by display name", async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_messages") {
+        return Promise.resolve([
+          {
+            role: "assistant",
+            content: "找到候选技能",
+            created_at: new Date().toISOString(),
+            streamItems: [
+              {
+                type: "tool_call",
+                toolCall: {
+                  id: "tc-1",
+                  name: "clawhub_recommend",
+                  input: { query: "short video" },
+                  output: buildToolOutput(),
+                  status: "completed",
+                },
+              },
+            ],
+          },
+        ]);
+      }
+      if (command === "get_sessions") return Promise.resolve([]);
+      if (command === "install_clawhub_skill") {
+        return Promise.reject("DUPLICATE_SKILL_NAME:Video Maker");
+      }
+      return Promise.resolve(null);
+    });
+
+    render(
+      <ChatView
+        skill={{
+          id: "builtin-find-skills",
+          name: "找技能",
+          description: "desc",
+          version: "1.0.0",
+          author: "test",
+          recommended_model: "model-a",
+          tags: [],
+          created_at: new Date().toISOString(),
+        }}
+        models={[
+          {
+            id: "model-a",
+            name: "Model A",
+            api_format: "openai",
+            base_url: "https://example.com",
+            model_name: "model-a",
+            is_default: true,
+          },
+        ]}
+        sessionId="session-1"
+        installedSkillIds={[]}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "立即安装" })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "立即安装" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认安装" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("技能名称冲突：已存在「Video Maker」，请先重命名后再安装。")).toBeInTheDocument();
+    });
+  });
 });

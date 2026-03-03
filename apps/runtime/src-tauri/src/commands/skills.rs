@@ -201,6 +201,45 @@ fn extract_tag_value(tags: &[String], prefix: &str) -> Option<String> {
     })
 }
 
+fn normalize_display_name(name: &str) -> String {
+    name.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim()
+        .to_lowercase()
+}
+
+pub async fn ensure_skill_display_name_available(
+    pool: &SqlitePool,
+    incoming_name: &str,
+    incoming_id: &str,
+) -> Result<(), String> {
+    let target = normalize_display_name(incoming_name);
+    if target.is_empty() {
+        return Ok(());
+    }
+
+    let rows = sqlx::query_as::<_, (String,)>("SELECT manifest FROM installed_skills")
+        .fetch_all(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    for (manifest_json,) in rows {
+        let Ok(manifest) = serde_json::from_str::<SkillManifest>(&manifest_json) else {
+            continue;
+        };
+        if manifest.id == incoming_id {
+            continue;
+        }
+        if normalize_display_name(&manifest.name) == target {
+            let conflict_name = manifest.name.trim();
+            return Err(format!("DUPLICATE_SKILL_NAME:{conflict_name}"));
+        }
+    }
+
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn render_local_skill_preview(
     name: String,
@@ -282,6 +321,8 @@ pub async fn install_skill(
     db: State<'_, DbState>,
 ) -> Result<SkillManifest, String> {
     let unpacked = verify_and_unpack(&pack_path, &username).map_err(|e| e.to_string())?;
+    ensure_skill_display_name_available(&db.0, &unpacked.manifest.name, &unpacked.manifest.id)
+        .await?;
 
     let manifest_json = serde_json::to_string(&unpacked.manifest).map_err(|e| e.to_string())?;
 
@@ -340,6 +381,7 @@ pub async fn import_local_skill_to_pool(
         username_hint: None,
         encrypted_verify: String::new(),
     };
+    ensure_skill_display_name_available(pool, &manifest.name, &skill_id).await?;
 
     let manifest_json = serde_json::to_string(&manifest).map_err(|e| e.to_string())?;
 

@@ -41,6 +41,15 @@ function extractErrorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
+function extractDuplicateSkillName(error: unknown): string | null {
+  const message = extractErrorMessage(error, "");
+  const prefix = "DUPLICATE_SKILL_NAME:";
+  if (!message.includes(prefix)) {
+    return null;
+  }
+  return message.split(prefix)[1]?.trim() || null;
+}
+
 function getDefaultSkillId(skillList: SkillManifest[]): string | null {
   const builtin = skillList.find((item) => item.id === BUILTIN_GENERAL_SKILL_ID);
   if (builtin) {
@@ -338,6 +347,11 @@ export default function App() {
         setPendingImportDir(null);
         navigate("experts");
       } catch (importError) {
+        const duplicateName = extractDuplicateSkillName(importError);
+        if (duplicateName) {
+          setExpertCreateError(`技能名称冲突：已存在「${duplicateName}」（文件已保存到：${skillDir}）`);
+          return;
+        }
         const message = extractErrorMessage(importError, "导入失败，请稍后重试。");
         setExpertCreateError(`${message}（文件已保存到：${skillDir}）`);
         return;
@@ -366,6 +380,11 @@ export default function App() {
       setExpertSavedPath(null);
       navigate("experts");
     } catch (e) {
+      const duplicateName = extractDuplicateSkillName(e);
+      if (duplicateName) {
+        setExpertCreateError(`技能名称冲突：已存在「${duplicateName}」（文件已保存到：${pendingImportDir}）`);
+        return;
+      }
       const message = extractErrorMessage(e, "导入失败，请稍后重试。");
       setExpertCreateError(`${message}（文件已保存到：${pendingImportDir}）`);
     } finally {
@@ -461,13 +480,21 @@ export default function App() {
   }
 
   async function handleInstallFromLibrary(slug: string) {
-    const result = await invoke<{ manifest: SkillManifest; missing_mcp: string[] }>("install_clawhub_skill", {
-      slug,
-      githubUrl: null,
-    });
-    await loadSkills();
-    if (result?.manifest?.id) {
-      setSelectedSkillId(result.manifest.id);
+    try {
+      const result = await invoke<{ manifest: SkillManifest; missing_mcp: string[] }>("install_clawhub_skill", {
+        slug,
+        githubUrl: null,
+      });
+      await loadSkills();
+      if (result?.manifest?.id) {
+        setSelectedSkillId(result.manifest.id);
+      }
+    } catch (e) {
+      const duplicateName = extractDuplicateSkillName(e);
+      if (duplicateName) {
+        throw new Error(`技能名称冲突：已存在「${duplicateName}」，请先重命名后再安装。`);
+      }
+      throw e;
     }
   }
 
@@ -520,9 +547,13 @@ export default function App() {
   async function handleSaveEmployee(input: UpsertAgentEmployeeInput) {
     await invoke<string>("upsert_agent_employee", { input });
     const latest = await loadEmployees();
+    const targetEmployeeId = (input.employee_id || input.role_id || "").trim().toLowerCase();
     const target = input.id
       ? latest.find((e) => e.id === input.id)
-      : latest.find((e) => e.name === input.name && e.role_id === input.role_id);
+      : latest.find((e) =>
+        e.name === input.name &&
+        (e.employee_id || e.role_id || "").trim().toLowerCase() === targetEmployeeId,
+      );
     if (target) {
       setSelectedEmployeeId(target.id);
       if (target.is_default && target.primary_skill_id) {
@@ -542,15 +573,16 @@ export default function App() {
     await invoke<string>("upsert_agent_employee", {
       input: {
         id: employee.id,
+        employee_id: employee.employee_id || employee.role_id,
         name: employee.name,
-        role_id: employee.role_id,
+        role_id: employee.employee_id || employee.role_id,
         persona: employee.persona,
         feishu_open_id: employee.feishu_open_id,
         feishu_app_id: employee.feishu_app_id,
         feishu_app_secret: employee.feishu_app_secret,
         primary_skill_id: employee.primary_skill_id,
         default_work_dir: employee.default_work_dir,
-        openclaw_agent_id: employee.openclaw_agent_id || employee.role_id,
+        openclaw_agent_id: employee.employee_id || employee.openclaw_agent_id || employee.role_id,
         routing_priority: employee.routing_priority ?? 100,
         enabled_scopes: employee.enabled_scopes?.length ? employee.enabled_scopes : ["feishu"],
         enabled: employee.enabled,

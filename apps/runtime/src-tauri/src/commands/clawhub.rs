@@ -10,7 +10,7 @@ use tauri::{AppHandle, Manager, State};
 use walkdir::WalkDir;
 use zip::ZipArchive;
 
-use crate::commands::skills::{DbState, ImportResult};
+use crate::commands::skills::{ensure_skill_display_name_available, DbState, ImportResult};
 
 const DEFAULT_CLAWHUB_BASE: &str = "https://www.clawhub.ai";
 
@@ -687,6 +687,7 @@ pub async fn install_clawhub_skill(
         username_hint: None,
         encrypted_verify: String::new(),
     };
+    ensure_skill_display_name_available(&db.0, &manifest.name, &manifest.id).await?;
 
     let manifest_json = serde_json::to_string(&manifest).map_err(|e| e.to_string())?;
     let now = Utc::now().to_rfc3339();

@@ -41,6 +41,17 @@ export function ChatView({
   installedSkillIds = [],
   onSkillInstalled,
 }: Props) {
+  const parseDuplicateSkillName = (error: unknown): string | null => {
+    const message =
+      typeof error === "string"
+        ? error
+        : error instanceof Error
+        ? error.message
+        : String(error ?? "");
+    const prefix = "DUPLICATE_SKILL_NAME:";
+    if (!message.includes(prefix)) return null;
+    return message.split(prefix)[1]?.trim() || null;
+  };
   const routeErrorHint = (code?: string) => {
     switch (code) {
       case "SKILL_NOT_FOUND":
@@ -729,7 +740,12 @@ export function ChatView({
       setShowInstallConfirm(false);
       setPendingInstallSkill(null);
     } catch (e) {
-      setInstallError("安装失败，请重试。");
+      const duplicateName = parseDuplicateSkillName(e);
+      if (duplicateName) {
+        setInstallError(`技能名称冲突：已存在「${duplicateName}」，请先重命名后再安装。`);
+      } else {
+        setInstallError("安装失败，请重试。");
+      }
       console.error("安装 ClawHub 技能失败:", e);
     } finally {
       installInFlightRef.current = false;

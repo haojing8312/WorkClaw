@@ -137,8 +137,11 @@ export function SkillLibraryView({ installedSkillIds, onInstall }: Props) {
   async function handleConfirmInstall() {
     if (!pendingInstall || installingSlug) return;
     setInstallingSlug(pendingInstall.slug);
+    setError("");
     try {
       await onInstall(pendingInstall.slug);
+    } catch (e) {
+      setError(String(e));
     } finally {
       setInstallingSlug("");
       setPendingInstall(null);
@@ -208,7 +211,10 @@ export function SkillLibraryView({ installedSkillIds, onInstall }: Props) {
                 <div className="text-[11px] text-gray-400 mt-2">下载 {item.downloads}</div>
                 <div className="mt-3">
                   <button
-                    onClick={() => setPendingInstall(item)}
+                    onClick={() => {
+                      setError("");
+                      setPendingInstall(item);
+                    }}
                     disabled={installed || isInstalling}
                     className={`h-7 px-3 rounded text-xs transition-colors ${
                       installed

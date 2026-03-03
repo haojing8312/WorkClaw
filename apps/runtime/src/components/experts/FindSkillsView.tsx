@@ -19,6 +19,7 @@ export function FindSkillsView({ installedSkillIds, onInstall }: Props) {
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [installingSlug, setInstallingSlug] = useState("");
+  const [installError, setInstallError] = useState("");
   const [pendingInstall, setPendingInstall] = useState<ClawhubSkillRecommendation | null>(null);
   const [turns, setTurns] = useState<Turn[]>([]);
 
@@ -61,8 +62,11 @@ export function FindSkillsView({ installedSkillIds, onInstall }: Props) {
   async function handleConfirmInstall() {
     if (!pendingInstall || installingSlug) return;
     setInstallingSlug(pendingInstall.slug);
+    setInstallError("");
     try {
       await onInstall(pendingInstall.slug);
+    } catch (e) {
+      setInstallError(String(e));
     } finally {
       setInstallingSlug("");
       setPendingInstall(null);
@@ -96,6 +100,7 @@ export function FindSkillsView({ installedSkillIds, onInstall }: Props) {
             {loading ? "匹配中..." : "找技能"}
           </button>
         </form>
+        {installError && <div className="text-xs text-red-600 mt-2">{installError}</div>}
       </div>
 
       {empty ? (
@@ -132,7 +137,10 @@ export function FindSkillsView({ installedSkillIds, onInstall }: Props) {
                         <div className="text-[11px] text-blue-700 mt-2">{item.reason}</div>
                         <div className="mt-3">
                           <button
-                            onClick={() => setPendingInstall(item)}
+                            onClick={() => {
+                              setInstallError("");
+                              setPendingInstall(item);
+                            }}
                             disabled={installed || isInstalling}
                             className={`h-7 px-3 rounded text-xs transition-colors ${
                               installed
