@@ -309,10 +309,18 @@ pub async fn setup_test_db() -> (SqlitePool, TempDir) {
             thread_id TEXT NOT NULL,
             employee_id TEXT NOT NULL,
             session_id TEXT NOT NULL,
+            route_session_key TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             PRIMARY KEY (thread_id, employee_id)
         )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_im_thread_sessions_route_key ON im_thread_sessions(route_session_key)",
     )
     .execute(&pool)
     .await

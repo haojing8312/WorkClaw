@@ -335,6 +335,7 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
             thread_id TEXT NOT NULL,
             employee_id TEXT NOT NULL,
             session_id TEXT NOT NULL,
+            route_session_key TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             PRIMARY KEY (thread_id, employee_id)
@@ -408,6 +409,14 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
         .await;
     let _ = sqlx::query(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_employees_role_id_unique ON agent_employees(role_id)",
+    )
+    .execute(&pool)
+    .await;
+    let _ = sqlx::query("ALTER TABLE im_thread_sessions ADD COLUMN route_session_key TEXT NOT NULL DEFAULT ''")
+        .execute(&pool)
+        .await;
+    let _ = sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_im_thread_sessions_route_key ON im_thread_sessions(route_session_key)",
     )
     .execute(&pool)
     .await;
