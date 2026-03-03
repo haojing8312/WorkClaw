@@ -131,6 +131,8 @@ fn classify_model_route_error(error_message: &str) -> ModelRouteErrorKind {
         || lower.contains("dns")
         || lower.contains("connect")
         || lower.contains("socket")
+        || lower.contains("error sending request for url")
+        || lower.contains("sending request for url")
     {
         return ModelRouteErrorKind::Network;
     }
@@ -142,6 +144,28 @@ fn should_retry_same_candidate(kind: ModelRouteErrorKind) -> bool {
         kind,
         ModelRouteErrorKind::RateLimit | ModelRouteErrorKind::Timeout | ModelRouteErrorKind::Network
     )
+}
+
+fn retry_budget_for_error(kind: ModelRouteErrorKind, configured_retry_count: usize) -> usize {
+    if kind == ModelRouteErrorKind::Network {
+        configured_retry_count.max(1)
+    } else {
+        configured_retry_count
+    }
+}
+
+fn retry_backoff_ms(kind: ModelRouteErrorKind, attempt_idx: usize) -> u64 {
+    let base_ms = match kind {
+        ModelRouteErrorKind::RateLimit => 1200u64,
+        ModelRouteErrorKind::Timeout => 700u64,
+        ModelRouteErrorKind::Network => 400u64,
+        _ => 0u64,
+    };
+    if base_ms == 0 {
+        return 0;
+    }
+    let exp = attempt_idx.min(3) as u32;
+    base_ms.saturating_mul(1u64 << exp).min(5000)
 }
 
 fn parse_fallback_chain_targets(raw: &str) -> Vec<(String, String)> {
@@ -746,7 +770,19 @@ pub async fn send_message(
                         err_text
                     );
 
-                    if should_retry_same_candidate(kind) && attempt_idx < per_candidate_retry_count {
+                    let retry_budget = retry_budget_for_error(kind, per_candidate_retry_count);
+                    if should_retry_same_candidate(kind) && attempt_idx < retry_budget {
+                        let backoff_ms = retry_backoff_ms(kind, attempt_idx);
+                        if backoff_ms > 0 {
+                            eprintln!(
+                                "[routing] 同候选重试等待: format={}, model={}, wait_ms={}, next_attempt={}",
+                                candidate_api_format,
+                                candidate_model_name,
+                                backoff_ms,
+                                attempt_idx + 2
+                            );
+                            tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+                        }
                         attempt_idx += 1;
                         continue;
                     }
@@ -1151,6 +1187,7 @@ mod tests {
     use super::{
         classify_model_route_error, is_supported_protocol, normalize_permission_mode_for_storage,
         parse_fallback_chain_targets, should_retry_same_candidate, infer_capability_from_user_message,
+        retry_backoff_ms, retry_budget_for_error,
         parse_permission_mode,
         permission_mode_label_for_display, extract_skill_prompt_from_decrypted_files, ModelRouteErrorKind,
     };
@@ -1255,6 +1292,28 @@ mod tests {
         assert!(should_retry_same_candidate(rate));
         assert!(should_retry_same_candidate(timeout));
         assert!(should_retry_same_candidate(network));
+    }
+
+    #[test]
+    fn classify_model_route_error_detects_transport_send_failures_as_network() {
+        let kind =
+            classify_model_route_error("error sending request for url (https://api.minimax.io/anthropic/v1/messages)");
+        assert_eq!(kind, ModelRouteErrorKind::Network);
+    }
+
+    #[test]
+    fn retry_budget_for_error_guarantees_one_retry_for_network() {
+        assert_eq!(retry_budget_for_error(ModelRouteErrorKind::Network, 0), 1);
+        assert_eq!(retry_budget_for_error(ModelRouteErrorKind::Network, 2), 2);
+        assert_eq!(retry_budget_for_error(ModelRouteErrorKind::RateLimit, 0), 0);
+    }
+
+    #[test]
+    fn retry_backoff_is_exponential_and_capped() {
+        assert_eq!(retry_backoff_ms(ModelRouteErrorKind::Network, 0), 400);
+        assert_eq!(retry_backoff_ms(ModelRouteErrorKind::Network, 2), 1600);
+        assert_eq!(retry_backoff_ms(ModelRouteErrorKind::RateLimit, 3), 5000);
+        assert_eq!(retry_backoff_ms(ModelRouteErrorKind::Unknown, 1), 0);
     }
 
     #[test]
