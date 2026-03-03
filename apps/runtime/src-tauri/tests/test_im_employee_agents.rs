@@ -32,6 +32,9 @@ async fn employee_config_and_im_session_mapping_work() {
             feishu_app_secret: "".to_string(),
             primary_skill_id: "builtin-general".to_string(),
             default_work_dir: "E:/workspace/pm".to_string(),
+            openclaw_agent_id: "project_manager".to_string(),
+            routing_priority: 100,
+            enabled_scopes: vec!["feishu".to_string()],
             enabled: true,
             is_default: true,
             skill_ids: vec!["builtin-general".to_string()],
@@ -122,6 +125,9 @@ async fn group_message_without_mention_routes_to_main_employee() {
             feishu_app_secret: "".to_string(),
             primary_skill_id: "builtin-general".to_string(),
             default_work_dir: "".to_string(),
+            openclaw_agent_id: "main".to_string(),
+            routing_priority: 100,
+            enabled_scopes: vec!["feishu".to_string()],
             enabled: true,
             is_default: true,
             skill_ids: vec![],
@@ -142,6 +148,9 @@ async fn group_message_without_mention_routes_to_main_employee() {
             feishu_app_secret: "".to_string(),
             primary_skill_id: "builtin-general".to_string(),
             default_work_dir: "".to_string(),
+            openclaw_agent_id: "presales".to_string(),
+            routing_priority: 90,
+            enabled_scopes: vec!["feishu".to_string()],
             enabled: true,
             is_default: false,
             skill_ids: vec!["builtin-general".to_string()],
@@ -193,6 +202,9 @@ async fn upsert_employee_rejects_duplicate_role_id() {
             feishu_app_secret: "".to_string(),
             primary_skill_id: "".to_string(),
             default_work_dir: "".to_string(),
+            openclaw_agent_id: "duplicate_role".to_string(),
+            routing_priority: 100,
+            enabled_scopes: vec!["feishu".to_string()],
             enabled: true,
             is_default: false,
             skill_ids: vec![],
@@ -213,6 +225,9 @@ async fn upsert_employee_rejects_duplicate_role_id() {
             feishu_app_secret: "".to_string(),
             primary_skill_id: "".to_string(),
             default_work_dir: "".to_string(),
+            openclaw_agent_id: "duplicate_role".to_string(),
+            routing_priority: 100,
+            enabled_scopes: vec!["feishu".to_string()],
             enabled: true,
             is_default: false,
             skill_ids: vec![],
@@ -222,4 +237,36 @@ async fn upsert_employee_rejects_duplicate_role_id() {
     .expect_err("duplicate role_id should fail");
 
     assert!(err.contains("role_id"));
+}
+
+#[tokio::test]
+async fn employee_persists_openclaw_agent_mapping() {
+    let (pool, _tmp) = helpers::setup_test_db().await;
+
+    let id = upsert_agent_employee_with_pool(
+        &pool,
+        UpsertAgentEmployeeInput {
+            id: None,
+            name: "主员工".to_string(),
+            role_id: "main".to_string(),
+            persona: "".to_string(),
+            feishu_open_id: "".to_string(),
+            feishu_app_id: "".to_string(),
+            feishu_app_secret: "".to_string(),
+            primary_skill_id: "".to_string(),
+            default_work_dir: "".to_string(),
+            openclaw_agent_id: "main".to_string(),
+            routing_priority: 100,
+            enabled_scopes: vec!["feishu".to_string()],
+            enabled: true,
+            is_default: true,
+            skill_ids: vec![],
+        },
+    )
+    .await
+    .expect("upsert");
+
+    let list = list_agent_employees_with_pool(&pool).await.expect("list");
+    assert_eq!(list[0].id, id);
+    assert_eq!(list[0].openclaw_agent_id, "main");
 }

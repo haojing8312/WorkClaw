@@ -261,6 +261,9 @@ export interface AgentEmployee {
   feishu_app_secret: string;
   primary_skill_id: string;
   default_work_dir: string;
+  openclaw_agent_id: string;
+  routing_priority: number;
+  enabled_scopes: string[];
   enabled: boolean;
   is_default: boolean;
   skill_ids: string[];
@@ -278,6 +281,9 @@ export interface UpsertAgentEmployeeInput {
   feishu_app_secret: string;
   primary_skill_id: string;
   default_work_dir: string;
+  openclaw_agent_id: string;
+  routing_priority: number;
+  enabled_scopes: string[];
   enabled: boolean;
   is_default: boolean;
   skill_ids: string[];

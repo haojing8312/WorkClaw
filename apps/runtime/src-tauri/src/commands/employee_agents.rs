@@ -16,6 +16,9 @@ pub struct AgentEmployee {
     pub feishu_app_secret: String,
     pub primary_skill_id: String,
     pub default_work_dir: String,
+    pub openclaw_agent_id: String,
+    pub routing_priority: i64,
+    pub enabled_scopes: Vec<String>,
     pub enabled: bool,
     pub is_default: bool,
     pub skill_ids: Vec<String>,
@@ -34,6 +37,9 @@ pub struct UpsertAgentEmployeeInput {
     pub feishu_app_secret: String,
     pub primary_skill_id: String,
     pub default_work_dir: String,
+    pub openclaw_agent_id: String,
+    pub routing_priority: i64,
+    pub enabled_scopes: Vec<String>,
     pub enabled: bool,
     pub is_default: bool,
     pub skill_ids: Vec<String>,
@@ -55,8 +61,8 @@ pub struct EnsuredEmployeeSession {
 }
 
 pub async fn list_agent_employees_with_pool(pool: &SqlitePool) -> Result<Vec<AgentEmployee>, String> {
-    let rows = sqlx::query_as::<_, (String, String, String, String, String, String, String, String, String, i64, i64, String, String)>(
-        "SELECT id, name, role_id, persona, feishu_open_id, feishu_app_id, feishu_app_secret, primary_skill_id, default_work_dir, enabled, is_default, created_at, updated_at
+    let rows = sqlx::query_as::<_, (String, String, String, String, String, String, String, String, String, String, i64, String, i64, i64, String, String)>(
+        "SELECT id, name, role_id, persona, feishu_open_id, feishu_app_id, feishu_app_secret, primary_skill_id, default_work_dir, openclaw_agent_id, routing_priority, enabled_scopes_json, enabled, is_default, created_at, updated_at
          FROM agent_employees
          ORDER BY is_default DESC, updated_at DESC",
     )
@@ -65,7 +71,7 @@ pub async fn list_agent_employees_with_pool(pool: &SqlitePool) -> Result<Vec<Age
     .map_err(|e| e.to_string())?;
 
     let mut result = Vec::with_capacity(rows.len());
-    for (id, name, role_id, persona, feishu_open_id, feishu_app_id, feishu_app_secret, primary_skill_id, default_work_dir, enabled, is_default, created_at, updated_at) in rows {
+    for (id, name, role_id, persona, feishu_open_id, feishu_app_id, feishu_app_secret, primary_skill_id, default_work_dir, openclaw_agent_id, routing_priority, enabled_scopes_json, enabled, is_default, created_at, updated_at) in rows {
         let skill_rows = sqlx::query_as::<_, (String,)>(
             "SELECT skill_id FROM agent_employee_skills WHERE employee_id = ? ORDER BY sort_order ASC",
         )
@@ -73,6 +79,8 @@ pub async fn list_agent_employees_with_pool(pool: &SqlitePool) -> Result<Vec<Age
         .fetch_all(pool)
         .await
         .map_err(|e| e.to_string())?;
+        let enabled_scopes = serde_json::from_str::<Vec<String>>(&enabled_scopes_json)
+            .unwrap_or_else(|_| vec!["feishu".to_string()]);
         result.push(AgentEmployee {
             id,
             name,
@@ -83,6 +91,9 @@ pub async fn list_agent_employees_with_pool(pool: &SqlitePool) -> Result<Vec<Age
             feishu_app_secret,
             primary_skill_id,
             default_work_dir,
+            openclaw_agent_id,
+            routing_priority,
+            enabled_scopes,
             enabled: enabled != 0,
             is_default: is_default != 0,
             skill_ids: skill_rows.into_iter().map(|(skill_id,)| skill_id).collect(),
@@ -131,6 +142,23 @@ pub async fn upsert_agent_employee_with_pool(
     } else {
         input.default_work_dir.trim().to_string()
     };
+    let openclaw_agent_id = if input.openclaw_agent_id.trim().is_empty() {
+        role_id.to_string()
+    } else {
+        input.openclaw_agent_id.trim().to_string()
+    };
+    let enabled_scopes = if input.enabled_scopes.is_empty() {
+        vec!["feishu".to_string()]
+    } else {
+        input
+            .enabled_scopes
+            .iter()
+            .map(|v| v.trim())
+            .filter(|v| !v.is_empty())
+            .map(|v| v.to_lowercase())
+            .collect::<Vec<_>>()
+    };
+    let enabled_scopes_json = serde_json::to_string(&enabled_scopes).map_err(|e| e.to_string())?;
     let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
 
     if input.is_default {
@@ -142,10 +170,10 @@ pub async fn upsert_agent_employee_with_pool(
 
     sqlx::query(
         "INSERT INTO agent_employees (
-            id, name, role_id, persona, feishu_open_id, feishu_app_id, feishu_app_secret, primary_skill_id, default_work_dir,
+            id, name, role_id, persona, feishu_open_id, feishu_app_id, feishu_app_secret, primary_skill_id, default_work_dir, openclaw_agent_id, routing_priority, enabled_scopes_json,
             enabled, is_default, created_at, updated_at
          )
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
             name = excluded.name,
             role_id = excluded.role_id,
@@ -155,6 +183,9 @@ pub async fn upsert_agent_employee_with_pool(
             feishu_app_secret = excluded.feishu_app_secret,
             primary_skill_id = excluded.primary_skill_id,
             default_work_dir = excluded.default_work_dir,
+            openclaw_agent_id = excluded.openclaw_agent_id,
+            routing_priority = excluded.routing_priority,
+            enabled_scopes_json = excluded.enabled_scopes_json,
             enabled = excluded.enabled,
             is_default = excluded.is_default,
             updated_at = excluded.updated_at",
@@ -168,6 +199,9 @@ pub async fn upsert_agent_employee_with_pool(
     .bind(input.feishu_app_secret.trim())
     .bind(input.primary_skill_id.trim())
     .bind(default_work_dir)
+    .bind(openclaw_agent_id)
+    .bind(input.routing_priority)
+    .bind(enabled_scopes_json)
     .bind(if input.enabled { 1 } else { 0 })
     .bind(if input.is_default { 1 } else { 0 })
     .bind(&now)

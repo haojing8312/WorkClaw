@@ -226,6 +226,9 @@ export function SettingsView({ onClose }: Props) {
     feishu_app_secret: "",
     primary_skill_id: "",
     default_work_dir: "",
+    openclaw_agent_id: "",
+    routing_priority: 100,
+    enabled_scopes: ["feishu"],
     enabled: true,
     is_default: false,
     skill_ids: [],
@@ -471,6 +474,9 @@ export function SettingsView({ onClose }: Props) {
     try {
       const payload: UpsertAgentEmployeeInput = {
         ...employeeForm,
+        openclaw_agent_id: (employeeForm.openclaw_agent_id || employeeForm.role_id || "main").trim(),
+        routing_priority: Number.isFinite(employeeForm.routing_priority) ? employeeForm.routing_priority : 100,
+        enabled_scopes: employeeForm.enabled_scopes?.length ? employeeForm.enabled_scopes : ["feishu"],
         skill_ids: employeeForm.skill_ids.filter((x) => x.trim().length > 0),
       };
       const id = await invoke<string>("upsert_agent_employee", { input: payload });
@@ -505,6 +511,7 @@ export function SettingsView({ onClose }: Props) {
     setEmployeeForm((s) => ({
       ...s,
       role_id: tpl.role_id,
+      openclaw_agent_id: tpl.role_id,
       persona: tpl.persona,
     }));
   }
@@ -534,6 +541,9 @@ export function SettingsView({ onClose }: Props) {
         feishu_app_secret: "",
         primary_skill_id: "",
         default_work_dir: "",
+        openclaw_agent_id: "",
+        routing_priority: 100,
+        enabled_scopes: ["feishu"],
         enabled: true,
         is_default: false,
         skill_ids: [],
@@ -567,6 +577,9 @@ export function SettingsView({ onClose }: Props) {
       feishu_app_secret: employee.feishu_app_secret,
       primary_skill_id: employee.primary_skill_id || "",
       default_work_dir: employee.default_work_dir,
+      openclaw_agent_id: employee.openclaw_agent_id || employee.role_id || "",
+      routing_priority: Number.isFinite(employee.routing_priority) ? employee.routing_priority : 100,
+      enabled_scopes: employee.enabled_scopes?.length ? employee.enabled_scopes : ["feishu"],
       enabled: employee.enabled,
       is_default: employee.is_default,
       skill_ids: employee.skill_ids.length > 0 ? employee.skill_ids : [],

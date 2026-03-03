@@ -23,6 +23,9 @@ const blankForm: UpsertAgentEmployeeInput = {
   feishu_app_secret: "",
   primary_skill_id: "",
   default_work_dir: "",
+  openclaw_agent_id: "",
+  routing_priority: 100,
+  enabled_scopes: ["feishu"],
   enabled: true,
   is_default: false,
   skill_ids: [],
@@ -97,6 +100,9 @@ export function EmployeeHubView({
       feishu_app_secret: e.feishu_app_secret,
       primary_skill_id: e.primary_skill_id || "",
       default_work_dir: e.default_work_dir || "",
+      openclaw_agent_id: e.openclaw_agent_id || e.role_id || "",
+      routing_priority: Number.isFinite(e.routing_priority) ? e.routing_priority : 100,
+      enabled_scopes: e.enabled_scopes?.length > 0 ? e.enabled_scopes : ["feishu"],
       enabled: e.enabled,
       is_default: e.is_default,
       skill_ids: e.is_default
@@ -116,6 +122,9 @@ export function EmployeeHubView({
     try {
       await onSaveEmployee({
         ...form,
+        openclaw_agent_id: (form.openclaw_agent_id || form.role_id || "main").trim(),
+        routing_priority: Number.isFinite(form.routing_priority) ? form.routing_priority : 100,
+        enabled_scopes: form.enabled_scopes?.length > 0 ? form.enabled_scopes : ["feishu"],
         skill_ids: form.is_default ? [] : form.skill_ids,
       });
       setMessage("员工已保存");
@@ -266,6 +275,23 @@ export function EmployeeHubView({
               value={form.role_id}
               onChange={(e) => setForm((s) => ({ ...s, role_id: e.target.value }))}
             />
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              <input
+                className="w-full border border-gray-200 rounded px-2 py-1.5 text-sm"
+                placeholder="OpenClaw Agent ID（默认同角色ID）"
+                value={form.openclaw_agent_id}
+                onChange={(e) => setForm((s) => ({ ...s, openclaw_agent_id: e.target.value }))}
+              />
+              <input
+                className="w-full border border-gray-200 rounded px-2 py-1.5 text-sm"
+                type="number"
+                placeholder="路由优先级（默认100）"
+                value={form.routing_priority}
+                onChange={(e) =>
+                  setForm((s) => ({ ...s, routing_priority: Number(e.target.value || 100) }))
+                }
+              />
+            </div>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
               {roleTemplates.map((tpl) => (
                 <button

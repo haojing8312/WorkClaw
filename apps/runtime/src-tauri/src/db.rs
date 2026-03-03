@@ -295,6 +295,9 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
             feishu_app_secret TEXT NOT NULL DEFAULT '',
             primary_skill_id TEXT NOT NULL DEFAULT '',
             default_work_dir TEXT NOT NULL DEFAULT '',
+            openclaw_agent_id TEXT NOT NULL DEFAULT '',
+            routing_priority INTEGER NOT NULL DEFAULT 100,
+            enabled_scopes_json TEXT NOT NULL DEFAULT '[]',
             enabled INTEGER NOT NULL DEFAULT 1,
             is_default INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
@@ -392,6 +395,15 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
         .execute(&pool)
         .await;
     let _ = sqlx::query("ALTER TABLE agent_employees ADD COLUMN feishu_app_secret TEXT NOT NULL DEFAULT ''")
+        .execute(&pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE agent_employees ADD COLUMN openclaw_agent_id TEXT NOT NULL DEFAULT ''")
+        .execute(&pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE agent_employees ADD COLUMN routing_priority INTEGER NOT NULL DEFAULT 100")
+        .execute(&pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE agent_employees ADD COLUMN enabled_scopes_json TEXT NOT NULL DEFAULT '[]'")
         .execute(&pool)
         .await;
     let _ = sqlx::query(
