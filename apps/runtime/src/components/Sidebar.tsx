@@ -1,5 +1,18 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import {
+  BrainCog,
+  CirclePlay,
+  Download,
+  History,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Search,
+  Settings2,
+  ShieldCheck,
+  Trash2,
+  Users,
+} from "lucide-react";
 import { SessionInfo } from "../types";
 import { RiskConfirmDialog } from "./RiskConfirmDialog";
 
@@ -47,6 +60,7 @@ export function Sidebar({
   const isStartTask = activeMainView === "start-task";
   const isExperts = activeMainView === "experts" || activeMainView === "experts-new";
   const isEmployees = activeMainView === "employees";
+  const iconClassName = "h-4 w-4 flex-shrink-0";
 
   function handleSearchChange(value: string) {
     setSearchQuery(value);
@@ -87,7 +101,7 @@ export function Sidebar({
           title="展开侧边栏"
           aria-label="展开侧边栏"
         >
-          ▶
+          <PanelLeftOpen className={iconClassName} />
         </button>
         <button
           onClick={onOpenStartTask}
@@ -97,7 +111,7 @@ export function Sidebar({
           title="开始任务"
           aria-label="开始任务"
         >
-          ○
+          <CirclePlay className={iconClassName} />
         </button>
         <button
           onClick={onOpenExperts}
@@ -107,7 +121,7 @@ export function Sidebar({
           title="专家技能"
           aria-label="专家技能"
         >
-          ◆
+          <BrainCog className={iconClassName} />
         </button>
         <button
           onClick={onOpenEmployees}
@@ -117,7 +131,7 @@ export function Sidebar({
           title="智能体员工"
           aria-label="智能体员工"
         >
-          ◎
+          <Users className={iconClassName} />
         </button>
         <button
           onClick={onSettings}
@@ -125,52 +139,59 @@ export function Sidebar({
           title="设置"
           aria-label="设置"
         >
-          ⚙
+          <Settings2 className={iconClassName} />
         </button>
       </div>
     );
   }
 
   return (
-    <div className="sm-surface sm-divider w-60 flex flex-col h-full border-r flex-shrink-0">
+    <div className="sm-surface sm-divider w-64 flex flex-col h-full border-r flex-shrink-0">
       <div className="sm-surface sm-divider px-4 py-3 text-xs font-medium sm-text-muted border-b flex items-center justify-between">
         <span>SkillMint</span>
         <button
           onClick={onCollapse}
           className="sm-btn sm-btn-ghost h-7 w-7 text-sm rounded-md"
           title="折叠侧边栏"
+          aria-label="折叠侧边栏"
         >
-          ◀
+          <PanelLeftClose className="h-4 w-4" />
         </button>
       </div>
 
-      <div className="sm-divider px-3 py-2 border-b">
-        <div className="grid grid-cols-3 gap-2">
+      <div className="sm-divider px-3 py-3 border-b">
+        <div className="flex flex-col gap-1.5">
           <button
             onClick={onOpenStartTask}
+            aria-pressed={isStartTask}
             className={
-              "sm-btn text-xs py-1.5 rounded-md " +
+              "sm-btn w-full justify-start text-[13px] font-medium py-2 px-2 rounded-md " +
               (isStartTask ? "sm-btn-primary" : "sm-btn-secondary")
             }
           >
+            <CirclePlay className={iconClassName} />
             开始任务
           </button>
           <button
             onClick={onOpenExperts}
+            aria-pressed={isExperts}
             className={
-              "sm-btn text-xs py-1.5 rounded-md " +
+              "sm-btn w-full justify-start text-[13px] font-medium py-2 px-2 rounded-md " +
               (isExperts ? "sm-btn-primary" : "sm-btn-secondary")
             }
           >
+            <BrainCog className={iconClassName} />
             专家技能
           </button>
           <button
             onClick={onOpenEmployees}
+            aria-pressed={isEmployees}
             className={
-              "sm-btn text-xs py-1.5 rounded-md " +
+              "sm-btn w-full justify-start text-[13px] font-medium py-2 px-2 rounded-md " +
               (isEmployees ? "sm-btn-primary" : "sm-btn-secondary")
             }
           >
+            <Users className={iconClassName} />
             智能体员工
           </button>
         </div>
@@ -179,11 +200,15 @@ export function Sidebar({
       <div className="flex-1 overflow-hidden">
         {selectedSkillId && (
           <div className="h-full flex flex-col">
-            <div className="sm-divider px-4 py-2 text-xs font-medium sm-text-muted border-t border-b">
+            <div className="sm-divider px-4 py-2 text-xs font-medium sm-text-muted border-t border-b flex items-center gap-1.5">
+              <History className="h-3.5 w-3.5" />
               <span>会话历史</span>
             </div>
             <div className="sm-divider px-3 py-2 border-b">
-              <label className="sm-field-label text-[11px]">操作确认级别</label>
+              <label className="sm-field-label text-[11px] flex items-center gap-1.5">
+                <ShieldCheck className="h-3.5 w-3.5" />
+                <span>操作确认级别</span>
+              </label>
               <select
                 value={newSessionPermissionMode}
                 onChange={(e) =>
@@ -197,13 +222,16 @@ export function Sidebar({
               </select>
             </div>
             <div className="sm-divider px-3 py-2 border-b">
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => handleSearchChange(e.target.value)}
-                placeholder="搜索会话..."
-                className="sm-input w-full py-1 text-xs"
-              />
+              <div className="relative">
+                <Search className="h-3.5 w-3.5 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none sm-text-muted" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => handleSearchChange(e.target.value)}
+                  placeholder="搜索会话..."
+                  className="sm-input w-full py-1 text-xs pl-8"
+                />
+              </div>
             </div>
             <div className="flex-1 overflow-y-auto py-1">
               {sessions.length === 0 && (
@@ -216,7 +244,6 @@ export function Sidebar({
                     initial={{ opacity: 0, x: -10 }}
                     animate={{ opacity: 1, x: 0 }}
                     exit={{ opacity: 0, x: -20, height: 0 }}
-                    whileHover={{ scale: 1.01 }}
                     transition={{ duration: 0.2 }}
                     className={
                       "group flex items-center px-4 py-2 text-sm cursor-pointer rounded-md mx-1 transition-colors " +
@@ -225,26 +252,29 @@ export function Sidebar({
                     onClick={() => onSelectSession(s.id)}
                   >
                     <div className="flex-1 min-w-0">
-                      <div className="truncate text-xs">{s.title || "未命名任务"}</div>
+                      <div className="truncate text-[13px]">{s.title || "未命名任务"}</div>
                     </div>
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
                         onExportSession(s.id);
                       }}
-                      className="hidden group-hover:block sm-btn sm-btn-ghost h-6 w-6 text-xs ml-1 flex-shrink-0"
+                      className="hidden group-hover:inline-flex sm-btn sm-btn-ghost h-6 w-6 text-xs ml-1 flex-shrink-0"
                       title="导出会话"
+                      aria-label="导出会话"
                     >
-                      ↓
+                      <Download className="h-3.5 w-3.5" />
                     </button>
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
                         onDeleteSession(s.id);
                       }}
-                      className="hidden group-hover:block sm-btn sm-btn-danger h-6 w-6 text-xs ml-1 flex-shrink-0"
+                      className="hidden group-hover:inline-flex sm-btn sm-btn-danger h-6 w-6 text-xs ml-1 flex-shrink-0"
+                      title="删除会话"
+                      aria-label="删除会话"
                     >
-                      ×
+                      <Trash2 className="h-3.5 w-3.5" />
                     </button>
                   </motion.div>
                 ))}
@@ -259,6 +289,7 @@ export function Sidebar({
           onClick={onSettings}
           className="sm-btn sm-btn-secondary w-full text-sm py-1.5 rounded-lg"
         >
+          <Settings2 className={iconClassName} />
           设置
         </button>
       </div>
