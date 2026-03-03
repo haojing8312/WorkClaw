@@ -3,28 +3,12 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   CapabilityRouteTemplateInfo,
   CapabilityRoutingPolicy,
-  AgentEmployee,
-  ImRouteSimulationPayload,
-  ImRoutingBinding,
-  FeishuChatInfo,
-  FeishuEventRelayStatus,
-  FeishuGatewaySettings,
-  FeishuWsStatus,
   ModelConfig,
   ProviderConfig,
   ProviderHealthInfo,
-  RecentImThread,
   RouteAttemptLog,
   RouteAttemptStat,
-  ThreadEmployeeBinding,
-  ThreadRoleConfig,
-  RuntimePreferences,
-  SkillManifest,
-  UpsertImRoutingBindingInput,
-  UpsertAgentEmployeeInput,
 } from "../types";
-import { RiskConfirmDialog } from "./RiskConfirmDialog";
-import { FeishuRoutingWizard } from "./employees/FeishuRoutingWizard";
 
 const MCP_PRESETS = [
   { label: "— 快速选择 —", value: "", name: "", command: "", args: "", env: "" },
@@ -58,6 +42,25 @@ const SEARCH_PRESETS = [
   { label: "SerpAPI (多引擎)", value: "serpapi", api_format: "search_serpapi", base_url: "https://serpapi.com", model_name: "google" },
 ];
 
+function parseMcpEnvJson(text: string): { env: Record<string, string>; error: string | null } {
+  if (!text.trim()) {
+    return { env: {}, error: null };
+  }
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { env: {}, error: "环境变量 JSON 必须是对象格式" };
+    }
+    const normalized: Record<string, string> = {};
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      normalized[key] = typeof value === "string" ? value : String(value ?? "");
+    }
+    return { env: normalized, error: null };
+  } catch {
+    return { env: {}, error: "环境变量 JSON 格式错误" };
+  }
+}
+
 interface Props {
   onClose: () => void;
 }
@@ -76,28 +79,11 @@ const ROUTING_CAPABILITIES = [
   { label: "语音合成 TTS", value: "audio_tts" },
 ];
 
-const EMPLOYEE_ROLE_TEMPLATES: Array<{ name: string; employee_id: string; persona: string }> = [
-  {
-    name: "项目经理",
-    employee_id: "project_manager",
-    persona: "负责需求澄清、任务拆解、里程碑推进与风险管理，优先输出可执行计划与验收标准。",
-  },
-  {
-    name: "技术负责人",
-    employee_id: "tech_lead",
-    persona: "负责技术方案评审、架构决策和质量把关，强调可维护性、测试覆盖和交付稳定性。",
-  },
-  {
-    name: "运营专员",
-    employee_id: "operations",
-    persona: "负责运营数据分析、活动复盘与流程优化，输出可落地行动项和指标跟踪方案。",
-  },
-  {
-    name: "客服专员",
-    employee_id: "customer_success",
-    persona: "负责用户问题分级、解决路径设计与满意度提升，提供清晰且可执行的处理建议。",
-  },
-];
+// 普通用户模式：仅保留关键入口，其他能力后台自动处理
+const SHOW_CAPABILITY_ROUTING_SETTINGS = false;
+const SHOW_HEALTH_SETTINGS = false;
+const SHOW_MCP_SETTINGS = true;
+const SHOW_AUTO_ROUTING_SETTINGS = false;
 
 export function SettingsView({ onClose }: Props) {
   const [models, setModels] = useState<ModelConfig[]>([]);
@@ -122,8 +108,9 @@ export function SettingsView({ onClose }: Props) {
   const [mcpServers, setMcpServers] = useState<any[]>([]);
   const [mcpForm, setMcpForm] = useState({ name: "", command: "", args: "", env: "" });
   const [mcpError, setMcpError] = useState("");
+  const [showMcpEnvJson, setShowMcpEnvJson] = useState(false);
   const [activeTab, setActiveTab] = useState<
-    "models" | "capabilities" | "health" | "mcp" | "search" | "routing" | "feishu"
+    "models" | "capabilities" | "health" | "mcp" | "search" | "routing"
   >("models");
 
   // 搜索引擎配置
@@ -181,53 +168,6 @@ export function SettingsView({ onClose }: Props) {
   const [routeStatsCapability, setRouteStatsCapability] = useState("all");
   const [routeStatsHours, setRouteStatsHours] = useState(24);
 
-  const [feishuSettings, setFeishuSettings] = useState<FeishuGatewaySettings>({
-    app_id: "",
-    app_secret: "",
-    ingress_token: "",
-    encrypt_key: "",
-    sidecar_base_url: "http://localhost:8765",
-  });
-  const [feishuWsStatus, setFeishuWsStatus] = useState<FeishuWsStatus | null>(null);
-  const [feishuRelayStatus, setFeishuRelayStatus] = useState<FeishuEventRelayStatus | null>(null);
-  const [feishuChats, setFeishuChats] = useState<FeishuChatInfo[]>([]);
-  const [recentThreads, setRecentThreads] = useState<RecentImThread[]>([]);
-  const [selectedThreadId, setSelectedThreadId] = useState("");
-  const [threadRoleConfig, setThreadRoleConfig] = useState<ThreadRoleConfig | null>(null);
-  const [threadEmployeeBinding, setThreadEmployeeBinding] = useState<ThreadEmployeeBinding | null>(null);
-  const [employees, setEmployees] = useState<AgentEmployee[]>([]);
-  const [routingBindings, setRoutingBindings] = useState<ImRoutingBinding[]>([]);
-  const [employeeSkillOptions, setEmployeeSkillOptions] = useState<SkillManifest[]>([]);
-  const [selectedEmployeeId, setSelectedEmployeeId] = useState("");
-  const [threadEmployeeIdsInput, setThreadEmployeeIdsInput] = useState("");
-  const [employeeForm, setEmployeeForm] = useState<UpsertAgentEmployeeInput>({
-    id: undefined,
-    employee_id: "",
-    name: "",
-    role_id: "",
-    persona: "",
-    feishu_open_id: "",
-    feishu_app_id: "",
-    feishu_app_secret: "",
-    primary_skill_id: "",
-    default_work_dir: "",
-    openclaw_agent_id: "",
-    routing_priority: 100,
-    enabled_scopes: ["feishu"],
-    enabled: true,
-    is_default: false,
-    skill_ids: [],
-  });
-  const [globalDefaultWorkDir, setGlobalDefaultWorkDir] = useState("");
-  const [roleTenantId, setRoleTenantId] = useState("default");
-  const [roleScenarioTemplate, setRoleScenarioTemplate] = useState("opportunity_review");
-  const [roleIdsInput, setRoleIdsInput] = useState(
-    "presales,project_manager,business_consultant,architect"
-  );
-  const [feishuOpMessage, setFeishuOpMessage] = useState("");
-  const [pendingDeleteEmployee, setPendingDeleteEmployee] = useState<{ id: string; name: string } | null>(null);
-  const [deletingEmployee, setDeletingEmployee] = useState(false);
-
   function inferConnectionKey(baseUrl: string, apiFormat: string): string {
     const normalized = (baseUrl || "").toLowerCase();
     if (normalized.includes("deepseek")) return "deepseek";
@@ -273,11 +213,17 @@ export function SettingsView({ onClose }: Props) {
 
   useEffect(() => {
     loadModels();
-    loadMcpServers();
     loadSearchConfigs();
-    loadRoutingSettings();
-    loadCapabilityRoutingPolicy("chat");
-    loadRouteTemplates("chat");
+    if (SHOW_MCP_SETTINGS) {
+      loadMcpServers();
+    }
+    if (SHOW_AUTO_ROUTING_SETTINGS) {
+      loadRoutingSettings();
+    }
+    if (SHOW_CAPABILITY_ROUTING_SETTINGS) {
+      loadCapabilityRoutingPolicy("chat");
+      loadRouteTemplates("chat");
+    }
   }, []);
 
   useEffect(() => {
@@ -287,24 +233,11 @@ export function SettingsView({ onClose }: Props) {
   }, [chatRoutingPolicy.primary_provider_id, selectedCapability]);
 
   useEffect(() => {
-    if (activeTab === "health") {
+    if (SHOW_HEALTH_SETTINGS && activeTab === "health") {
       loadRecentRouteLogs(false);
       loadRouteStats();
     }
   }, [activeTab]);
-
-  useEffect(() => {
-    if (activeTab === "feishu") {
-      refreshFeishuConsole();
-    }
-  }, [activeTab]);
-
-  useEffect(() => {
-    if (activeTab !== "feishu" || !selectedThreadId) return;
-    loadThreadRoleConfig(selectedThreadId);
-    loadThreadEmployeeBinding(selectedThreadId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, selectedThreadId]);
 
   async function loadModels() {
     try {
@@ -314,361 +247,6 @@ export function SettingsView({ onClose }: Props) {
       await loadProviderConfigs(list);
     } catch (e) {
       setError("加载模型连接失败: " + String(e));
-    }
-  }
-
-  async function loadFeishuSettings() {
-    const settings = await invoke<FeishuGatewaySettings>("get_feishu_gateway_settings");
-    setFeishuSettings(settings);
-  }
-
-  async function loadFeishuStatuses() {
-    const [ws, relay] = await Promise.all([
-      invoke<FeishuWsStatus>("get_feishu_long_connection_status", { sidecarBaseUrl: null }),
-      invoke<FeishuEventRelayStatus>("get_feishu_event_relay_status"),
-    ]);
-    setFeishuWsStatus(ws);
-    setFeishuRelayStatus(relay);
-  }
-
-  async function loadFeishuChats() {
-    const result = await invoke<{ items: FeishuChatInfo[] }>("list_feishu_chats", {
-      pageSize: 50,
-      pageToken: null,
-      userIdType: "open_id",
-      appId: null,
-      appSecret: null,
-      sidecarBaseUrl: null,
-    });
-    const items = Array.isArray(result?.items) ? result.items : [];
-    setFeishuChats(items);
-    if (!selectedThreadId && items.length > 0) {
-      setSelectedThreadId(items[0].chat_id);
-    }
-  }
-
-  async function loadRecentThreads() {
-    const items = await invoke<RecentImThread[]>("list_recent_im_threads", { limit: 30 });
-    setRecentThreads(items || []);
-    if (!selectedThreadId && items && items.length > 0) {
-      setSelectedThreadId(items[0].thread_id);
-    }
-  }
-
-  async function loadAgentEmployees() {
-    const list = await invoke<AgentEmployee[]>("list_agent_employees");
-    setEmployees(list || []);
-    if (!selectedEmployeeId && list.length > 0) {
-      setSelectedEmployeeId(list[0].id);
-    }
-  }
-
-  async function loadRoutingBindings() {
-    const list = await invoke<ImRoutingBinding[]>("list_im_routing_bindings");
-    setRoutingBindings(list || []);
-  }
-
-  async function loadEmployeeSkillOptions() {
-    const list = await invoke<SkillManifest[]>("list_skills");
-    setEmployeeSkillOptions((list || []).filter((x) => x.id !== "builtin-general"));
-  }
-
-  async function loadRuntimePreferences() {
-    const prefs = await invoke<RuntimePreferences>("get_runtime_preferences");
-    setGlobalDefaultWorkDir(prefs?.default_work_dir || "");
-  }
-
-  async function loadThreadEmployeeBinding(threadId: string) {
-    if (!threadId.trim()) {
-      setThreadEmployeeBinding(null);
-      setThreadEmployeeIdsInput("");
-      return;
-    }
-    try {
-      const binding = await invoke<ThreadEmployeeBinding>("get_thread_employee_bindings", { threadId });
-      setThreadEmployeeBinding(binding);
-      setThreadEmployeeIdsInput((binding.employee_ids || []).join(","));
-    } catch {
-      setThreadEmployeeBinding(null);
-      setThreadEmployeeIdsInput("");
-    }
-  }
-
-  async function loadThreadRoleConfig(threadId: string) {
-    if (!threadId.trim()) {
-      setThreadRoleConfig(null);
-      return;
-    }
-    try {
-      const cfg = await invoke<ThreadRoleConfig>("get_thread_role_config", { threadId });
-      setThreadRoleConfig(cfg);
-      setRoleTenantId(cfg.tenant_id || "default");
-      setRoleScenarioTemplate(cfg.scenario_template || "opportunity_review");
-      if (cfg.roles && cfg.roles.length > 0) {
-        setRoleIdsInput(cfg.roles.join(","));
-      }
-    } catch {
-      setThreadRoleConfig(null);
-    }
-  }
-
-  async function refreshFeishuConsole() {
-    setFeishuOpMessage("");
-    try {
-      await Promise.all([
-        loadFeishuSettings(),
-        loadFeishuStatuses(),
-        loadFeishuChats(),
-        loadRecentThreads(),
-        loadAgentEmployees(),
-        loadRoutingBindings(),
-        loadEmployeeSkillOptions(),
-        loadRuntimePreferences(),
-      ]);
-      if (selectedThreadId) {
-        await Promise.all([loadThreadRoleConfig(selectedThreadId), loadThreadEmployeeBinding(selectedThreadId)]);
-      }
-    } catch (e) {
-      setFeishuOpMessage("飞书控制台加载失败: " + String(e));
-    }
-  }
-
-  async function handleSaveFeishuSettings() {
-    setFeishuOpMessage("");
-    try {
-      await invoke("set_feishu_gateway_settings", { settings: feishuSettings });
-      setFeishuOpMessage("飞书配置已保存");
-    } catch (e) {
-      setFeishuOpMessage("保存飞书配置失败: " + String(e));
-    }
-  }
-
-  async function handleVerifyFeishuConnection() {
-    setFeishuOpMessage("");
-    try {
-      await invoke("set_feishu_gateway_settings", { settings: feishuSettings });
-      await invoke<FeishuWsStatus>("start_feishu_long_connection", {
-        sidecarBaseUrl: null,
-        appId: null,
-        appSecret: null,
-      });
-      await invoke<FeishuEventRelayStatus>("start_feishu_event_relay", {
-        sidecarBaseUrl: null,
-        intervalMs: 1500,
-        limit: 50,
-      });
-      await loadFeishuStatuses();
-      await loadFeishuChats();
-      await loadRecentThreads();
-      setFeishuOpMessage("配置已保存，连接正常");
-    } catch (e) {
-      setFeishuOpMessage("连接校验失败: " + String(e));
-    }
-  }
-
-  async function handleStartFeishuLongConnection() {
-    setFeishuOpMessage("");
-    try {
-      const ws = await invoke<FeishuWsStatus>("start_feishu_long_connection", {
-        sidecarBaseUrl: null,
-        appId: null,
-        appSecret: null,
-      });
-      setFeishuWsStatus(ws);
-      setFeishuOpMessage("飞书长连接已启动");
-    } catch (e) {
-      setFeishuOpMessage("启动长连接失败: " + String(e));
-    }
-  }
-
-  async function handleBindThreadRoles() {
-    if (!selectedThreadId.trim()) {
-      setFeishuOpMessage("请先选择线程");
-      return;
-    }
-    const roles = roleIdsInput
-      .split(",")
-      .map((x) => x.trim())
-      .filter(Boolean);
-    if (roles.length === 0) {
-      setFeishuOpMessage("角色列表不能为空");
-      return;
-    }
-    try {
-      await invoke("bind_thread_roles", {
-        threadId: selectedThreadId,
-        tenantId: roleTenantId.trim() || "default",
-        scenarioTemplate: roleScenarioTemplate.trim() || "opportunity_review",
-        roles,
-      });
-      setFeishuOpMessage("线程角色绑定已保存");
-      await loadThreadRoleConfig(selectedThreadId);
-    } catch (e) {
-      setFeishuOpMessage("保存线程角色绑定失败: " + String(e));
-    }
-  }
-
-  async function handleSaveEmployee() {
-    try {
-      const employeeId = (employeeForm.employee_id || employeeForm.role_id || "main").trim().toLowerCase();
-      const payload: UpsertAgentEmployeeInput = {
-        ...employeeForm,
-        employee_id: employeeId,
-        role_id: employeeId,
-        openclaw_agent_id: employeeId,
-        routing_priority: Number.isFinite(employeeForm.routing_priority) ? employeeForm.routing_priority : 100,
-        enabled_scopes: employeeForm.enabled_scopes?.length ? employeeForm.enabled_scopes : ["feishu"],
-        skill_ids: employeeForm.skill_ids.filter((x) => x.trim().length > 0),
-      };
-      const id = await invoke<string>("upsert_agent_employee", { input: payload });
-      setSelectedEmployeeId(id);
-      setFeishuOpMessage("员工配置已保存");
-      await loadAgentEmployees();
-    } catch (e) {
-      setFeishuOpMessage("保存员工失败: " + String(e));
-    }
-  }
-
-  async function handleSaveGlobalDefaultWorkDir() {
-    try {
-      if (!globalDefaultWorkDir.trim()) {
-        setFeishuOpMessage("默认工作目录不能为空");
-        return;
-      }
-      await invoke("set_runtime_preferences", {
-        input: { default_work_dir: globalDefaultWorkDir.trim() },
-      });
-      const resolved = await invoke<string>("resolve_default_work_dir");
-      setGlobalDefaultWorkDir(resolved);
-      setFeishuOpMessage("默认工作目录已保存");
-    } catch (e) {
-      setFeishuOpMessage("保存默认工作目录失败: " + String(e));
-    }
-  }
-
-  function applyEmployeeRoleTemplate(employeeId: string) {
-    const tpl = EMPLOYEE_ROLE_TEMPLATES.find((x) => x.employee_id === employeeId);
-    if (!tpl) return;
-    setEmployeeForm((s) => ({
-      ...s,
-      employee_id: tpl.employee_id,
-      role_id: tpl.employee_id,
-      openclaw_agent_id: tpl.employee_id,
-      persona: tpl.persona,
-    }));
-  }
-
-  function requestDeleteEmployee() {
-    if (!selectedEmployeeId || deletingEmployee) return;
-    const target = employees.find((x) => x.id === selectedEmployeeId);
-    setPendingDeleteEmployee({
-      id: selectedEmployeeId,
-      name: target?.name ?? selectedEmployeeId,
-    });
-  }
-
-  async function confirmDeleteEmployee() {
-    if (!pendingDeleteEmployee || deletingEmployee) return;
-    setDeletingEmployee(true);
-    try {
-      await invoke("delete_agent_employee", { employeeId: pendingDeleteEmployee.id });
-      setSelectedEmployeeId("");
-      setEmployeeForm({
-        id: undefined,
-        employee_id: "",
-        name: "",
-        role_id: "",
-        persona: "",
-        feishu_open_id: "",
-        feishu_app_id: "",
-        feishu_app_secret: "",
-        primary_skill_id: "",
-        default_work_dir: "",
-        openclaw_agent_id: "",
-        routing_priority: 100,
-        enabled_scopes: ["feishu"],
-        enabled: true,
-        is_default: false,
-        skill_ids: [],
-      });
-      setFeishuOpMessage("员工已删除");
-      await loadAgentEmployees();
-    } catch (e) {
-      setFeishuOpMessage("删除员工失败: " + String(e));
-    } finally {
-      setDeletingEmployee(false);
-      setPendingDeleteEmployee(null);
-    }
-  }
-
-  function cancelDeleteEmployee() {
-    if (deletingEmployee) return;
-    setPendingDeleteEmployee(null);
-  }
-
-  async function handleSaveRoutingRule(input: UpsertImRoutingBindingInput) {
-    await invoke<string>("upsert_im_routing_binding", { input });
-    await loadRoutingBindings();
-  }
-
-  async function handleDeleteRoutingRule(id: string) {
-    await invoke("delete_im_routing_binding", { id });
-    await loadRoutingBindings();
-  }
-
-  async function handleSimulateRoute(payload: ImRouteSimulationPayload) {
-    return invoke("simulate_im_route", { payload });
-  }
-
-  function handlePickEmployee(employeeId: string) {
-    setSelectedEmployeeId(employeeId);
-    const employee = employees.find((x) => x.id === employeeId);
-    if (!employee) return;
-    setEmployeeForm({
-      id: employee.id,
-      employee_id: employee.employee_id || employee.role_id || "",
-      name: employee.name,
-      role_id: employee.employee_id || employee.role_id,
-      persona: employee.persona,
-      feishu_open_id: employee.feishu_open_id,
-      feishu_app_id: employee.feishu_app_id,
-      feishu_app_secret: employee.feishu_app_secret,
-      primary_skill_id: employee.primary_skill_id || "",
-      default_work_dir: employee.default_work_dir,
-      openclaw_agent_id: employee.employee_id || employee.openclaw_agent_id || employee.role_id || "",
-      routing_priority: Number.isFinite(employee.routing_priority) ? employee.routing_priority : 100,
-      enabled_scopes: employee.enabled_scopes?.length ? employee.enabled_scopes : ["feishu"],
-      enabled: employee.enabled,
-      is_default: employee.is_default,
-      skill_ids: employee.skill_ids.length > 0 ? employee.skill_ids : [],
-    });
-  }
-
-  const deleteEmployeeSummary = pendingDeleteEmployee
-    ? `确定删除员工「${pendingDeleteEmployee.name}」吗？`
-    : "确定删除该员工吗？";
-  const deleteEmployeeImpact = pendingDeleteEmployee
-    ? `员工ID: ${pendingDeleteEmployee.id}`
-    : undefined;
-
-  async function handleBindThreadEmployees() {
-    if (!selectedThreadId.trim()) {
-      setFeishuOpMessage("请先选择线程");
-      return;
-    }
-    const employeeIds = threadEmployeeIdsInput
-      .split(",")
-      .map((x) => x.trim())
-      .filter(Boolean);
-    try {
-      await invoke("bind_thread_employees", {
-        threadId: selectedThreadId,
-        employeeIds,
-      });
-      setFeishuOpMessage("线程员工绑定已保存");
-      await loadThreadEmployeeBinding(selectedThreadId);
-    } catch (e) {
-      setFeishuOpMessage("保存线程员工绑定失败: " + String(e));
     }
   }
 
@@ -1090,12 +668,19 @@ export function SettingsView({ onClose }: Props) {
   function applyMcpPreset(value: string) {
     const preset = MCP_PRESETS.find((p) => p.value === value);
     if (!preset || !preset.value) return;
+    setShowMcpEnvJson(false);
     setMcpForm({
       name: preset.name,
       command: preset.command,
       args: preset.args,
       env: preset.env,
     });
+  }
+
+  function updateMcpEnvField(envKey: string, value: string) {
+    const parsed = parseMcpEnvJson(mcpForm.env);
+    const next = { ...parsed.env, [envKey]: value };
+    setMcpForm((s) => ({ ...s, env: JSON.stringify(next) }));
   }
 
   function applySearchPreset(value: string) {
@@ -1138,22 +723,19 @@ export function SettingsView({ onClose }: Props) {
     setMcpError("");
     try {
       const args = mcpForm.args.split(/\s+/).filter(Boolean);
-      let env: Record<string, string> = {};
-      if (mcpForm.env.trim()) {
-        try {
-          env = JSON.parse(mcpForm.env.trim());
-        } catch {
-          setMcpError("环境变量 JSON 格式错误");
-          return;
-        }
+      const parsedEnv = parseMcpEnvJson(mcpForm.env);
+      if (parsedEnv.error) {
+        setMcpError(parsedEnv.error);
+        return;
       }
       await invoke("add_mcp_server", {
         name: mcpForm.name,
         command: mcpForm.command,
         args,
-        env,
+        env: parsedEnv.env,
       });
       setMcpForm({ name: "", command: "", args: "", env: "" });
+      setShowMcpEnvJson(false);
       loadMcpServers();
     } catch (e) {
       setMcpError(String(e));
@@ -1234,6 +816,8 @@ export function SettingsView({ onClose }: Props) {
 
   const inputCls = "sm-input w-full text-sm py-1.5";
   const labelCls = "sm-field-label";
+  const parsedMcpEnv = parseMcpEnvJson(mcpForm.env);
+  const mcpApiKeyEnvKeys = Object.keys(parsedMcpEnv.env).filter((key) => key.toUpperCase().includes("API_KEY"));
 
   // 眼睛图标：显示状态（可见）
   function EyeOpenIcon() {
@@ -1265,27 +849,33 @@ export function SettingsView({ onClose }: Props) {
           >
             模型连接
           </button>
-          <button
-            onClick={() => setActiveTab("capabilities")}
-              className={"sm-btn h-8 px-2 rounded-none border-b-2 text-sm font-medium transition-colors " +
-              (activeTab === "capabilities" ? "text-[var(--sm-primary-strong)] border-[var(--sm-primary)]" : "sm-text-muted border-transparent hover:text-[var(--sm-text)]")}
-          >
-            能力路由
-          </button>
-          <button
-            onClick={() => setActiveTab("health")}
-              className={"sm-btn h-8 px-2 rounded-none border-b-2 text-sm font-medium transition-colors " +
-              (activeTab === "health" ? "text-[var(--sm-primary-strong)] border-[var(--sm-primary)]" : "sm-text-muted border-transparent hover:text-[var(--sm-text)]")}
-          >
-            健康检查
-          </button>
-          <button
-            onClick={() => setActiveTab("mcp")}
-              className={"sm-btn h-8 px-2 rounded-none border-b-2 text-sm font-medium transition-colors " +
-              (activeTab === "mcp" ? "text-[var(--sm-primary-strong)] border-[var(--sm-primary)]" : "sm-text-muted border-transparent hover:text-[var(--sm-text)]")}
-          >
-            MCP 服务器
-          </button>
+          {SHOW_CAPABILITY_ROUTING_SETTINGS && (
+            <button
+              onClick={() => setActiveTab("capabilities")}
+                className={"sm-btn h-8 px-2 rounded-none border-b-2 text-sm font-medium transition-colors " +
+                (activeTab === "capabilities" ? "text-[var(--sm-primary-strong)] border-[var(--sm-primary)]" : "sm-text-muted border-transparent hover:text-[var(--sm-text)]")}
+            >
+              能力路由
+            </button>
+          )}
+          {SHOW_HEALTH_SETTINGS && (
+            <button
+              onClick={() => setActiveTab("health")}
+                className={"sm-btn h-8 px-2 rounded-none border-b-2 text-sm font-medium transition-colors " +
+                (activeTab === "health" ? "text-[var(--sm-primary-strong)] border-[var(--sm-primary)]" : "sm-text-muted border-transparent hover:text-[var(--sm-text)]")}
+            >
+              健康检查
+            </button>
+          )}
+          {SHOW_MCP_SETTINGS && (
+            <button
+              onClick={() => setActiveTab("mcp")}
+                className={"sm-btn h-8 px-2 rounded-none border-b-2 text-sm font-medium transition-colors " +
+                (activeTab === "mcp" ? "text-[var(--sm-primary-strong)] border-[var(--sm-primary)]" : "sm-text-muted border-transparent hover:text-[var(--sm-text)]")}
+            >
+              MCP 服务器
+            </button>
+          )}
           <button
             onClick={() => setActiveTab("search")}
               className={"sm-btn h-8 px-2 rounded-none border-b-2 text-sm font-medium transition-colors " +
@@ -1293,20 +883,15 @@ export function SettingsView({ onClose }: Props) {
           >
             搜索引擎
           </button>
-          <button
-            onClick={() => setActiveTab("routing")}
-              className={"sm-btn h-8 px-2 rounded-none border-b-2 text-sm font-medium transition-colors " +
-              (activeTab === "routing" ? "text-[var(--sm-primary-strong)] border-[var(--sm-primary)]" : "sm-text-muted border-transparent hover:text-[var(--sm-text)]")}
-          >
-            自动路由
-          </button>
-          <button
-            onClick={() => setActiveTab("feishu")}
-              className={"sm-btn h-8 px-2 rounded-none border-b-2 text-sm font-medium transition-colors " +
-              (activeTab === "feishu" ? "text-[var(--sm-primary-strong)] border-[var(--sm-primary)]" : "sm-text-muted border-transparent hover:text-[var(--sm-text)]")}
-          >
-            飞书协作
-          </button>
+          {SHOW_AUTO_ROUTING_SETTINGS && (
+            <button
+              onClick={() => setActiveTab("routing")}
+                className={"sm-btn h-8 px-2 rounded-none border-b-2 text-sm font-medium transition-colors " +
+                (activeTab === "routing" ? "text-[var(--sm-primary-strong)] border-[var(--sm-primary)]" : "sm-text-muted border-transparent hover:text-[var(--sm-text)]")}
+            >
+              自动路由
+            </button>
+          )}
         </div>
         <button onClick={onClose} className="text-gray-500 hover:text-gray-800 text-sm">
           返回
@@ -1459,7 +1044,7 @@ export function SettingsView({ onClose }: Props) {
       </div>
       </>)}
 
-      {activeTab === "capabilities" && (
+      {SHOW_CAPABILITY_ROUTING_SETTINGS && activeTab === "capabilities" && (
         <div className="bg-white rounded-lg p-4 space-y-3">
           <div className="text-xs font-medium text-gray-500 mb-2">能力路由</div>
           <div>
@@ -1624,7 +1209,7 @@ export function SettingsView({ onClose }: Props) {
         </div>
       )}
 
-      {activeTab === "health" && (
+      {SHOW_HEALTH_SETTINGS && activeTab === "health" && (
         <div className="bg-white rounded-lg p-4 space-y-3">
           <div className="text-xs font-medium text-gray-500 mb-2">连接健康检查</div>
           <div>
@@ -1857,7 +1442,7 @@ export function SettingsView({ onClose }: Props) {
         </div>
       )}
 
-      {activeTab === "mcp" && (<>
+      {SHOW_MCP_SETTINGS && activeTab === "mcp" && (<>
       {/* MCP 服务器管理 */}
       <div className="bg-white rounded-lg p-4 space-y-3">
         <div className="text-xs font-medium text-gray-500 mb-2">MCP 服务器</div>
@@ -1902,9 +1487,41 @@ export function SettingsView({ onClose }: Props) {
           <label className={labelCls}>参数（空格分隔）</label>
           <input className={inputCls} placeholder="例: @anthropic/mcp-server-filesystem /tmp" value={mcpForm.args} onChange={(e) => setMcpForm({ ...mcpForm, args: e.target.value })} />
         </div>
-        <div>
-          <label className={labelCls}>环境变量（JSON 格式，可选）</label>
-          <input className={inputCls} placeholder='例: {"API_KEY": "xxx"}' value={mcpForm.env} onChange={(e) => setMcpForm({ ...mcpForm, env: e.target.value })} />
+        {mcpApiKeyEnvKeys.map((envKey) => (
+          <div key={envKey}>
+            <label className={labelCls}>API Key（可选）</label>
+            <input
+              className={inputCls}
+              type="password"
+              placeholder={`请输入 ${envKey}`}
+              value={parsedMcpEnv.env[envKey] || ""}
+              onChange={(e) => updateMcpEnvField(envKey, e.target.value)}
+            />
+            <div className="text-[11px] text-gray-400 mt-1">变量名：{envKey}</div>
+          </div>
+        ))}
+        <div className="space-y-2">
+          <button
+            type="button"
+            onClick={() => setShowMcpEnvJson((v) => !v)}
+            className="text-xs text-blue-500 hover:text-blue-600"
+          >
+            {showMcpEnvJson ? "收起高级 JSON 配置" : "高级：环境变量 JSON 配置"}
+          </button>
+          {showMcpEnvJson && (
+            <div>
+              <label className={labelCls}>环境变量（JSON 格式，可选）</label>
+              <input
+                className={inputCls}
+                placeholder='例: {"API_KEY": "xxx"}'
+                value={mcpForm.env}
+                onChange={(e) => setMcpForm({ ...mcpForm, env: e.target.value })}
+              />
+              {parsedMcpEnv.error && (
+                <div className="text-[11px] text-red-500 mt-1">{parsedMcpEnv.error}</div>
+              )}
+            </div>
+          )}
         </div>
         {mcpError && <div className="bg-red-50 text-red-600 text-xs px-2 py-1 rounded">{mcpError}</div>}
         <button
@@ -2044,7 +1661,7 @@ export function SettingsView({ onClose }: Props) {
         </div>
       </>)}
 
-      {activeTab === "routing" && (
+      {SHOW_AUTO_ROUTING_SETTINGS && activeTab === "routing" && (
         <div className="bg-white rounded-lg p-4 space-y-3">
           <div className="text-xs font-medium text-gray-500 mb-2">子 Skill 自动路由</div>
           <div>
@@ -2094,391 +1711,6 @@ export function SettingsView({ onClose }: Props) {
         </div>
       )}
 
-      {activeTab === "feishu" && (
-        <div className="space-y-4">
-          <div className="bg-white rounded-lg p-4 space-y-3">
-            <div className="text-xs font-medium text-gray-500">飞书网关配置</div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div>
-                <label className={labelCls}>Ingress Token（可空，长连接可不填）</label>
-                <input
-                  className={inputCls}
-                  value={feishuSettings.ingress_token}
-                  onChange={(e) => setFeishuSettings((s) => ({ ...s, ingress_token: e.target.value }))}
-                />
-              </div>
-              <div>
-                <label className={labelCls}>Encrypt Key（可空，长连接可不填）</label>
-                <input
-                  className={inputCls}
-                  value={feishuSettings.encrypt_key}
-                  onChange={(e) => setFeishuSettings((s) => ({ ...s, encrypt_key: e.target.value }))}
-                />
-              </div>
-            </div>
-            <div className="text-xs text-gray-500">
-              飞书 AppID/AppSecret 不再使用全局配置，请到“智能体员工”页面为具体员工绑定。
-            </div>
-            <div className="text-xs text-gray-400">
-              普通用户无需配置 Sidecar 地址，系统默认 `http://localhost:8765` 自动管理。
-            </div>
-            <div className="flex gap-2">
-              <button
-                onClick={handleSaveFeishuSettings}
-                className="sm-btn sm-btn-primary text-sm py-1.5 px-3 rounded-lg"
-              >
-                保存配置
-              </button>
-              <button
-                onClick={handleVerifyFeishuConnection}
-                className="sm-btn sm-btn-primary text-sm py-1.5 px-3 rounded-lg"
-              >
-                保存并校验连接
-              </button>
-              <button
-                onClick={refreshFeishuConsole}
-                className="sm-btn sm-btn-secondary text-sm py-1.5 px-3 rounded-lg"
-              >
-                刷新状态
-              </button>
-            </div>
-          </div>
-
-          <div className="bg-white rounded-lg p-4 space-y-3">
-            <div className="text-xs font-medium text-gray-500">连接状态</div>
-            <div className="text-xs text-gray-600">
-              WS: {feishuWsStatus?.running ? "running" : "stopped"} · queued={feishuWsStatus?.queued_events ?? 0}
-            </div>
-            <div className="text-xs text-gray-600">
-              Relay: {feishuRelayStatus?.running ? "running" : "stopped"} · accepted_total={feishuRelayStatus?.total_accepted ?? 0}
-              {feishuRelayStatus?.last_error ? ` · error=${feishuRelayStatus.last_error}` : ""}
-            </div>
-            <div className="text-xs text-gray-400">
-              连接由系统自动维护，无需手动启动/停止长连接。
-            </div>
-            {feishuOpMessage && (
-              <div className="text-xs bg-blue-50 text-blue-700 border border-blue-100 rounded px-2 py-1">{feishuOpMessage}</div>
-            )}
-          </div>
-
-          <div className="bg-white rounded-lg p-4 space-y-3">
-            <div className="text-xs font-medium text-gray-500">智能体员工</div>
-            <div className="text-xs text-gray-400">
-              每个员工使用员工编号统一标识，可配置技能集合、飞书标识与默认工作目录。技能只允许在桌面端由管理员维护。
-            </div>
-            <div className="space-y-2 border border-gray-100 rounded p-2">
-              <div className="text-xs text-gray-500">全局默认工作目录（新建会话默认使用）</div>
-              <input
-                className={inputCls}
-                placeholder="例如 D:\\workspace\\workclaw"
-                value={globalDefaultWorkDir}
-                onChange={(e) => setGlobalDefaultWorkDir(e.target.value)}
-              />
-              <div className="text-[11px] text-gray-400">
-                默认：C:\Users\&lt;用户名&gt;\WorkClaw\workspace。支持 C/D/E 盘，目录不存在自动创建。
-              </div>
-              <button
-                onClick={handleSaveGlobalDefaultWorkDir}
-                className="bg-blue-500 hover:bg-blue-600 text-white text-sm py-1.5 px-3 rounded-lg"
-              >
-                保存默认目录
-              </button>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div className="max-h-56 overflow-y-auto border border-gray-100 rounded">
-                {employees.length === 0 ? (
-                  <div className="text-xs text-gray-400 px-2 py-2">暂无员工</div>
-                ) : (
-                  employees.map((e) => (
-                    <button
-                      key={e.id}
-                      onClick={() => handlePickEmployee(e.id)}
-                      className={
-                        "w-full text-left px-2 py-1.5 text-xs border-b border-gray-50 hover:bg-gray-50 " +
-                        (selectedEmployeeId === e.id ? "bg-blue-50 text-blue-700" : "text-gray-700")
-                      }
-                    >
-                      <div className="font-medium truncate">
-                        {e.name} · {e.employee_id || e.role_id}
-                      </div>
-                      <div className="text-[11px] text-gray-400 truncate">
-                        skill={e.primary_skill_id || "通用助手（系统默认）"} · dir={e.default_work_dir || "(默认)"}
-                      </div>
-                    </button>
-                  ))
-                )}
-              </div>
-              <div className="space-y-2">
-                <input
-                  className={inputCls}
-                  placeholder="员工名称"
-                  value={employeeForm.name}
-                  onChange={(e) => setEmployeeForm((s) => ({ ...s, name: e.target.value }))}
-                />
-                <input
-                  className={inputCls}
-                  placeholder="员工编号（employee_id，例如 project_manager）"
-                  value={employeeForm.employee_id}
-                  onChange={(e) =>
-                    setEmployeeForm((s) => ({
-                      ...s,
-                      employee_id: e.target.value,
-                      role_id: e.target.value,
-                      openclaw_agent_id: e.target.value,
-                    }))
-                  }
-                />
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                  {EMPLOYEE_ROLE_TEMPLATES.map((tpl) => (
-                    <button
-                      key={tpl.employee_id}
-                      type="button"
-                      onClick={() => applyEmployeeRoleTemplate(tpl.employee_id)}
-                      className="h-8 rounded border border-gray-200 hover:border-blue-300 hover:bg-blue-50 text-xs text-gray-700"
-                    >
-                      填充{tpl.name}
-                    </button>
-                  ))}
-                </div>
-                <input
-                  className={inputCls}
-                  placeholder="飞书机器人 open_id（可空，仅用于飞书@精准路由）"
-                  value={employeeForm.feishu_open_id}
-                  onChange={(e) => setEmployeeForm((s) => ({ ...s, feishu_open_id: e.target.value }))}
-                />
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                  <input
-                    className={inputCls}
-                    placeholder="机器人 App ID（可空）"
-                    value={employeeForm.feishu_app_id}
-                    onChange={(e) => setEmployeeForm((s) => ({ ...s, feishu_app_id: e.target.value }))}
-                  />
-                  <input
-                    className={inputCls}
-                    type="password"
-                    placeholder="机器人 App Secret（可空）"
-                    value={employeeForm.feishu_app_secret}
-                    onChange={(e) => setEmployeeForm((s) => ({ ...s, feishu_app_secret: e.target.value }))}
-                  />
-                </div>
-                <select
-                  className={inputCls + " bg-white"}
-                  value={employeeForm.primary_skill_id}
-                  onChange={(e) => setEmployeeForm((s) => ({ ...s, primary_skill_id: e.target.value }))}
-                >
-                  <option value="">通用助手（系统默认）</option>
-                  {employeeSkillOptions.map((skill) => (
-                    <option key={skill.id} value={skill.id}>
-                      {skill.name}
-                    </option>
-                  ))}
-                </select>
-                <input
-                  className={inputCls}
-                  placeholder="默认工作目录（可空）"
-                  value={employeeForm.default_work_dir}
-                  onChange={(e) => setEmployeeForm((s) => ({ ...s, default_work_dir: e.target.value }))}
-                />
-                <div className="text-xs text-gray-500">技能集合（主员工可留空）</div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-36 overflow-y-auto border border-gray-100 rounded p-2">
-                  {employeeSkillOptions.map((skill) => {
-                    const checked = employeeForm.skill_ids.includes(skill.id);
-                    return (
-                      <label key={skill.id} className="inline-flex items-center gap-2 text-xs text-gray-700">
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={(e) => {
-                            setEmployeeForm((s) => {
-                              if (e.target.checked) {
-                                return { ...s, skill_ids: Array.from(new Set([...s.skill_ids, skill.id])) };
-                              }
-                              return { ...s, skill_ids: s.skill_ids.filter((id) => id !== skill.id) };
-                            });
-                          }}
-                        />
-                        <span className="truncate">{skill.name}</span>
-                      </label>
-                    );
-                  })}
-                </div>
-                <div className="flex items-center gap-4 text-xs text-gray-600">
-                  <label className="inline-flex items-center gap-1">
-                    <input
-                      type="checkbox"
-                      checked={employeeForm.enabled}
-                      onChange={(e) => setEmployeeForm((s) => ({ ...s, enabled: e.target.checked }))}
-                    />
-                    启用
-                  </label>
-                  <label className="inline-flex items-center gap-1">
-                    <input
-                      type="checkbox"
-                      checked={employeeForm.is_default}
-                      onChange={(e) => setEmployeeForm((s) => ({ ...s, is_default: e.target.checked }))}
-                    />
-                    默认员工
-                  </label>
-                </div>
-                <textarea
-                  className={inputCls}
-                  rows={2}
-                  placeholder="员工人格/职责（可空）"
-                  value={employeeForm.persona}
-                  onChange={(e) => setEmployeeForm((s) => ({ ...s, persona: e.target.value }))}
-                />
-                <div className="flex gap-2">
-                  <button
-                    onClick={handleSaveEmployee}
-                    className="bg-blue-500 hover:bg-blue-600 text-white text-sm py-1.5 px-3 rounded-lg"
-                  >
-                    保存员工
-                  </button>
-                  <button
-                    onClick={requestDeleteEmployee}
-                    className="bg-red-50 hover:bg-red-100 text-red-600 text-sm py-1.5 px-3 rounded-lg"
-                  >
-                    删除员工
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <FeishuRoutingWizard
-            bindings={routingBindings}
-            onSaveRule={handleSaveRoutingRule}
-            onDeleteRule={handleDeleteRoutingRule}
-            onSimulate={handleSimulateRoute}
-          />
-
-          <div className="bg-white rounded-lg p-4 space-y-3">
-            <div className="text-xs font-medium text-gray-500">最近会话（用于绑定角色）</div>
-            <div className="text-xs text-gray-400">
-              这里展示机器人最近收到消息的会话。你只需要选中会话并配置角色，后续在飞书群 `@机器人` 即可自动协作。
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div>
-                <div className="text-xs text-gray-500 mb-1">飞书群聊（API）</div>
-                <div className="max-h-44 overflow-y-auto border border-gray-100 rounded">
-                  {feishuChats.length === 0 ? (
-                    <div className="text-xs text-gray-400 px-2 py-2">暂无</div>
-                  ) : (
-                    feishuChats.map((c) => (
-                      <button
-                        key={c.chat_id}
-                        onClick={() => setSelectedThreadId(c.chat_id)}
-                        className={
-                          "w-full text-left px-2 py-1.5 text-xs border-b border-gray-50 hover:bg-gray-50 " +
-                          (selectedThreadId === c.chat_id ? "bg-blue-50 text-blue-700" : "text-gray-700")
-                        }
-                      >
-                        <div className="font-medium truncate">{c.name || c.chat_id}</div>
-                        <div className="text-[11px] text-gray-400 truncate">{c.chat_id}</div>
-                      </button>
-                    ))
-                  )}
-                </div>
-              </div>
-              <div>
-                <div className="text-xs text-gray-500 mb-1">最近线程（收件箱）</div>
-                <div className="max-h-44 overflow-y-auto border border-gray-100 rounded">
-                  {recentThreads.length === 0 ? (
-                    <div className="text-xs text-gray-400 px-2 py-2">暂无</div>
-                  ) : (
-                    recentThreads.map((t) => (
-                      <button
-                        key={t.thread_id + t.last_seen_at}
-                        onClick={() => setSelectedThreadId(t.thread_id)}
-                        className={
-                          "w-full text-left px-2 py-1.5 text-xs border-b border-gray-50 hover:bg-gray-50 " +
-                          (selectedThreadId === t.thread_id ? "bg-blue-50 text-blue-700" : "text-gray-700")
-                        }
-                      >
-                        <div className="font-medium truncate">{t.thread_id}</div>
-                        <div className="text-[11px] text-gray-400 truncate">{t.last_text_preview}</div>
-                      </button>
-                    ))
-                  )}
-                </div>
-              </div>
-            </div>
-
-            <div className="pt-2 border-t border-gray-100 space-y-2">
-              <div className="text-xs text-gray-600">当前线程：{selectedThreadId || "(未选择)"}</div>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-                <input
-                  className={inputCls}
-                  placeholder="tenant_id"
-                  value={roleTenantId}
-                  onChange={(e) => setRoleTenantId(e.target.value)}
-                />
-                <input
-                  className={inputCls}
-                  placeholder="scenario_template"
-                  value={roleScenarioTemplate}
-                  onChange={(e) => setRoleScenarioTemplate(e.target.value)}
-                />
-                <button
-                  className="bg-gray-100 hover:bg-gray-200 text-sm rounded-lg"
-                  onClick={() => loadThreadRoleConfig(selectedThreadId)}
-                >
-                  读取线程角色配置
-                </button>
-              </div>
-              <textarea
-                className={inputCls}
-                rows={3}
-                placeholder="角色 ID，逗号分隔"
-                value={roleIdsInput}
-                onChange={(e) => setRoleIdsInput(e.target.value)}
-              />
-              <button
-                onClick={handleBindThreadRoles}
-                className="bg-blue-500 hover:bg-blue-600 text-white text-sm py-1.5 px-3 rounded-lg"
-              >
-                保存线程角色绑定
-              </button>
-              <textarea
-                className={inputCls}
-                rows={2}
-                placeholder="线程员工ID（逗号分隔）"
-                value={threadEmployeeIdsInput}
-                onChange={(e) => setThreadEmployeeIdsInput(e.target.value)}
-              />
-              <button
-                onClick={handleBindThreadEmployees}
-                className="bg-blue-500 hover:bg-blue-600 text-white text-sm py-1.5 px-3 rounded-lg"
-              >
-                保存线程员工绑定
-              </button>
-              {threadRoleConfig && (
-                <div className="text-xs text-gray-600 bg-gray-50 border border-gray-100 rounded px-2 py-1">
-                  已绑定：{threadRoleConfig.roles.join(", ")} · 模板：{threadRoleConfig.scenario_template}
-                </div>
-              )}
-              {threadEmployeeBinding && (
-                <div className="text-xs text-gray-600 bg-gray-50 border border-gray-100 rounded px-2 py-1">
-                  员工绑定：{threadEmployeeBinding.employee_ids.join(", ") || "(空)"}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-      <RiskConfirmDialog
-        open={Boolean(pendingDeleteEmployee)}
-        level="high"
-        title="删除员工"
-        summary={deleteEmployeeSummary}
-        impact={deleteEmployeeImpact}
-        irreversible
-        confirmLabel="确认删除"
-        cancelLabel="取消"
-        loading={deletingEmployee}
-        onConfirm={confirmDeleteEmployee}
-        onCancel={cancelDeleteEmployee}
-      />
     </div>
   );
 }
