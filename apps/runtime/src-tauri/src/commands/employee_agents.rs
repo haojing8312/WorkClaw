@@ -538,7 +538,11 @@ pub async fn upsert_agent_employee_with_pool(
     } else {
         input.default_work_dir.trim().to_string()
     };
-    let openclaw_agent_id = employee_id.clone();
+    let openclaw_agent_id = if input.openclaw_agent_id.trim().is_empty() {
+        employee_id.clone()
+    } else {
+        input.openclaw_agent_id.trim().to_string()
+    };
     let enabled_scopes = if input.enabled_scopes.is_empty() {
         vec!["feishu".to_string()]
     } else {

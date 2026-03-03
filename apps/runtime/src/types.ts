@@ -331,6 +331,7 @@ export interface AgentEmployee {
   primary_skill_id: string;
   default_work_dir: string;
   openclaw_agent_id: string;
+  routing_priority: number;
   enabled_scopes: string[];
   enabled: boolean;
   is_default: boolean;
@@ -420,6 +421,7 @@ export interface UpsertAgentEmployeeInput {
   primary_skill_id: string;
   default_work_dir: string;
   openclaw_agent_id: string;
+  routing_priority: number;
   enabled_scopes: string[];
   enabled: boolean;
   is_default: boolean;

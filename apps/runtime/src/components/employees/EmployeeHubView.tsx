@@ -339,6 +339,9 @@ export function EmployeeHubView({
         primary_skill_id: selectedEmployee.primary_skill_id || "",
         default_work_dir: selectedEmployee.default_work_dir || "",
         openclaw_agent_id: selectedEmployee.openclaw_agent_id || employeeId,
+        routing_priority: Number.isFinite(selectedEmployee.routing_priority)
+          ? selectedEmployee.routing_priority
+          : 100,
         enabled_scopes: selectedEmployee.enabled_scopes?.length ? selectedEmployee.enabled_scopes : ["feishu"],
         enabled: selectedEmployee.enabled,
         is_default: selectedEmployee.is_default,

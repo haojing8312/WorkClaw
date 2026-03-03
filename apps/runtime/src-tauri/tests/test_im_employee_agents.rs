@@ -710,3 +710,35 @@ async fn cancel_and_retry_failed_group_run_steps_work() {
     .expect("count failed after retry");
     assert_eq!(failed_count_after_retry.0, 0);
 }
+
+#[tokio::test]
+async fn employee_persists_openclaw_agent_mapping() {
+    let (pool, _tmp) = helpers::setup_test_db().await;
+
+    let id = upsert_agent_employee_with_pool(
+        &pool,
+        UpsertAgentEmployeeInput {
+            id: None,
+            name: "主员工".to_string(),
+            role_id: "main".to_string(),
+            persona: "".to_string(),
+            feishu_open_id: "".to_string(),
+            feishu_app_id: "".to_string(),
+            feishu_app_secret: "".to_string(),
+            primary_skill_id: "".to_string(),
+            default_work_dir: "".to_string(),
+            openclaw_agent_id: "main".to_string(),
+            routing_priority: 100,
+            enabled_scopes: vec!["feishu".to_string()],
+            enabled: true,
+            is_default: true,
+            skill_ids: vec![],
+        },
+    )
+    .await
+    .expect("upsert");
+
+    let list = list_agent_employees_with_pool(&pool).await.expect("list");
+    assert_eq!(list[0].id, id);
+    assert_eq!(list[0].openclaw_agent_id, "main");
+}

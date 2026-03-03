@@ -1070,6 +1070,7 @@ export default function App() {
         primary_skill_id: employee.primary_skill_id,
         default_work_dir: employee.default_work_dir,
         openclaw_agent_id: employee.employee_id || employee.openclaw_agent_id || employee.role_id,
+        routing_priority: employee.routing_priority ?? 100,
         enabled_scopes: employee.enabled_scopes?.length ? employee.enabled_scopes : ["feishu"],
         enabled: employee.enabled,
         is_default: true,
