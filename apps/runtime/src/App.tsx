@@ -171,7 +171,8 @@ export default function App() {
 
   async function loadEmployees(): Promise<AgentEmployee[]> {
     try {
-      const list = await invoke<AgentEmployee[]>("list_agent_employees");
+      const raw = await invoke<AgentEmployee[] | null>("list_agent_employees");
+      const list = Array.isArray(raw) ? raw : [];
       setEmployees(list);
       setSelectedEmployeeId((prev) => {
         if (prev && list.some((e) => e.id === prev)) return prev;
@@ -498,6 +499,10 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedSkillId]);
 
+  const handleSkillInstalledFromChat = useCallback(async (_skillId: string) => {
+    await loadSkills();
+  }, []);
+
   function handleOpenStartTask() {
     const mainEmployee = employees.find((e) => e.is_default) ?? employees[0];
     if (mainEmployee) {
@@ -715,6 +720,8 @@ export default function App() {
                 sessionId={selectedSessionId}
                 workDir={selectedSession?.work_dir}
                 onSessionUpdate={handleSessionRefresh}
+                installedSkillIds={skills.map((s) => s.id)}
+                onSkillInstalled={handleSkillInstalledFromChat}
                 initialMessage={
                   pendingInitialMessage && pendingInitialMessage.sessionId === selectedSessionId
                     ? pendingInitialMessage.message

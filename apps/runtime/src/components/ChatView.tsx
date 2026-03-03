@@ -8,6 +8,15 @@ import { SkillManifest, ModelConfig, Message, StreamItem, FileAttachment, SkillR
 import { motion, AnimatePresence } from "framer-motion";
 import { ToolIsland } from "./ToolIsland";
 
+type ClawhubInstallCandidate = {
+  slug: string;
+  name: string;
+  description?: string;
+  stars?: number;
+  githubUrl?: string | null;
+  sourceUrl?: string | null;
+};
+
 interface Props {
   skill: SkillManifest;
   models: ModelConfig[];
@@ -16,6 +25,8 @@ interface Props {
   onSessionUpdate?: () => void;
   initialMessage?: string;
   onInitialMessageConsumed?: () => void;
+  installedSkillIds?: string[];
+  onSkillInstalled?: (skillId: string) => Promise<void> | void;
 }
 
 export function ChatView({
@@ -26,6 +37,8 @@ export function ChatView({
   onSessionUpdate,
   initialMessage,
   onInitialMessageConsumed,
+  installedSkillIds = [],
+  onSkillInstalled,
 }: Props) {
   const routeErrorHint = (code?: string) => {
     switch (code) {
@@ -61,6 +74,10 @@ export function ChatView({
     toolName: string;
     toolInput: Record<string, unknown>;
   } | null>(null);
+  const [pendingInstallSkill, setPendingInstallSkill] = useState<ClawhubInstallCandidate | null>(null);
+  const [showInstallConfirm, setShowInstallConfirm] = useState(false);
+  const [installingSlug, setInstallingSlug] = useState<string | null>(null);
+  const [installError, setInstallError] = useState<string | null>(null);
   const [subAgentBuffer, setSubAgentBuffer] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -578,9 +595,131 @@ export function ChatView({
 
   // 从 models 查找当前会话的模型名称
   const currentModel = models[0];
+  const installedSkillSet = new Set(installedSkillIds);
   const routeCompleted = routeEvents.filter((e) => e.status === "completed").length;
   const routeFailed = routeEvents.filter((e) => e.status === "failed").length;
   const routeTotalDuration = routeEvents.reduce((sum, e) => sum + (e.duration_ms || 0), 0);
+
+  function parseClawhubCandidatesFromOutput(output?: string): ClawhubInstallCandidate[] {
+    if (!output) return [];
+    try {
+      const parsed = JSON.parse(output);
+      if (parsed?.source !== "clawhub" || !Array.isArray(parsed?.items)) return [];
+      return parsed.items
+        .map((item: any) => {
+          const slug = typeof item?.slug === "string" ? item.slug.trim() : "";
+          const name = typeof item?.name === "string" ? item.name.trim() : "";
+          if (!slug || !name) return null;
+          return {
+            slug,
+            name,
+            description: typeof item?.description === "string" ? item.description : "",
+            stars: typeof item?.stars === "number" ? item.stars : undefined,
+            githubUrl: typeof item?.github_url === "string" ? item.github_url : null,
+            sourceUrl: typeof item?.source_url === "string" ? item.source_url : null,
+          } as ClawhubInstallCandidate;
+        })
+        .filter(Boolean) as ClawhubInstallCandidate[];
+    } catch {
+      return [];
+    }
+  }
+
+  function extractInstallCandidates(items: StreamItem[] | undefined): ClawhubInstallCandidate[] {
+    if (!items || items.length === 0) return [];
+    const map = new Map<string, ClawhubInstallCandidate>();
+    for (const item of items) {
+      if (item.type !== "tool_call" || !item.toolCall) continue;
+      const name = item.toolCall.name;
+      if (name !== "clawhub_search" && name !== "clawhub_recommend") continue;
+      const parsed = parseClawhubCandidatesFromOutput(item.toolCall.output);
+      for (const c of parsed) {
+        const exists = map.get(c.slug);
+        if (!exists) {
+          map.set(c.slug, c);
+          continue;
+        }
+        const existingLen = exists.description?.length ?? 0;
+        const currentLen = c.description?.length ?? 0;
+        if (currentLen > existingLen || (c.stars ?? 0) > (exists.stars ?? 0)) {
+          map.set(c.slug, c);
+        }
+      }
+    }
+    return Array.from(map.values());
+  }
+
+  function renderInstallCandidates(candidates: ClawhubInstallCandidate[]) {
+    if (candidates.length === 0) return null;
+    return (
+      <div className="mt-3 border border-blue-100 bg-blue-50/40 rounded-xl p-3">
+        <div className="text-xs font-medium text-blue-700 mb-2">可安装技能</div>
+        <div className="space-y-2">
+          {candidates.map((candidate) => {
+            const installed = installedSkillSet.has(`clawhub-${candidate.slug}`);
+            const isInstalling = installingSlug === candidate.slug;
+            return (
+              <div key={candidate.slug} className="rounded-lg border border-blue-100 bg-white p-2.5">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium text-gray-800 truncate">{candidate.name}</div>
+                    <div className="text-[11px] text-gray-400">slug: {candidate.slug}</div>
+                  </div>
+                  <button
+                    onClick={() => {
+                      if (installed || isInstalling) return;
+                      setInstallError(null);
+                      setPendingInstallSkill(candidate);
+                      setShowInstallConfirm(true);
+                    }}
+                    disabled={installed || isInstalling}
+                    className={`h-7 px-2.5 rounded text-xs font-medium transition-colors ${
+                      installed
+                        ? "bg-gray-100 text-gray-400 cursor-not-allowed"
+                        : isInstalling
+                        ? "bg-blue-100 text-blue-400 cursor-not-allowed"
+                        : "bg-blue-500 hover:bg-blue-600 text-white"
+                    }`}
+                  >
+                    {installed ? "已安装" : isInstalling ? "安装中..." : "立即安装"}
+                  </button>
+                </div>
+                {candidate.description && (
+                  <div className="mt-1.5 text-xs text-gray-600 line-clamp-2">{candidate.description}</div>
+                )}
+                <div className="mt-1.5 text-[11px] text-gray-400">
+                  stars: {candidate.stars ?? 0}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        {installError && <div className="mt-2 text-xs text-red-500">{installError}</div>}
+      </div>
+    );
+  }
+
+  async function handleConfirmInstall() {
+    if (!pendingInstallSkill || installingSlug) return;
+    setInstallError(null);
+    setInstallingSlug(pendingInstallSkill.slug);
+    try {
+      const result = await invoke<{ manifest: { id: string } }>("install_clawhub_skill", {
+        slug: pendingInstallSkill.slug,
+        githubUrl: pendingInstallSkill.githubUrl ?? pendingInstallSkill.sourceUrl ?? null,
+      });
+      if (result?.manifest?.id) {
+        await onSkillInstalled?.(result.manifest.id);
+      }
+      setShowInstallConfirm(false);
+      setPendingInstallSkill(null);
+    } catch (e) {
+      setInstallError("安装失败，请重试。");
+      console.error("安装 ClawHub 技能失败:", e);
+    } finally {
+      setInstallingSlug(null);
+    }
+  }
 
   // Markdown 渲染组件配置
   const markdownComponents = {
@@ -780,7 +919,10 @@ export function ChatView({
                 }
               >
                 {m.role === "assistant" && m.streamItems ? (
-                  renderStreamItems(m.streamItems, false)
+                  <>
+                    {renderStreamItems(m.streamItems, false)}
+                    {renderInstallCandidates(extractInstallCandidates(m.streamItems))}
+                  </>
                 ) : m.role === "assistant" && m.toolCalls ? (
                   <>
                     <ToolIsland toolCalls={m.toolCalls} isRunning={false} />
@@ -874,6 +1016,36 @@ export function ChatView({
                   className="bg-red-600 hover:bg-red-700 text-white px-4 py-1 rounded text-xs font-medium transition-colors"
                 >
                   拒绝
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        {showInstallConfirm && pendingInstallSkill && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 px-4">
+            <div className="w-full max-w-md rounded-2xl border border-gray-200 bg-white p-5 shadow-xl">
+              <div className="text-base font-semibold text-gray-900">安装技能</div>
+              <div className="mt-2 text-sm text-gray-600">
+                是否安装「{pendingInstallSkill.name}」？
+              </div>
+              <div className="mt-1 text-xs text-gray-400">slug: {pendingInstallSkill.slug}</div>
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  onClick={() => {
+                    if (installingSlug) return;
+                    setShowInstallConfirm(false);
+                    setPendingInstallSkill(null);
+                  }}
+                  className="h-9 px-4 rounded-lg border border-gray-200 text-gray-600 text-sm hover:bg-gray-50"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={handleConfirmInstall}
+                  disabled={Boolean(installingSlug)}
+                  className="h-9 px-4 rounded-lg bg-blue-500 hover:bg-blue-600 disabled:bg-blue-200 text-white text-sm"
+                >
+                  {installingSlug ? "安装中..." : "确认安装"}
                 </button>
               </div>
             </div>
