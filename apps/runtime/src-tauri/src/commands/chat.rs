@@ -5,6 +5,7 @@ use chrono::Utc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use super::models::load_routing_settings_from_pool;
+use super::runtime_preferences::resolve_default_work_dir_with_pool;
 use super::skills::DbState;
 use crate::agent::AgentExecutor;
 use crate::agent::compactor;
@@ -270,13 +271,22 @@ pub fn emit_skill_route_event(app: &AppHandle, event: SkillRouteEvent) {
 pub async fn create_session(
     skill_id: String,
     model_id: String,
-    work_dir: String,
+    work_dir: Option<String>,
     permission_mode: Option<String>,
     db: State<'_, DbState>,
 ) -> Result<String, String> {
     let session_id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
     let permission_mode = normalize_permission_mode_for_storage(permission_mode.as_deref());
+    let normalized_work_dir = work_dir
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let resolved_work_dir = if normalized_work_dir.is_empty() {
+        resolve_default_work_dir_with_pool(&db.0).await?
+    } else {
+        normalized_work_dir
+    };
     sqlx::query(
         "INSERT INTO sessions (id, skill_id, title, created_at, model_id, permission_mode, work_dir) VALUES (?, ?, ?, ?, ?, ?, ?)"
     )
@@ -286,7 +296,7 @@ pub async fn create_session(
     .bind(&now)
     .bind(&model_id)
     .bind(permission_mode)
-    .bind(&work_dir)
+    .bind(&resolved_work_dir)
     .execute(&db.0)
     .await
     .map_err(|e| e.to_string())?;

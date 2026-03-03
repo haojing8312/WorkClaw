@@ -43,6 +43,12 @@ describe("SettingsView feishu console", () => {
       if (command === "list_recent_im_threads") {
         return Promise.resolve([{ thread_id: "oc_1", source: "feishu", last_text_preview: "hello", last_seen_at: "2026-03-02T00:00:00Z" }]);
       }
+      if (command === "list_skills") {
+        return Promise.resolve([
+          { id: "builtin-general", name: "通用助手", description: "", version: "1.0.0", author: "", recommended_model: "", tags: [], created_at: "2026-01-01T00:00:00Z" },
+          { id: "local-project-manager", name: "项目经理助手", description: "", version: "1.0.0", author: "", recommended_model: "", tags: [], created_at: "2026-01-01T00:00:00Z" },
+        ]);
+      }
       if (command === "set_feishu_gateway_settings") return Promise.resolve(null);
 
       return Promise.resolve(null);

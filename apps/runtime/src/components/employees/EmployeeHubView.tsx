@@ -1,5 +1,6 @@
-import { useMemo, useState } from "react";
-import { AgentEmployee, SkillManifest, UpsertAgentEmployeeInput } from "../../types";
+import { useEffect, useMemo, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { AgentEmployee, RuntimePreferences, SkillManifest, UpsertAgentEmployeeInput } from "../../types";
 
 interface Props {
   employees: AgentEmployee[];
@@ -19,12 +20,35 @@ const blankForm: UpsertAgentEmployeeInput = {
   feishu_open_id: "",
   feishu_app_id: "",
   feishu_app_secret: "",
-  primary_skill_id: "builtin-general",
+  primary_skill_id: "",
   default_work_dir: "",
   enabled: true,
   is_default: false,
-  skill_ids: ["builtin-general"],
+  skill_ids: [],
 };
+
+const roleTemplates: Array<{ name: string; roleId: string; persona: string }> = [
+  {
+    name: "项目经理",
+    roleId: "project_manager",
+    persona: "负责需求澄清、任务拆解、里程碑推进与风险管理，优先输出可执行计划与验收标准。",
+  },
+  {
+    name: "技术负责人",
+    roleId: "tech_lead",
+    persona: "负责技术方案评审、架构决策和质量把关，强调可维护性、测试覆盖和交付稳定性。",
+  },
+  {
+    name: "运营专员",
+    roleId: "operations",
+    persona: "负责运营数据分析、活动复盘与流程优化，输出可落地行动项和指标跟踪方案。",
+  },
+  {
+    name: "客服专员",
+    roleId: "customer_success",
+    persona: "负责用户问题分级、解决路径设计与满意度提升，提供清晰且可执行的处理建议。",
+  },
+];
 
 export function EmployeeHubView({
   employees,
@@ -38,11 +62,24 @@ export function EmployeeHubView({
   const [form, setForm] = useState<UpsertAgentEmployeeInput>(blankForm);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
+  const [globalDefaultWorkDir, setGlobalDefaultWorkDir] = useState("");
+  const [savingGlobalWorkDir, setSavingGlobalWorkDir] = useState(false);
 
   const skillOptions = useMemo(
     () => skills.filter((s) => s.id !== "builtin-general"),
     [skills],
   );
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const prefs = await invoke<RuntimePreferences>("get_runtime_preferences");
+        setGlobalDefaultWorkDir(prefs.default_work_dir || "");
+      } catch {
+        // ignore: settings panel remains editable manually
+      }
+    })();
+  }, []);
 
   function pickEmployee(id: string) {
     onSelectEmployee(id);
@@ -56,13 +93,13 @@ export function EmployeeHubView({
       feishu_open_id: e.feishu_open_id,
       feishu_app_id: e.feishu_app_id,
       feishu_app_secret: e.feishu_app_secret,
-      primary_skill_id: e.primary_skill_id || "builtin-general",
+      primary_skill_id: e.primary_skill_id || "",
       default_work_dir: e.default_work_dir || "",
       enabled: e.enabled,
       is_default: e.is_default,
       skill_ids: e.is_default
         ? []
-        : (e.skill_ids.length > 0 ? e.skill_ids : ["builtin-general"]),
+        : (e.skill_ids.length > 0 ? e.skill_ids : []),
     });
   }
 
@@ -102,6 +139,37 @@ export function EmployeeHubView({
     }
   }
 
+  async function saveGlobalDefaultWorkDir() {
+    if (!globalDefaultWorkDir.trim()) {
+      setMessage("默认工作目录不能为空");
+      return;
+    }
+    setSavingGlobalWorkDir(true);
+    setMessage("");
+    try {
+      await invoke("set_runtime_preferences", {
+        input: { default_work_dir: globalDefaultWorkDir.trim() },
+      });
+      const resolved = await invoke<string>("resolve_default_work_dir");
+      setGlobalDefaultWorkDir(resolved);
+      setMessage("全局默认工作目录已保存");
+    } catch (e) {
+      setMessage(String(e));
+    } finally {
+      setSavingGlobalWorkDir(false);
+    }
+  }
+
+  function applyRoleTemplate(roleId: string) {
+    const tpl = roleTemplates.find((x) => x.roleId === roleId);
+    if (!tpl) return;
+    setForm((s) => ({
+      ...s,
+      role_id: tpl.roleId,
+      persona: tpl.persona,
+    }));
+  }
+
   return (
     <div className="h-full overflow-y-auto bg-gray-50">
       <div className="max-w-6xl mx-auto px-8 pt-10 pb-12 space-y-4">
@@ -110,6 +178,26 @@ export function EmployeeHubView({
           <p className="text-sm text-gray-600 mt-2">
             员工独立于飞书。每个员工可绑定多技能和独立飞书机器人配置；主员工默认进入且拥有全技能权限。
           </p>
+        </div>
+
+        <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-2">
+          <div className="text-xs text-gray-500">全局默认工作目录（新建会话默认使用）</div>
+          <input
+            className="w-full border border-gray-200 rounded px-2 py-1.5 text-sm"
+            placeholder="例如 D:\\workspace\\skillmint"
+            value={globalDefaultWorkDir}
+            onChange={(e) => setGlobalDefaultWorkDir(e.target.value)}
+          />
+          <div className="text-[11px] text-gray-500">
+            默认：C:\Users\&lt;用户名&gt;\SkillMint\workspace。支持 C/D/E 盘路径，目录不存在会自动创建。
+          </div>
+          <button
+            disabled={savingGlobalWorkDir}
+            onClick={saveGlobalDefaultWorkDir}
+            className="h-8 px-3 rounded bg-blue-500 hover:bg-blue-600 disabled:bg-blue-300 text-white text-xs"
+          >
+            保存默认目录
+          </button>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -154,12 +242,30 @@ export function EmployeeHubView({
               value={form.role_id}
               onChange={(e) => setForm((s) => ({ ...s, role_id: e.target.value }))}
             />
-            <input
-              className="w-full border border-gray-200 rounded px-2 py-1.5 text-sm"
-              placeholder="默认技能ID"
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+              {roleTemplates.map((tpl) => (
+                <button
+                  key={tpl.roleId}
+                  type="button"
+                  onClick={() => applyRoleTemplate(tpl.roleId)}
+                  className="h-8 rounded border border-gray-200 hover:border-blue-300 hover:bg-blue-50 text-xs text-gray-700"
+                >
+                  填充{tpl.name}
+                </button>
+              ))}
+            </div>
+            <select
+              className="w-full border border-gray-200 rounded px-2 py-1.5 text-sm bg-white"
               value={form.primary_skill_id}
               onChange={(e) => setForm((s) => ({ ...s, primary_skill_id: e.target.value }))}
-            />
+            >
+              <option value="">通用助手（系统默认）</option>
+              {skillOptions.map((skill) => (
+                <option key={skill.id} value={skill.id}>
+                  {skill.name}
+                </option>
+              ))}
+            </select>
             <input
               className="w-full border border-gray-200 rounded px-2 py-1.5 text-sm"
               placeholder="默认工作目录"
@@ -175,7 +281,7 @@ export function EmployeeHubView({
             />
             <input
               className="w-full border border-gray-200 rounded px-2 py-1.5 text-sm"
-              placeholder="飞书机器人 open_id（用于@路由，可空）"
+              placeholder="飞书机器人 open_id（可空，仅用于飞书@精准路由）"
               value={form.feishu_open_id}
               onChange={(e) => setForm((s) => ({ ...s, feishu_open_id: e.target.value }))}
             />
@@ -271,4 +377,3 @@ export function EmployeeHubView({
     </div>
   );
 }
-

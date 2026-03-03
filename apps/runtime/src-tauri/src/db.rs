@@ -374,6 +374,11 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
     let _ = sqlx::query("ALTER TABLE agent_employees ADD COLUMN feishu_app_secret TEXT NOT NULL DEFAULT ''")
         .execute(&pool)
         .await;
+    let _ = sqlx::query(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_employees_role_id_unique ON agent_employees(role_id)",
+    )
+    .execute(&pool)
+    .await;
 
     // 默认路由配置
     let _ = sqlx::query("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('route_max_call_depth', '4')")
@@ -383,6 +388,9 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
         .execute(&pool)
         .await;
     let _ = sqlx::query("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('route_retry_count', '0')")
+        .execute(&pool)
+        .await;
+    let _ = sqlx::query("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('runtime_default_work_dir', '')")
         .execute(&pool)
         .await;
 

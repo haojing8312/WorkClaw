@@ -61,7 +61,6 @@ describe("App session create flow", () => {
   beforeEach(() => {
     invokeMock.mockReset();
     openMock.mockReset();
-    openMock.mockResolvedValue("E:/code/yzpd/skillhub");
 
     invokeMock.mockImplementation((command: string, payload?: any) => {
       if (command === "list_skills") {
@@ -121,6 +120,7 @@ describe("App session create flow", () => {
         expect.objectContaining({
           skillId: "builtin-general",
           modelId: "model-a",
+          workDir: "",
         })
       );
     });
@@ -145,6 +145,7 @@ describe("App session create flow", () => {
         "create_session",
         expect.objectContaining({
           skillId: "builtin-general",
+          workDir: "",
         })
       );
     });
@@ -208,8 +209,7 @@ describe("App session create flow", () => {
     expect(screen.getByTestId("chat-initial-message")).toHaveTextContent("整理本地文件");
   });
 
-  test("does nothing when workspace dialog is canceled", async () => {
-    openMock.mockResolvedValueOnce(null);
+  test("does not require directory picker before creating session", async () => {
     render(<App />);
 
     await waitFor(() => {
@@ -218,10 +218,11 @@ describe("App session create flow", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "create-with-input" }));
 
-    await new Promise((resolve) => setTimeout(resolve, 50));
-
-    expect(
-      invokeMock.mock.calls.some((call) => call[0] === "create_session")
-    ).toBe(false);
+    await waitFor(() => {
+      expect(
+        invokeMock.mock.calls.some((call) => call[0] === "create_session")
+      ).toBe(true);
+    });
+    expect(openMock).not.toHaveBeenCalled();
   });
 });

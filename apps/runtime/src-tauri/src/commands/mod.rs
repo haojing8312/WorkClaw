@@ -10,3 +10,4 @@ pub mod employee_agents;
 pub mod openclaw_gateway;
 pub mod feishu_gateway;
 pub mod clawhub;
+pub mod runtime_preferences;

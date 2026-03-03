@@ -199,10 +199,6 @@ export default function App() {
     const modelId = models[0]?.id;
     if (!selectedSkillId || !modelId || creatingSession) return;
 
-    // 弹出目录选择器
-    const dir = await open({ directory: true, title: "选择工作目录" });
-    if (!dir || typeof dir !== "string") return; // 用户取消
-
     setCreatingSession(true);
     setCreateSessionError(null);
     try {
@@ -211,7 +207,7 @@ export default function App() {
       const id = await invoke<string>("create_session", {
         skillId: chosenSkill,
         modelId,
-        workDir: dir,
+        workDir: selectedEmployee?.default_work_dir || "",
         permissionMode: newSessionPermissionMode,
       });
       const firstMessage = initialMessage.trim();
@@ -293,13 +289,11 @@ export default function App() {
     }
     const modelId = models[0]?.id;
     if (modelId) {
-      const dir = await open({ directory: true, title: "选择工作目录" });
-      if (!dir || typeof dir !== "string") return;
       try {
         const sessionId = await invoke<string>("create_session", {
           skillId,
           modelId,
-          workDir: dir,
+          workDir: "",
           permissionMode: newSessionPermissionMode,
         });
         const sessions = await invoke<SessionInfo[]>("get_sessions", { skillId });

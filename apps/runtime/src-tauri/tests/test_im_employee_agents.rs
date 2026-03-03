@@ -176,3 +176,50 @@ async fn group_message_without_mention_routes_to_main_employee() {
     assert_eq!(targets.len(), 1);
     assert_eq!(targets[0].id, main_id);
 }
+
+#[tokio::test]
+async fn upsert_employee_rejects_duplicate_role_id() {
+    let (pool, _tmp) = helpers::setup_test_db().await;
+
+    upsert_agent_employee_with_pool(
+        &pool,
+        UpsertAgentEmployeeInput {
+            id: None,
+            name: "角色A".to_string(),
+            role_id: "duplicate_role".to_string(),
+            persona: "".to_string(),
+            feishu_open_id: "".to_string(),
+            feishu_app_id: "".to_string(),
+            feishu_app_secret: "".to_string(),
+            primary_skill_id: "".to_string(),
+            default_work_dir: "".to_string(),
+            enabled: true,
+            is_default: false,
+            skill_ids: vec![],
+        },
+    )
+    .await
+    .expect("insert first employee");
+
+    let err = upsert_agent_employee_with_pool(
+        &pool,
+        UpsertAgentEmployeeInput {
+            id: None,
+            name: "角色B".to_string(),
+            role_id: "duplicate_role".to_string(),
+            persona: "".to_string(),
+            feishu_open_id: "".to_string(),
+            feishu_app_id: "".to_string(),
+            feishu_app_secret: "".to_string(),
+            primary_skill_id: "".to_string(),
+            default_work_dir: "".to_string(),
+            enabled: true,
+            is_default: false,
+            skill_ids: vec![],
+        },
+    )
+    .await
+    .expect_err("duplicate role_id should fail");
+
+    assert!(err.contains("role_id"));
+}

@@ -17,6 +17,8 @@ import {
   RouteAttemptStat,
   ThreadEmployeeBinding,
   ThreadRoleConfig,
+  RuntimePreferences,
+  SkillManifest,
   UpsertAgentEmployeeInput,
 } from "../types";
 
@@ -73,6 +75,29 @@ const ROUTING_CAPABILITIES = [
   { label: "生图 Image", value: "image_gen" },
   { label: "语音转写 STT", value: "audio_stt" },
   { label: "语音合成 TTS", value: "audio_tts" },
+];
+
+const EMPLOYEE_ROLE_TEMPLATES: Array<{ name: string; role_id: string; persona: string }> = [
+  {
+    name: "项目经理",
+    role_id: "project_manager",
+    persona: "负责需求澄清、任务拆解、里程碑推进与风险管理，优先输出可执行计划与验收标准。",
+  },
+  {
+    name: "技术负责人",
+    role_id: "tech_lead",
+    persona: "负责技术方案评审、架构决策和质量把关，强调可维护性、测试覆盖和交付稳定性。",
+  },
+  {
+    name: "运营专员",
+    role_id: "operations",
+    persona: "负责运营数据分析、活动复盘与流程优化，输出可落地行动项和指标跟踪方案。",
+  },
+  {
+    name: "客服专员",
+    role_id: "customer_success",
+    persona: "负责用户问题分级、解决路径设计与满意度提升，提供清晰且可执行的处理建议。",
+  },
 ];
 
 export function SettingsView({ onClose }: Props) {
@@ -187,6 +212,7 @@ export function SettingsView({ onClose }: Props) {
   const [threadRoleConfig, setThreadRoleConfig] = useState<ThreadRoleConfig | null>(null);
   const [threadEmployeeBinding, setThreadEmployeeBinding] = useState<ThreadEmployeeBinding | null>(null);
   const [employees, setEmployees] = useState<AgentEmployee[]>([]);
+  const [employeeSkillOptions, setEmployeeSkillOptions] = useState<SkillManifest[]>([]);
   const [selectedEmployeeId, setSelectedEmployeeId] = useState("");
   const [threadEmployeeIdsInput, setThreadEmployeeIdsInput] = useState("");
   const [employeeForm, setEmployeeForm] = useState<UpsertAgentEmployeeInput>({
@@ -197,12 +223,13 @@ export function SettingsView({ onClose }: Props) {
     feishu_open_id: "",
     feishu_app_id: "",
     feishu_app_secret: "",
-    primary_skill_id: "builtin-general",
+    primary_skill_id: "",
     default_work_dir: "",
     enabled: true,
     is_default: false,
-    skill_ids: ["builtin-general"],
+    skill_ids: [],
   });
+  const [globalDefaultWorkDir, setGlobalDefaultWorkDir] = useState("");
   const [roleTenantId, setRoleTenantId] = useState("default");
   const [roleScenarioTemplate, setRoleScenarioTemplate] = useState("opportunity_review");
   const [roleIdsInput, setRoleIdsInput] = useState(
@@ -298,6 +325,16 @@ export function SettingsView({ onClose }: Props) {
     }
   }
 
+  async function loadEmployeeSkillOptions() {
+    const list = await invoke<SkillManifest[]>("list_skills");
+    setEmployeeSkillOptions((list || []).filter((x) => x.id !== "builtin-general"));
+  }
+
+  async function loadRuntimePreferences() {
+    const prefs = await invoke<RuntimePreferences>("get_runtime_preferences");
+    setGlobalDefaultWorkDir(prefs?.default_work_dir || "");
+  }
+
   async function loadThreadEmployeeBinding(threadId: string) {
     if (!threadId.trim()) {
       setThreadEmployeeBinding(null);
@@ -341,6 +378,8 @@ export function SettingsView({ onClose }: Props) {
         loadFeishuChats(),
         loadRecentThreads(),
         loadAgentEmployees(),
+        loadEmployeeSkillOptions(),
+        loadRuntimePreferences(),
       ]);
       if (selectedThreadId) {
         await Promise.all([loadThreadRoleConfig(selectedThreadId), loadThreadEmployeeBinding(selectedThreadId)]);
@@ -440,6 +479,33 @@ export function SettingsView({ onClose }: Props) {
     }
   }
 
+  async function handleSaveGlobalDefaultWorkDir() {
+    try {
+      if (!globalDefaultWorkDir.trim()) {
+        setFeishuOpMessage("默认工作目录不能为空");
+        return;
+      }
+      await invoke("set_runtime_preferences", {
+        input: { default_work_dir: globalDefaultWorkDir.trim() },
+      });
+      const resolved = await invoke<string>("resolve_default_work_dir");
+      setGlobalDefaultWorkDir(resolved);
+      setFeishuOpMessage("默认工作目录已保存");
+    } catch (e) {
+      setFeishuOpMessage("保存默认工作目录失败: " + String(e));
+    }
+  }
+
+  function applyEmployeeRoleTemplate(roleId: string) {
+    const tpl = EMPLOYEE_ROLE_TEMPLATES.find((x) => x.role_id === roleId);
+    if (!tpl) return;
+    setEmployeeForm((s) => ({
+      ...s,
+      role_id: tpl.role_id,
+      persona: tpl.persona,
+    }));
+  }
+
   async function handleDeleteEmployee() {
     if (!selectedEmployeeId) return;
     try {
@@ -453,11 +519,11 @@ export function SettingsView({ onClose }: Props) {
         feishu_open_id: "",
         feishu_app_id: "",
         feishu_app_secret: "",
-        primary_skill_id: "builtin-general",
+        primary_skill_id: "",
         default_work_dir: "",
         enabled: true,
         is_default: false,
-        skill_ids: ["builtin-general"],
+        skill_ids: [],
       });
       setFeishuOpMessage("员工已删除");
       await loadAgentEmployees();
@@ -478,11 +544,11 @@ export function SettingsView({ onClose }: Props) {
       feishu_open_id: employee.feishu_open_id,
       feishu_app_id: employee.feishu_app_id,
       feishu_app_secret: employee.feishu_app_secret,
-      primary_skill_id: employee.primary_skill_id || "builtin-general",
+      primary_skill_id: employee.primary_skill_id || "",
       default_work_dir: employee.default_work_dir,
       enabled: employee.enabled,
       is_default: employee.is_default,
-      skill_ids: employee.skill_ids.length > 0 ? employee.skill_ids : ["builtin-general"],
+      skill_ids: employee.skill_ids.length > 0 ? employee.skill_ids : [],
     });
   }
 
@@ -2127,6 +2193,24 @@ export function SettingsView({ onClose }: Props) {
             <div className="text-xs text-gray-400">
               每个员工可配置角色、技能集合、飞书标识与默认工作目录。技能只允许在桌面端由管理员维护。
             </div>
+            <div className="space-y-2 border border-gray-100 rounded p-2">
+              <div className="text-xs text-gray-500">全局默认工作目录（新建会话默认使用）</div>
+              <input
+                className={inputCls}
+                placeholder="例如 D:\\workspace\\skillmint"
+                value={globalDefaultWorkDir}
+                onChange={(e) => setGlobalDefaultWorkDir(e.target.value)}
+              />
+              <div className="text-[11px] text-gray-400">
+                默认：C:\Users\&lt;用户名&gt;\SkillMint\workspace。支持 C/D/E 盘，目录不存在自动创建。
+              </div>
+              <button
+                onClick={handleSaveGlobalDefaultWorkDir}
+                className="bg-blue-500 hover:bg-blue-600 text-white text-sm py-1.5 px-3 rounded-lg"
+              >
+                保存默认目录
+              </button>
+            </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div className="max-h-56 overflow-y-auto border border-gray-100 rounded">
                 {employees.length === 0 ? (
@@ -2145,7 +2229,7 @@ export function SettingsView({ onClose }: Props) {
                         {e.name} · {e.role_id}
                       </div>
                       <div className="text-[11px] text-gray-400 truncate">
-                        skill={e.primary_skill_id || "(未设置)"} · dir={e.default_work_dir || "(默认)"}
+                        skill={e.primary_skill_id || "通用助手（系统默认）"} · dir={e.default_work_dir || "(默认)"}
                       </div>
                     </button>
                   ))
@@ -2164,35 +2248,65 @@ export function SettingsView({ onClose }: Props) {
                   value={employeeForm.role_id}
                   onChange={(e) => setEmployeeForm((s) => ({ ...s, role_id: e.target.value }))}
                 />
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                  {EMPLOYEE_ROLE_TEMPLATES.map((tpl) => (
+                    <button
+                      key={tpl.role_id}
+                      type="button"
+                      onClick={() => applyEmployeeRoleTemplate(tpl.role_id)}
+                      className="h-8 rounded border border-gray-200 hover:border-blue-300 hover:bg-blue-50 text-xs text-gray-700"
+                    >
+                      填充{tpl.name}
+                    </button>
+                  ))}
+                </div>
                 <input
                   className={inputCls}
-                  placeholder="飞书 open_id（可空）"
+                  placeholder="飞书 open_id（可空，仅用于飞书@精准路由）"
                   value={employeeForm.feishu_open_id}
                   onChange={(e) => setEmployeeForm((s) => ({ ...s, feishu_open_id: e.target.value }))}
                 />
-                <input
-                  className={inputCls}
-                  placeholder="主技能 ID（如 builtin-general）"
+                <select
+                  className={inputCls + " bg-white"}
                   value={employeeForm.primary_skill_id}
                   onChange={(e) => setEmployeeForm((s) => ({ ...s, primary_skill_id: e.target.value }))}
-                />
+                >
+                  <option value="">通用助手（系统默认）</option>
+                  {employeeSkillOptions.map((skill) => (
+                    <option key={skill.id} value={skill.id}>
+                      {skill.name}
+                    </option>
+                  ))}
+                </select>
                 <input
                   className={inputCls}
                   placeholder="默认工作目录（可空）"
                   value={employeeForm.default_work_dir}
                   onChange={(e) => setEmployeeForm((s) => ({ ...s, default_work_dir: e.target.value }))}
                 />
-                <input
-                  className={inputCls}
-                  placeholder="技能集合（逗号分隔）"
-                  value={employeeForm.skill_ids.join(",")}
-                  onChange={(e) =>
-                    setEmployeeForm((s) => ({
-                      ...s,
-                      skill_ids: e.target.value.split(",").map((x) => x.trim()).filter(Boolean),
-                    }))
-                  }
-                />
+                <div className="text-xs text-gray-500">技能集合（主员工可留空）</div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-36 overflow-y-auto border border-gray-100 rounded p-2">
+                  {employeeSkillOptions.map((skill) => {
+                    const checked = employeeForm.skill_ids.includes(skill.id);
+                    return (
+                      <label key={skill.id} className="inline-flex items-center gap-2 text-xs text-gray-700">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(e) => {
+                            setEmployeeForm((s) => {
+                              if (e.target.checked) {
+                                return { ...s, skill_ids: Array.from(new Set([...s.skill_ids, skill.id])) };
+                              }
+                              return { ...s, skill_ids: s.skill_ids.filter((id) => id !== skill.id) };
+                            });
+                          }}
+                        />
+                        <span className="truncate">{skill.name}</span>
+                      </label>
+                    );
+                  })}
+                </div>
                 <div className="flex items-center gap-4 text-xs text-gray-600">
                   <label className="inline-flex items-center gap-1">
                     <input

@@ -1,4 +1,5 @@
 use crate::commands::skills::DbState;
+use crate::commands::runtime_preferences::resolve_default_work_dir_with_pool;
 use crate::im::types::ImEvent;
 use sqlx::SqlitePool;
 use tauri::State;
@@ -99,12 +100,37 @@ pub async fn upsert_agent_employee_with_pool(
     if input.name.trim().is_empty() {
         return Err("employee name is required".to_string());
     }
-    if input.role_id.trim().is_empty() {
+    let role_id = input.role_id.trim();
+    if role_id.is_empty() {
         return Err("employee role_id is required".to_string());
     }
+    let existing_role = sqlx::query_as::<_, (String,)>(
+        "SELECT id FROM agent_employees WHERE role_id = ? LIMIT 1",
+    )
+    .bind(role_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| e.to_string())?;
 
     let now = chrono::Utc::now().to_rfc3339();
     let id = input.id.unwrap_or_else(|| Uuid::new_v4().to_string());
+    if let Some((existing_id,)) = existing_role {
+        if existing_id != id {
+            return Err("employee role_id already exists".to_string());
+        }
+    }
+    let default_work_dir = if input.default_work_dir.trim().is_empty() {
+        let base = resolve_default_work_dir_with_pool(pool).await?;
+        let by_role = std::path::PathBuf::from(base)
+            .join("employees")
+            .join(role_id)
+            .to_string_lossy()
+            .to_string();
+        std::fs::create_dir_all(&by_role).map_err(|e| format!("failed to create employee work dir: {e}"))?;
+        by_role
+    } else {
+        input.default_work_dir.trim().to_string()
+    };
     let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
 
     if input.is_default {
@@ -135,13 +161,13 @@ pub async fn upsert_agent_employee_with_pool(
     )
     .bind(&id)
     .bind(input.name.trim())
-    .bind(input.role_id.trim())
+    .bind(role_id)
     .bind(input.persona.trim())
     .bind(input.feishu_open_id.trim())
     .bind(input.feishu_app_id.trim())
     .bind(input.feishu_app_secret.trim())
     .bind(input.primary_skill_id.trim())
-    .bind(input.default_work_dir.trim())
+    .bind(default_work_dir)
     .bind(if input.enabled { 1 } else { 0 })
     .bind(if input.is_default { 1 } else { 0 })
     .bind(&now)

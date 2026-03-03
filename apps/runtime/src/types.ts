@@ -288,6 +288,10 @@ export interface ThreadEmployeeBinding {
   employee_ids: string[];
 }
 
+export interface RuntimePreferences {
+  default_work_dir: string;
+}
+
 /// 文件附件（用于 File Upload 功能）
 export interface FileAttachment {
   name: string;
