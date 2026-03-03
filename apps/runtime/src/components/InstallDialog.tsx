@@ -2,6 +2,7 @@ import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { ClawhubSkillSummary, SkillManifest } from "../types";
+import { RiskConfirmDialog } from "./RiskConfirmDialog";
 
 type InstallMode = "skillpack" | "local" | "clawhub" | "industry";
 
@@ -25,6 +26,7 @@ export function InstallDialog({ onInstalled, onClose }: Props) {
   const [clawhubLoading, setClawhubLoading] = useState(false);
   const [clawhubResults, setClawhubResults] = useState<ClawhubSkillSummary[]>([]);
   const [selectedClawhubSlug, setSelectedClawhubSlug] = useState<string>("");
+  const [installConfirmOpen, setInstallConfirmOpen] = useState(false);
 
   async function pickFile() {
     const f = await open({ filters: [{ name: "SkillPack", extensions: ["skillpack"] }] });
@@ -45,6 +47,7 @@ export function InstallDialog({ onInstalled, onClose }: Props) {
     setMode(m);
     setError("");
     setMcpWarning([]);
+    setInstallConfirmOpen(false);
     if (m !== "industry") {
       setIndustryCheckMessage("");
       setIndustryChecking(false);
@@ -171,6 +174,38 @@ export function InstallDialog({ onInstalled, onClose }: Props) {
       setLoading(false);
     }
   }
+
+  function requestInstall() {
+    if (loading) return;
+    setInstallConfirmOpen(true);
+  }
+
+  function handleCancelInstallConfirm() {
+    if (loading) return;
+    setInstallConfirmOpen(false);
+  }
+
+  function handleConfirmInstall() {
+    if (loading) return;
+    setInstallConfirmOpen(false);
+    void handleInstall();
+  }
+
+  const selectedClawhubSkill = clawhubResults.find((item) => item.slug === selectedClawhubSlug);
+  const installRiskSummary = mode === "skillpack"
+    ? "确认安装该 .skillpack 技能包吗？"
+    : mode === "local"
+    ? "确认导入该本地技能目录吗？"
+    : mode === "clawhub"
+    ? `确认安装「${selectedClawhubSkill?.name ?? "所选 ClawHub 技能"}」吗？`
+    : "确认安装该行业包吗？";
+  const installRiskImpact = mode === "skillpack"
+    ? (packPath ? `文件: ${packPath}` : "请先选择 .skillpack 文件并填写用户名。")
+    : mode === "local"
+    ? (localDir ? `目录: ${localDir}` : "请先选择本地技能目录。")
+    : mode === "clawhub"
+    ? (selectedClawhubSkill ? `slug: ${selectedClawhubSkill.slug}` : "请先搜索并选择要安装的 ClawHub 技能。")
+    : (industryPath ? `文件: ${industryPath}` : "请先选择 .industrypack 文件。");
 
   const tabBase = "flex-1 py-1.5 text-sm rounded transition-colors text-center";
   const tabActive = "bg-blue-500 text-white";
@@ -353,7 +388,7 @@ export function InstallDialog({ onInstalled, onClose }: Props) {
             取消
           </button>
           <button
-            onClick={handleInstall}
+            onClick={requestInstall}
             disabled={loading}
             className="flex-1 bg-blue-500 hover:bg-blue-600 active:scale-[0.97] disabled:bg-gray-200 disabled:text-gray-400 text-white py-2 rounded-lg text-sm transition-all"
           >
@@ -361,6 +396,19 @@ export function InstallDialog({ onInstalled, onClose }: Props) {
           </button>
         </div>
       </div>
+      <RiskConfirmDialog
+        open={installConfirmOpen}
+        level="medium"
+        title="安装技能"
+        summary={installRiskSummary}
+        impact={installRiskImpact}
+        irreversible={false}
+        confirmLabel="确认安装"
+        cancelLabel="取消"
+        loading={loading}
+        onConfirm={handleConfirmInstall}
+        onCancel={handleCancelInstallConfirm}
+      />
     </div>
   );
 }

@@ -81,6 +81,8 @@ describe("ExpertsView", () => {
     fireEvent.click(screen.getByRole("button", { name: "开始任务" }));
     fireEvent.click(screen.getByRole("button", { name: "刷新" }));
     fireEvent.click(screen.getByRole("button", { name: "移除" }));
+    expect(deleteSpy).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "确认移除" }));
 
     expect(startTaskSpy).toHaveBeenCalledWith("local-file-organizer");
     expect(refreshSpy).toHaveBeenCalledWith("local-file-organizer");

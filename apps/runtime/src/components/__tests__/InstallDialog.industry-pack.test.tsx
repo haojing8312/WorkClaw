@@ -59,6 +59,7 @@ describe("InstallDialog industry pack mode", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: "安装" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认安装" }));
 
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("install_industry_bundle", {

@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { SkillManifest } from "../../types";
 import { SkillLibraryView } from "./SkillLibraryView";
 import { FindSkillsView } from "./FindSkillsView";
+import { RiskConfirmDialog } from "../RiskConfirmDialog";
 
 interface Props {
   skills: SkillManifest[];
@@ -19,6 +20,18 @@ interface Props {
   busyAction?: "refresh" | "delete" | "check-update" | "update" | null;
 }
 
+type PendingExpertsRiskAction =
+  | {
+      kind: "delete";
+      skillId: string;
+      skillName: string;
+    }
+  | {
+      kind: "update";
+      skillId: string;
+      skillName: string;
+    };
+
 export function ExpertsView({
   skills,
   onInstallSkill,
@@ -35,6 +48,7 @@ export function ExpertsView({
   busyAction,
 }: Props) {
   const [activeTab, setActiveTab] = useState<"mine" | "library" | "finder">("mine");
+  const [pendingRiskAction, setPendingRiskAction] = useState<PendingExpertsRiskAction | null>(null);
   const visibleSkills = skills.filter((skill) => skill.id !== "builtin-general");
   const totalSkills = visibleSkills.length;
   const builtinSkills = visibleSkills.filter((skill) => skill.id.startsWith("builtin-")).length;
@@ -46,6 +60,62 @@ export function ExpertsView({
     () => new Set(visibleSkills.map((skill) => skill.id)),
     [visibleSkills]
   );
+  const riskDialogLoading = Boolean(
+    pendingRiskAction &&
+      busySkillId === pendingRiskAction.skillId &&
+      ((pendingRiskAction.kind === "delete" && busyAction === "delete") ||
+        (pendingRiskAction.kind === "update" && busyAction === "update"))
+  );
+  const riskDialogMeta = pendingRiskAction
+    ? pendingRiskAction.kind === "delete"
+      ? {
+          level: "high" as const,
+          title: "移除技能",
+          summary: `确定移除「${pendingRiskAction.skillName}」吗？`,
+          impact: "该操作会移除技能入口，并可能影响已有工作流。",
+          irreversible: true,
+          confirmLabel: "确认移除",
+        }
+      : {
+          level: "medium" as const,
+          title: "更新技能",
+          summary: `确定更新「${pendingRiskAction.skillName}」吗？`,
+          impact: "更新后将覆盖当前版本，建议先完成正在进行的任务。",
+          irreversible: false,
+          confirmLabel: "确认更新",
+        }
+    : null;
+
+  function requestDeleteSkill(skillId: string, skillName: string) {
+    setPendingRiskAction({
+      kind: "delete",
+      skillId,
+      skillName,
+    });
+  }
+
+  function requestUpdateSkill(skillId: string, skillName: string) {
+    setPendingRiskAction({
+      kind: "update",
+      skillId,
+      skillName,
+    });
+  }
+
+  function handleRiskCancel() {
+    if (riskDialogLoading) return;
+    setPendingRiskAction(null);
+  }
+
+  function handleRiskConfirm() {
+    if (!pendingRiskAction) return;
+    if (pendingRiskAction.kind === "delete") {
+      onDeleteSkill(pendingRiskAction.skillId);
+    } else {
+      onUpdateClawhubSkill(pendingRiskAction.skillId);
+    }
+    setPendingRiskAction(null);
+  }
 
   return (
     <div className="h-full overflow-y-auto bg-gray-50">
@@ -185,7 +255,7 @@ export function ExpertsView({
                     )}
                     {isClawhub && updateState?.hasUpdate && (
                       <button
-                        onClick={() => onUpdateClawhubSkill(skill.id)}
+                        onClick={() => requestUpdateSkill(skill.id, skill.name)}
                         disabled={busySkillId === skill.id && busyAction === "update"}
                         className="h-7 px-3 rounded bg-emerald-50 hover:bg-emerald-100 disabled:bg-emerald-100 text-emerald-700 text-xs transition-colors"
                       >
@@ -194,7 +264,7 @@ export function ExpertsView({
                     )}
                     {!isBuiltin && (
                       <button
-                        onClick={() => onDeleteSkill(skill.id)}
+                        onClick={() => requestDeleteSkill(skill.id, skill.name)}
                         disabled={busySkillId === skill.id && busyAction === "delete"}
                         className="h-7 px-3 rounded bg-red-50 hover:bg-red-100 disabled:bg-red-100 text-red-600 text-xs transition-colors"
                       >
@@ -220,6 +290,19 @@ export function ExpertsView({
           )
         )}
       </div>
+      <RiskConfirmDialog
+        open={Boolean(riskDialogMeta)}
+        level={riskDialogMeta?.level ?? "low"}
+        title={riskDialogMeta?.title ?? ""}
+        summary={riskDialogMeta?.summary ?? ""}
+        impact={riskDialogMeta?.impact}
+        irreversible={riskDialogMeta?.irreversible}
+        confirmLabel={riskDialogMeta?.confirmLabel}
+        cancelLabel="取消"
+        loading={riskDialogLoading}
+        onConfirm={handleRiskConfirm}
+        onCancel={handleRiskCancel}
+      />
     </div>
   );
 }

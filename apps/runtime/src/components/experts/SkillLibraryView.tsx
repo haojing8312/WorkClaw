@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ClawhubLibraryItem } from "../../types";
+import { RiskConfirmDialog } from "../RiskConfirmDialog";
 
 interface Props {
   installedSkillIds: Set<string>;
@@ -20,6 +21,7 @@ export function SkillLibraryView({ installedSkillIds, onInstall }: Props) {
   const [error, setError] = useState<string>("");
   const [selectedTag, setSelectedTag] = useState<string>("全部");
   const [installingSlug, setInstallingSlug] = useState<string>("");
+  const [pendingInstall, setPendingInstall] = useState<ClawhubLibraryItem | null>(null);
   const [textZhMap, setTextZhMap] = useState<Record<string, string>>({});
   const [translating, setTranslating] = useState(false);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
@@ -132,13 +134,20 @@ export function SkillLibraryView({ installedSkillIds, onInstall }: Props) {
     return items.filter((item) => (item.tags ?? []).includes(selectedTag));
   }, [items, selectedTag]);
 
-  async function handleInstall(slug: string) {
-    setInstallingSlug(slug);
+  async function handleConfirmInstall() {
+    if (!pendingInstall || installingSlug) return;
+    setInstallingSlug(pendingInstall.slug);
     try {
-      await onInstall(slug);
+      await onInstall(pendingInstall.slug);
     } finally {
       setInstallingSlug("");
+      setPendingInstall(null);
     }
+  }
+
+  function handleCancelInstall() {
+    if (installingSlug) return;
+    setPendingInstall(null);
   }
 
   return (
@@ -199,7 +208,7 @@ export function SkillLibraryView({ installedSkillIds, onInstall }: Props) {
                 <div className="text-[11px] text-gray-400 mt-2">下载 {item.downloads}</div>
                 <div className="mt-3">
                   <button
-                    onClick={() => void handleInstall(item.slug)}
+                    onClick={() => setPendingInstall(item)}
                     disabled={installed || isInstalling}
                     className={`h-7 px-3 rounded text-xs transition-colors ${
                       installed
@@ -219,6 +228,19 @@ export function SkillLibraryView({ installedSkillIds, onInstall }: Props) {
       <div ref={sentinelRef} className="h-8 flex items-center justify-center text-xs text-gray-400">
         {loading ? "加载中..." : nextCursor ? "下拉加载更多" : initialized ? "已加载全部" : ""}
       </div>
+      <RiskConfirmDialog
+        open={Boolean(pendingInstall)}
+        level="medium"
+        title="安装技能"
+        summary={pendingInstall ? `确定安装「${textZhMap[pendingInstall.name] ?? pendingInstall.name}」吗？` : "确定安装该技能吗？"}
+        impact={pendingInstall ? `slug: ${pendingInstall.slug}` : undefined}
+        irreversible={false}
+        confirmLabel="确认安装"
+        cancelLabel="取消"
+        loading={Boolean(installingSlug)}
+        onConfirm={handleConfirmInstall}
+        onCancel={handleCancelInstall}
+      />
     </div>
   );
 }

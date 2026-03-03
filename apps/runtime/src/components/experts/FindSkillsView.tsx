@@ -1,6 +1,7 @@
 import { FormEvent, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ClawhubSkillRecommendation } from "../../types";
+import { RiskConfirmDialog } from "../RiskConfirmDialog";
 
 interface Props {
   installedSkillIds: Set<string>;
@@ -18,6 +19,7 @@ export function FindSkillsView({ installedSkillIds, onInstall }: Props) {
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [installingSlug, setInstallingSlug] = useState("");
+  const [pendingInstall, setPendingInstall] = useState<ClawhubSkillRecommendation | null>(null);
   const [turns, setTurns] = useState<Turn[]>([]);
 
   const empty = useMemo(() => turns.length === 0, [turns.length]);
@@ -56,13 +58,20 @@ export function FindSkillsView({ installedSkillIds, onInstall }: Props) {
     }
   }
 
-  async function handleInstall(slug: string) {
-    setInstallingSlug(slug);
+  async function handleConfirmInstall() {
+    if (!pendingInstall || installingSlug) return;
+    setInstallingSlug(pendingInstall.slug);
     try {
-      await onInstall(slug);
+      await onInstall(pendingInstall.slug);
     } finally {
       setInstallingSlug("");
+      setPendingInstall(null);
     }
+  }
+
+  function handleCancelInstall() {
+    if (installingSlug) return;
+    setPendingInstall(null);
   }
 
   return (
@@ -123,7 +132,7 @@ export function FindSkillsView({ installedSkillIds, onInstall }: Props) {
                         <div className="text-[11px] text-blue-700 mt-2">{item.reason}</div>
                         <div className="mt-3">
                           <button
-                            onClick={() => void handleInstall(item.slug)}
+                            onClick={() => setPendingInstall(item)}
                             disabled={installed || isInstalling}
                             className={`h-7 px-3 rounded text-xs transition-colors ${
                               installed
@@ -143,6 +152,19 @@ export function FindSkillsView({ installedSkillIds, onInstall }: Props) {
           ))}
         </div>
       )}
+      <RiskConfirmDialog
+        open={Boolean(pendingInstall)}
+        level="medium"
+        title="安装技能"
+        summary={pendingInstall ? `确定安装「${pendingInstall.name}」吗？` : "确定安装该技能吗？"}
+        impact={pendingInstall ? `slug: ${pendingInstall.slug}` : undefined}
+        irreversible={false}
+        confirmLabel="确认安装"
+        cancelLabel="取消"
+        loading={Boolean(installingSlug)}
+        onConfirm={handleConfirmInstall}
+        onCancel={handleCancelInstall}
+      />
     </div>
   );
 }
