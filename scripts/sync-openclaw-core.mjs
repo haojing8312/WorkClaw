@@ -12,16 +12,9 @@ const vendorRoot = resolve(repoRoot, "apps/runtime/sidecar/vendor/openclaw-core"
 const copyManifest = [
   "src/routing/resolve-route.ts",
   "src/routing/session-key.ts",
-  "src/routing/bindings.ts",
   "src/routing/account-id.ts",
   "src/routing/account-lookup.ts",
   "src/channels/chat-type.ts",
-  "src/agents/agent-scope.ts",
-  "src/agents/tool-policy-shared.ts",
-  "src/config/types.agents.ts",
-  "src/config/types.agents-shared.ts",
-  "src/config/types.tools.ts",
-  "src/config/types.sandbox.ts",
 ];
 
 function ensureDir(path) {
