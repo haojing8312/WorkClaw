@@ -4,7 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
-import { SkillManifest, ModelConfig, Message, StreamItem, FileAttachment, SkillRouteEvent, ImRoleTimelineEvent, ImRoleDispatchRequest } from "../types";
+import { SkillManifest, ModelConfig, Message, StreamItem, FileAttachment, SkillRouteEvent, ImRoleTimelineEvent, ImRoleDispatchRequest, ImRouteDecisionEvent } from "../types";
 import { motion, AnimatePresence } from "framer-motion";
 import { ToolIsland } from "./ToolIsland";
 import { RiskConfirmDialog } from "./RiskConfirmDialog";
@@ -95,6 +95,7 @@ export function ChatView({
   const [sidePanelTab, setSidePanelTab] = useState<"assets" | "routing">("assets");
   const [routeEvents, setRouteEvents] = useState<SkillRouteEvent[]>([]);
   const [imRoleEvents, setImRoleEvents] = useState<ImRoleTimelineEvent[]>([]);
+  const [imRouteDecisions, setImRouteDecisions] = useState<ImRouteDecisionEvent[]>([]);
 
   // File Upload: 读取文件为文本
   const readFileAsText = (file: File): Promise<string> => {
@@ -225,6 +226,7 @@ export function ChatView({
     setToolConfirm(null);
     setRouteEvents([]);
     setImRoleEvents([]);
+    setImRouteDecisions([]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
@@ -338,6 +340,16 @@ export function ChatView({
           summary: `任务已分发(${payload.agent_type})`,
         },
       ]);
+    });
+    return () => {
+      unlistenPromise.then((fn) => fn());
+    };
+  }, [sessionId]);
+
+  useEffect(() => {
+    const unlistenPromise = listen<ImRouteDecisionEvent>("im-route-decision", ({ payload }) => {
+      if (payload.session_id && payload.session_id !== sessionId) return;
+      setImRouteDecisions((prev) => [...prev, payload]);
     });
     return () => {
       unlistenPromise.then((fn) => fn());
@@ -1121,6 +1133,23 @@ export function ChatView({
                               </span>
                             </div>
                             {evt.summary && <div className="text-gray-500 mt-1">{evt.summary}</div>}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="p-3 bg-white rounded-lg border border-gray-200 shadow-sm">
+                    <div className="text-xs text-gray-500 mb-2">路由决策</div>
+                    {imRouteDecisions.length === 0 ? (
+                      <div className="text-xs text-gray-400">暂无路由决策事件</div>
+                    ) : (
+                      <div className="space-y-2">
+                        {imRouteDecisions.slice(-8).map((evt, idx) => (
+                          <div key={`${evt.thread_id}-${evt.session_key}-${idx}`} className="text-xs bg-gray-50 rounded p-2">
+                            <div className="font-mono text-gray-700">agent: {evt.agent_id}</div>
+                            <div className="text-gray-500 mt-1">matched_by: {evt.matched_by}</div>
+                            <div className="text-gray-500">session_key: {evt.session_key}</div>
                           </div>
                         ))}
                       </div>

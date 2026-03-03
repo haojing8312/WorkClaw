@@ -207,6 +207,14 @@ export interface ImRoleDispatchRequest {
   agent_type: string;
 }
 
+export interface ImRouteDecisionEvent {
+  session_id?: string;
+  thread_id: string;
+  agent_id: string;
+  session_key: string;
+  matched_by: string;
+}
+
 export interface FeishuGatewaySettings {
   app_id: string;
   app_secret: string;

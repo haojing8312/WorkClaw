@@ -96,6 +96,13 @@ describe("ChatView IM routing panel", () => {
         prompt: "场景=opportunity_review。用户输入：请开始评审",
         agent_type: "plan",
       });
+      emit("im-route-decision", {
+        session_id: "session-a",
+        thread_id: "thread-1",
+        agent_id: "peer-agent",
+        session_key: "agent:peer-agent:main",
+        matched_by: "binding.peer",
+      });
     });
 
     await waitFor(() => {
@@ -109,6 +116,10 @@ describe("ChatView IM routing panel", () => {
       expect(screen.getAllByText("架构师").length).toBeGreaterThan(0);
       expect(screen.getByText("正在评估技术可行性")).toBeInTheDocument();
       expect(screen.getByText("任务已分发(plan)")).toBeInTheDocument();
+      expect(screen.getByText("路由决策")).toBeInTheDocument();
+      expect(screen.getByText("agent: peer-agent")).toBeInTheDocument();
+      expect(screen.getByText("matched_by: binding.peer")).toBeInTheDocument();
+      expect(screen.getByText("session_key: agent:peer-agent:main")).toBeInTheDocument();
     });
   });
 });

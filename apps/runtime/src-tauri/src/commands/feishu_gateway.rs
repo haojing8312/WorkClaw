@@ -3,6 +3,7 @@ use crate::commands::employee_agents::{
     ensure_employee_sessions_for_event_with_pool, link_inbound_event_to_session_with_pool,
 };
 use crate::commands::im_gateway::process_im_event;
+use crate::commands::openclaw_gateway::resolve_openclaw_route_with_pool;
 use crate::commands::skills::DbState;
 use crate::im::feishu_adapter::{build_feishu_markdown_message, build_feishu_text_message};
 use crate::im::feishu_formatter::format_role_message;
@@ -25,6 +26,15 @@ pub struct FeishuGatewayResult {
     pub accepted: bool,
     pub deduped: bool,
     pub challenge: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct ImRouteDecisionEvent {
+    pub session_id: String,
+    pub thread_id: String,
+    pub agent_id: String,
+    pub session_key: String,
+    pub matched_by: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -379,6 +389,7 @@ pub async fn handle_feishu_event(
         ParsedFeishuPayload::Event(event) => {
             let r = process_im_event(&db.0, event.clone()).await?;
             if !r.deduped {
+                let route_decision = resolve_openclaw_route_with_pool(&db.0, &event).await.ok();
                 let employee_sessions =
                     ensure_employee_sessions_for_event_with_pool(&db.0, &event).await?;
                 for s in &employee_sessions {
@@ -389,6 +400,34 @@ pub async fn handle_feishu_event(
                         &s.session_id,
                     )
                     .await;
+                    let route_agent_id = route_decision
+                        .as_ref()
+                        .and_then(|v| v.get("agentId"))
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or(&s.role_id)
+                        .to_string();
+                    let route_session_key = route_decision
+                        .as_ref()
+                        .and_then(|v| v.get("sessionKey"))
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or(&s.session_id)
+                        .to_string();
+                    let matched_by = route_decision
+                        .as_ref()
+                        .and_then(|v| v.get("matchedBy"))
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("default")
+                        .to_string();
+                    let _ = app.emit(
+                        "im-route-decision",
+                        ImRouteDecisionEvent {
+                            session_id: s.session_id.clone(),
+                            thread_id: event.thread_id.clone(),
+                            agent_id: route_agent_id,
+                            session_key: route_session_key,
+                            matched_by,
+                        },
+                    );
 
                     let _ = app.emit(
                         "im-role-event",
@@ -773,6 +812,7 @@ async fn sync_feishu_ws_events_core(
         let r = process_im_event(pool, inbound.clone()).await?;
         if r.accepted && !r.deduped {
             if let Ok(employee_sessions) = ensure_employee_sessions_for_event_with_pool(pool, &inbound).await {
+                let route_decision = resolve_openclaw_route_with_pool(pool, &inbound).await.ok();
                 for s in employee_sessions {
                     let _ = link_inbound_event_to_session_with_pool(
                         pool,
@@ -782,6 +822,34 @@ async fn sync_feishu_ws_events_core(
                     )
                     .await;
                     if let Some(app) = app {
+                        let route_agent_id = route_decision
+                            .as_ref()
+                            .and_then(|v| v.get("agentId"))
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or(&s.role_id)
+                            .to_string();
+                        let route_session_key = route_decision
+                            .as_ref()
+                            .and_then(|v| v.get("sessionKey"))
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or(&s.session_id)
+                            .to_string();
+                        let matched_by = route_decision
+                            .as_ref()
+                            .and_then(|v| v.get("matchedBy"))
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("default")
+                            .to_string();
+                        let _ = app.emit(
+                            "im-route-decision",
+                            ImRouteDecisionEvent {
+                                session_id: s.session_id.clone(),
+                                thread_id: inbound.thread_id.clone(),
+                                agent_id: route_agent_id,
+                                session_key: route_session_key,
+                                matched_by,
+                            },
+                        );
                         let _ = app.emit(
                             "im-role-event",
                             build_im_role_event_payload(
