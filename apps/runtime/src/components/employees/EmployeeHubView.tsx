@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { AgentEmployee, RuntimePreferences, SkillManifest, UpsertAgentEmployeeInput } from "../../types";
+import { RiskConfirmDialog } from "../RiskConfirmDialog";
 
 interface Props {
   employees: AgentEmployee[];
@@ -64,6 +65,7 @@ export function EmployeeHubView({
   const [message, setMessage] = useState("");
   const [globalDefaultWorkDir, setGlobalDefaultWorkDir] = useState("");
   const [savingGlobalWorkDir, setSavingGlobalWorkDir] = useState(false);
+  const [pendingDeleteEmployee, setPendingDeleteEmployee] = useState<{ id: string; name: string } | null>(null);
 
   const skillOptions = useMemo(
     () => skills.filter((s) => s.id !== "builtin-general"),
@@ -124,19 +126,34 @@ export function EmployeeHubView({
     }
   }
 
-  async function removeCurrent() {
-    if (!selectedEmployeeId) return;
+  function requestRemoveCurrent() {
+    if (!selectedEmployeeId || saving) return;
+    const target = employees.find((x) => x.id === selectedEmployeeId);
+    setPendingDeleteEmployee({
+      id: selectedEmployeeId,
+      name: target?.name ?? selectedEmployeeId,
+    });
+  }
+
+  async function confirmRemoveCurrent() {
+    if (!pendingDeleteEmployee || saving) return;
     setSaving(true);
     setMessage("");
     try {
-      await onDeleteEmployee(selectedEmployeeId);
+      await onDeleteEmployee(pendingDeleteEmployee.id);
       resetForm();
       setMessage("员工已删除");
     } catch (e) {
       setMessage(String(e));
     } finally {
       setSaving(false);
+      setPendingDeleteEmployee(null);
     }
+  }
+
+  function cancelRemoveCurrent() {
+    if (saving) return;
+    setPendingDeleteEmployee(null);
   }
 
   async function saveGlobalDefaultWorkDir() {
@@ -169,6 +186,13 @@ export function EmployeeHubView({
       persona: tpl.persona,
     }));
   }
+
+  const deleteDialogSummary = pendingDeleteEmployee
+    ? `确定删除员工「${pendingDeleteEmployee.name}」吗？`
+    : "确定删除该员工吗？";
+  const deleteDialogImpact = pendingDeleteEmployee
+    ? `员工ID: ${pendingDeleteEmployee.id}`
+    : undefined;
 
   return (
     <div className="h-full overflow-y-auto bg-gray-50">
@@ -358,7 +382,7 @@ export function EmployeeHubView({
               </button>
               <button
                 disabled={saving || !selectedEmployeeId}
-                onClick={removeCurrent}
+                onClick={requestRemoveCurrent}
                 className="h-8 px-3 rounded bg-red-50 hover:bg-red-100 disabled:bg-gray-100 text-red-600 text-xs"
               >
                 删除员工
@@ -374,6 +398,19 @@ export function EmployeeHubView({
           </div>
         </div>
       </div>
+      <RiskConfirmDialog
+        open={Boolean(pendingDeleteEmployee)}
+        level="high"
+        title="删除员工"
+        summary={deleteDialogSummary}
+        impact={deleteDialogImpact}
+        irreversible
+        confirmLabel="确认删除"
+        cancelLabel="取消"
+        loading={saving}
+        onConfirm={confirmRemoveCurrent}
+        onCancel={cancelRemoveCurrent}
+      />
     </div>
   );
 }

@@ -21,6 +21,7 @@ import {
   SkillManifest,
   UpsertAgentEmployeeInput,
 } from "../types";
+import { RiskConfirmDialog } from "./RiskConfirmDialog";
 
 const MCP_PRESETS = [
   { label: "— 快速选择 —", value: "", name: "", command: "", args: "", env: "" },
@@ -236,6 +237,8 @@ export function SettingsView({ onClose }: Props) {
     "presales,project_manager,business_consultant,architect"
   );
   const [feishuOpMessage, setFeishuOpMessage] = useState("");
+  const [pendingDeleteEmployee, setPendingDeleteEmployee] = useState<{ id: string; name: string } | null>(null);
+  const [deletingEmployee, setDeletingEmployee] = useState(false);
 
   useEffect(() => {
     loadModels();
@@ -506,10 +509,20 @@ export function SettingsView({ onClose }: Props) {
     }));
   }
 
-  async function handleDeleteEmployee() {
-    if (!selectedEmployeeId) return;
+  function requestDeleteEmployee() {
+    if (!selectedEmployeeId || deletingEmployee) return;
+    const target = employees.find((x) => x.id === selectedEmployeeId);
+    setPendingDeleteEmployee({
+      id: selectedEmployeeId,
+      name: target?.name ?? selectedEmployeeId,
+    });
+  }
+
+  async function confirmDeleteEmployee() {
+    if (!pendingDeleteEmployee || deletingEmployee) return;
+    setDeletingEmployee(true);
     try {
-      await invoke("delete_agent_employee", { employeeId: selectedEmployeeId });
+      await invoke("delete_agent_employee", { employeeId: pendingDeleteEmployee.id });
       setSelectedEmployeeId("");
       setEmployeeForm({
         id: undefined,
@@ -529,7 +542,15 @@ export function SettingsView({ onClose }: Props) {
       await loadAgentEmployees();
     } catch (e) {
       setFeishuOpMessage("删除员工失败: " + String(e));
+    } finally {
+      setDeletingEmployee(false);
+      setPendingDeleteEmployee(null);
     }
+  }
+
+  function cancelDeleteEmployee() {
+    if (deletingEmployee) return;
+    setPendingDeleteEmployee(null);
   }
 
   function handlePickEmployee(employeeId: string) {
@@ -551,6 +572,13 @@ export function SettingsView({ onClose }: Props) {
       skill_ids: employee.skill_ids.length > 0 ? employee.skill_ids : [],
     });
   }
+
+  const deleteEmployeeSummary = pendingDeleteEmployee
+    ? `确定删除员工「${pendingDeleteEmployee.name}」吗？`
+    : "确定删除该员工吗？";
+  const deleteEmployeeImpact = pendingDeleteEmployee
+    ? `员工ID: ${pendingDeleteEmployee.id}`
+    : undefined;
 
   async function handleBindThreadEmployees() {
     if (!selectedThreadId.trim()) {
@@ -2340,7 +2368,7 @@ export function SettingsView({ onClose }: Props) {
                     保存员工
                   </button>
                   <button
-                    onClick={handleDeleteEmployee}
+                    onClick={requestDeleteEmployee}
                     className="bg-red-50 hover:bg-red-100 text-red-600 text-sm py-1.5 px-3 rounded-lg"
                   >
                     删除员工
@@ -2464,6 +2492,19 @@ export function SettingsView({ onClose }: Props) {
           </div>
         </div>
       )}
+      <RiskConfirmDialog
+        open={Boolean(pendingDeleteEmployee)}
+        level="high"
+        title="删除员工"
+        summary={deleteEmployeeSummary}
+        impact={deleteEmployeeImpact}
+        irreversible
+        confirmLabel="确认删除"
+        cancelLabel="取消"
+        loading={deletingEmployee}
+        onConfirm={confirmDeleteEmployee}
+        onCancel={cancelDeleteEmployee}
+      />
     </div>
   );
 }
