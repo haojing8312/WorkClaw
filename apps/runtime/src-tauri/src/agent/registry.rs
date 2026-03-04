@@ -1,7 +1,7 @@
 use super::tools::{
-    BashTool, EditTool, FileCopyTool, FileDeleteTool, FileMoveTool, FileStatTool,
-    GlobTool, GrepTool, ListDirTool, OpenInFolderTool, ReadFileTool, ScreenshotTool,
-    TodoWriteTool, WebFetchTool, WriteFileTool,
+    BashTool, EditTool, FileCopyTool, FileDeleteTool, FileMoveTool, FileStatTool, GlobTool,
+    GrepTool, ListDirTool, OpenInFolderTool, ReadFileTool, ScreenshotTool, TodoWriteTool,
+    WebFetchTool, WriteFileTool,
 };
 use super::types::Tool;
 use serde_json::{json, Value};
@@ -43,7 +43,10 @@ impl ToolRegistry {
     }
 
     pub fn register(&self, tool: Arc<dyn Tool>) {
-        self.tools.write().unwrap().insert(tool.name().to_string(), tool);
+        self.tools
+            .write()
+            .unwrap()
+            .insert(tool.name().to_string(), tool);
     }
 
     pub fn unregister(&self, name: &str) {
@@ -93,7 +96,10 @@ impl ToolRegistry {
 
     /// 返回所有以指定前缀开头的工具名称
     pub fn tools_with_prefix(&self, prefix: &str) -> Vec<String> {
-        self.tools.read().unwrap().keys()
+        self.tools
+            .read()
+            .unwrap()
+            .keys()
             .filter(|k| k.starts_with(prefix))
             .cloned()
             .collect()

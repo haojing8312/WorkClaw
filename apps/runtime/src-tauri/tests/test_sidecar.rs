@@ -6,11 +6,19 @@ async fn test_sidecar_start_and_health_check() {
 
     // Start sidecar
     let result = manager.start().await;
-    assert!(result.is_ok(), "Sidecar should start successfully: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Sidecar should start successfully: {:?}",
+        result.err()
+    );
 
     // Health check should succeed
     let health = manager.health_check().await;
-    assert!(health.is_ok(), "Health check should pass: {:?}", health.err());
+    assert!(
+        health.is_ok(),
+        "Health check should pass: {:?}",
+        health.err()
+    );
 
     // Stop sidecar
     manager.stop();

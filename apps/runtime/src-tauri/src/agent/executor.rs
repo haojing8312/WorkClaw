@@ -297,7 +297,9 @@ impl AgentExecutor {
         session_id: Option<&str>,
         allowed_tools: Option<&[String]>,
         permission_mode: PermissionMode,
-        tool_confirm_tx: Option<std::sync::Arc<std::sync::Mutex<Option<std::sync::mpsc::Sender<bool>>>>>,
+        tool_confirm_tx: Option<
+            std::sync::Arc<std::sync::Mutex<Option<std::sync::mpsc::Sender<bool>>>>,
+        >,
         work_dir: Option<String>,
         max_iterations_override: Option<usize>,
         cancel_flag: Option<Arc<AtomicBool>>,
@@ -323,12 +325,15 @@ impl AgentExecutor {
                 if flag.load(Ordering::SeqCst) {
                     eprintln!("[agent] 任务被用户取消");
                     if let (Some(app), Some(sid)) = (app_handle, session_id) {
-                        let _ = app.emit("agent-state-event", AgentStateEvent {
-                            session_id: sid.to_string(),
-                            state: "finished".to_string(),
-                            detail: Some("用户取消".to_string()),
-                            iteration,
-                        });
+                        let _ = app.emit(
+                            "agent-state-event",
+                            AgentStateEvent {
+                                session_id: sid.to_string(),
+                                state: "finished".to_string(),
+                                detail: Some("用户取消".to_string()),
+                                iteration,
+                            },
+                        );
                     }
                     messages.push(json!({
                         "role": "assistant",
@@ -341,12 +346,15 @@ impl AgentExecutor {
             if iteration >= max_iterations {
                 // 发射 error 状态事件
                 if let (Some(app), Some(sid)) = (app_handle, session_id) {
-                    let _ = app.emit("agent-state-event", AgentStateEvent {
-                        session_id: sid.to_string(),
-                        state: "error".to_string(),
-                        detail: Some(format!("达到最大迭代次数 {}", max_iterations)),
-                        iteration,
-                    });
+                    let _ = app.emit(
+                        "agent-state-event",
+                        AgentStateEvent {
+                            session_id: sid.to_string(),
+                            state: "error".to_string(),
+                            detail: Some(format!("达到最大迭代次数 {}", max_iterations)),
+                            iteration,
+                        },
+                    );
                 }
                 return Err(anyhow!("达到最大迭代次数 {}", max_iterations));
             }
@@ -356,12 +364,15 @@ impl AgentExecutor {
 
             // 发射 thinking 状态事件
             if let (Some(app), Some(sid)) = (app_handle, session_id) {
-                let _ = app.emit("agent-state-event", AgentStateEvent {
-                    session_id: sid.to_string(),
-                    state: "thinking".to_string(),
-                    detail: None,
-                    iteration,
-                });
+                let _ = app.emit(
+                    "agent-state-event",
+                    AgentStateEvent {
+                        session_id: sid.to_string(),
+                        state: "thinking".to_string(),
+                        detail: None,
+                        iteration,
+                    },
+                );
             }
 
             // 自动压缩检查（仅在第二轮及之后，避免首轮触发）
@@ -380,12 +391,7 @@ impl AgentExecutor {
                         {
                             let path_str = path.to_string_lossy().to_string();
                             match super::compactor::auto_compact(
-                                api_format,
-                                base_url,
-                                api_key,
-                                model,
-                                &messages,
-                                &path_str,
+                                api_format, base_url, api_key, model, &messages, &path_str,
                             )
                             .await
                             {
@@ -452,34 +458,46 @@ impl AgentExecutor {
 
                     // 发射 finished 状态事件
                     if let (Some(app), Some(sid)) = (app_handle, session_id) {
-                        let _ = app.emit("agent-state-event", AgentStateEvent {
-                            session_id: sid.to_string(),
-                            state: "finished".to_string(),
-                            detail: None,
-                            iteration,
-                        });
+                        let _ = app.emit(
+                            "agent-state-event",
+                            AgentStateEvent {
+                                session_id: sid.to_string(),
+                                state: "finished".to_string(),
+                                detail: None,
+                                iteration,
+                            },
+                        );
                     }
 
                     return Ok(messages);
                 }
-                tc_response @ (LLMResponse::ToolCalls(_) | LLMResponse::TextWithToolCalls(_, _)) => {
+                tc_response
+                @ (LLMResponse::ToolCalls(_) | LLMResponse::TextWithToolCalls(_, _)) => {
                     let (companion_text, tool_calls) = match tc_response {
                         LLMResponse::ToolCalls(tc) => (String::new(), tc),
                         LLMResponse::TextWithToolCalls(text, tc) => (text, tc),
                         _ => unreachable!(),
                     };
 
-                    eprintln!("[agent] Executing {} tool calls (companion_text={})", tool_calls.len(), !companion_text.is_empty());
+                    eprintln!(
+                        "[agent] Executing {} tool calls (companion_text={})",
+                        tool_calls.len(),
+                        !companion_text.is_empty()
+                    );
 
                     // 发射 tool_calling 状态事件
                     if let (Some(app), Some(sid)) = (app_handle, session_id) {
-                        let tool_names: Vec<&str> = tool_calls.iter().map(|tc| tc.name.as_str()).collect();
-                        let _ = app.emit("agent-state-event", AgentStateEvent {
-                            session_id: sid.to_string(),
-                            state: "tool_calling".to_string(),
-                            detail: Some(tool_names.join(", ")),
-                            iteration,
-                        });
+                        let tool_names: Vec<&str> =
+                            tool_calls.iter().map(|tc| tc.name.as_str()).collect();
+                        let _ = app.emit(
+                            "agent-state-event",
+                            AgentStateEvent {
+                                session_id: sid.to_string(),
+                                state: "tool_calling".to_string(),
+                                detail: Some(tool_names.join(", ")),
+                                iteration,
+                            },
+                        );
                     }
 
                     // 执行所有工具调用
@@ -520,12 +538,15 @@ impl AgentExecutor {
                                 eprintln!("[agent] 工具执行中被用户取消");
                                 // 发射 finished 事件，确保前端清除状态指示器
                                 if let (Some(app), Some(sid)) = (app_handle, session_id) {
-                                    let _ = app.emit("agent-state-event", AgentStateEvent {
-                                        session_id: sid.to_string(),
-                                        state: "finished".to_string(),
-                                        detail: Some("用户取消".to_string()),
-                                        iteration,
-                                    });
+                                    let _ = app.emit(
+                                        "agent-state-event",
+                                        AgentStateEvent {
+                                            session_id: sid.to_string(),
+                                            state: "finished".to_string(),
+                                            detail: Some("用户取消".to_string()),
+                                            iteration,
+                                        },
+                                    );
                                 }
                                 messages.push(json!({
                                     "role": "assistant",
@@ -559,24 +580,30 @@ impl AgentExecutor {
 
                         // 发送工具开始事件
                         if let (Some(app), Some(sid)) = (app_handle, session_id) {
-                            let _ = app.emit("tool-call-event", ToolCallEvent {
-                                session_id: sid.to_string(),
-                                tool_name: call.name.clone(),
-                                tool_input: call.input.clone(),
-                                tool_output: None,
-                                status: "started".to_string(),
-                            });
+                            let _ = app.emit(
+                                "tool-call-event",
+                                ToolCallEvent {
+                                    session_id: sid.to_string(),
+                                    tool_name: call.name.clone(),
+                                    tool_input: call.input.clone(),
+                                    tool_output: None,
+                                    status: "started".to_string(),
+                                },
+                            );
                         }
 
                         // 权限确认检查：在执行工具前判断是否需要用户确认
                         if permission_mode.needs_confirmation(&call.name) {
                             if let (Some(app), Some(sid)) = (app_handle, session_id) {
                                 // 发射确认请求事件，前端弹出确认对话框
-                                let _ = app.emit("tool-confirm-event", serde_json::json!({
-                                    "session_id": sid,
-                                    "tool_name": call.name,
-                                    "tool_input": call.input,
-                                }));
+                                let _ = app.emit(
+                                    "tool-confirm-event",
+                                    serde_json::json!({
+                                        "session_id": sid,
+                                        "tool_name": call.name,
+                                        "tool_input": call.input,
+                                    }),
+                                );
 
                                 // 创建一次性通道并将发送端存入全局状态
                                 let (tx, rx) = std::sync::mpsc::channel::<bool>();
@@ -600,13 +627,16 @@ impl AgentExecutor {
 
                                 if !confirmed {
                                     // 用户拒绝 — 记录拒绝事件并跳过此工具
-                                    let _ = app.emit("tool-call-event", ToolCallEvent {
-                                        session_id: sid.to_string(),
-                                        tool_name: call.name.clone(),
-                                        tool_input: call.input.clone(),
-                                        tool_output: Some("用户拒绝了此操作".to_string()),
-                                        status: "error".to_string(),
-                                    });
+                                    let _ = app.emit(
+                                        "tool-call-event",
+                                        ToolCallEvent {
+                                            session_id: sid.to_string(),
+                                            tool_name: call.name.clone(),
+                                            tool_input: call.input.clone(),
+                                            tool_output: Some("用户拒绝了此操作".to_string()),
+                                            status: "error".to_string(),
+                                        },
+                                    );
                                     tool_results.push(ToolResult {
                                         tool_use_id: call.id.clone(),
                                         content: "用户拒绝了此操作".to_string(),
@@ -616,7 +646,11 @@ impl AgentExecutor {
                             }
                         }
 
-                        let max_attempts = if is_skill_call { route_retry_count + 1 } else { 1 };
+                        let max_attempts = if is_skill_call {
+                            route_retry_count + 1
+                        } else {
+                            1
+                        };
                         let mut attempt = 0usize;
                         let (result, is_error) = loop {
                             attempt += 1;
@@ -625,7 +659,10 @@ impl AgentExecutor {
                                     // 检查白名单：若设置了白名单但工具不在其中，拒绝执行
                                     if let Some(whitelist) = allowed_tools {
                                         if !whitelist.iter().any(|w| w == &call.name) {
-                                            (format!("此 Skill 不允许使用工具: {}", call.name), true)
+                                            (
+                                                format!("此 Skill 不允许使用工具: {}", call.name),
+                                                true,
+                                            )
                                         } else {
                                             let tool_clone = Arc::clone(&tool);
                                             let input_clone = call.input.clone();
@@ -650,13 +687,18 @@ impl AgentExecutor {
                                             };
                                             if is_skill_call {
                                                 match tokio::time::timeout(
-                                                    std::time::Duration::from_secs(route_node_timeout_secs),
+                                                    std::time::Duration::from_secs(
+                                                        route_node_timeout_secs,
+                                                    ),
                                                     exec_future,
                                                 )
                                                 .await
                                                 {
                                                     Ok(v) => v,
-                                                    Err(_) => ("TIMEOUT: 子 Skill 执行超时".to_string(), true),
+                                                    Err(_) => (
+                                                        "TIMEOUT: 子 Skill 执行超时".to_string(),
+                                                        true,
+                                                    ),
                                                 }
                                             } else {
                                                 exec_future.await
@@ -686,13 +728,17 @@ impl AgentExecutor {
                                         };
                                         if is_skill_call {
                                             match tokio::time::timeout(
-                                                std::time::Duration::from_secs(route_node_timeout_secs),
+                                                std::time::Duration::from_secs(
+                                                    route_node_timeout_secs,
+                                                ),
                                                 exec_future,
                                             )
                                             .await
                                             {
                                                 Ok(v) => v,
-                                                Err(_) => ("TIMEOUT: 子 Skill 执行超时".to_string(), true),
+                                                Err(_) => {
+                                                    ("TIMEOUT: 子 Skill 执行超时".to_string(), true)
+                                                }
                                             }
                                         } else {
                                             exec_future.await
@@ -701,7 +747,8 @@ impl AgentExecutor {
                                 }
                                 None => {
                                     // 列出可用工具，引导 LLM 使用正确的工具
-                                    let available: Vec<String> = self.registry
+                                    let available: Vec<String> = self
+                                        .registry
                                         .get_tool_definitions()
                                         .iter()
                                         .filter_map(|t| t["name"].as_str().map(String::from))
@@ -725,17 +772,20 @@ impl AgentExecutor {
 
                         // 发送工具完成事件
                         if let (Some(app), Some(sid)) = (app_handle, session_id) {
-                            let _ = app.emit("tool-call-event", ToolCallEvent {
-                                session_id: sid.to_string(),
-                                tool_name: call.name.clone(),
-                                tool_input: call.input.clone(),
-                                tool_output: Some(result.clone()),
-                                status: if is_error {
-                                    "error".to_string()
-                                } else {
-                                    "completed".to_string()
+                            let _ = app.emit(
+                                "tool-call-event",
+                                ToolCallEvent {
+                                    session_id: sid.to_string(),
+                                    tool_name: call.name.clone(),
+                                    tool_input: call.input.clone(),
+                                    tool_output: Some(result.clone()),
+                                    status: if is_error {
+                                        "error".to_string()
+                                    } else {
+                                        "completed".to_string()
+                                    },
                                 },
-                            });
+                            );
                         }
 
                         if is_skill_call {

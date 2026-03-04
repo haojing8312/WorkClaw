@@ -129,14 +129,12 @@ impl ProcessManager {
         // 在后台线程中等待子进程退出，更新退出状态
         // 注意：child 的所有权移入此线程，不需要 Mutex
         let exit_status_clone = Arc::clone(&exit_status);
-        thread::spawn(move || {
-            match child.wait() {
-                Ok(status) => {
-                    *exit_status_clone.lock().unwrap() = Some(status.code().unwrap_or(-1));
-                }
-                Err(_) => {
-                    *exit_status_clone.lock().unwrap() = Some(-1);
-                }
+        thread::spawn(move || match child.wait() {
+            Ok(status) => {
+                *exit_status_clone.lock().unwrap() = Some(status.code().unwrap_or(-1));
+            }
+            Err(_) => {
+                *exit_status_clone.lock().unwrap() = Some(-1);
             }
         });
 
@@ -148,7 +146,10 @@ impl ProcessManager {
             exit_status,
         };
 
-        self.processes.lock().unwrap().insert(id.clone(), bg_process);
+        self.processes
+            .lock()
+            .unwrap()
+            .insert(id.clone(), bg_process);
         Ok(id)
     }
 
@@ -163,9 +164,7 @@ impl ProcessManager {
         let stderr_buf_arc;
         {
             let procs = self.processes.lock().unwrap();
-            let proc = procs
-                .get(id)
-                .ok_or_else(|| anyhow!("进程 {} 不存在", id))?;
+            let proc = procs.get(id).ok_or_else(|| anyhow!("进程 {} 不存在", id))?;
             exit_status_arc = Arc::clone(&proc.exit_status);
             stdout_buf_arc = Arc::clone(&proc.stdout_buf);
             stderr_buf_arc = Arc::clone(&proc.stderr_buf);
@@ -203,9 +202,7 @@ impl ProcessManager {
         let pid;
         {
             let procs = self.processes.lock().unwrap();
-            let proc = procs
-                .get(id)
-                .ok_or_else(|| anyhow!("进程 {} 不存在", id))?;
+            let proc = procs.get(id).ok_or_else(|| anyhow!("进程 {} 不存在", id))?;
             pid = proc.pid;
         }
 
@@ -230,9 +227,7 @@ impl ProcessManager {
     #[cfg(not(target_os = "windows"))]
     fn kill_process_by_pid(pid: u32) -> Result<()> {
         // Unix 上使用 kill -9 终止进程
-        let output = Command::new("kill")
-            .args(["-9", &pid.to_string()])
-            .output();
+        let output = Command::new("kill").args(["-9", &pid.to_string()]).output();
         match output {
             Ok(_) => Ok(()),
             Err(e) => Err(anyhow!("终止进程 {} 失败: {}", pid, e)),

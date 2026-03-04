@@ -42,11 +42,12 @@ fn normalize_path(raw: &str) -> String {
 }
 
 async fn get_app_setting(pool: &SqlitePool, key: &str) -> Result<Option<String>, String> {
-    let row = sqlx::query_as::<_, (String,)>("SELECT value FROM app_settings WHERE key = ? LIMIT 1")
-        .bind(key)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| e.to_string())?;
+    let row =
+        sqlx::query_as::<_, (String,)>("SELECT value FROM app_settings WHERE key = ? LIMIT 1")
+            .bind(key)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| e.to_string())?;
     Ok(row.map(|(v,)| v))
 }
 
@@ -63,7 +64,9 @@ async fn set_app_setting(pool: &SqlitePool, key: &str, value: &str) -> Result<()
     Ok(())
 }
 
-pub async fn get_runtime_preferences_with_pool(pool: &SqlitePool) -> Result<RuntimePreferences, String> {
+pub async fn get_runtime_preferences_with_pool(
+    pool: &SqlitePool,
+) -> Result<RuntimePreferences, String> {
     let saved = get_app_setting(pool, KEY_RUNTIME_DEFAULT_WORK_DIR).await?;
     let dir = saved
         .map(|v| normalize_path(&v))

@@ -25,7 +25,8 @@ fn capture_writes_session_and_long_term_with_gate() {
         author_role: "architect".to_string(),
         confidence: 0.5,
     };
-    let r2 = capture_entry(root, "thread-1", "architect", &unconfirmed).expect("capture unconfirmed");
+    let r2 =
+        capture_entry(root, "thread-1", "architect", &unconfirmed).expect("capture unconfirmed");
     assert!(r2.session_written);
     assert!(!r2.long_term_written);
 
@@ -33,4 +34,3 @@ fn capture_writes_session_and_long_term_with_gate() {
     assert!(recalled.contains("客户预算在 80-120 万"));
     assert!(recalled.contains("msg-1"));
 }
-

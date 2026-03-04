@@ -31,9 +31,12 @@ pub fn final_recommendation(input: &OpportunityReviewInput) -> String {
     };
     format!(
         "承接建议: {}\n成本区间: {}\n风险: {}",
-        if input.feasible { "建议承接" } else { "暂不承接" },
+        if input.feasible {
+            "建议承接"
+        } else {
+            "暂不承接"
+        },
         input.estimated_cost_range,
         risk_text
     )
 }
-

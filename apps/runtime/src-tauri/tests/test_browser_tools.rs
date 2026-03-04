@@ -18,11 +18,7 @@ fn test_all_browser_tools_registered() {
 
     // 验证每个工具都能通过名称获取
     for name in &BROWSER_TOOL_NAMES {
-        assert!(
-            registry.get(name).is_some(),
-            "工具 {} 应已注册",
-            name
-        );
+        assert!(registry.get(name).is_some(), "工具 {} 应已注册", name);
     }
 }
 
@@ -31,7 +27,9 @@ fn test_browser_navigate_schema_has_required_url() {
     let registry = ToolRegistry::new();
     register_browser_tools(&registry, "http://localhost:8765");
 
-    let tool = registry.get("browser_navigate").expect("browser_navigate 应已注册");
+    let tool = registry
+        .get("browser_navigate")
+        .expect("browser_navigate 应已注册");
     let schema = tool.input_schema();
 
     // 验证 schema 包含 url 属性
@@ -73,7 +71,9 @@ fn test_browser_scroll_schema_has_direction_enum() {
     let registry = ToolRegistry::new();
     register_browser_tools(&registry, "http://localhost:8765");
 
-    let tool = registry.get("browser_scroll").expect("browser_scroll 应已注册");
+    let tool = registry
+        .get("browser_scroll")
+        .expect("browser_scroll 应已注册");
     let schema = tool.input_schema();
 
     // 验证 direction 有 enum 约束
@@ -140,7 +140,9 @@ fn test_browser_evaluate_schema_requires_script() {
     let registry = ToolRegistry::new();
     register_browser_tools(&registry, "http://localhost:8765");
 
-    let tool = registry.get("browser_evaluate").expect("browser_evaluate 应已注册");
+    let tool = registry
+        .get("browser_evaluate")
+        .expect("browser_evaluate 应已注册");
     let schema = tool.input_schema();
 
     let required = schema["required"].as_array().expect("应有 required 数组");
@@ -174,11 +176,7 @@ fn test_browser_tools_no_required_for_optional_tools() {
         // 这些工具的 schema 不应有 required 字段，或 required 为空
         if let Some(required) = schema.get("required") {
             if let Some(arr) = required.as_array() {
-                assert!(
-                    arr.is_empty(),
-                    "工具 {} 不应有必填参数",
-                    name
-                );
+                assert!(arr.is_empty(), "工具 {} 不应有必填参数", name);
             }
         }
         // 如果没有 required 字段也是正确的
@@ -190,10 +188,18 @@ fn test_browser_launch_schema_is_local_playwright_only() {
     let registry = ToolRegistry::new();
     register_browser_tools(&registry, "http://localhost:8765");
 
-    let tool = registry.get("browser_launch").expect("browser_launch 应已注册");
+    let tool = registry
+        .get("browser_launch")
+        .expect("browser_launch 应已注册");
     let schema = tool.input_schema();
-    assert!(schema["properties"]["headless"].is_object(), "应包含 headless");
-    assert!(schema["properties"]["viewport"].is_object(), "应包含 viewport");
+    assert!(
+        schema["properties"]["headless"].is_object(),
+        "应包含 headless"
+    );
+    assert!(
+        schema["properties"]["viewport"].is_object(),
+        "应包含 viewport"
+    );
     assert!(
         schema["properties"].get("provider").is_none(),
         "browser_launch schema 不应包含 provider"

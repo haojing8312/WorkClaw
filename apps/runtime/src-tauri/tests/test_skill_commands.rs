@@ -50,7 +50,9 @@ async fn render_local_skill_preview_uses_template_and_returns_save_path() {
     .expect("render preview");
 
     assert!(preview.markdown.contains("name: My Skill"));
-    assert!(preview.markdown.contains("description: Use when 用于整理文件"));
+    assert!(preview
+        .markdown
+        .contains("description: Use when 用于整理文件"));
     assert!(preview.markdown.contains("## Workflow"));
     assert!(preview.markdown.contains("## Quality Checklist"));
 
@@ -60,17 +62,14 @@ async fn render_local_skill_preview_uses_template_and_returns_save_path() {
 
 #[tokio::test]
 async fn render_local_skill_preview_has_default_values_for_empty_input() {
-    let preview = render_local_skill_preview(
-        "".to_string(),
-        "".to_string(),
-        "".to_string(),
-        None,
-    )
-    .await
-    .expect("render preview with defaults");
+    let preview = render_local_skill_preview("".to_string(), "".to_string(), "".to_string(), None)
+        .await
+        .expect("render preview with defaults");
 
     assert!(preview.markdown.contains("name: expert-skill"));
-    assert!(preview.markdown.contains("Use when 需要在特定任务场景中提供稳定执行能力"));
+    assert!(preview
+        .markdown
+        .contains("Use when 需要在特定任务场景中提供稳定执行能力"));
     assert!(preview.save_path.contains(".workclaw"));
     assert!(Path::new(&preview.save_path).ends_with("expert-skill"));
 }

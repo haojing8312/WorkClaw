@@ -54,7 +54,8 @@ fn test_edit_replace_all() {
     let path = "test_edit_replaceall.txt";
     fs::write(path, "aaa bbb aaa").unwrap();
 
-    let input = json!({"path": path, "old_string": "aaa", "new_string": "ccc", "replace_all": true});
+    let input =
+        json!({"path": path, "old_string": "aaa", "new_string": "ccc", "replace_all": true});
     let result = tool.execute(input, &ctx).unwrap();
     assert!(result.contains("2"));
 

@@ -1,9 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const vendorRoot = resolve(process.cwd(), "vendor", "openclaw-core");
+const testDir = dirname(fileURLToPath(import.meta.url));
+const vendorRoot = resolve(testDir, "..", "vendor", "openclaw-core");
 
 test("openclaw vendor metadata exists", () => {
   const commitPath = resolve(vendorRoot, "UPSTREAM_COMMIT");

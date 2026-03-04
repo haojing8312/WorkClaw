@@ -43,10 +43,7 @@ async fn test_react_loop_max_iterations_error() {
         .await;
 
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("最大迭代次数"));
+    assert!(result.unwrap_err().to_string().contains("最大迭代次数"));
 }
 
 #[tokio::test]
@@ -102,8 +99,8 @@ fn router_uses_fallback_on_primary_error() {
     assert_eq!(primary.provider_id, "deepseek");
     assert_eq!(primary.model, "deepseek-chat");
 
-    let fallback = route_with_fallback(&policy, Some(RouteFailureKind::RateLimit))
-        .expect("fallback route");
+    let fallback =
+        route_with_fallback(&policy, Some(RouteFailureKind::RateLimit)).expect("fallback route");
     assert_eq!(fallback.provider_id, "qwen");
     assert_eq!(fallback.model, "qwen-max");
 }

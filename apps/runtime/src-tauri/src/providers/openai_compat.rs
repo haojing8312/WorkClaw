@@ -26,6 +26,9 @@ impl ProviderPlugin for OpenAiCompatProvider {
     }
 
     fn capabilities(&self) -> Vec<String> {
-        self.capabilities.iter().map(|cap| (*cap).to_string()).collect()
+        self.capabilities
+            .iter()
+            .map(|cap| (*cap).to_string())
+            .collect()
     }
 }

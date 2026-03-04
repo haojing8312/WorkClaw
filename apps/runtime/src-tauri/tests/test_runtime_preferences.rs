@@ -1,8 +1,8 @@
 mod helpers;
 
 use runtime_lib::commands::runtime_preferences::{
-    get_runtime_preferences_with_pool, resolve_default_work_dir_with_pool, set_runtime_preferences_with_pool,
-    RuntimePreferencesInput,
+    get_runtime_preferences_with_pool, resolve_default_work_dir_with_pool,
+    set_runtime_preferences_with_pool, RuntimePreferencesInput,
 };
 
 #[tokio::test]
@@ -18,7 +18,11 @@ async fn runtime_preferences_returns_default_when_not_configured() {
 #[tokio::test]
 async fn runtime_preferences_can_be_saved_and_resolved_with_auto_create() {
     let (pool, tmp) = helpers::setup_test_db().await;
-    let target = tmp.path().join("workspace_target").to_string_lossy().to_string();
+    let target = tmp
+        .path()
+        .join("workspace_target")
+        .to_string_lossy()
+        .to_string();
 
     let saved = set_runtime_preferences_with_pool(
         &pool,

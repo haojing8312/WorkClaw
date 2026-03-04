@@ -52,17 +52,23 @@ fn parse_feishu_payload_maps_message_event() {
 #[tokio::test]
 async fn validate_feishu_auth_honors_configured_token() {
     let (pool, _tmp) = helpers::setup_test_db().await;
-    sqlx::query("INSERT INTO app_settings (key, value) VALUES ('feishu_ingress_token', 'feishu-secret')")
-        .execute(&pool)
-        .await
-        .expect("seed token");
+    sqlx::query(
+        "INSERT INTO app_settings (key, value) VALUES ('feishu_ingress_token', 'feishu-secret')",
+    )
+    .execute(&pool)
+    .await
+    .expect("seed token");
 
-    assert!(validate_feishu_auth_with_pool(&pool, Some("feishu-secret".to_string()))
-        .await
-        .is_ok());
-    assert!(validate_feishu_auth_with_pool(&pool, Some("wrong".to_string()))
-        .await
-        .is_err());
+    assert!(
+        validate_feishu_auth_with_pool(&pool, Some("feishu-secret".to_string()))
+            .await
+            .is_ok()
+    );
+    assert!(
+        validate_feishu_auth_with_pool(&pool, Some("wrong".to_string()))
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -143,7 +149,9 @@ async fn plan_role_events_for_feishu_uses_thread_bindings() {
 #[tokio::test]
 async fn resolve_feishu_settings_reads_from_app_settings() {
     let (pool, _tmp) = helpers::setup_test_db().await;
-    set_app_setting(&pool, "feishu_app_id", "cli_app").await.expect("set app id");
+    set_app_setting(&pool, "feishu_app_id", "cli_app")
+        .await
+        .expect("set app id");
     set_app_setting(&pool, "feishu_app_secret", "cli_secret")
         .await
         .expect("set app secret");

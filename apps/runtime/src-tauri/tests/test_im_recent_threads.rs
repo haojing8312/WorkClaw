@@ -59,4 +59,3 @@ async fn list_recent_threads_returns_latest_per_thread() {
     assert_eq!(threads[0].thread_id, "chat-a");
     assert_eq!(threads[0].last_text_preview, "hello a2");
 }
-

@@ -43,4 +43,3 @@ pub fn route_with_fallback(
         | Some(RouteFailureKind::Unknown) => ordered.get(1).cloned(),
     }
 }
-

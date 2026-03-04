@@ -12,4 +12,3 @@ pub fn format_role_message(
         next_step.trim()
     )
 }
-

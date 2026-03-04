@@ -1,7 +1,7 @@
 use crate::agent::types::{Tool, ToolContext};
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{mpsc, Arc, Mutex};
 use tauri::{AppHandle, Emitter};
 
 /// AskUser 响应通道 - 前端通过 Tauri command 发送用户响应
@@ -86,7 +86,10 @@ impl Tool for AskUserTool {
 
         // 设置 responder 以便前端 command 可以发送响应
         {
-            let mut guard = self.responder.lock().map_err(|e| anyhow!("锁获取失败: {}", e))?;
+            let mut guard = self
+                .responder
+                .lock()
+                .map_err(|e| anyhow!("锁获取失败: {}", e))?;
             *guard = Some(tx);
         }
 
@@ -111,7 +114,10 @@ impl Tool for AskUserTool {
 
         // 清理 responder
         {
-            let mut guard = self.responder.lock().map_err(|e| anyhow!("锁获取失败: {}", e))?;
+            let mut guard = self
+                .responder
+                .lock()
+                .map_err(|e| anyhow!("锁获取失败: {}", e))?;
             *guard = None;
         }
 

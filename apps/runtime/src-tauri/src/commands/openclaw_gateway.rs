@@ -1,7 +1,7 @@
-use crate::commands::im_gateway::{process_im_event, FeishuCallbackResult};
-use crate::commands::im_config::get_thread_role_config_with_pool;
-use crate::commands::im_routing::list_im_routing_bindings_with_pool;
 use crate::commands::feishu_gateway::{call_sidecar_json, resolve_feishu_sidecar_base_url};
+use crate::commands::im_config::get_thread_role_config_with_pool;
+use crate::commands::im_gateway::{process_im_event, FeishuCallbackResult};
+use crate::commands::im_routing::list_im_routing_bindings_with_pool;
 use crate::commands::skills::DbState;
 use crate::im::runtime_bridge::{build_im_role_event_payload, ImRoleEventPayload};
 use crate::im::types::{ImEvent, ImEventType};
@@ -15,8 +15,8 @@ struct OpenClawEnvelope {
 }
 
 pub fn parse_openclaw_payload(payload: &str) -> Result<ImEvent, String> {
-    let raw_value: serde_json::Value = serde_json::from_str(payload)
-        .map_err(|e| format!("invalid openclaw payload: {}", e))?;
+    let raw_value: serde_json::Value =
+        serde_json::from_str(payload).map_err(|e| format!("invalid openclaw payload: {}", e))?;
 
     let candidate = if raw_value.get("event").is_some() {
         let wrapped: OpenClawEnvelope = serde_json::from_value(raw_value)
@@ -126,11 +126,12 @@ pub async fn validate_openclaw_auth_with_pool(
     pool: &SqlitePool,
     auth_token: Option<String>,
 ) -> Result<(), String> {
-    let configured: Option<(String,)> =
-        sqlx::query_as("SELECT value FROM app_settings WHERE key = 'openclaw_ingress_token' LIMIT 1")
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| e.to_string())?;
+    let configured: Option<(String,)> = sqlx::query_as(
+        "SELECT value FROM app_settings WHERE key = 'openclaw_ingress_token' LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| e.to_string())?;
 
     let expected = configured.map(|(v,)| v).unwrap_or_default();
     if expected.trim().is_empty() {
@@ -149,7 +150,9 @@ pub async fn plan_role_events_for_openclaw(
     pool: &SqlitePool,
     event: &ImEvent,
 ) -> Result<Vec<ImRoleEventPayload>, String> {
-    if event.event_type != ImEventType::MessageCreated && event.event_type != ImEventType::MentionRole {
+    if event.event_type != ImEventType::MessageCreated
+        && event.event_type != ImEventType::MentionRole
+    {
         return Ok(Vec::new());
     }
 
@@ -186,7 +189,9 @@ pub async fn plan_role_events_for_openclaw(
         .collect())
 }
 
-fn bindings_to_openclaw_payload(bindings: Vec<crate::commands::im_routing::ImRoutingBinding>) -> Vec<serde_json::Value> {
+fn bindings_to_openclaw_payload(
+    bindings: Vec<crate::commands::im_routing::ImRoutingBinding>,
+) -> Vec<serde_json::Value> {
     bindings
         .into_iter()
         .filter(|binding| binding.enabled)

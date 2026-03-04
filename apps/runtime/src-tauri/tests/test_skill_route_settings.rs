@@ -1,18 +1,21 @@
 mod helpers;
 
 use runtime_lib::commands::models::{
-    apply_capability_route_template_from_pool, list_capability_route_templates_for,
-    get_capability_routing_policy_from_pool, get_chat_routing_policy_from_pool, list_provider_configs_from_pool,
-    list_provider_models_from_pool, list_route_attempt_stats_from_pool, load_routing_settings_from_pool, save_provider_config_to_pool,
-    upsert_capability_routing_policy_to_pool, upsert_chat_routing_policy_to_pool, CapabilityRoutingPolicy,
-    ChatRoutingPolicy, ProviderConfig,
+    apply_capability_route_template_from_pool, get_capability_routing_policy_from_pool,
+    get_chat_routing_policy_from_pool, list_capability_route_templates_for,
+    list_provider_configs_from_pool, list_provider_models_from_pool,
+    list_route_attempt_stats_from_pool, load_routing_settings_from_pool,
+    save_provider_config_to_pool, upsert_capability_routing_policy_to_pool,
+    upsert_chat_routing_policy_to_pool, CapabilityRoutingPolicy, ChatRoutingPolicy, ProviderConfig,
 };
 
 #[tokio::test]
 async fn route_settings_use_defaults_when_empty() {
     let (pool, _tmp) = helpers::setup_test_db().await;
 
-    let settings = load_routing_settings_from_pool(&pool).await.expect("load settings");
+    let settings = load_routing_settings_from_pool(&pool)
+        .await
+        .expect("load settings");
     assert_eq!(settings.max_call_depth, 4);
     assert_eq!(settings.node_timeout_seconds, 60);
     assert_eq!(settings.retry_count, 0);
@@ -21,20 +24,26 @@ async fn route_settings_use_defaults_when_empty() {
 #[tokio::test]
 async fn route_settings_parse_from_app_settings_table() {
     let (pool, _tmp) = helpers::setup_test_db().await;
-    sqlx::query("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('route_max_call_depth', '7')")
-        .execute(&pool)
-        .await
-        .expect("set depth");
+    sqlx::query(
+        "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('route_max_call_depth', '7')",
+    )
+    .execute(&pool)
+    .await
+    .expect("set depth");
     sqlx::query("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('route_node_timeout_seconds', '120')")
         .execute(&pool)
         .await
         .expect("set timeout");
-    sqlx::query("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('route_retry_count', '2')")
-        .execute(&pool)
-        .await
-        .expect("set retry");
+    sqlx::query(
+        "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('route_retry_count', '2')",
+    )
+    .execute(&pool)
+    .await
+    .expect("set retry");
 
-    let settings = load_routing_settings_from_pool(&pool).await.expect("load settings");
+    let settings = load_routing_settings_from_pool(&pool)
+        .await
+        .expect("load settings");
     assert_eq!(settings.max_call_depth, 7);
     assert_eq!(settings.node_timeout_seconds, 120);
     assert_eq!(settings.retry_count, 2);
@@ -78,10 +87,14 @@ async fn provider_config_can_be_saved_and_listed() {
         extra_json: "{}".to_string(),
         enabled: true,
     };
-    let id = save_provider_config_to_pool(&pool, config).await.expect("save provider");
+    let id = save_provider_config_to_pool(&pool, config)
+        .await
+        .expect("save provider");
     assert!(!id.is_empty());
 
-    let listed = list_provider_configs_from_pool(&pool).await.expect("list providers");
+    let listed = list_provider_configs_from_pool(&pool)
+        .await
+        .expect("list providers");
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].provider_key, "deepseek");
     assert_eq!(listed[0].protocol_type, "openai");
@@ -93,7 +106,8 @@ async fn chat_routing_policy_can_be_saved_and_loaded() {
     let policy = ChatRoutingPolicy {
         primary_provider_id: "provider-1".to_string(),
         primary_model: "deepseek-chat".to_string(),
-        fallback_chain_json: "[{\"provider_id\":\"provider-2\",\"model\":\"qwen-max\"}]".to_string(),
+        fallback_chain_json: "[{\"provider_id\":\"provider-2\",\"model\":\"qwen-max\"}]"
+            .to_string(),
         timeout_ms: 45000,
         retry_count: 1,
         enabled: true,
@@ -219,15 +233,21 @@ async fn route_attempt_stats_are_aggregated() {
     let stats = list_route_attempt_stats_from_pool(&pool, 24, Some("chat"))
         .await
         .expect("stats");
-    assert!(stats.iter().any(|s| !s.success && s.error_kind == "rate_limit" && s.count >= 1));
-    assert!(stats.iter().any(|s| s.success && s.error_kind == "ok" && s.count >= 1));
+    assert!(stats
+        .iter()
+        .any(|s| !s.success && s.error_kind == "rate_limit" && s.count >= 1));
+    assert!(stats
+        .iter()
+        .any(|s| s.success && s.error_kind == "ok" && s.count >= 1));
 }
 
 #[tokio::test]
 async fn capability_route_templates_can_be_listed_for_chat() {
     let templates = list_capability_route_templates_for(Some("chat"));
     assert!(!templates.is_empty());
-    assert!(templates.iter().any(|t| t.template_id == "china-first-p0" && t.capability == "chat"));
+    assert!(templates
+        .iter()
+        .any(|t| t.template_id == "china-first-p0" && t.capability == "chat"));
 }
 
 #[tokio::test]

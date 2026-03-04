@@ -17,4 +17,3 @@ fn build_feishu_markdown_message_has_expected_shape() {
     let content = payload["content"].as_str().unwrap_or_default();
     assert!(content.contains("智能体协作更新"));
 }
-

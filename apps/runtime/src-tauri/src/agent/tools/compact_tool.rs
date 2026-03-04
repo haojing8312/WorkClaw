@@ -105,7 +105,12 @@ mod tests {
     #[test]
     fn test_execute_with_focus() {
         let tool = CompactTool::new();
-        let result = tool.execute(json!({"focus": "TypeScript 相关变更"}), &ToolContext::default()).unwrap();
+        let result = tool
+            .execute(
+                json!({"focus": "TypeScript 相关变更"}),
+                &ToolContext::default(),
+            )
+            .unwrap();
         assert!(result.contains("TypeScript 相关变更"));
         assert!(result.contains("下一轮迭代"));
     }
@@ -114,7 +119,9 @@ mod tests {
     fn test_execute_with_empty_focus() {
         let tool = CompactTool::new();
         // 空字符串 focus 等同于未提供
-        let result = tool.execute(json!({"focus": ""}), &ToolContext::default()).unwrap();
+        let result = tool
+            .execute(json!({"focus": ""}), &ToolContext::default())
+            .unwrap();
         assert!(!result.contains("重点"));
     }
 

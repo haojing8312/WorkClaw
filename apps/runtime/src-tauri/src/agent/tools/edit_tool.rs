@@ -40,8 +40,7 @@ impl Tool for EditTool {
         let replace_all = input["replace_all"].as_bool().unwrap_or(false);
 
         let checked = ctx.check_path(path)?;
-        let content =
-            fs::read_to_string(&checked).map_err(|e| anyhow!("读取文件失败: {}", e))?;
+        let content = fs::read_to_string(&checked).map_err(|e| anyhow!("读取文件失败: {}", e))?;
         let count = content.matches(old_string).count();
 
         if count == 0 {

@@ -27,13 +27,15 @@ fn test_todo_update_status() {
     let tool = TodoWriteTool::new();
     let ctx = ToolContext::default();
 
-    tool
-        .execute(json!({
+    tool.execute(
+        json!({
             "todos": [
                 {"id": "task-1", "content": "Test task", "status": "pending", "priority": "medium"}
             ]
-        }), &ctx)
-        .unwrap();
+        }),
+        &ctx,
+    )
+    .unwrap();
 
     let result = tool
         .execute(json!({
@@ -50,18 +52,23 @@ fn test_todo_delete() {
     let tool = TodoWriteTool::new();
     let ctx = ToolContext::default();
 
-    tool
-        .execute(json!({
+    tool.execute(
+        json!({
             "todos": [
                 {"id": "task-del", "content": "Will delete", "status": "pending", "priority": "low"}
             ]
-        }), &ctx)
-        .unwrap();
+        }),
+        &ctx,
+    )
+    .unwrap();
 
     let result = tool
-        .execute(json!({
-            "todos": []
-        }), &ctx)
+        .execute(
+            json!({
+                "todos": []
+            }),
+            &ctx,
+        )
         .unwrap();
     assert!(result.contains("已清空"));
 }
@@ -72,7 +79,10 @@ fn test_todo_missing_action() {
     let ctx = ToolContext::default();
     let result = tool.execute(json!({}), &ctx);
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("缺少 todos 数组参数"));
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("缺少 todos 数组参数"));
 }
 
 #[test]

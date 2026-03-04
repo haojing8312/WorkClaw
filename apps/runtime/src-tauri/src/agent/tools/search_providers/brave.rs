@@ -86,7 +86,10 @@ impl SearchProvider for BraveSearch {
         let body: Value = response.json()?;
 
         // 调试日志：打印实际响应格式
-        eprintln!("[brave] 响应体: {}", serde_json::to_string_pretty(&body).unwrap_or_else(|_| "无法序列化".to_string()));
+        eprintln!(
+            "[brave] 响应体: {}",
+            serde_json::to_string_pretty(&body).unwrap_or_else(|_| "无法序列化".to_string())
+        );
 
         let items = parse_brave_response(&body);
 
@@ -123,7 +126,11 @@ fn parse_brave_response(json: &Value) -> Vec<SearchItem> {
                     .and_then(|d| d.as_str())
                     .unwrap_or("")
                     .to_string();
-                Some(SearchItem { title, url, snippet })
+                Some(SearchItem {
+                    title,
+                    url,
+                    snippet,
+                })
             })
             .collect(),
         None => vec![],

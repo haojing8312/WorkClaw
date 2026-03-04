@@ -28,9 +28,11 @@ impl AllowedToolsValue {
     fn into_vec(self) -> Vec<String> {
         match self {
             AllowedToolsValue::Array(v) => v,
-            AllowedToolsValue::CommaSeparated(s) => {
-                s.split(',').map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).collect()
-            }
+            AllowedToolsValue::CommaSeparated(s) => s
+                .split(',')
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                .collect(),
         }
     }
 }

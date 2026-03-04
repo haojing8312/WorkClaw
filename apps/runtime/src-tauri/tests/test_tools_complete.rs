@@ -3,11 +3,10 @@
 //! 确保 ToolRegistry::with_standard_tools() 静态注册的 15 个工具全部可用，
 //! 以及 L3/L4 动态注册工具可独立创建并注册。
 
-use runtime_lib::agent::ToolRegistry;
 use runtime_lib::agent::tools::{
-    BashTool, BashOutputTool, BashKillTool, ProcessManager,
-    browser_tools::register_browser_tools,
+    browser_tools::register_browser_tools, BashKillTool, BashOutputTool, BashTool, ProcessManager,
 };
+use runtime_lib::agent::ToolRegistry;
 use std::sync::Arc;
 
 /// 验证 with_standard_tools() 静态注册的 15 个工具全部存在
@@ -17,20 +16,27 @@ fn test_all_standard_tools_registered() {
 
     let expected_tools = [
         // L1: 原有基础工具
-        "read_file", "write_file", "glob", "grep", "edit",
-        "todo_write", "web_fetch", "bash",
+        "read_file",
+        "write_file",
+        "glob",
+        "grep",
+        "edit",
+        "todo_write",
+        "web_fetch",
+        "bash",
         // L2: 文件扩展工具
-        "list_dir", "file_stat", "file_delete", "file_move", "file_copy",
+        "list_dir",
+        "file_stat",
+        "file_delete",
+        "file_move",
+        "file_copy",
         // L5: 系统工具
-        "screenshot", "open_in_folder",
+        "screenshot",
+        "open_in_folder",
     ];
 
     for name in &expected_tools {
-        assert!(
-            registry.get(name).is_some(),
-            "标准工具 '{}' 未注册",
-            name
-        );
+        assert!(registry.get(name).is_some(), "标准工具 '{}' 未注册", name);
     }
 
     let defs = registry.get_tool_definitions();
@@ -64,7 +70,10 @@ fn test_l3_process_management_tools() {
     registry.unregister("bash");
     registry.register(Arc::new(BashTool::with_process_manager(Arc::clone(&pm))));
 
-    assert!(registry.get("bash_output").is_some(), "bash_output 应已注册");
+    assert!(
+        registry.get("bash_output").is_some(),
+        "bash_output 应已注册"
+    );
     assert!(registry.get("bash_kill").is_some(), "bash_kill 应已注册");
     assert!(registry.get("bash").is_some(), "替换后的 bash 应仍然存在");
 
@@ -147,9 +156,7 @@ fn test_filtered_tool_definitions() {
     let filtered = registry.get_filtered_tool_definitions(&whitelist);
     assert_eq!(filtered.len(), 3, "过滤后应有 3 个工具");
 
-    let names: Vec<&str> = filtered.iter()
-        .filter_map(|d| d["name"].as_str())
-        .collect();
+    let names: Vec<&str> = filtered.iter().filter_map(|d| d["name"].as_str()).collect();
     assert!(names.contains(&"read_file"));
     assert!(names.contains(&"write_file"));
     assert!(names.contains(&"bash"));

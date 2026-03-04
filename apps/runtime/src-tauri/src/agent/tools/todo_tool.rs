@@ -88,18 +88,9 @@ impl Tool for TodoWriteTool {
                     .filter(|s| !s.is_empty())
                     .map(|s| s.to_string())
                     .unwrap_or_else(|| Uuid::new_v4().to_string());
-                let content = t["content"]
-                    .as_str()
-                    .unwrap_or("(无内容)")
-                    .to_string();
-                let status = t["status"]
-                    .as_str()
-                    .unwrap_or("pending")
-                    .to_string();
-                let priority = t["priority"]
-                    .as_str()
-                    .unwrap_or("medium")
-                    .to_string();
+                let content = t["content"].as_str().unwrap_or("(无内容)").to_string();
+                let status = t["status"].as_str().unwrap_or("pending").to_string();
+                let priority = t["priority"].as_str().unwrap_or("medium").to_string();
                 TodoItem {
                     id,
                     content,

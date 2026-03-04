@@ -41,11 +41,7 @@ impl ToolContext {
 
             let wd_canonical = wd.canonicalize().unwrap_or_else(|_| wd.clone());
             if !check_path.starts_with(&wd_canonical) {
-                anyhow::bail!(
-                    "路径 {} 不在工作目录 {} 范围内",
-                    path,
-                    wd.display()
-                );
+                anyhow::bail!("路径 {} 不在工作目录 {} 范围内", path, wd.display());
             }
         }
         Ok(canonical)

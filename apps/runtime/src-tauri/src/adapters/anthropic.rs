@@ -1,7 +1,7 @@
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
+use futures_util::StreamExt;
 use reqwest::Client;
 use serde_json::{json, Value};
-use futures_util::StreamExt;
 
 pub async fn chat_stream_with_tools(
     base_url: &str,
@@ -63,10 +63,7 @@ pub async fn chat_stream_with_tools(
                         "content_block_start" => {
                             if v["content_block"]["type"] == "tool_use" {
                                 current_tool_call = Some(ToolCall {
-                                    id: v["content_block"]["id"]
-                                        .as_str()
-                                        .unwrap_or("")
-                                        .to_string(),
+                                    id: v["content_block"]["id"].as_str().unwrap_or("").to_string(),
                                     name: v["content_block"]["name"]
                                         .as_str()
                                         .unwrap_or("")
@@ -82,9 +79,8 @@ pub async fn chat_stream_with_tools(
                                 text_content.push_str(token);
                                 on_token(token.to_string());
                             } else if v["delta"]["type"] == "input_json_delta" {
-                                current_tool_input.push_str(
-                                    v["delta"]["partial_json"].as_str().unwrap_or(""),
-                                );
+                                current_tool_input
+                                    .push_str(v["delta"]["partial_json"].as_str().unwrap_or(""));
                             }
                         }
                         "content_block_stop" => {

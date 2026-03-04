@@ -91,7 +91,10 @@ impl SearchProvider for SerpApiSearch {
         let resp_body: Value = response.json()?;
 
         // 调试日志：打印实际响应格式
-        eprintln!("[serpapi] 响应体: {}", serde_json::to_string_pretty(&resp_body).unwrap_or_else(|_| "无法序列化".to_string()));
+        eprintln!(
+            "[serpapi] 响应体: {}",
+            serde_json::to_string_pretty(&resp_body).unwrap_or_else(|_| "无法序列化".to_string())
+        );
 
         let items = parse_serpapi_response(&resp_body);
 
@@ -111,9 +114,7 @@ impl SearchProvider for SerpApiSearch {
 ///
 /// 响应结构：`{ organic_results: [{ title, link, snippet }] }`
 fn parse_serpapi_response(json: &Value) -> Vec<SearchItem> {
-    let results = json
-        .get("organic_results")
-        .and_then(|r| r.as_array());
+    let results = json.get("organic_results").and_then(|r| r.as_array());
 
     match results {
         Some(arr) => arr
@@ -127,7 +128,11 @@ fn parse_serpapi_response(json: &Value) -> Vec<SearchItem> {
                     .and_then(|s| s.as_str())
                     .unwrap_or("")
                     .to_string();
-                Some(SearchItem { title, url, snippet })
+                Some(SearchItem {
+                    title,
+                    url,
+                    snippet,
+                })
             })
             .collect(),
         None => vec![],

@@ -18,7 +18,10 @@ pub struct RecentImThread {
     pub last_seen_at: String,
 }
 
-pub async fn process_im_event(pool: &SqlitePool, event: ImEvent) -> Result<FeishuCallbackResult, String> {
+pub async fn process_im_event(
+    pool: &SqlitePool,
+    event: ImEvent,
+) -> Result<FeishuCallbackResult, String> {
     let thread_id = event.thread_id.clone();
     let message_id = event.message_id.clone().unwrap_or_default();
     let text_preview = event
@@ -37,12 +40,13 @@ pub async fn process_im_event(pool: &SqlitePool, event: ImEvent) -> Result<Feish
         .unwrap_or_else(|| format!("{}_{}", thread_id, message_id));
 
     let now = chrono::Utc::now().to_rfc3339();
-    let result = sqlx::query("INSERT OR IGNORE INTO im_event_dedup (event_id, created_at) VALUES (?, ?)")
-        .bind(&event_id)
-        .bind(&now)
-        .execute(pool)
-        .await
-        .map_err(|e| e.to_string())?;
+    let result =
+        sqlx::query("INSERT OR IGNORE INTO im_event_dedup (event_id, created_at) VALUES (?, ?)")
+            .bind(&event_id)
+            .bind(&now)
+            .execute(pool)
+            .await
+            .map_err(|e| e.to_string())?;
 
     if result.rows_affected() > 0 {
         sqlx::query(
@@ -81,7 +85,7 @@ pub async fn list_recent_im_threads_with_pool(
            GROUP BY thread_id
          ) g ON g.thread_id = e.thread_id AND g.latest_at = e.created_at
          ORDER BY e.created_at DESC
-         LIMIT ?"
+         LIMIT ?",
     )
     .bind(lim)
     .fetch_all(pool)
@@ -90,21 +94,26 @@ pub async fn list_recent_im_threads_with_pool(
 
     Ok(rows
         .into_iter()
-        .map(|(thread_id, source, last_text_preview, last_seen_at)| RecentImThread {
-            thread_id,
-            source,
-            last_text_preview,
-            last_seen_at,
-        })
+        .map(
+            |(thread_id, source, last_text_preview, last_seen_at)| RecentImThread {
+                thread_id,
+                source,
+                last_text_preview,
+                last_seen_at,
+            },
+        )
         .collect())
 }
 
 #[tauri::command]
-pub async fn handle_feishu_callback(payload: String, db: State<'_, DbState>) -> Result<FeishuCallbackResult, String> {
+pub async fn handle_feishu_callback(
+    payload: String,
+    db: State<'_, DbState>,
+) -> Result<FeishuCallbackResult, String> {
     // Compatibility alias: direct Feishu callback style payload.
     // Preferred new ingress is handle_openclaw_event.
-    let event: ImEvent = serde_json::from_str(&payload)
-        .map_err(|e| format!("invalid callback payload: {}", e))?;
+    let event: ImEvent =
+        serde_json::from_str(&payload).map_err(|e| format!("invalid callback payload: {}", e))?;
     process_im_event(&db.0, event).await
 }
 

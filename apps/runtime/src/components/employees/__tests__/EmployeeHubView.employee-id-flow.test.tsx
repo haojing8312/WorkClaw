@@ -49,6 +49,10 @@ describe("EmployeeHubView employee_id flow", () => {
 
     expect(screen.queryByPlaceholderText("角色ID（如 project_manager）")).not.toBeInTheDocument();
     expect(screen.queryByPlaceholderText("OpenClaw Agent ID（默认同角色ID）")).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("员工名称")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "手动新建" }));
+    expect(screen.getByPlaceholderText("员工名称")).toBeInTheDocument();
 
     fireEvent.change(screen.getByPlaceholderText("员工名称"), {
       target: { value: "Project Manager" },

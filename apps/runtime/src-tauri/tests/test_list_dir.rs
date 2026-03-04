@@ -23,7 +23,10 @@ fn test_list_dir_basic() {
     assert!(result.contains("subdir"), "应包含 subdir");
 
     // 文件大小应以人类可读格式显示
-    assert!(result.contains("KB") || result.contains("B"), "应显示文件大小");
+    assert!(
+        result.contains("KB") || result.contains("B"),
+        "应显示文件大小"
+    );
 
     // 清理
     fs::remove_dir_all(dir).unwrap();

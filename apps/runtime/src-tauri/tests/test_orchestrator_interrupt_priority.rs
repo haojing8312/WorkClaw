@@ -27,4 +27,3 @@ fn human_override_preempts_auto_turn() {
     let next = resolve_next_action(&events);
     assert_eq!(next, OrchestratorAction::ApplyOverride);
 }
-

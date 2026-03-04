@@ -77,12 +77,11 @@ async fn same_route_session_key_reuses_existing_session() {
     assert!(!second[0].created);
     assert_eq!(second[0].session_id, first[0].session_id);
 
-    let (count,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM im_thread_sessions WHERE session_id = ?",
-    )
-    .bind(&first[0].session_id)
-    .fetch_one(&pool)
-    .await
-    .expect("count mappings");
+    let (count,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM im_thread_sessions WHERE session_id = ?")
+            .bind(&first[0].session_id)
+            .fetch_one(&pool)
+            .await
+            .expect("count mappings");
     assert_eq!(count, 2);
 }

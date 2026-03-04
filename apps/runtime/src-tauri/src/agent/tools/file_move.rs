@@ -50,13 +50,11 @@ impl Tool for FileMoveTool {
 
         // 确保目标的父目录存在
         if let Some(parent) = dst_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| anyhow!("创建目标父目录失败: {}", e))?;
+            std::fs::create_dir_all(parent).map_err(|e| anyhow!("创建目标父目录失败: {}", e))?;
         }
 
         // 执行移动/重命名
-        std::fs::rename(&src_path, &dst_path)
-            .map_err(|e| anyhow!("移动失败: {}", e))?;
+        std::fs::rename(&src_path, &dst_path).map_err(|e| anyhow!("移动失败: {}", e))?;
 
         Ok(format!("已移动 {} → {}", source, destination))
     }

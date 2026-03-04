@@ -367,8 +367,8 @@ impl Tool for ClawhubSearchTool {
                 "source_url": s.source_url
             })).collect::<Vec<_>>()
         });
-        let rendered = serde_json::to_string_pretty(&payload)
-            .map_err(|e| anyhow!("序列化结果失败: {}", e))?;
+        let rendered =
+            serde_json::to_string_pretty(&payload).map_err(|e| anyhow!("序列化结果失败: {}", e))?;
         Ok(truncate_tool_output(&rendered, OUTPUT_MAX_CHARS))
     }
 }
@@ -441,8 +441,8 @@ impl Tool for ClawhubRecommendTool {
             "query": query,
             "items": recs
         });
-        let rendered = serde_json::to_string_pretty(&payload)
-            .map_err(|e| anyhow!("序列化结果失败: {}", e))?;
+        let rendered =
+            serde_json::to_string_pretty(&payload).map_err(|e| anyhow!("序列化结果失败: {}", e))?;
         Ok(truncate_tool_output(&rendered, OUTPUT_MAX_CHARS))
     }
 }

@@ -130,6 +130,10 @@ export default function App() {
   const [clawhubUpdateStatus, setClawhubUpdateStatus] = useState<Record<string, { hasUpdate: boolean; message: string }>>({});
   const [employees, setEmployees] = useState<AgentEmployee[]>([]);
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string | null>(null);
+  const [employeeCreatorHighlight, setEmployeeCreatorHighlight] = useState<{
+    employeeId: string;
+    name: string;
+  } | null>(null);
   const [imManagedSessionIds, setImManagedSessionIds] = useState<string[]>([]);
   const [dismissedModelSetupHint, setDismissedModelSetupHint] = useState(() => {
     if (typeof window === "undefined") {
@@ -169,6 +173,7 @@ export default function App() {
     message: string;
   } | null>(null);
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const employeesRef = useRef<AgentEmployee[]>([]);
 
   function navigate(view: MainView) {
     setActiveMainView(view);
@@ -206,6 +211,10 @@ export default function App() {
       // ignore
     }
   }, [models.length]);
+
+  useEffect(() => {
+    employeesRef.current = employees;
+  }, [employees]);
 
   useEffect(() => {
     if (
@@ -775,7 +784,26 @@ export default function App() {
     if (selectedSkillId) {
       loadSessions(selectedSkillId);
       if (selectedSkillId === BUILTIN_EMPLOYEE_CREATOR_SKILL_ID) {
-        void loadEmployees();
+        const previousEmployeeIds = new Set(
+          employeesRef.current.map((item) => item.id),
+        );
+        void (async () => {
+          try {
+            const latest = await loadEmployees();
+            const created = latest.find(
+              (item) => !previousEmployeeIds.has(item.id),
+            );
+            if (created) {
+              setSelectedEmployeeId(created.id);
+              setEmployeeCreatorHighlight({
+                employeeId: created.id,
+                name: created.name,
+              });
+            }
+          } catch (e) {
+            console.error("刷新员工列表失败:", e);
+          }
+        })();
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -822,6 +850,9 @@ export default function App() {
 
   async function handleDeleteEmployee(employeeId: string) {
     await invoke("delete_agent_employee", { employeeId });
+    if (employeeCreatorHighlight?.employeeId === employeeId) {
+      setEmployeeCreatorHighlight(null);
+    }
     await loadEmployees();
   }
 
@@ -1014,6 +1045,7 @@ export default function App() {
 
   async function handleOpenEmployeeCreatorSkill() {
     if (creatingSession) return;
+    setEmployeeCreatorHighlight(null);
     let nextSkills = skills;
     if (!nextSkills.some((item) => item.id === BUILTIN_EMPLOYEE_CREATOR_SKILL_ID)) {
       try {
@@ -1398,6 +1430,13 @@ export default function App() {
                 employees={employees}
                 skills={skills}
                 selectedEmployeeId={selectedEmployeeId}
+                highlightEmployeeId={employeeCreatorHighlight?.employeeId ?? null}
+                highlightMessage={
+                  employeeCreatorHighlight
+                    ? `已由创建员工助手生成：${employeeCreatorHighlight.name}`
+                    : null
+                }
+                onDismissHighlight={() => setEmployeeCreatorHighlight(null)}
                 onSelectEmployee={setSelectedEmployeeId}
                 onSaveEmployee={handleSaveEmployee}
                 onDeleteEmployee={handleDeleteEmployee}

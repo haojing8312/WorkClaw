@@ -3,8 +3,8 @@ mod helpers;
 use runtime_lib::commands::employee_agents::{
     bind_thread_employees_with_pool, ensure_employee_sessions_for_event_with_pool,
     get_thread_employee_bindings_with_pool, link_inbound_event_to_session_with_pool,
-    list_agent_employees_with_pool, resolve_target_employees_for_event, upsert_agent_employee_with_pool,
-    UpsertAgentEmployeeInput,
+    list_agent_employees_with_pool, resolve_target_employees_for_event,
+    upsert_agent_employee_with_pool, UpsertAgentEmployeeInput,
 };
 use runtime_lib::im::types::{ImEvent, ImEventType};
 
@@ -74,13 +74,12 @@ async fn employee_config_and_im_session_mapping_work() {
     assert_eq!(sessions.len(), 1);
     assert_eq!(sessions[0].employee_id, employee_id);
 
-    let (skill_id, work_dir): (String, String) = sqlx::query_as(
-        "SELECT skill_id, work_dir FROM sessions WHERE id = ?",
-    )
-    .bind(&sessions[0].session_id)
-    .fetch_one(&pool)
-    .await
-    .expect("query created session");
+    let (skill_id, work_dir): (String, String) =
+        sqlx::query_as("SELECT skill_id, work_dir FROM sessions WHERE id = ?")
+            .bind(&sessions[0].session_id)
+            .fetch_one(&pool)
+            .await
+            .expect("query created session");
     assert_eq!(skill_id, "builtin-general");
     assert_eq!(work_dir, "E:/workspace/pm");
 
@@ -162,13 +161,9 @@ async fn group_message_without_mention_routes_to_main_employee() {
     .await
     .expect("upsert other");
 
-    bind_thread_employees_with_pool(
-        &pool,
-        "chat_group_1",
-        &[other_id.clone(), main_id.clone()],
-    )
-    .await
-    .expect("bind thread employees");
+    bind_thread_employees_with_pool(&pool, "chat_group_1", &[other_id.clone(), main_id.clone()])
+        .await
+        .expect("bind thread employees");
 
     let targets = resolve_target_employees_for_event(
         &pool,

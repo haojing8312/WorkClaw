@@ -19,4 +19,3 @@ pub fn build_openclaw_outbound_message(
         }
     })
 }
-

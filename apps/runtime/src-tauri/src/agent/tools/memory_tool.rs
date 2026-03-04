@@ -132,11 +132,7 @@ impl Tool for MemoryTool {
                 }
                 let mut entries: Vec<String> = fs::read_dir(&self.memory_dir)?
                     .filter_map(|e| e.ok())
-                    .filter(|e| {
-                        e.path()
-                            .extension()
-                            .map_or(false, |ext| ext == "md")
-                    })
+                    .filter(|e| e.path().extension().map_or(false, |ext| ext == "md"))
                     .filter_map(|e| {
                         e.path()
                             .file_stem()
@@ -189,7 +185,8 @@ impl Tool for MemoryTool {
                     author_role: role_id.to_string(),
                     confidence,
                 };
-                let result = crate::im::memory::capture_entry(&self.memory_dir, thread_id, role_id, &entry)?;
+                let result =
+                    crate::im::memory::capture_entry(&self.memory_dir, thread_id, role_id, &entry)?;
                 Ok(format!(
                     "IM 记忆写入完成: session_written={}, long_term_written={}",
                     result.session_written, result.long_term_written
@@ -202,7 +199,8 @@ impl Tool for MemoryTool {
                 let role_id = input["role_id"]
                     .as_str()
                     .ok_or_else(|| anyhow!("recall_im 操作缺少 role_id 参数"))?;
-                let recalled = crate::im::memory::recall_context(&self.memory_dir, thread_id, role_id)?;
+                let recalled =
+                    crate::im::memory::recall_context(&self.memory_dir, thread_id, role_id)?;
                 if recalled.trim().is_empty() {
                     Ok("无可召回 IM 记忆".to_string())
                 } else {

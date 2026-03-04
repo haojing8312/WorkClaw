@@ -1,6 +1,8 @@
-use runtime_lib::agent::tools::WebSearchTool;
 use runtime_lib::agent::tools::search_providers::cache::SearchCache;
-use runtime_lib::agent::tools::search_providers::{SearchProvider, SearchParams, SearchResponse, SearchItem};
+use runtime_lib::agent::tools::search_providers::{
+    SearchItem, SearchParams, SearchProvider, SearchResponse,
+};
+use runtime_lib::agent::tools::WebSearchTool;
 use runtime_lib::agent::{Tool, ToolContext};
 use serde_json::json;
 use std::sync::Arc;
@@ -10,8 +12,12 @@ use std::time::Duration;
 struct MockProvider;
 
 impl SearchProvider for MockProvider {
-    fn name(&self) -> &str { "mock" }
-    fn display_name(&self) -> &str { "Mock Search" }
+    fn name(&self) -> &str {
+        "mock"
+    }
+    fn display_name(&self) -> &str {
+        "Mock Search"
+    }
     fn search(&self, params: &SearchParams) -> anyhow::Result<SearchResponse> {
         Ok(SearchResponse {
             query: params.query.clone(),
@@ -39,7 +45,10 @@ fn test_web_search_tool_metadata() {
 
     let schema = tool.input_schema();
     assert!(schema["properties"]["query"].is_object());
-    assert!(schema["required"].as_array().unwrap().contains(&json!("query")));
+    assert!(schema["required"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("query")));
 }
 
 #[test]

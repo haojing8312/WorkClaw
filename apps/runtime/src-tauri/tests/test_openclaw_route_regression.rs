@@ -57,7 +57,11 @@ fn pick_route(body_json: &serde_json::Value) -> serde_json::Value {
             .and_then(|p| p.get("id"))
             .and_then(serde_json::Value::as_str)
             .unwrap_or_default();
-        if b_channel == channel && account_matches(b_account, account_id) && !b_peer.is_empty() && b_peer == peer_id {
+        if b_channel == channel
+            && account_matches(b_account, account_id)
+            && !b_peer.is_empty()
+            && b_peer == peer_id
+        {
             let agent_id = binding
                 .get("agentId")
                 .and_then(serde_json::Value::as_str)
@@ -163,17 +167,37 @@ async fn spawn_mock_sidecar_with_priority(
 async fn route_regression_vectors_match_expected_priority() {
     let (pool, _tmp) = helpers::setup_test_db().await;
     let vectors = vec![
-        ("peer", "chat-peer", "tenant-a", "peer-agent", "binding.peer"),
-        ("account", "chat-account", "tenant-a", "account-agent", "binding.account"),
-        ("channel", "chat-channel", "tenant-b", "channel-agent", "binding.channel"),
+        (
+            "peer",
+            "chat-peer",
+            "tenant-a",
+            "peer-agent",
+            "binding.peer",
+        ),
+        (
+            "account",
+            "chat-account",
+            "tenant-a",
+            "account-agent",
+            "binding.account",
+        ),
+        (
+            "channel",
+            "chat-channel",
+            "tenant-b",
+            "channel-agent",
+            "binding.channel",
+        ),
         ("default", "chat-default", "tenant-c", "main", "default"),
     ];
     let (base_url, server_task) = spawn_mock_sidecar_with_priority(vectors.len()).await;
-    sqlx::query("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('feishu_sidecar_base_url', ?)")
-        .bind(&base_url)
-        .execute(&pool)
-        .await
-        .expect("seed sidecar base");
+    sqlx::query(
+        "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('feishu_sidecar_base_url', ?)",
+    )
+    .bind(&base_url)
+    .execute(&pool)
+    .await
+    .expect("seed sidecar base");
 
     for (name, thread_id, tenant_id, expected_agent, expected_matched_by) in vectors {
         sqlx::query("DELETE FROM im_routing_bindings")

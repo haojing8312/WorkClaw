@@ -35,4 +35,3 @@ async fn group_thread_can_bind_multiple_roles() {
     assert_eq!(cfg.roles[1], "pm");
     assert_eq!(cfg.roles[2], "consultant");
 }
-

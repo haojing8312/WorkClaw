@@ -1,11 +1,11 @@
-use tauri::State;
-use serde_json::{json, Value};
-use uuid::Uuid;
-use chrono::Utc;
-use std::sync::Arc;
 use super::skills::DbState;
-use crate::agent::ToolRegistry;
 use crate::agent::tools::SidecarBridgeTool;
+use crate::agent::ToolRegistry;
+use chrono::Utc;
+use serde_json::{json, Value};
+use std::sync::Arc;
+use tauri::State;
+use uuid::Uuid;
 
 #[tauri::command]
 pub async fn add_mcp_server(
@@ -35,7 +35,8 @@ pub async fn add_mcp_server(
 
     // 通知 Sidecar 连接 MCP 服务器
     let client = reqwest::Client::new();
-    let connect_resp = client.post("http://localhost:8765/api/mcp/add-server")
+    let connect_resp = client
+        .post("http://localhost:8765/api/mcp/add-server")
         .json(&json!({
             "name": name,
             "config": {
@@ -58,7 +59,8 @@ pub async fn add_mcp_server(
     }
 
     // 获取工具列表并注册
-    let tools_resp = client.post("http://localhost:8765/api/mcp/list-tools")
+    let tools_resp = client
+        .post("http://localhost:8765/api/mcp/list-tools")
         .json(&json!({ "serverName": name }))
         .send()
         .await
@@ -70,7 +72,9 @@ pub async fn add_mcp_server(
         for tool in tool_list {
             let tool_name = tool["name"].as_str().unwrap_or_default();
             let tool_desc = tool["description"].as_str().unwrap_or_default();
-            let schema = tool.get("inputSchema").cloned()
+            let schema = tool
+                .get("inputSchema")
+                .cloned()
                 .unwrap_or(json!({"type": "object", "properties": {}}));
 
             let full_name = format!("mcp_{}_{}", name, tool_name);
@@ -89,9 +93,7 @@ pub async fn add_mcp_server(
 }
 
 #[tauri::command]
-pub async fn list_mcp_servers(
-    db: State<'_, DbState>,
-) -> Result<Vec<Value>, String> {
+pub async fn list_mcp_servers(db: State<'_, DbState>) -> Result<Vec<Value>, String> {
     let rows = sqlx::query_as::<_, (String, String, String, String, String, i32, String)>(
         "SELECT id, name, command, args, env, enabled, created_at FROM mcp_servers ORDER BY created_at DESC"
     )
@@ -99,15 +101,20 @@ pub async fn list_mcp_servers(
     .await
     .map_err(|e| e.to_string())?;
 
-    Ok(rows.iter().map(|(id, name, command, args, env, enabled, created_at)| json!({
-        "id": id,
-        "name": name,
-        "command": command,
-        "args": serde_json::from_str::<Value>(args).unwrap_or(json!([])),
-        "env": serde_json::from_str::<Value>(env).unwrap_or(json!({})),
-        "enabled": enabled == &1,
-        "created_at": created_at,
-    })).collect())
+    Ok(rows
+        .iter()
+        .map(|(id, name, command, args, env, enabled, created_at)| {
+            json!({
+                "id": id,
+                "name": name,
+                "command": command,
+                "args": serde_json::from_str::<Value>(args).unwrap_or(json!([])),
+                "env": serde_json::from_str::<Value>(env).unwrap_or(json!({})),
+                "enabled": enabled == &1,
+                "created_at": created_at,
+            })
+        })
+        .collect())
 }
 
 #[tauri::command]
@@ -117,13 +124,11 @@ pub async fn remove_mcp_server(
     registry: State<'_, Arc<ToolRegistry>>,
 ) -> Result<(), String> {
     // 获取 server name
-    let (name,): (String,) = sqlx::query_as(
-        "SELECT name FROM mcp_servers WHERE id = ?"
-    )
-    .bind(&id)
-    .fetch_one(&db.0)
-    .await
-    .map_err(|e| e.to_string())?;
+    let (name,): (String,) = sqlx::query_as("SELECT name FROM mcp_servers WHERE id = ?")
+        .bind(&id)
+        .fetch_one(&db.0)
+        .await
+        .map_err(|e| e.to_string())?;
 
     // 从 registry 反注册所有该服务器的工具
     let prefix = format!("mcp_{}_", name);

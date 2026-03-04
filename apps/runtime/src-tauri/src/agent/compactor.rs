@@ -190,8 +190,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let messages = vec![json!({"role": "user", "content": "test"})];
 
-        let path =
-            save_transcript(&dir.path().to_path_buf(), "my-session-456", &messages).unwrap();
+        let path = save_transcript(&dir.path().to_path_buf(), "my-session-456", &messages).unwrap();
         let filename = path.file_name().unwrap().to_string_lossy();
 
         assert!(filename.starts_with("my-session-456_"));

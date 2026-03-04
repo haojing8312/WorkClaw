@@ -5,17 +5,17 @@ pub const BUILTIN_PDF_SKILL_ID: &str = "builtin-pdf";
 pub const BUILTIN_PPTX_SKILL_ID: &str = "builtin-pptx";
 pub const BUILTIN_XLSX_SKILL_ID: &str = "builtin-xlsx";
 pub const BUILTIN_FIND_SKILLS_ID: &str = "builtin-find-skills";
+pub const BUILTIN_EMPLOYEE_CREATOR_ID: &str = "builtin-employee-creator";
 
-const BUILTIN_GENERAL_SKILL_MD: &str =
-    include_str!("../builtin-skills/general-assistant/SKILL.md");
-const BUILTIN_SKILL_CREATOR_MD: &str =
-    include_str!("../builtin-skills/skill-creator/SKILL.md");
+const BUILTIN_GENERAL_SKILL_MD: &str = include_str!("../builtin-skills/general-assistant/SKILL.md");
+const BUILTIN_SKILL_CREATOR_MD: &str = include_str!("../builtin-skills/skill-creator/SKILL.md");
 const BUILTIN_DOCX_SKILL_MD: &str = include_str!("../builtin-skills/docx/SKILL.md");
 const BUILTIN_PDF_SKILL_MD: &str = include_str!("../builtin-skills/pdf/SKILL.md");
 const BUILTIN_PPTX_SKILL_MD: &str = include_str!("../builtin-skills/pptx/SKILL.md");
 const BUILTIN_XLSX_SKILL_MD: &str = include_str!("../builtin-skills/xlsx/SKILL.md");
-const BUILTIN_FIND_SKILLS_MD: &str =
-    include_str!("../builtin-skills/find-skills/SKILL.md");
+const BUILTIN_FIND_SKILLS_MD: &str = include_str!("../builtin-skills/find-skills/SKILL.md");
+const BUILTIN_EMPLOYEE_CREATOR_SKILL_MD: &str =
+    include_str!("../builtin-skills/employee-creator/SKILL.md");
 const LOCAL_SKILL_TEMPLATE_MD: &str =
     include_str!("../builtin-skills/skill-creator-guide/templates/LOCAL_SKILL_TEMPLATE.md");
 
@@ -24,7 +24,7 @@ pub struct BuiltinSkillEntry {
     pub markdown: &'static str,
 }
 
-const BUILTIN_SKILL_ENTRIES: [BuiltinSkillEntry; 7] = [
+const BUILTIN_SKILL_ENTRIES: [BuiltinSkillEntry; 8] = [
     BuiltinSkillEntry {
         id: BUILTIN_GENERAL_SKILL_ID,
         markdown: BUILTIN_GENERAL_SKILL_MD,
@@ -53,6 +53,10 @@ const BUILTIN_SKILL_ENTRIES: [BuiltinSkillEntry; 7] = [
         id: BUILTIN_FIND_SKILLS_ID,
         markdown: BUILTIN_FIND_SKILLS_MD,
     },
+    BuiltinSkillEntry {
+        id: BUILTIN_EMPLOYEE_CREATOR_ID,
+        markdown: BUILTIN_EMPLOYEE_CREATOR_SKILL_MD,
+    },
 ];
 
 pub fn builtin_skill_markdown(skill_id: &str) -> Option<&'static str> {
@@ -80,8 +84,11 @@ mod tests {
 
     #[test]
     fn builtin_skill_entries_include_expert_presets() {
-        let ids: Vec<&str> = builtin_skill_entries().iter().map(|entry| entry.id).collect();
-        assert_eq!(ids.len(), 7);
+        let ids: Vec<&str> = builtin_skill_entries()
+            .iter()
+            .map(|entry| entry.id)
+            .collect();
+        assert_eq!(ids.len(), 8);
         assert!(ids.contains(&BUILTIN_GENERAL_SKILL_ID));
         assert!(ids.contains(&BUILTIN_SKILL_CREATOR_ID));
         assert!(ids.contains(&BUILTIN_DOCX_SKILL_ID));
@@ -89,6 +96,7 @@ mod tests {
         assert!(ids.contains(&BUILTIN_PPTX_SKILL_ID));
         assert!(ids.contains(&BUILTIN_XLSX_SKILL_ID));
         assert!(ids.contains(&BUILTIN_FIND_SKILLS_ID));
+        assert!(ids.contains(&BUILTIN_EMPLOYEE_CREATOR_ID));
     }
 
     #[test]
@@ -99,5 +107,6 @@ mod tests {
         assert!(builtin_skill_markdown(BUILTIN_PPTX_SKILL_ID).is_some());
         assert!(builtin_skill_markdown(BUILTIN_XLSX_SKILL_ID).is_some());
         assert!(builtin_skill_markdown(BUILTIN_FIND_SKILLS_ID).is_some());
+        assert!(builtin_skill_markdown(BUILTIN_EMPLOYEE_CREATOR_ID).is_some());
     }
 }

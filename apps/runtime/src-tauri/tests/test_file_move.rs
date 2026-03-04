@@ -1,4 +1,4 @@
-use runtime_lib::agent::{Tool, ToolContext, FileMoveTool};
+use runtime_lib::agent::{FileMoveTool, Tool, ToolContext};
 use serde_json::json;
 use std::fs;
 
@@ -53,8 +53,14 @@ fn test_move_directory_with_contents() {
     // 验证源目录已不存在
     assert!(!std::path::Path::new(src_dir).exists());
     // 验证目标目录及子文件内容正确
-    assert_eq!(fs::read_to_string(format!("{}/a.txt", dst_dir)).unwrap(), "file a");
-    assert_eq!(fs::read_to_string(format!("{}/sub/b.txt", dst_dir)).unwrap(), "file b");
+    assert_eq!(
+        fs::read_to_string(format!("{}/a.txt", dst_dir)).unwrap(),
+        "file a"
+    );
+    assert_eq!(
+        fs::read_to_string(format!("{}/sub/b.txt", dst_dir)).unwrap(),
+        "file b"
+    );
 
     // 清理
     fs::remove_dir_all(dst_dir).unwrap();

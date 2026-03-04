@@ -1,6 +1,5 @@
 use crate::agent::tools::search_providers::{
-    SearchItem, SearchParams, SearchProvider,
-    cache::SearchCache,
+    cache::SearchCache, SearchItem, SearchParams, SearchProvider,
 };
 use crate::agent::types::{Tool, ToolContext};
 use anyhow::{anyhow, Result};
@@ -200,8 +199,10 @@ mod tests {
     fn test_web_search_freshness_param() {
         let cache = Arc::new(SearchCache::new(Duration::from_secs(60), 10));
         let tool = WebSearchTool::with_provider(Box::new(MockProvider), cache);
-        let result =
-            tool.execute(json!({"query": "news", "freshness": "day"}), &ToolContext::default());
+        let result = tool.execute(
+            json!({"query": "news", "freshness": "day"}),
+            &ToolContext::default(),
+        );
         assert!(result.is_ok());
     }
 

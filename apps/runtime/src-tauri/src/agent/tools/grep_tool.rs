@@ -60,8 +60,7 @@ impl Tool for GrepTool {
             .build()
             .map_err(|e| anyhow!("正则表达式错误: {}", e))?;
 
-        let metadata =
-            std::fs::metadata(&checked).map_err(|e| anyhow!("无法访问路径: {}", e))?;
+        let metadata = std::fs::metadata(&checked).map_err(|e| anyhow!("无法访问路径: {}", e))?;
 
         if metadata.is_file() {
             // 单文件搜索
@@ -80,8 +79,7 @@ impl Tool for GrepTool {
 
 /// 搜索单个文件
 fn search_file(path: &Path, re: &regex::Regex) -> Result<String> {
-    let content =
-        std::fs::read_to_string(path).map_err(|e| anyhow!("读取文件失败: {}", e))?;
+    let content = std::fs::read_to_string(path).map_err(|e| anyhow!("读取文件失败: {}", e))?;
 
     let matches: Vec<String> = content
         .lines()
@@ -173,10 +171,7 @@ fn walk_dir(
             // 尝试读取文件（跳过二进制文件）
             if let Ok(content) = std::fs::read_to_string(&path) {
                 *files_count += 1;
-                let relative = path
-                    .strip_prefix(dir)
-                    .unwrap_or(&path)
-                    .to_string_lossy();
+                let relative = path.strip_prefix(dir).unwrap_or(&path).to_string_lossy();
 
                 for (i, line) in content.lines().enumerate() {
                     if re.is_match(line) {

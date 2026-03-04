@@ -16,20 +16,26 @@ fn test_memory_write_and_read() {
 
     // 写入内容
     let write_result = tool
-        .execute(json!({
-            "action": "write",
-            "key": "test",
-            "content": "Hello Memory"
-        }), &ctx)
+        .execute(
+            json!({
+                "action": "write",
+                "key": "test",
+                "content": "Hello Memory"
+            }),
+            &ctx,
+        )
         .unwrap();
     assert!(write_result.contains("已写入"));
 
     // 读回并验证内容一致
     let read_result = tool
-        .execute(json!({
-            "action": "read",
-            "key": "test"
-        }), &ctx)
+        .execute(
+            json!({
+                "action": "read",
+                "key": "test"
+            }),
+            &ctx,
+        )
         .unwrap();
     assert_eq!(read_result, "Hello Memory");
 }
@@ -59,8 +65,11 @@ fn test_memory_delete() {
     let ctx = ToolContext::default();
 
     // 写入后删除
-    tool.execute(json!({"action": "write", "key": "del", "content": "x"}), &ctx)
-        .unwrap();
+    tool.execute(
+        json!({"action": "write", "key": "del", "content": "x"}),
+        &ctx,
+    )
+    .unwrap();
     let result = tool
         .execute(json!({"action": "delete", "key": "del"}), &ctx)
         .unwrap();
@@ -101,10 +110,16 @@ fn test_memory_overwrite() {
     let ctx = ToolContext::default();
 
     // 同一个键多次写入，应以最新内容为准
-    tool.execute(json!({"action": "write", "key": "k", "content": "first"}), &ctx)
-        .unwrap();
-    tool.execute(json!({"action": "write", "key": "k", "content": "second"}), &ctx)
-        .unwrap();
+    tool.execute(
+        json!({"action": "write", "key": "k", "content": "first"}),
+        &ctx,
+    )
+    .unwrap();
+    tool.execute(
+        json!({"action": "write", "key": "k", "content": "second"}),
+        &ctx,
+    )
+    .unwrap();
     let result = tool
         .execute(json!({"action": "read", "key": "k"}), &ctx)
         .unwrap();

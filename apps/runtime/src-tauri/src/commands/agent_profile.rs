@@ -48,7 +48,10 @@ fn normalized_answer(answers: &[AgentProfileAnswerInput], key: &str) -> String {
         .unwrap_or_default()
 }
 
-fn render_markdown(employee: &AgentEmployee, answers: &[AgentProfileAnswerInput]) -> AgentProfileDraft {
+fn render_markdown(
+    employee: &AgentEmployee,
+    answers: &[AgentProfileAnswerInput],
+) -> AgentProfileDraft {
     let mission = normalized_answer(answers, "mission");
     let responsibilities = normalized_answer(answers, "responsibilities");
     let collaboration = normalized_answer(answers, "collaboration");
@@ -85,7 +88,10 @@ fn render_markdown(employee: &AgentEmployee, answers: &[AgentProfileAnswerInput]
     }
 }
 
-async fn find_employee_with_pool(pool: &SqlitePool, employee_db_id: &str) -> Result<AgentEmployee, String> {
+async fn find_employee_with_pool(
+    pool: &SqlitePool,
+    employee_db_id: &str,
+) -> Result<AgentEmployee, String> {
     let rows = list_agent_employees_with_pool(pool).await?;
     rows.into_iter()
         .find(|item| item.id == employee_db_id)

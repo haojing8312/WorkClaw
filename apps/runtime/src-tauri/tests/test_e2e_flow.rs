@@ -1,9 +1,9 @@
 mod helpers;
 
+use chrono::Utc;
 use helpers::*;
 use runtime_lib::agent::skill_config::SkillConfig;
 use uuid::Uuid;
-use chrono::Utc;
 
 // ============================================================
 // 测试 1: 导入本地 Skill 并验证可读回
@@ -21,13 +21,18 @@ async fn test_import_local_skill_and_read() {
 
     // 验证 frontmatter 解析正确
     assert_eq!(config.name.as_deref(), Some("test-skill"));
-    assert_eq!(config.description.as_deref(), Some("A test skill for E2E testing"));
+    assert_eq!(
+        config.description.as_deref(),
+        Some("A test skill for E2E testing")
+    );
     assert_eq!(
         config.allowed_tools,
         Some(vec!["ReadFile".to_string(), "Glob".to_string()])
     );
     assert!(config.user_invocable);
-    assert!(config.system_prompt.contains("You are a helpful test assistant."));
+    assert!(config
+        .system_prompt
+        .contains("You are a helpful test assistant."));
 
     // 构造 manifest（模拟 import_local_skill 逻辑）
     let name = config.name.clone().unwrap_or_default();
@@ -63,7 +68,7 @@ async fn test_import_local_skill_and_read() {
 
     // 验证可读回
     let (read_manifest, read_path, read_source): (String, String, String) = sqlx::query_as(
-        "SELECT manifest, pack_path, source_type FROM installed_skills WHERE id = ?"
+        "SELECT manifest, pack_path, source_type FROM installed_skills WHERE id = ?",
     )
     .bind(&skill_id)
     .fetch_one(&pool)
@@ -75,12 +80,15 @@ async fn test_import_local_skill_and_read() {
 
     let parsed: serde_json::Value = serde_json::from_str(&read_manifest).unwrap();
     assert_eq!(parsed["name"].as_str().unwrap(), "test-skill");
-    assert_eq!(parsed["description"].as_str().unwrap(), "A test skill for E2E testing");
+    assert_eq!(
+        parsed["description"].as_str().unwrap(),
+        "A test skill for E2E testing"
+    );
     assert_eq!(parsed["version"].as_str().unwrap(), "local");
 
     // 验证 Skill 在列表中
     let rows = sqlx::query_as::<_, (String,)>(
-        "SELECT manifest FROM installed_skills ORDER BY installed_at DESC"
+        "SELECT manifest FROM installed_skills ORDER BY installed_at DESC",
     )
     .fetch_all(&pool)
     .await
@@ -130,7 +138,7 @@ async fn test_session_lifecycle() {
     let now = Utc::now().to_rfc3339();
 
     sqlx::query(
-        "INSERT INTO sessions (id, skill_id, title, created_at, model_id) VALUES (?, ?, ?, ?, ?)"
+        "INSERT INTO sessions (id, skill_id, title, created_at, model_id) VALUES (?, ?, ?, ?, ?)",
     )
     .bind(&session_id)
     .bind(skill_id)
@@ -162,23 +170,19 @@ async fn test_session_lifecycle() {
     }
 
     // 验证消息计数
-    let (msg_count,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM messages WHERE session_id = ?"
-    )
-    .bind(&session_id)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let (msg_count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM messages WHERE session_id = ?")
+        .bind(&session_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(msg_count, 3);
 
     // 验证会话存在
-    let (title,): (String,) = sqlx::query_as(
-        "SELECT title FROM sessions WHERE id = ?"
-    )
-    .bind(&session_id)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let (title,): (String,) = sqlx::query_as("SELECT title FROM sessions WHERE id = ?")
+        .bind(&session_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(title, "测试会话");
 
     // 删除会话（先删消息，再删会话 — 模拟 delete_session 逻辑）
@@ -194,22 +198,19 @@ async fn test_session_lifecycle() {
         .unwrap();
 
     // 验证清理完成
-    let (remaining_msgs,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM messages WHERE session_id = ?"
-    )
-    .bind(&session_id)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let (remaining_msgs,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM messages WHERE session_id = ?")
+            .bind(&session_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert_eq!(remaining_msgs, 0);
 
-    let remaining_sessions = sqlx::query_as::<_, (String,)>(
-        "SELECT id FROM sessions WHERE id = ?"
-    )
-    .bind(&session_id)
-    .fetch_optional(&pool)
-    .await
-    .unwrap();
+    let remaining_sessions = sqlx::query_as::<_, (String,)>("SELECT id FROM sessions WHERE id = ?")
+        .bind(&session_id)
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
     assert!(remaining_sessions.is_none());
 }
 
@@ -229,7 +230,7 @@ async fn test_search_sessions() {
     let now = Utc::now().to_rfc3339();
 
     sqlx::query(
-        "INSERT INTO sessions (id, skill_id, title, created_at, model_id) VALUES (?, ?, ?, ?, ?)"
+        "INSERT INTO sessions (id, skill_id, title, created_at, model_id) VALUES (?, ?, ?, ?, ?)",
     )
     .bind(&session_a)
     .bind(skill_id)
@@ -241,7 +242,7 @@ async fn test_search_sessions() {
     .unwrap();
 
     sqlx::query(
-        "INSERT INTO sessions (id, skill_id, title, created_at, model_id) VALUES (?, ?, ?, ?, ?)"
+        "INSERT INTO sessions (id, skill_id, title, created_at, model_id) VALUES (?, ?, ?, ?, ?)",
     )
     .bind(&session_b)
     .bind(skill_id)
@@ -259,7 +260,7 @@ async fn test_search_sessions() {
          FROM sessions s
          LEFT JOIN messages m ON m.session_id = s.id
          WHERE s.skill_id = ? AND (s.title LIKE ? OR m.content LIKE ?)
-         ORDER BY s.created_at DESC"
+         ORDER BY s.created_at DESC",
     )
     .bind(skill_id)
     .bind(pattern)
@@ -279,7 +280,7 @@ async fn test_search_sessions() {
          FROM sessions s
          LEFT JOIN messages m ON m.session_id = s.id
          WHERE s.skill_id = ? AND (s.title LIKE ? OR m.content LIKE ?)
-         ORDER BY s.created_at DESC"
+         ORDER BY s.created_at DESC",
     )
     .bind(skill_id)
     .bind(pattern_py)
@@ -294,7 +295,7 @@ async fn test_search_sessions() {
     // 搜索消息内容 — 先给 session_a 添加消息
     let msg_id = Uuid::new_v4().to_string();
     sqlx::query(
-        "INSERT INTO messages (id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)"
+        "INSERT INTO messages (id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)",
     )
     .bind(&msg_id)
     .bind(&session_a)
@@ -311,7 +312,7 @@ async fn test_search_sessions() {
         "SELECT DISTINCT s.id
          FROM sessions s
          LEFT JOIN messages m ON m.session_id = s.id
-         WHERE s.skill_id = ? AND (s.title LIKE ? OR m.content LIKE ?)"
+         WHERE s.skill_id = ? AND (s.title LIKE ? OR m.content LIKE ?)",
     )
     .bind(skill_id)
     .bind(pattern_tokio)
@@ -352,7 +353,7 @@ async fn test_mcp_server_crud() {
 
     // 列表查询 — 验证能找到
     let rows = sqlx::query_as::<_, (String, String, String, String, String, i32)>(
-        "SELECT id, name, command, args, env, enabled FROM mcp_servers ORDER BY created_at DESC"
+        "SELECT id, name, command, args, env, enabled FROM mcp_servers ORDER BY created_at DESC",
     )
     .fetch_all(&pool)
     .await
@@ -437,7 +438,10 @@ Test skill with MCP dependencies."#;
     let config = runtime_lib::agent::skill_config::SkillConfig::parse(content);
     assert_eq!(config.mcp_servers.len(), 2);
     assert_eq!(config.mcp_servers[0].name, "brave-search");
-    assert_eq!(config.mcp_servers[0].env, Some(vec!["BRAVE_API_KEY".to_string()]));
+    assert_eq!(
+        config.mcp_servers[0].env,
+        Some(vec!["BRAVE_API_KEY".to_string()])
+    );
     assert_eq!(config.mcp_servers[1].name, "memory");
     assert_eq!(config.mcp_servers[1].command, None);
 }
@@ -481,14 +485,24 @@ agent: Explore
 
     // 验证所有字段
     assert_eq!(config.name.as_deref(), Some("code-review"));
-    assert_eq!(config.description.as_deref(), Some("审查代码并提供改进建议"));
+    assert_eq!(
+        config.description.as_deref(),
+        Some("审查代码并提供改进建议")
+    );
     assert_eq!(
         config.allowed_tools,
-        Some(vec!["ReadFile".to_string(), "Glob".to_string(), "Grep".to_string()])
+        Some(vec![
+            "ReadFile".to_string(),
+            "Glob".to_string(),
+            "Grep".to_string()
+        ])
     );
     assert_eq!(config.model.as_deref(), Some("claude-sonnet-4-20250514"));
     assert_eq!(config.max_iterations, Some(15));
-    assert_eq!(config.argument_hint.as_deref(), Some("<file_path> [focus_area]"));
+    assert_eq!(
+        config.argument_hint.as_deref(),
+        Some("<file_path> [focus_area]")
+    );
     assert!(!config.disable_model_invocation);
     assert!(config.user_invocable);
     assert_eq!(config.context.as_deref(), Some("fork"));
@@ -502,11 +516,21 @@ agent: Explore
     let mut config_with_args = config.clone();
     config_with_args.substitute_arguments(&["main.rs", "error-handling"], "sess-e2e-001");
 
-    assert!(config_with_args.system_prompt.contains("请审查以下文件: main.rs"));
-    assert!(config_with_args.system_prompt.contains("关注领域: error-handling"));
-    assert!(config_with_args.system_prompt.contains("所有参数: main.rs error-handling"));
-    assert!(config_with_args.system_prompt.contains("会话 ID: sess-e2e-001"));
-    assert!(config_with_args.system_prompt.contains("简写: main.rs 和 error-handling"));
+    assert!(config_with_args
+        .system_prompt
+        .contains("请审查以下文件: main.rs"));
+    assert!(config_with_args
+        .system_prompt
+        .contains("关注领域: error-handling"));
+    assert!(config_with_args
+        .system_prompt
+        .contains("所有参数: main.rs error-handling"));
+    assert!(config_with_args
+        .system_prompt
+        .contains("会话 ID: sess-e2e-001"));
+    assert!(config_with_args
+        .system_prompt
+        .contains("简写: main.rs 和 error-handling"));
 
     // 将解析后的 Skill 存入数据库并验证往返一致性
     let skill_id = "local-code-review";
@@ -537,17 +561,22 @@ agent: Explore
     .unwrap();
 
     // 读回并验证
-    let (read_manifest,): (String,) = sqlx::query_as(
-        "SELECT manifest FROM installed_skills WHERE id = ?"
-    )
-    .bind(skill_id)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let (read_manifest,): (String,) =
+        sqlx::query_as("SELECT manifest FROM installed_skills WHERE id = ?")
+            .bind(skill_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
 
     let parsed: serde_json::Value = serde_json::from_str(&read_manifest).unwrap();
     assert_eq!(parsed["name"].as_str().unwrap(), "code-review");
-    assert_eq!(parsed["description"].as_str().unwrap(), "审查代码并提供改进建议");
-    assert_eq!(parsed["recommended_model"].as_str().unwrap(), "claude-sonnet-4-20250514");
+    assert_eq!(
+        parsed["description"].as_str().unwrap(),
+        "审查代码并提供改进建议"
+    );
+    assert_eq!(
+        parsed["recommended_model"].as_str().unwrap(),
+        "claude-sonnet-4-20250514"
+    );
     assert_eq!(parsed["version"].as_str().unwrap(), "local");
 }

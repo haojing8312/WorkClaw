@@ -1,5 +1,6 @@
 use runtime_lib::im::runtime_bridge::{
-    build_im_role_event_payload, build_runtime_task_payload, normalize_stream_token, RoleTaskRequest,
+    build_im_role_event_payload, build_runtime_task_payload, normalize_stream_token,
+    RoleTaskRequest,
 };
 
 #[tokio::test]
@@ -14,7 +15,10 @@ async fn bridge_dispatches_role_task_and_receives_stream_events() {
     let payload = build_runtime_task_payload(&req);
     assert_eq!(payload["agent_type"], "plan");
     assert_eq!(payload["role_id"], "architect");
-    assert!(payload["prompt"].as_str().unwrap_or_default().contains("架构师"));
+    assert!(payload["prompt"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("架构师"));
 
     let stream_raw = serde_json::json!({
         "session_id": "s1",
@@ -22,8 +26,8 @@ async fn bridge_dispatches_role_task_and_receives_stream_events() {
         "done": false,
         "sub_agent": true
     });
-    let event = normalize_stream_token("architect", "架构师", &stream_raw)
-        .expect("event should normalize");
+    let event =
+        normalize_stream_token("architect", "架构师", &stream_raw).expect("event should normalize");
     assert_eq!(event.role_id, "architect");
     assert_eq!(event.role_name, "架构师");
     assert_eq!(event.token, "阶段结论：可承接");

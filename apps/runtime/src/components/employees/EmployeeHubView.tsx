@@ -20,6 +20,10 @@ interface Props {
   onDeleteEmployee: (employeeId: string) => Promise<void>;
   onSetAsMainAndEnter: (employeeId: string) => void;
   onStartTaskWithEmployee: (employeeId: string) => Promise<void> | void;
+  onOpenEmployeeCreatorSkill?: () => Promise<void> | void;
+  highlightEmployeeId?: string | null;
+  highlightMessage?: string | null;
+  onDismissHighlight?: () => void;
 }
 
 const blankForm: UpsertAgentEmployeeInput = {
@@ -100,9 +104,14 @@ export function EmployeeHubView({
   onDeleteEmployee,
   onSetAsMainAndEnter,
   onStartTaskWithEmployee,
+  onOpenEmployeeCreatorSkill,
+  highlightEmployeeId,
+  highlightMessage,
+  onDismissHighlight,
 }: Props) {
   const [form, setForm] = useState<UpsertAgentEmployeeInput>(blankForm);
   const [employeeIdEdited, setEmployeeIdEdited] = useState(false);
+  const [showManualEditor, setShowManualEditor] = useState(Boolean(selectedEmployeeId));
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [feishuStatuses, setFeishuStatuses] = useState<FeishuEmployeeConnectionStatuses | null>(null);
@@ -157,6 +166,12 @@ export function EmployeeHubView({
     };
   }, []);
 
+  useEffect(() => {
+    if (selectedEmployeeId) {
+      setShowManualEditor(true);
+    }
+  }, [selectedEmployeeId]);
+
   const feishuStatusByEmployeeId = useMemo(() => {
     const map = new Map<string, FeishuEmployeeWsStatus>();
     for (const item of feishuStatuses?.sidecar?.items || []) {
@@ -198,6 +213,7 @@ export function EmployeeHubView({
 
   function pickEmployee(id: string) {
     onSelectEmployee(id);
+    setShowManualEditor(true);
     const e = employees.find((x) => x.id === id);
     if (!e) return;
     setForm({
@@ -351,6 +367,40 @@ export function EmployeeHubView({
           </p>
         </div>
 
+        <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+          <div>
+            <div className="text-sm font-medium text-blue-900">推荐：使用内置「创建员工」技能</div>
+            <div className="text-xs text-blue-700 mt-1">
+              通过对话描述岗位需求，系统会自动给出技能匹配与配置建议，并在你确认后创建员工。
+            </div>
+          </div>
+          <button
+            type="button"
+            data-testid="open-employee-creator-skill"
+            onClick={() => onOpenEmployeeCreatorSkill?.()}
+            className="h-9 px-4 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm"
+          >
+            使用创建员工助手
+          </button>
+        </div>
+
+        {highlightMessage && (
+          <div
+            data-testid="employee-creator-highlight"
+            className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 flex items-center justify-between gap-3"
+          >
+            <div className="text-xs text-emerald-800">{highlightMessage}</div>
+            <button
+              type="button"
+              data-testid="employee-creator-highlight-dismiss"
+              onClick={() => onDismissHighlight?.()}
+              className="h-7 px-2.5 rounded border border-emerald-200 hover:bg-emerald-100 text-emerald-700 text-xs"
+            >
+              知道了
+            </button>
+          </div>
+        )}
+
         <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-2">
           <div className="text-xs text-gray-500">全局默认工作目录（新建会话默认使用）</div>
           <input
@@ -374,22 +424,44 @@ export function EmployeeHubView({
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="bg-white border border-gray-200 rounded-xl p-3 max-h-[640px] overflow-y-auto">
             <div className="text-xs text-gray-500 mb-2">员工列表</div>
-            <button
-              onClick={resetForm}
-              className="w-full mb-2 h-8 rounded bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs"
-            >
-              新建员工
-            </button>
+            <div className="mb-2 grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => onOpenEmployeeCreatorSkill?.()}
+                className="h-8 rounded bg-blue-600 hover:bg-blue-700 text-white text-xs"
+              >
+                新建员工
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  resetForm();
+                  setShowManualEditor(true);
+                }}
+                className="h-8 rounded bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs"
+              >
+                手动新建
+              </button>
+            </div>
             <div className="space-y-2">
               {employees.map((e) => {
                 const status = resolveFeishuStatus(e);
+                const isSelected = selectedEmployeeId === e.id;
+                const isHighlighted = highlightEmployeeId === e.id;
                 return (
                   <button
                     key={e.id}
+                    data-testid={`employee-item-${e.id}`}
                     onClick={() => pickEmployee(e.id)}
                     className={
                       "w-full text-left border rounded p-2 text-xs " +
-                      (selectedEmployeeId === e.id ? "border-blue-300 bg-blue-50" : "border-gray-200 bg-white")
+                      (
+                        isHighlighted
+                          ? "border-emerald-300 bg-emerald-50 ring-1 ring-emerald-200"
+                          : isSelected
+                          ? "border-blue-300 bg-blue-50"
+                          : "border-gray-200 bg-white"
+                      )
                     }
                   >
                     <div className="flex items-center gap-2">
@@ -401,6 +473,11 @@ export function EmployeeHubView({
                       <div className="font-medium text-gray-800 truncate">
                         {e.name} {e.is_default ? "· 主员工" : ""}
                       </div>
+                      {isHighlighted && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 border border-emerald-200">
+                          新建
+                        </span>
+                      )}
                     </div>
                     <div className="text-gray-500 truncate">{e.employee_id || e.role_id}</div>
                   </button>
@@ -410,8 +487,25 @@ export function EmployeeHubView({
             </div>
 
           <div className="md:col-span-2 bg-white border border-gray-200 rounded-xl p-4 space-y-3">
-            <div className="text-xs text-gray-500">员工配置</div>
+            <div className="flex items-center justify-between">
+              <div className="text-xs text-gray-500">员工配置（高级）</div>
+              {!showManualEditor && (
+                <button
+                  type="button"
+                  onClick={() => setShowManualEditor(true)}
+                  className="h-7 px-2.5 rounded bg-gray-50 hover:bg-gray-100 text-gray-600 text-xs"
+                >
+                  展开手动配置
+                </button>
+              )}
+            </div>
 
+            {!showManualEditor ? (
+              <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50 px-3 py-4 text-xs text-gray-500">
+                默认建议使用“创建员工助手”对话式完成配置；如需精细化参数，可点击上方“展开手动配置”。
+              </div>
+            ) : (
+              <>
             <div className="rounded-lg border border-gray-200 p-3 space-y-2">
               <div className="text-xs font-medium text-gray-700">步骤 1 / 3 · 基础信息</div>
               <input
@@ -628,6 +722,8 @@ export function EmployeeHubView({
                 与该员工对话开始任务
               </button>
             </div>
+              </>
+            )}
           </div>
         </div>
       </div>

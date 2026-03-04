@@ -24,4 +24,3 @@ pub fn build_feishu_markdown_message(chat_id: &str, markdown: &str) -> Value {
         .unwrap_or_else(|_| "{\"zh_cn\":{\"title\":\"智能体协作更新\",\"content\":[[{\"tag\":\"text\",\"text\":\"\"}]]}}".to_string())
     })
 }
-

@@ -1,7 +1,7 @@
-use crate::commands::im_config::get_thread_role_config_with_pool;
 use crate::commands::employee_agents::{
     ensure_employee_sessions_for_event_with_pool, link_inbound_event_to_session_with_pool,
 };
+use crate::commands::im_config::get_thread_role_config_with_pool;
 use crate::commands::im_gateway::process_im_event;
 use crate::commands::openclaw_gateway::resolve_openclaw_route_with_pool;
 use crate::commands::skills::DbState;
@@ -11,9 +11,9 @@ use crate::im::runtime_bridge::{
     build_im_role_dispatch_request, build_im_role_event_payload, ImRoleDispatchRequest,
     ImRoleEventPayload,
 };
+use crate::im::types::{ImEvent, ImEventType};
 use reqwest::Client;
 use sha2::{Digest, Sha256};
-use crate::im::types::{ImEvent, ImEventType};
 use sqlx::SqlitePool;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -129,10 +129,16 @@ pub fn parse_feishu_payload(payload: &str) -> Result<ParsedFeishuPayload, String
         .mentions
         .unwrap_or_default()
         .into_iter()
-        .find(|m| m.key.as_deref() == Some("@_all") || m.name.as_deref().unwrap_or("").contains("智能体"))
+        .find(|m| {
+            m.key.as_deref() == Some("@_all") || m.name.as_deref().unwrap_or("").contains("智能体")
+        })
         .and_then(|m| m.mention_id.and_then(|id| id.open_id));
 
-    let event_type = match header.event_type.as_deref().unwrap_or("im.message.receive_v1") {
+    let event_type = match header
+        .event_type
+        .as_deref()
+        .unwrap_or("im.message.receive_v1")
+    {
         "im.message.receive_v1" => ImEventType::MessageCreated,
         "im.message.reaction.created_v1" => ImEventType::MessageCreated,
         other => {
@@ -153,9 +159,11 @@ pub fn parse_feishu_payload(payload: &str) -> Result<ParsedFeishuPayload, String
         message_id: message.message_id,
         text: content_text,
         role_id,
-        tenant_id: header
-            .tenant_key
-            .or_else(|| event.sender.and_then(|s| s.sender_id.and_then(|id| id.open_id))),
+        tenant_id: header.tenant_key.or_else(|| {
+            event
+                .sender
+                .and_then(|s| s.sender_id.and_then(|id| id.open_id))
+        }),
     }))
 }
 
@@ -193,11 +201,12 @@ pub async fn validate_feishu_auth_with_pool(
 }
 
 pub async fn get_app_setting(pool: &SqlitePool, key: &str) -> Result<Option<String>, String> {
-    let row: Option<(String,)> = sqlx::query_as("SELECT value FROM app_settings WHERE key = ? LIMIT 1")
-        .bind(key)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| e.to_string())?;
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT value FROM app_settings WHERE key = ? LIMIT 1")
+            .bind(key)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| e.to_string())?;
     Ok(row.map(|(v,)| v))
 }
 
@@ -211,7 +220,10 @@ pub async fn set_app_setting(pool: &SqlitePool, key: &str, value: &str) -> Resul
     Ok(())
 }
 
-pub async fn resolve_feishu_sidecar_base_url(pool: &SqlitePool, input: Option<String>) -> Result<Option<String>, String> {
+pub async fn resolve_feishu_sidecar_base_url(
+    pool: &SqlitePool,
+    input: Option<String>,
+) -> Result<Option<String>, String> {
     if let Some(v) = input {
         if !v.trim().is_empty() {
             return Ok(Some(v));
@@ -288,7 +300,12 @@ pub async fn list_enabled_employee_feishu_connections_with_pool(
     Ok(result)
 }
 
-pub fn calculate_feishu_signature(timestamp: &str, nonce: &str, encrypt_key: &str, body: &str) -> String {
+pub fn calculate_feishu_signature(
+    timestamp: &str,
+    nonce: &str,
+    encrypt_key: &str,
+    body: &str,
+) -> String {
     let mut hasher = Sha256::new();
     hasher.update(format!("{}{}{}{}", timestamp, nonce, encrypt_key, body));
     let digest = hasher.finalize();
@@ -612,11 +629,7 @@ fn feishu_event_relay_status(state: &FeishuEventRelayState) -> FeishuEventRelayS
         generation: state.generation.load(Ordering::SeqCst),
         interval_ms: state.interval_ms.load(Ordering::SeqCst),
         total_accepted: state.total_accepted.load(Ordering::SeqCst),
-        last_error: state
-            .last_error
-            .lock()
-            .ok()
-            .and_then(|guard| guard.clone()),
+        last_error: state.last_error.lock().ok().and_then(|guard| guard.clone()),
     }
 }
 
@@ -626,7 +639,11 @@ pub async fn call_sidecar_json(
     sidecar_base_url: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let base = sidecar_base_url.unwrap_or_else(|| "http://localhost:8765".to_string());
-    let url = format!("{}/{}", base.trim_end_matches('/'), path.trim_start_matches('/'));
+    let url = format!(
+        "{}/{}",
+        base.trim_end_matches('/'),
+        path.trim_start_matches('/')
+    );
     let client = Client::new();
     let resp = client
         .post(url)
@@ -751,9 +768,19 @@ pub async fn set_feishu_gateway_settings(
 ) -> Result<(), String> {
     set_app_setting(&db.0, "feishu_app_id", settings.app_id.as_str()).await?;
     set_app_setting(&db.0, "feishu_app_secret", settings.app_secret.as_str()).await?;
-    set_app_setting(&db.0, "feishu_ingress_token", settings.ingress_token.as_str()).await?;
+    set_app_setting(
+        &db.0,
+        "feishu_ingress_token",
+        settings.ingress_token.as_str(),
+    )
+    .await?;
     set_app_setting(&db.0, "feishu_encrypt_key", settings.encrypt_key.as_str()).await?;
-    set_app_setting(&db.0, "feishu_sidecar_base_url", settings.sidecar_base_url.as_str()).await?;
+    set_app_setting(
+        &db.0,
+        "feishu_sidecar_base_url",
+        settings.sidecar_base_url.as_str(),
+    )
+    .await?;
     Ok(())
 }
 
@@ -762,10 +789,18 @@ pub async fn get_feishu_gateway_settings(
     db: State<'_, DbState>,
 ) -> Result<FeishuGatewaySettings, String> {
     Ok(FeishuGatewaySettings {
-        app_id: get_app_setting(&db.0, "feishu_app_id").await?.unwrap_or_default(),
-        app_secret: get_app_setting(&db.0, "feishu_app_secret").await?.unwrap_or_default(),
-        ingress_token: get_app_setting(&db.0, "feishu_ingress_token").await?.unwrap_or_default(),
-        encrypt_key: get_app_setting(&db.0, "feishu_encrypt_key").await?.unwrap_or_default(),
+        app_id: get_app_setting(&db.0, "feishu_app_id")
+            .await?
+            .unwrap_or_default(),
+        app_secret: get_app_setting(&db.0, "feishu_app_secret")
+            .await?
+            .unwrap_or_default(),
+        ingress_token: get_app_setting(&db.0, "feishu_ingress_token")
+            .await?
+            .unwrap_or_default(),
+        encrypt_key: get_app_setting(&db.0, "feishu_encrypt_key")
+            .await?
+            .unwrap_or_default(),
         sidecar_base_url: get_app_setting(&db.0, "feishu_sidecar_base_url")
             .await?
             .unwrap_or_else(|| "http://localhost:8765".to_string()),
@@ -924,7 +959,9 @@ async fn sync_feishu_ws_events_core(
         };
         let r = process_im_event(pool, inbound.clone()).await?;
         if r.accepted && !r.deduped {
-            if let Ok(employee_sessions) = ensure_employee_sessions_for_event_with_pool(pool, &inbound).await {
+            if let Ok(employee_sessions) =
+                ensure_employee_sessions_for_event_with_pool(pool, &inbound).await
+            {
                 let route_decision = resolve_openclaw_route_with_pool(pool, &inbound).await.ok();
                 for s in employee_sessions {
                     let _ = link_inbound_event_to_session_with_pool(
@@ -1067,12 +1104,19 @@ pub async fn start_feishu_event_relay_with_pool_and_app(
             if relay_worker_state.generation.load(Ordering::SeqCst) != generation {
                 break;
             }
-            match sync_feishu_ws_events_core(&pool, base.clone(), Some(lim), app_for_worker.as_ref())
-                .await
+            match sync_feishu_ws_events_core(
+                &pool,
+                base.clone(),
+                Some(lim),
+                app_for_worker.as_ref(),
+            )
+            .await
             {
                 Ok(n) => {
                     if n > 0 {
-                        relay_worker_state.total_accepted.fetch_add(n, Ordering::SeqCst);
+                        relay_worker_state
+                            .total_accepted
+                            .fetch_add(n, Ordering::SeqCst);
                     }
                     if let Ok(mut guard) = relay_worker_state.last_error.lock() {
                         *guard = None;
@@ -1084,7 +1128,10 @@ pub async fn start_feishu_event_relay_with_pool_and_app(
                     }
                 }
             }
-            let ms = relay_worker_state.interval_ms.load(Ordering::SeqCst).clamp(200, 30_000);
+            let ms = relay_worker_state
+                .interval_ms
+                .load(Ordering::SeqCst)
+                .clamp(200, 30_000);
             tokio::time::sleep(Duration::from_millis(ms)).await;
         }
         if relay_worker_state.generation.load(Ordering::SeqCst) == generation {

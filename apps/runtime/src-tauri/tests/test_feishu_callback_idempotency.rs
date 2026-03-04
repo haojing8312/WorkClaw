@@ -28,4 +28,3 @@ async fn callback_same_event_id_is_processed_once() {
     assert!(second.accepted);
     assert!(second.deduped);
 }
-

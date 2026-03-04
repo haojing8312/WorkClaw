@@ -253,7 +253,10 @@ fn extract_skill_md_from_zip_bytes(bytes: &[u8]) -> Result<String, String> {
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
         let path = Path::new(entry.name());
-        let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or_default();
+        let file_name = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default();
         if file_name.eq_ignore_ascii_case("SKILL.md") {
             let mut content = String::new();
             std::io::Read::read_to_string(&mut entry, &mut content)
@@ -286,7 +289,11 @@ async fn download_skill_zip_bytes(client: &Client, repo_url: &str) -> Result<Vec
     Ok(bytes.to_vec())
 }
 
-async fn resolve_repo_url(client: &Client, slug: &str, github_url: Option<String>) -> Result<String, String> {
+async fn resolve_repo_url(
+    client: &Client,
+    slug: &str,
+    github_url: Option<String>,
+) -> Result<String, String> {
     if let Some(url) = github_url.filter(|u| !u.trim().is_empty()) {
         return Ok(url);
     }
@@ -322,7 +329,11 @@ fn parse_google_translate_text(body: &Value) -> Option<String> {
             out.push_str(piece);
         }
     }
-    if out.trim().is_empty() { None } else { Some(out) }
+    if out.trim().is_empty() {
+        None
+    } else {
+        Some(out)
+    }
 }
 
 async fn translate_text_to_zh(client: &Client, text: &str) -> Result<String, String> {
@@ -365,11 +376,7 @@ fn find_skill_root(extract_dir: &Path) -> Option<PathBuf> {
 
 async fn fetch_skill_detail_url(client: &Client, slug: &str) -> Result<Option<String>, String> {
     let base = clawhub_base_url();
-    let query_url = format!(
-        "{}/api/v1/skill?slug={}",
-        base,
-        urlencoding::encode(slug)
-    );
+    let query_url = format!("{}/api/v1/skill?slug={}", base, urlencoding::encode(slug));
     if let Ok(resp) = client.get(&query_url).send().await {
         if resp.status().is_success() {
             let body: Value = resp.json().await.map_err(|e| e.to_string())?;
@@ -389,7 +396,11 @@ async fn fetch_skill_detail_url(client: &Client, slug: &str) -> Result<Option<St
     }
 
     let path_url = format!("{}/api/v1/skill/{}", base, urlencoding::encode(slug));
-    let resp = client.get(&path_url).send().await.map_err(|e| e.to_string())?;
+    let resp = client
+        .get(&path_url)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
         return Ok(None);
     }
@@ -406,7 +417,10 @@ async fn fetch_skill_detail_url(client: &Client, slug: &str) -> Result<Option<St
     Ok(direct.or(nested))
 }
 
-async fn check_missing_mcp(pool: &SqlitePool, cfg: &crate::agent::skill_config::SkillConfig) -> Result<Vec<String>, String> {
+async fn check_missing_mcp(
+    pool: &SqlitePool,
+    cfg: &crate::agent::skill_config::SkillConfig,
+) -> Result<Vec<String>, String> {
     let mut missing = Vec::new();
     for dep in &cfg.mcp_servers {
         let exists: Option<(String,)> = sqlx::query_as("SELECT id FROM mcp_servers WHERE name = ?")
@@ -456,10 +470,7 @@ pub async fn search_clawhub_skills(
         .or_else(|| body.as_array().cloned())
         .unwrap_or_default();
 
-    let mut out: Vec<ClawhubSkillSummary> = items
-        .iter()
-        .filter_map(normalize_skill)
-        .collect();
+    let mut out: Vec<ClawhubSkillSummary> = items.iter().filter_map(normalize_skill).collect();
     out.sort_by(|a, b| b.stars.cmp(&a.stars).then_with(|| a.name.cmp(&b.name)));
     Ok(out)
 }
@@ -513,12 +524,13 @@ pub async fn recommend_clawhub_skills(
         })
         .collect();
 
-    recs.sort_by(|a, b| b
-        .score
-        .partial_cmp(&a.score)
-        .unwrap_or(std::cmp::Ordering::Equal)
-        .then_with(|| b.stars.cmp(&a.stars))
-        .then_with(|| a.name.cmp(&b.name)));
+    recs.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| b.stars.cmp(&a.stars))
+            .then_with(|| a.name.cmp(&b.name))
+    });
 
     let out_limit = limit.unwrap_or(5).max(1).min(10) as usize;
     recs.truncate(out_limit);
@@ -560,7 +572,11 @@ pub async fn list_clawhub_library(
         .get("nextCursor")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
-        .or_else(|| body.get("next_cursor").and_then(|v| v.as_str()).map(|s| s.to_string()));
+        .or_else(|| {
+            body.get("next_cursor")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        });
 
     Ok(ClawhubLibraryResponse {
         items: items.iter().filter_map(normalize_library_item).collect(),
@@ -591,13 +607,12 @@ pub async fn translate_clawhub_texts(
         }
 
         let cache_key = format!("zh-CN:{}", sha256_hex(&clean));
-        let cached: Option<(String,)> = sqlx::query_as(
-            "SELECT translated_text FROM skill_i18n_cache WHERE cache_key = ?"
-        )
-        .bind(&cache_key)
-        .fetch_optional(&db.0)
-        .await
-        .map_err(|e| e.to_string())?;
+        let cached: Option<(String,)> =
+            sqlx::query_as("SELECT translated_text FROM skill_i18n_cache WHERE cache_key = ?")
+                .bind(&cache_key)
+                .fetch_optional(&db.0)
+                .await
+                .map_err(|e| e.to_string())?;
         if let Some((translated,)) = cached {
             out.push(translated);
             continue;
@@ -663,8 +678,8 @@ pub async fn install_clawhub_skill(
         std::io::copy(&mut entry, &mut outfile).map_err(|e| e.to_string())?;
     }
 
-    let skill_root = find_skill_root(&extract_dir)
-        .ok_or_else(|| "未在下载包中找到 SKILL.md".to_string())?;
+    let skill_root =
+        find_skill_root(&extract_dir).ok_or_else(|| "未在下载包中找到 SKILL.md".to_string())?;
     let skill_md_path = skill_root.join("SKILL.md");
     let content = std::fs::read_to_string(&skill_md_path)
         .map_err(|e| format!("读取 SKILL.md 失败: {}", e))?;
@@ -704,7 +719,10 @@ pub async fn install_clawhub_skill(
     .map_err(|e| e.to_string())?;
 
     let missing_mcp = check_missing_mcp(&db.0, &config).await?;
-    Ok(ImportResult { manifest, missing_mcp })
+    Ok(ImportResult {
+        manifest,
+        missing_mcp,
+    })
 }
 
 #[tauri::command]
@@ -721,7 +739,7 @@ pub async fn check_clawhub_skill_update(
     }
 
     let (pack_path, source_type): (String, String) = sqlx::query_as(
-        "SELECT pack_path, COALESCE(source_type, 'encrypted') FROM installed_skills WHERE id = ?"
+        "SELECT pack_path, COALESCE(source_type, 'encrypted') FROM installed_skills WHERE id = ?",
     )
     .bind(&skill_id)
     .fetch_one(&db.0)

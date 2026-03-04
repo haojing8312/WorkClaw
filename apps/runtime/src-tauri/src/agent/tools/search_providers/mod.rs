@@ -87,7 +87,11 @@ mod tests {
         let result = create_provider("search_unknown", "", "key", "");
         assert!(result.is_err());
         let err_msg = result.err().unwrap().to_string();
-        assert!(err_msg.contains("未知的搜索 Provider"), "错误信息: {}", err_msg);
+        assert!(
+            err_msg.contains("未知的搜索 Provider"),
+            "错误信息: {}",
+            err_msg
+        );
     }
 
     #[test]

@@ -26,4 +26,3 @@ fn opportunity_review_reaches_final_recommendation_stage() {
     assert!(summary.contains("成本区间"));
     assert!(summary.contains("风险"));
 }
-

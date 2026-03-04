@@ -1,5 +1,5 @@
 use runtime_lib::agent::tools::process_manager::ProcessManager;
-use runtime_lib::agent::{BashTool, BashKillTool, BashOutputTool, Tool, ToolContext};
+use runtime_lib::agent::{BashKillTool, BashOutputTool, BashTool, Tool, ToolContext};
 use serde_json::json;
 use std::sync::Arc;
 use std::thread;

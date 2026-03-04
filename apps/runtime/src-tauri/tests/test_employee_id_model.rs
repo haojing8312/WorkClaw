@@ -49,9 +49,10 @@ async fn upsert_employee_mirrors_employee_id_to_legacy_ids() {
 async fn migration_backfills_employee_id_from_role_id() {
     let (pool, _tmp) = helpers::setup_test_db().await;
 
-    let _ = sqlx::query("ALTER TABLE agent_employees ADD COLUMN employee_id TEXT NOT NULL DEFAULT ''")
-        .execute(&pool)
-        .await;
+    let _ =
+        sqlx::query("ALTER TABLE agent_employees ADD COLUMN employee_id TEXT NOT NULL DEFAULT ''")
+            .execute(&pool)
+            .await;
 
     let now = chrono::Utc::now().to_rfc3339();
     sqlx::query(
@@ -77,15 +78,16 @@ async fn migration_backfills_employee_id_from_role_id() {
         .await
         .expect("backfill employee_id");
 
-    let row: (String,) = sqlx::query_as(
-        "SELECT employee_id FROM agent_employees WHERE id = 'emp-legacy'",
-    )
-    .fetch_one(&pool)
-    .await
-    .expect("query backfilled row");
+    let row: (String,) =
+        sqlx::query_as("SELECT employee_id FROM agent_employees WHERE id = 'emp-legacy'")
+            .fetch_one(&pool)
+            .await
+            .expect("query backfilled row");
     assert_eq!(row.0, "legacy_role");
 
-    let list = list_agent_employees_with_pool(&pool).await.expect("list employees");
+    let list = list_agent_employees_with_pool(&pool)
+        .await
+        .expect("list employees");
     assert_eq!(list.len(), 1);
     assert_eq!(list[0].employee_id, "legacy_role");
 }

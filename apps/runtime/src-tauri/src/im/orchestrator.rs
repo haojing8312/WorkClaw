@@ -1,5 +1,7 @@
+use crate::im::scenarios::opportunity_review::{
+    next_stage, OpportunityReviewInput, OpportunityStage,
+};
 use crate::im::types::{ImEvent, ImEventType};
-use crate::im::scenarios::opportunity_review::{next_stage, OpportunityReviewInput, OpportunityStage};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OrchestratorAction {

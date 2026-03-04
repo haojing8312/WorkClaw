@@ -70,7 +70,8 @@ impl Tool for SidecarBridgeTool {
         let url = format!("{}{}", self.sidecar_url, self.endpoint);
 
         // MCP 工具需要包装请求体
-        let body = if let (Some(server), Some(tool)) = (&self.mcp_server_name, &self.mcp_tool_name) {
+        let body = if let (Some(server), Some(tool)) = (&self.mcp_server_name, &self.mcp_tool_name)
+        {
             json!({
                 "serverName": server,
                 "toolName": tool,

@@ -39,8 +39,7 @@ impl Tool for ScreenshotTool {
         // 确保父目录存在
         if let Some(parent) = checked.parent() {
             if !parent.exists() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| anyhow!("创建父目录失败: {}", e))?;
+                std::fs::create_dir_all(parent).map_err(|e| anyhow!("创建父目录失败: {}", e))?;
             }
         }
 
@@ -49,9 +48,7 @@ impl Tool for ScreenshotTool {
 
         // 验证截图文件是否生成
         if checked.exists() {
-            let size = std::fs::metadata(&checked)
-                .map(|m| m.len())
-                .unwrap_or(0);
+            let size = std::fs::metadata(&checked).map(|m| m.len()).unwrap_or(0);
             Ok(format!(
                 "截图已保存到 {}（{} 字节）\n{}",
                 path_str, size, output
@@ -125,9 +122,7 @@ fn capture_screenshot(path: &str) -> Result<String> {
 #[cfg(target_os = "linux")]
 fn capture_screenshot(path: &str) -> Result<String> {
     // Linux：优先尝试 gnome-screenshot，回退到 import (ImageMagick)
-    let gnome_result = Command::new("gnome-screenshot")
-        .args(["-f", path])
-        .output();
+    let gnome_result = Command::new("gnome-screenshot").args(["-f", path]).output();
 
     match gnome_result {
         Ok(output) if output.status.success() => {
@@ -140,10 +135,7 @@ fn capture_screenshot(path: &str) -> Result<String> {
             let output = Command::new("import")
                 .args(["-window", "root", path])
                 .output()
-                .map_err(|e| anyhow!(
-                    "截图失败：gnome-screenshot 和 import 均不可用: {}",
-                    e
-                ))?;
+                .map_err(|e| anyhow!("截图失败：gnome-screenshot 和 import 均不可用: {}", e))?;
 
             let stdout = String::from_utf8_lossy(&output.stdout).to_string();
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();

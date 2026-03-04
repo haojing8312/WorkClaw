@@ -1,6 +1,8 @@
 mod helpers;
 
-use runtime_lib::commands::im_config::{bind_thread_roles_with_pool, get_thread_role_config_with_pool};
+use runtime_lib::commands::im_config::{
+    bind_thread_roles_with_pool, get_thread_role_config_with_pool,
+};
 use runtime_lib::commands::im_gateway::process_im_event;
 use runtime_lib::im::feishu_formatter::format_role_message;
 use runtime_lib::im::memory::{capture_entry, MemoryEntry};
@@ -72,4 +74,3 @@ async fn feishu_thread_multi_role_collaboration_e2e() {
     assert!(outbound.contains("结论"));
     assert!(outbound.contains("下一步"));
 }
-

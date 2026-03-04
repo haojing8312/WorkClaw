@@ -50,13 +50,10 @@ impl Tool for ListDirTool {
 
         let mut entries: Vec<String> = Vec::new();
 
-        let read_dir =
-            std::fs::read_dir(&checked).map_err(|e| anyhow!("读取目录失败: {}", e))?;
+        let read_dir = std::fs::read_dir(&checked).map_err(|e| anyhow!("读取目录失败: {}", e))?;
 
         // 收集并排序条目
-        let mut dir_entries: Vec<_> = read_dir
-            .filter_map(|entry| entry.ok())
-            .collect();
+        let mut dir_entries: Vec<_> = read_dir.filter_map(|entry| entry.ok()).collect();
         dir_entries.sort_by_key(|e| e.file_name());
 
         for entry in dir_entries {

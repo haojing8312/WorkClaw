@@ -1,10 +1,10 @@
-use serde::{Deserialize, Serialize};
-use tauri::State;
-use uuid::Uuid;
 use super::skills::DbState;
-use sqlx::SqlitePool;
 use crate::providers::ProviderRegistry;
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use sqlx::SqlitePool;
+use tauri::State;
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelConfig {
@@ -130,8 +130,14 @@ fn builtin_capability_route_templates() -> Vec<CapabilityRouteTemplateDef> {
             primary_provider_keys: &["deepseek", "qwen", "moonshot"],
             primary_model: "deepseek-chat",
             fallback: &[
-                TemplateFallbackDef { provider_keys: &["qwen"], model: "qwen-plus" },
-                TemplateFallbackDef { provider_keys: &["moonshot"], model: "kimi-k2" },
+                TemplateFallbackDef {
+                    provider_keys: &["qwen"],
+                    model: "qwen-plus",
+                },
+                TemplateFallbackDef {
+                    provider_keys: &["moonshot"],
+                    model: "kimi-k2",
+                },
             ],
             timeout_ms: 60000,
             retry_count: 1,
@@ -143,9 +149,10 @@ fn builtin_capability_route_templates() -> Vec<CapabilityRouteTemplateDef> {
             capability: "vision",
             primary_provider_keys: &["qwen"],
             primary_model: "qwen-vl-max",
-            fallback: &[
-                TemplateFallbackDef { provider_keys: &["deepseek"], model: "deepseek-chat" },
-            ],
+            fallback: &[TemplateFallbackDef {
+                provider_keys: &["deepseek"],
+                model: "deepseek-chat",
+            }],
             timeout_ms: 90000,
             retry_count: 1,
         },
@@ -156,9 +163,10 @@ fn builtin_capability_route_templates() -> Vec<CapabilityRouteTemplateDef> {
             capability: "image_gen",
             primary_provider_keys: &["qwen"],
             primary_model: "wanx2.1-t2i-plus",
-            fallback: &[
-                TemplateFallbackDef { provider_keys: &["openai"], model: "gpt-image-1" },
-            ],
+            fallback: &[TemplateFallbackDef {
+                provider_keys: &["openai"],
+                model: "gpt-image-1",
+            }],
             timeout_ms: 120000,
             retry_count: 1,
         },
@@ -169,9 +177,10 @@ fn builtin_capability_route_templates() -> Vec<CapabilityRouteTemplateDef> {
             capability: "audio_stt",
             primary_provider_keys: &["qwen"],
             primary_model: "paraformer-v2",
-            fallback: &[
-                TemplateFallbackDef { provider_keys: &["openai"], model: "gpt-4o-mini-transcribe" },
-            ],
+            fallback: &[TemplateFallbackDef {
+                provider_keys: &["openai"],
+                model: "gpt-4o-mini-transcribe",
+            }],
             timeout_ms: 90000,
             retry_count: 1,
         },
@@ -182,9 +191,10 @@ fn builtin_capability_route_templates() -> Vec<CapabilityRouteTemplateDef> {
             capability: "audio_tts",
             primary_provider_keys: &["qwen"],
             primary_model: "cosyvoice-v1",
-            fallback: &[
-                TemplateFallbackDef { provider_keys: &["openai"], model: "gpt-4o-mini-tts" },
-            ],
+            fallback: &[TemplateFallbackDef {
+                provider_keys: &["openai"],
+                model: "gpt-4o-mini-tts",
+            }],
             timeout_ms: 60000,
             retry_count: 1,
         },
@@ -236,8 +246,13 @@ pub async fn apply_capability_route_template_from_pool(
             .map(|(id, _)| id.clone())
     };
 
-    let primary_provider_id = resolve_provider(template.primary_provider_keys)
-        .ok_or_else(|| format!("模板缺少主 Provider（需要其一）: {:?}", template.primary_provider_keys))?;
+    let primary_provider_id =
+        resolve_provider(template.primary_provider_keys).ok_or_else(|| {
+            format!(
+                "模板缺少主 Provider（需要其一）: {:?}",
+                template.primary_provider_keys
+            )
+        })?;
 
     let mut fallback_items: Vec<serde_json::Value> = Vec::new();
     for item in template.fallback {
@@ -253,7 +268,8 @@ pub async fn apply_capability_route_template_from_pool(
         capability: capability.to_string(),
         primary_provider_id,
         primary_model: template.primary_model.to_string(),
-        fallback_chain_json: serde_json::to_string(&fallback_items).unwrap_or_else(|_| "[]".to_string()),
+        fallback_chain_json: serde_json::to_string(&fallback_items)
+            .unwrap_or_else(|_| "[]".to_string()),
         timeout_ms: template.timeout_ms,
         retry_count: template.retry_count,
         enabled: true,
@@ -327,7 +343,9 @@ pub async fn save_provider_config_to_pool(
     Ok(id)
 }
 
-pub async fn list_provider_configs_from_pool(db: &SqlitePool) -> Result<Vec<ProviderConfig>, String> {
+pub async fn list_provider_configs_from_pool(
+    db: &SqlitePool,
+) -> Result<Vec<ProviderConfig>, String> {
     let rows = sqlx::query_as::<_, (String, String, String, String, String, String, String, String, String, bool)>(
         "SELECT id, provider_key, display_name, protocol_type, base_url, auth_type, api_key_encrypted, org_id, extra_json, CAST(enabled AS BOOLEAN)
          FROM provider_configs ORDER BY updated_at DESC",
@@ -339,7 +357,18 @@ pub async fn list_provider_configs_from_pool(db: &SqlitePool) -> Result<Vec<Prov
     Ok(rows
         .into_iter()
         .map(
-            |(id, provider_key, display_name, protocol_type, base_url, auth_type, api_key_encrypted, org_id, extra_json, enabled)| ProviderConfig {
+            |(
+                id,
+                provider_key,
+                display_name,
+                protocol_type,
+                base_url,
+                auth_type,
+                api_key_encrypted,
+                org_id,
+                extra_json,
+                enabled,
+            )| ProviderConfig {
                 id,
                 provider_key,
                 display_name,
@@ -389,15 +418,24 @@ pub async fn get_capability_routing_policy_from_pool(
     .await
     .map_err(|e| format!("读取能力路由策略失败: {e}"))?;
 
-    Ok(row.map(|(primary_provider_id, primary_model, fallback_chain_json, timeout_ms, retry_count, enabled)| CapabilityRoutingPolicy {
-        capability: capability.to_string(),
-        primary_provider_id,
-        primary_model,
-        fallback_chain_json,
-        timeout_ms,
-        retry_count,
-        enabled,
-    }))
+    Ok(row.map(
+        |(
+            primary_provider_id,
+            primary_model,
+            fallback_chain_json,
+            timeout_ms,
+            retry_count,
+            enabled,
+        )| CapabilityRoutingPolicy {
+            capability: capability.to_string(),
+            primary_provider_id,
+            primary_model,
+            fallback_chain_json,
+            timeout_ms,
+            retry_count,
+            enabled,
+        },
+    ))
 }
 
 pub async fn upsert_chat_routing_policy_to_pool(
@@ -502,10 +540,7 @@ async fn check_provider_health_from_pool(
 
 fn recommended_models_for_provider(provider_key: &str) -> Vec<String> {
     match provider_key {
-        "deepseek" => vec![
-            "deepseek-chat".to_string(),
-            "deepseek-reasoner".to_string(),
-        ],
+        "deepseek" => vec!["deepseek-chat".to_string(), "deepseek-reasoner".to_string()],
         "qwen" => vec![
             "qwen-max".to_string(),
             "qwen-plus".to_string(),
@@ -542,7 +577,9 @@ fn filter_models_by_capability(models: Vec<String>, capability: Option<&str>) ->
     let filtered = if capability == "vision" {
         models
             .into_iter()
-            .filter(|m| m.contains("vl") || m.contains("4o") || m.contains("claude") || m.contains("omni"))
+            .filter(|m| {
+                m.contains("vl") || m.contains("4o") || m.contains("claude") || m.contains("omni")
+            })
             .collect::<Vec<_>>()
     } else if capability == "reasoning" {
         models
@@ -552,7 +589,12 @@ fn filter_models_by_capability(models: Vec<String>, capability: Option<&str>) ->
     } else if capability == "image_gen" {
         models
             .into_iter()
-            .filter(|m| m.contains("image") || m.contains("vl") || m.contains("omni") || m.contains("cogview"))
+            .filter(|m| {
+                m.contains("image")
+                    || m.contains("vl")
+                    || m.contains("omni")
+                    || m.contains("cogview")
+            })
             .collect::<Vec<_>>()
     } else if capability == "audio_stt" {
         models
@@ -567,14 +609,20 @@ fn filter_models_by_capability(models: Vec<String>, capability: Option<&str>) ->
     } else {
         models
     };
-    if filtered.is_empty() { original } else { filtered }
+    if filtered.is_empty() {
+        original
+    } else {
+        filtered
+    }
 }
 
 fn cache_row_is_fresh(fetched_at: &str, ttl_seconds: i64) -> bool {
     let Ok(parsed) = DateTime::parse_from_rfc3339(fetched_at) else {
         return false;
     };
-    let age = Utc::now().signed_duration_since(parsed.with_timezone(&Utc)).num_seconds();
+    let age = Utc::now()
+        .signed_duration_since(parsed.with_timezone(&Utc))
+        .num_seconds();
     age >= 0 && age < ttl_seconds
 }
 
@@ -606,7 +654,12 @@ pub async fn list_provider_models_from_pool(
         .iter()
         .all(|(_, fetched_at, ttl)| cache_row_is_fresh(fetched_at, *ttl))
     {
-        Some(cache_rows.into_iter().map(|(model_id, _, _)| model_id).collect())
+        Some(
+            cache_rows
+                .into_iter()
+                .map(|(model_id, _, _)| model_id)
+                .collect(),
+        )
     } else {
         None
     };
@@ -658,16 +711,20 @@ pub async fn set_routing_settings(
     let node_timeout_seconds = settings.node_timeout_seconds.clamp(5, 600).to_string();
     let retry_count = settings.retry_count.clamp(0, 2).to_string();
 
-    sqlx::query("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('route_max_call_depth', ?)")
-        .bind(&max_call_depth)
-        .execute(&db.0)
-        .await
-        .map_err(|e| format!("保存路由深度设置失败: {e}"))?;
-    sqlx::query("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('route_node_timeout_seconds', ?)")
-        .bind(&node_timeout_seconds)
-        .execute(&db.0)
-        .await
-        .map_err(|e| format!("保存路由超时设置失败: {e}"))?;
+    sqlx::query(
+        "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('route_max_call_depth', ?)",
+    )
+    .bind(&max_call_depth)
+    .execute(&db.0)
+    .await
+    .map_err(|e| format!("保存路由深度设置失败: {e}"))?;
+    sqlx::query(
+        "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('route_node_timeout_seconds', ?)",
+    )
+    .bind(&node_timeout_seconds)
+    .execute(&db.0)
+    .await
+    .map_err(|e| format!("保存路由超时设置失败: {e}"))?;
     sqlx::query("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('route_retry_count', ?)")
         .bind(&retry_count)
         .execute(&db.0)
@@ -691,7 +748,10 @@ pub async fn list_provider_configs(db: State<'_, DbState>) -> Result<Vec<Provide
 }
 
 #[tauri::command]
-pub async fn delete_provider_config(provider_id: String, db: State<'_, DbState>) -> Result<(), String> {
+pub async fn delete_provider_config(
+    provider_id: String,
+    db: State<'_, DbState>,
+) -> Result<(), String> {
     sqlx::query("DELETE FROM provider_configs WHERE id = ?")
         .bind(&provider_id)
         .execute(&db.0)
@@ -732,16 +792,23 @@ pub async fn get_capability_routing_policy(
 }
 
 #[tauri::command]
-pub async fn test_provider_health(provider_id: String, db: State<'_, DbState>) -> Result<ProviderHealthInfo, String> {
+pub async fn test_provider_health(
+    provider_id: String,
+    db: State<'_, DbState>,
+) -> Result<ProviderHealthInfo, String> {
     check_provider_health_from_pool(&db.0, &provider_id).await
 }
 
 #[tauri::command]
-pub async fn test_all_provider_health(db: State<'_, DbState>) -> Result<Vec<ProviderHealthInfo>, String> {
-    let ids = sqlx::query_scalar::<_, String>("SELECT id FROM provider_configs WHERE enabled = 1 ORDER BY updated_at DESC")
-        .fetch_all(&db.0)
-        .await
-        .map_err(|e| format!("读取 Provider 列表失败: {e}"))?;
+pub async fn test_all_provider_health(
+    db: State<'_, DbState>,
+) -> Result<Vec<ProviderHealthInfo>, String> {
+    let ids = sqlx::query_scalar::<_, String>(
+        "SELECT id FROM provider_configs WHERE enabled = 1 ORDER BY updated_at DESC",
+    )
+    .fetch_all(&db.0)
+    .await
+    .map_err(|e| format!("读取 Provider 列表失败: {e}"))?;
 
     let mut results = Vec::with_capacity(ids.len());
     for provider_id in ids {
@@ -821,7 +888,18 @@ pub async fn list_recent_route_attempt_logs(
     Ok(rows
         .into_iter()
         .map(
-            |(session_id, capability, api_format, model_name, attempt_index, retry_index, error_kind, success, error_message, created_at)| RouteAttemptLog {
+            |(
+                session_id,
+                capability,
+                api_format,
+                model_name,
+                attempt_index,
+                retry_index,
+                error_kind,
+                success,
+                error_message,
+                created_at,
+            )| RouteAttemptLog {
                 session_id,
                 capability,
                 api_format,
@@ -874,7 +952,19 @@ pub async fn export_route_attempt_logs_csv(
     };
 
     let mut csv = String::from("created_at,session_id,capability,api_format,model_name,attempt_index,retry_index,error_kind,success,error_message\n");
-    for (session_id, capability_value, api_format, model_name, attempt_index, retry_index, error_kind_value, success, error_message, created_at) in rows {
+    for (
+        session_id,
+        capability_value,
+        api_format,
+        model_name,
+        attempt_index,
+        retry_index,
+        error_kind_value,
+        success,
+        error_message,
+        created_at,
+    ) in rows
+    {
         if let Some(ref cap_filter) = capability {
             if cap_filter != "all" && capability_value != *cap_filter {
                 continue;
@@ -947,12 +1037,14 @@ pub async fn list_route_attempt_stats_from_pool(
 
     Ok(rows
         .into_iter()
-        .map(|(capability, error_kind, success, count)| RouteAttemptStat {
-            capability,
-            error_kind,
-            success,
-            count,
-        })
+        .map(
+            |(capability, error_kind, success, count)| RouteAttemptStat {
+                capability,
+                error_kind,
+                success,
+                count,
+            },
+        )
         .collect())
 }
 
@@ -991,10 +1083,12 @@ pub async fn save_model_config(
     .await
     .map_err(|e| format!("保存模型配置失败: {e}"))?;
 
-    eprintln!("[models] 模型已保存: id={id}, name={}, api_key={}...{}",
+    eprintln!(
+        "[models] 模型已保存: id={id}, name={}, api_key={}...{}",
         config.name,
         &api_key[..6.min(api_key.len())],
-        &api_key[api_key.len().saturating_sub(4)..]);
+        &api_key[api_key.len().saturating_sub(4)..]
+    );
 
     Ok(())
 }
@@ -1008,21 +1102,29 @@ pub async fn list_model_configs(db: State<'_, DbState>) -> Result<Vec<ModelConfi
     .await
     .map_err(|e| e.to_string())?;
 
-    Ok(rows.into_iter().map(|(id, name, api_format, base_url, model_name, is_default)| {
-        ModelConfig { id, name, api_format, base_url, model_name, is_default }
-    }).collect())
+    Ok(rows
+        .into_iter()
+        .map(
+            |(id, name, api_format, base_url, model_name, is_default)| ModelConfig {
+                id,
+                name,
+                api_format,
+                base_url,
+                model_name,
+                is_default,
+            },
+        )
+        .collect())
 }
 
 /// 获取指定配置的 API Key（编辑时用）
 #[tauri::command]
 pub async fn get_model_api_key(model_id: String, db: State<'_, DbState>) -> Result<String, String> {
-    let row = sqlx::query_as::<_, (String,)>(
-        "SELECT api_key FROM model_configs WHERE id = ?"
-    )
-    .bind(&model_id)
-    .fetch_optional(&db.0)
-    .await
-    .map_err(|e| e.to_string())?;
+    let row = sqlx::query_as::<_, (String,)>("SELECT api_key FROM model_configs WHERE id = ?")
+        .bind(&model_id)
+        .fetch_optional(&db.0)
+        .await
+        .map_err(|e| e.to_string())?;
 
     match row {
         Some((key,)) => Ok(key),
@@ -1063,9 +1165,19 @@ pub async fn list_search_configs(db: State<'_, DbState>) -> Result<Vec<ModelConf
     .await
     .map_err(|e| e.to_string())?;
 
-    Ok(rows.into_iter().map(|(id, name, api_format, base_url, model_name, is_default)| {
-        ModelConfig { id, name, api_format, base_url, model_name, is_default }
-    }).collect())
+    Ok(rows
+        .into_iter()
+        .map(
+            |(id, name, api_format, base_url, model_name, is_default)| ModelConfig {
+                id,
+                name,
+                api_format,
+                base_url,
+                model_name,
+                is_default,
+            },
+        )
+        .collect())
 }
 
 /// 测试搜索 Provider 连接（执行一次最小化搜索请求）
@@ -1073,8 +1185,13 @@ pub async fn list_search_configs(db: State<'_, DbState>) -> Result<Vec<ModelConf
 pub async fn test_search_connection(config: ModelConfig, api_key: String) -> Result<bool, String> {
     use crate::agent::tools::search_providers::{create_provider, SearchParams};
 
-    let provider = create_provider(&config.api_format, &config.base_url, &api_key, &config.model_name)
-        .map_err(|e| format!("创建 Provider 失败: {}", e))?;
+    let provider = create_provider(
+        &config.api_format,
+        &config.base_url,
+        &api_key,
+        &config.model_name,
+    )
+    .map_err(|e| format!("创建 Provider 失败: {}", e))?;
 
     let result = tokio::task::spawn_blocking(move || {
         provider.search(&SearchParams {

@@ -115,7 +115,10 @@ fn test_copy_missing_params() {
     let input = json!({"source": "some_path"});
     let result = tool.execute(input, &ctx);
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("缺少 destination 参数"));
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("缺少 destination 参数"));
 
     // 缺少 source
     let input = json!({"destination": "some_path"});

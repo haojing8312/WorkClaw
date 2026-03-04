@@ -19,7 +19,11 @@ pub struct CaptureResult {
     pub long_term_written: bool,
 }
 
-pub fn memory_paths(root: &Path, thread_id: &str, role_id: &str) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
+pub fn memory_paths(
+    root: &Path,
+    thread_id: &str,
+    role_id: &str,
+) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
     let date = Utc::now().format("%Y-%m-%d").to_string();
     let daily = root.join("daily").join(format!("{}.md", date));
     let session = root.join("sessions").join(format!("{}.md", thread_id));
@@ -28,7 +32,12 @@ pub fn memory_paths(root: &Path, thread_id: &str, role_id: &str) -> (PathBuf, Pa
     (daily, session, role, org)
 }
 
-pub fn capture_entry(root: &Path, thread_id: &str, role_id: &str, entry: &MemoryEntry) -> Result<CaptureResult> {
+pub fn capture_entry(
+    root: &Path,
+    thread_id: &str,
+    role_id: &str,
+    entry: &MemoryEntry,
+) -> Result<CaptureResult> {
     let (daily, session, role, org) = memory_paths(root, thread_id, role_id);
     ensure_parent_dirs(&[&daily, &session, &role, &org])?;
 
@@ -92,4 +101,3 @@ fn append_line(path: &Path, line: &str) -> Result<()> {
     }
     Ok(())
 }
-

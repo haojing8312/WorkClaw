@@ -1,7 +1,7 @@
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
+use futures_util::StreamExt;
 use reqwest::Client;
 use serde_json::{json, Value};
-use futures_util::StreamExt;
 
 /// Strip <think>…</think> spans from a streaming token chunk.
 /// `in_think` carries state across chunk boundaries.
@@ -19,7 +19,9 @@ fn filter_thinking(input: &str, in_think: &mut bool) -> String {
                 buf.clear();
             }
             // Keep buf bounded so it doesn't grow unbounded on large thinking blocks
-            if buf.len() > 16 { buf = buf[buf.len()-16..].to_string(); }
+            if buf.len() > 16 {
+                buf = buf[buf.len() - 16..].to_string();
+            }
         } else {
             // Look for <think>
             if buf.ends_with("<think>") {
@@ -216,6 +218,11 @@ pub async fn test_connection(base_url: &str, api_key: &str, model: &str) -> Resu
         "messages": [{"role": "user", "content": "hi"}],
         "max_tokens": 10
     });
-    let resp = client.post(&url).bearer_auth(api_key).json(&body).send().await?;
+    let resp = client
+        .post(&url)
+        .bearer_auth(api_key)
+        .json(&body)
+        .send()
+        .await?;
     Ok(resp.status().is_success())
 }

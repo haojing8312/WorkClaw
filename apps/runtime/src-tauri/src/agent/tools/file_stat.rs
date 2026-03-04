@@ -35,8 +35,8 @@ impl Tool for FileStatTool {
 
         let checked = ctx.check_path(path)?;
 
-        let metadata = std::fs::metadata(&checked)
-            .map_err(|e| anyhow!("获取文件元信息失败: {}", e))?;
+        let metadata =
+            std::fs::metadata(&checked).map_err(|e| anyhow!("获取文件元信息失败: {}", e))?;
 
         // 判断文件类型
         let file_type = if metadata.is_file() {

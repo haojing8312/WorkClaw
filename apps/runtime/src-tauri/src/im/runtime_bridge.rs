@@ -58,7 +58,10 @@ pub fn normalize_stream_token(
     payload: &Value,
 ) -> Option<RoleProgressEvent> {
     let token = payload.get("token")?.as_str()?.to_string();
-    let done = payload.get("done").and_then(Value::as_bool).unwrap_or(false);
+    let done = payload
+        .get("done")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let sub_agent = payload
         .get("sub_agent")
         .and_then(Value::as_bool)

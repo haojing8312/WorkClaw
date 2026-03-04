@@ -109,4 +109,3 @@ pub async fn get_thread_role_config(
 ) -> Result<ThreadRoleConfig, String> {
     get_thread_role_config_with_pool(&db.0, &thread_id).await
 }
-

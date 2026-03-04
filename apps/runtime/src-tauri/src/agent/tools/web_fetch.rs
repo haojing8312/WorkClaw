@@ -78,8 +78,5 @@ pub fn strip_html_tags(html: &str) -> String {
     let no_style = re_style.replace_all(&no_script, "");
     let text = re_tags.replace_all(&no_style, "");
 
-    re_lines
-        .replace_all(&text, "\n\n")
-        .trim()
-        .to_string()
+    re_lines.replace_all(&text, "\n\n").trim().to_string()
 }

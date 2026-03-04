@@ -12,7 +12,9 @@ fn test_parse_with_frontmatter() {
     );
     assert_eq!(config.model.as_deref(), Some("gpt-4o"));
     assert_eq!(config.max_iterations, Some(5));
-    assert!(config.system_prompt.contains("You are a helpful assistant."));
+    assert!(config
+        .system_prompt
+        .contains("You are a helpful assistant."));
     assert!(config.system_prompt.contains("Do your best work."));
 }
 
@@ -79,15 +81,16 @@ fn test_default_claude_code_fields() {
     let content = "---\nname: simple\n---\nHello.";
     let config = SkillConfig::parse(content);
     assert!(config.argument_hint.is_none());
-    assert!(!config.disable_model_invocation);  // 默认 false
-    assert!(config.user_invocable);              // 默认 true
+    assert!(!config.disable_model_invocation); // 默认 false
+    assert!(config.user_invocable); // 默认 true
     assert!(config.context.is_none());
     assert!(config.agent.is_none());
 }
 
 #[test]
 fn test_allowed_tools_comma_separated() {
-    let content = "---\nname: csv-tools\nallowed_tools: \"Bash, Read, Glob\"\n---\nUse these tools.";
+    let content =
+        "---\nname: csv-tools\nallowed_tools: \"Bash, Read, Glob\"\n---\nUse these tools.";
     let config = SkillConfig::parse(content);
     assert_eq!(
         config.allowed_tools,
@@ -134,7 +137,10 @@ fn test_substitute_arguments_indexed() {
         ..Default::default()
     };
     config.substitute_arguments(&["input.rs", "output.rs"], "sess-456");
-    assert_eq!(config.system_prompt, "Read input.rs and write to output.rs.");
+    assert_eq!(
+        config.system_prompt,
+        "Read input.rs and write to output.rs."
+    );
 }
 
 #[test]
@@ -164,7 +170,10 @@ fn test_substitute_mixed_placeholders() {
         ..Default::default()
     };
     config.substitute_arguments(&["hello", "world"], "s1");
-    assert_eq!(config.system_prompt, "All: hello world, First: hello, Session: s1");
+    assert_eq!(
+        config.system_prompt,
+        "All: hello world, First: hello, Session: s1"
+    );
 }
 
 #[test]

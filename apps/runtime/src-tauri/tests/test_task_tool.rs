@@ -6,8 +6,8 @@
 // Temporarily skip this integration test on Windows to keep CI/regression green.
 
 use runtime_lib::agent::tools::TaskTool;
-use runtime_lib::agent::ToolRegistry;
 use runtime_lib::agent::types::{Tool, ToolContext};
+use runtime_lib::agent::ToolRegistry;
 use serde_json::json;
 use std::sync::Arc;
 

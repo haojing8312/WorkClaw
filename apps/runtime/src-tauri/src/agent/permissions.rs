@@ -80,10 +80,7 @@ pub fn narrow_allowed_tools(
     });
 
     match (parent_norm, child_norm) {
-        (Some(parent), Some(child)) => parent
-            .into_iter()
-            .filter(|t| child.contains(t))
-            .collect(),
+        (Some(parent), Some(child)) => parent.into_iter().filter(|t| child.contains(t)).collect(),
         (Some(parent), None) => parent,
         (None, Some(child)) => child.into_iter().collect(),
         (None, None) => vec![],
@@ -109,7 +106,11 @@ mod tests {
 
     #[test]
     fn test_narrow_allowed_tools_intersection() {
-        let parent = vec!["read_file".to_string(), "glob".to_string(), "bash".to_string()];
+        let parent = vec![
+            "read_file".to_string(),
+            "glob".to_string(),
+            "bash".to_string(),
+        ];
         let child = vec!["ReadFile".to_string(), "web_search".to_string()];
         let narrowed = narrow_allowed_tools(Some(&parent), Some(&child));
         assert_eq!(narrowed, vec!["read_file".to_string()]);

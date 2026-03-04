@@ -28,7 +28,9 @@ async fn upsert_and_list_routing_bindings() {
     .await
     .expect("upsert");
 
-    let rows = list_im_routing_bindings_with_pool(&pool).await.expect("list");
+    let rows = list_im_routing_bindings_with_pool(&pool)
+        .await
+        .expect("list");
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].channel, "feishu");
 }

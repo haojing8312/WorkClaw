@@ -69,10 +69,12 @@ fn parse_openclaw_payload_extracts_mentioned_role() {
 #[tokio::test]
 async fn validate_openclaw_auth_honors_configured_token() {
     let (pool, _tmp) = helpers::setup_test_db().await;
-    sqlx::query("INSERT INTO app_settings (key, value) VALUES ('openclaw_ingress_token', 'secret-1')")
-        .execute(&pool)
-        .await
-        .expect("seed token");
+    sqlx::query(
+        "INSERT INTO app_settings (key, value) VALUES ('openclaw_ingress_token', 'secret-1')",
+    )
+    .execute(&pool)
+    .await
+    .expect("seed token");
 
     let ok = validate_openclaw_auth_with_pool(&pool, Some("secret-1".to_string())).await;
     assert!(ok.is_ok());
@@ -177,11 +179,13 @@ async fn resolve_route_prefers_peer_binding() {
     let (pool, _tmp) = helpers::setup_test_db().await;
     let (sidecar_base, server_task) = spawn_mock_sidecar_once().await;
 
-    sqlx::query("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('feishu_sidecar_base_url', ?)")
-        .bind(&sidecar_base)
-        .execute(&pool)
-        .await
-        .expect("seed sidecar base url");
+    sqlx::query(
+        "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('feishu_sidecar_base_url', ?)",
+    )
+    .bind(&sidecar_base)
+    .execute(&pool)
+    .await
+    .expect("seed sidecar base url");
 
     upsert_im_routing_binding_with_pool(
         &pool,

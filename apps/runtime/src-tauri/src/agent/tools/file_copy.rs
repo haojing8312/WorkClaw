@@ -77,11 +77,9 @@ impl Tool for FileCopyTool {
         } else {
             // 确保目标父目录存在
             if let Some(parent) = dst.parent() {
-                fs::create_dir_all(parent)
-                    .map_err(|e| anyhow!("创建目标父目录失败: {}", e))?;
+                fs::create_dir_all(parent).map_err(|e| anyhow!("创建目标父目录失败: {}", e))?;
             }
-            fs::copy(&src, &dst)
-                .map_err(|e| anyhow!("复制文件失败: {}", e))?;
+            fs::copy(&src, &dst).map_err(|e| anyhow!("复制文件失败: {}", e))?;
             Ok(format!("已复制文件 {} → {}", source, destination))
         }
     }

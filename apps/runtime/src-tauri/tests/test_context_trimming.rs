@@ -48,7 +48,10 @@ fn test_trim_preserves_first_and_last() {
     ];
     let trimmed = trim_messages(&messages, 2_000);
     assert_eq!(trimmed.first().unwrap()["content"].as_str().unwrap(), &text);
-    assert_eq!(trimmed.last().unwrap()["content"].as_str().unwrap(), "final");
+    assert_eq!(
+        trimmed.last().unwrap()["content"].as_str().unwrap(),
+        "final"
+    );
 }
 
 #[test]
@@ -78,12 +81,21 @@ fn test_micro_compact_replaces_old_tool_results() {
     let result = micro_compact(&messages, 3);
     // 旧的 tool_result（id 1、2）应替换为 [已执行]
     let r1 = serde_json::to_string(&result[1]).unwrap();
-    assert!(r1.contains("[已执行]"), "Old tool result 1 should be replaced");
+    assert!(
+        r1.contains("[已执行]"),
+        "Old tool result 1 should be replaced"
+    );
     let r2 = serde_json::to_string(&result[2]).unwrap();
-    assert!(r2.contains("[已执行]"), "Old tool result 2 should be replaced");
+    assert!(
+        r2.contains("[已执行]"),
+        "Old tool result 2 should be replaced"
+    );
     // 近期的（id 3、4、5）应保留原始内容
     let r5 = serde_json::to_string(&result[5]).unwrap();
-    assert!(r5.contains("recent output"), "Recent tool result should be preserved");
+    assert!(
+        r5.contains("recent output"),
+        "Recent tool result should be preserved"
+    );
 }
 
 #[test]

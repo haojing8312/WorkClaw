@@ -33,10 +33,7 @@ fn test_read_file_missing_path() {
     let input = json!({});
     let result = tool.execute(input, &ctx);
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("缺少 path 参数"));
+    assert!(result.unwrap_err().to_string().contains("缺少 path 参数"));
 }
 
 #[test]
@@ -46,8 +43,5 @@ fn test_read_file_not_found() {
     let input = json!({"path": "nonexistent_file_xyz.txt"});
     let result = tool.execute(input, &ctx);
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("读取文件失败"));
+    assert!(result.unwrap_err().to_string().contains("读取文件失败"));
 }

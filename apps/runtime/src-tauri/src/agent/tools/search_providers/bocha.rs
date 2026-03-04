@@ -87,7 +87,10 @@ impl SearchProvider for BochaSearch {
         let resp_body: Value = response.json()?;
 
         // 调试日志：打印实际响应格式
-        eprintln!("[bocha] 响应体: {}", serde_json::to_string_pretty(&resp_body).unwrap_or_else(|_| "无法序列化".to_string()));
+        eprintln!(
+            "[bocha] 响应体: {}",
+            serde_json::to_string_pretty(&resp_body).unwrap_or_else(|_| "无法序列化".to_string())
+        );
 
         let items = parse_bocha_response(&resp_body);
 
@@ -125,7 +128,11 @@ fn parse_bocha_response(json: &Value) -> Vec<SearchItem> {
                     .and_then(|s| s.as_str())
                     .unwrap_or("")
                     .to_string();
-                Some(SearchItem { title, url, snippet })
+                Some(SearchItem {
+                    title,
+                    url,
+                    snippet,
+                })
             })
             .collect(),
         None => vec![],

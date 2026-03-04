@@ -29,4 +29,3 @@ pub enum ImEventType {
     #[serde(rename = "human.override")]
     HumanOverride,
 }
-

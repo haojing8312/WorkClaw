@@ -42,12 +42,18 @@ impl BashTool {
     fn is_dangerous(command: &str) -> bool {
         let lower = command.to_lowercase();
         let patterns = [
-            "rm -rf /", "rm -rf /*", "rm -rf ~",
-            "format c:", "format d:",
-            "shutdown", "reboot",
-            "> /dev/sda", "dd if=/dev/zero",
+            "rm -rf /",
+            "rm -rf /*",
+            "rm -rf ~",
+            "format c:",
+            "format d:",
+            "shutdown",
+            "reboot",
+            "> /dev/sda",
+            "dd if=/dev/zero",
             ":(){ :|:& };:",
-            "mkfs.", "wipefs",
+            "mkfs.",
+            "wipefs",
         ];
         patterns.iter().any(|p| lower.contains(p))
     }

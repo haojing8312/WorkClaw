@@ -10,10 +10,7 @@ fn test_get_filtered_definitions() {
     let whitelist = vec!["read_file".to_string(), "glob".to_string()];
     let filtered = registry.get_filtered_tool_definitions(&whitelist);
     assert_eq!(filtered.len(), 2);
-    let names: Vec<&str> = filtered
-        .iter()
-        .filter_map(|t| t["name"].as_str())
-        .collect();
+    let names: Vec<&str> = filtered.iter().filter_map(|t| t["name"].as_str()).collect();
     assert!(names.contains(&"read_file"));
     assert!(names.contains(&"glob"));
     assert!(!names.contains(&"write_file"));

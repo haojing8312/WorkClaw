@@ -1,5 +1,5 @@
-use crate::agent::skill_config::SkillConfig;
 use crate::agent::permissions::narrow_allowed_tools;
+use crate::agent::skill_config::SkillConfig;
 use crate::agent::types::{Tool, ToolContext};
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
@@ -162,9 +162,16 @@ impl Tool for SkillInvokeTool {
             let child_declared = config.allowed_tools.clone().unwrap_or_default();
             let narrowed_tools = narrow_allowed_tools(
                 ctx.allowed_tools.as_deref(),
-                if child_declared.is_empty() { None } else { Some(child_declared.as_slice()) },
+                if child_declared.is_empty() {
+                    None
+                } else {
+                    Some(child_declared.as_slice())
+                },
             );
-            if ctx.allowed_tools.is_some() && !child_declared.is_empty() && narrowed_tools.is_empty() {
+            if ctx.allowed_tools.is_some()
+                && !child_declared.is_empty()
+                && narrowed_tools.is_empty()
+            {
                 return Err(anyhow!(
                     "PERMISSION_DENIED: 子 Skill '{}' 声明的工具不在父会话允许范围内",
                     skill_name

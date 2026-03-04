@@ -47,8 +47,7 @@ impl Tool for FileDeleteTool {
 
         if checked.is_file() {
             // 删除文件
-            std::fs::remove_file(&checked)
-                .map_err(|e| anyhow!("删除文件失败: {}", e))?;
+            std::fs::remove_file(&checked).map_err(|e| anyhow!("删除文件失败: {}", e))?;
         } else if checked.is_dir() {
             // 尝试先删除空目录
             match std::fs::remove_dir(&checked) {

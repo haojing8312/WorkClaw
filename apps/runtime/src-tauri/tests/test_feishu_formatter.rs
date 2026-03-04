@@ -14,4 +14,3 @@ fn formatter_outputs_required_sections() {
     assert!(msg.contains("不确定项"));
     assert!(msg.contains("下一步"));
 }
-
