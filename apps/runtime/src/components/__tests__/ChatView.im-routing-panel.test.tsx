@@ -106,6 +106,10 @@ describe("ChatView IM routing panel", () => {
     });
 
     await waitFor(() => {
+      expect(screen.getByText("场景=opportunity_review。用户输入：请开始评审")).toBeInTheDocument();
+    });
+
+    await waitFor(() => {
       expect(screen.getByText(/已自动路由 1 个子 Skill/)).toBeInTheDocument();
     });
 

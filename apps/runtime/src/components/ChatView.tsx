@@ -340,6 +340,14 @@ export function ChatView({
   useEffect(() => {
     const unlistenPromise = listen<ImRoleDispatchRequest>("im-role-dispatch-request", ({ payload }) => {
       if (payload.session_id !== sessionId) return;
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "user",
+          content: payload.prompt || "",
+          created_at: new Date().toISOString(),
+        },
+      ]);
       setImRoleEvents((prev) => [
         ...prev,
         {
