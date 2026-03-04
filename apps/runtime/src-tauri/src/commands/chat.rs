@@ -1,29 +1,29 @@
-use tauri::{AppHandle, Emitter, Manager, State};
-use serde_json::{json, Value};
-use uuid::Uuid;
-use chrono::Utc;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use super::models::load_routing_settings_from_pool;
 use super::runtime_preferences::resolve_default_work_dir_with_pool;
 use super::skills::DbState;
-use crate::agent::AgentExecutor;
 use crate::agent::compactor;
 use crate::agent::executor::estimate_tokens;
 use crate::agent::permissions::PermissionMode;
-use crate::agent::tools::{
-    CompactTool, TaskTool, MemoryTool, WebSearchTool, AskUserTool, AskUserResponder,
-    BashTool, BashOutputTool, BashKillTool, ProcessManager, SkillInvokeTool,
-    ClawhubSearchTool, ClawhubRecommendTool,
-    browser_tools::register_browser_tools,
-};
 use crate::agent::tools::search_providers::cache::SearchCache;
+use crate::agent::tools::{
+    browser_tools::register_browser_tools, AskUserResponder, AskUserTool, BashKillTool,
+    BashOutputTool, BashTool, ClawhubRecommendTool, ClawhubSearchTool, CompactTool,
+    EmployeeManageTool, MemoryTool, ProcessManager, SkillInvokeTool, TaskTool, WebSearchTool,
+};
+use crate::agent::AgentExecutor;
+use chrono::Utc;
+use serde_json::{json, Value};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use tauri::{AppHandle, Emitter, Manager, State};
+use uuid::Uuid;
 
 /// 全局 AskUser 响应通道（用于 answer_user_question command）
 pub struct AskUserState(pub AskUserResponder);
 
 /// 工具确认通道（用于 confirm_tool_execution command）
-pub type ToolConfirmResponder = std::sync::Arc<std::sync::Mutex<Option<std::sync::mpsc::Sender<bool>>>>;
+pub type ToolConfirmResponder =
+    std::sync::Arc<std::sync::Mutex<Option<std::sync::mpsc::Sender<bool>>>>;
 pub struct ToolConfirmState(pub ToolConfirmResponder);
 
 /// 全局搜索缓存（跨会话共享，在 lib.rs 中创建）
@@ -143,7 +143,9 @@ fn classify_model_route_error(error_message: &str) -> ModelRouteErrorKind {
 fn should_retry_same_candidate(kind: ModelRouteErrorKind) -> bool {
     matches!(
         kind,
-        ModelRouteErrorKind::RateLimit | ModelRouteErrorKind::Timeout | ModelRouteErrorKind::Network
+        ModelRouteErrorKind::RateLimit
+            | ModelRouteErrorKind::Timeout
+            | ModelRouteErrorKind::Network
     )
 }
 
@@ -272,23 +274,22 @@ pub async fn create_session(
     skill_id: String,
     model_id: String,
     work_dir: Option<String>,
+    employee_id: Option<String>,
     permission_mode: Option<String>,
     db: State<'_, DbState>,
 ) -> Result<String, String> {
     let session_id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
     let permission_mode = normalize_permission_mode_for_storage(permission_mode.as_deref());
-    let normalized_work_dir = work_dir
-        .unwrap_or_default()
-        .trim()
-        .to_string();
+    let normalized_work_dir = work_dir.unwrap_or_default().trim().to_string();
+    let normalized_employee_id = employee_id.unwrap_or_default().trim().to_string();
     let resolved_work_dir = if normalized_work_dir.is_empty() {
         resolve_default_work_dir_with_pool(&db.0).await?
     } else {
         normalized_work_dir
     };
     sqlx::query(
-        "INSERT INTO sessions (id, skill_id, title, created_at, model_id, permission_mode, work_dir) VALUES (?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO sessions (id, skill_id, title, created_at, model_id, permission_mode, work_dir, employee_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
     )
     .bind(&session_id)
     .bind(&skill_id)
@@ -297,6 +298,7 @@ pub async fn create_session(
     .bind(&model_id)
     .bind(permission_mode)
     .bind(&resolved_work_dir)
+    .bind(&normalized_employee_id)
     .execute(&db.0)
     .await
     .map_err(|e| e.to_string())?;
@@ -320,7 +322,7 @@ pub async fn send_message(
     let msg_id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
     sqlx::query(
-        "INSERT INTO messages (id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)"
+        "INSERT INTO messages (id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)",
     )
     .bind(&msg_id)
     .bind(&session_id)
@@ -332,13 +334,11 @@ pub async fn send_message(
     .map_err(|e| e.to_string())?;
 
     // 如果是第一条消息，用消息前 20 个字符更新会话标题
-    let msg_count: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM messages WHERE session_id = ?"
-    )
-    .bind(&session_id)
-    .fetch_one(&db.0)
-    .await
-    .map_err(|e| e.to_string())?;
+    let msg_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM messages WHERE session_id = ?")
+        .bind(&session_id)
+        .fetch_one(&db.0)
+        .await
+        .map_err(|e| e.to_string())?;
 
     if msg_count.0 <= 1 {
         let title: String = user_message.chars().take(20).collect();
@@ -351,8 +351,8 @@ pub async fn send_message(
     }
 
     // 加载会话信息（含权限模式和工作目录）
-    let (skill_id, model_id, perm_str, work_dir) = sqlx::query_as::<_, (String, String, String, String)>(
-        "SELECT skill_id, model_id, permission_mode, COALESCE(work_dir, '') FROM sessions WHERE id = ?"
+    let (skill_id, model_id, perm_str, work_dir, session_employee_id) = sqlx::query_as::<_, (String, String, String, String, String)>(
+        "SELECT skill_id, model_id, permission_mode, COALESCE(work_dir, ''), COALESCE(employee_id, '') FROM sessions WHERE id = ?"
     )
     .bind(&session_id)
     .fetch_one(&db.0)
@@ -396,8 +396,8 @@ pub async fn send_message(
                 }),
             Err(_) => {
                 // 解包失败时回退到 manifest 描述
-                let manifest: skillpack_rs::SkillManifest = serde_json::from_str(&manifest_json)
-                    .map_err(|e| e.to_string())?;
+                let manifest: skillpack_rs::SkillManifest =
+                    serde_json::from_str(&manifest_json).map_err(|e| e.to_string())?;
                 manifest.description
             }
         }
@@ -405,7 +405,7 @@ pub async fn send_message(
 
     // 加载消息历史
     let history = sqlx::query_as::<_, (String, String)>(
-        "SELECT role, content FROM messages WHERE session_id = ? ORDER BY created_at ASC"
+        "SELECT role, content FROM messages WHERE session_id = ? ORDER BY created_at ASC",
     )
     .bind(&session_id)
     .fetch_all(&db.0)
@@ -413,13 +413,14 @@ pub async fn send_message(
     .map_err(|e| e.to_string())?;
 
     // 加载会话模型配置（含 api_key）作为最后兜底候选
-    let (session_api_format, session_base_url, session_model_name, session_api_key) = sqlx::query_as::<_, (String, String, String, String)>(
-        "SELECT api_format, base_url, model_name, api_key FROM model_configs WHERE id = ?"
-    )
-    .bind(&model_id)
-    .fetch_one(&db.0)
-    .await
-    .map_err(|e| format!("模型配置不存在 (model_id={model_id}): {e}"))?;
+    let (session_api_format, session_base_url, session_model_name, session_api_key) =
+        sqlx::query_as::<_, (String, String, String, String)>(
+            "SELECT api_format, base_url, model_name, api_key FROM model_configs WHERE id = ?",
+        )
+        .bind(&model_id)
+        .fetch_one(&db.0)
+        .await
+        .map_err(|e| format!("模型配置不存在 (model_id={model_id}): {e}"))?;
 
     // 构建候选链：routing policy primary/fallbacks + 会话 model 配置兜底
     let mut route_candidates: Vec<(String, String, String, String)> = Vec::new();
@@ -508,7 +509,9 @@ pub async fn send_message(
     }
 
     if route_candidates.is_empty() {
-        return Err(format!("模型 API Key 为空，请在设置中重新配置 (model_id={model_id})"));
+        return Err(format!(
+            "模型 API Key 为空，请在设置中重新配置 (model_id={model_id})"
+        ));
     }
 
     // 去重，避免 fallback 与会话配置重复
@@ -550,11 +553,19 @@ pub async fn send_message(
 
     // L3: 注册后台进程管理工具
     let process_manager = Arc::new(ProcessManager::new());
-    agent_executor.registry().register(Arc::new(BashOutputTool::new(Arc::clone(&process_manager))));
-    agent_executor.registry().register(Arc::new(BashKillTool::new(Arc::clone(&process_manager))));
+    agent_executor
+        .registry()
+        .register(Arc::new(BashOutputTool::new(Arc::clone(&process_manager))));
+    agent_executor
+        .registry()
+        .register(Arc::new(BashKillTool::new(Arc::clone(&process_manager))));
     // 替换默认 bash 工具为支持后台模式的版本
     agent_executor.registry().unregister("bash");
-    agent_executor.registry().register(Arc::new(BashTool::with_process_manager(Arc::clone(&process_manager))));
+    agent_executor
+        .registry()
+        .register(Arc::new(BashTool::with_process_manager(Arc::clone(
+            &process_manager,
+        ))));
 
     // L4: 注册浏览器自动化工具（通过 Sidecar 桥接）
     register_browser_tools(agent_executor.registry(), "http://localhost:8765");
@@ -568,8 +579,15 @@ pub async fn send_message(
     )
     .with_app_handle(app.clone(), session_id.clone());
     agent_executor.registry().register(Arc::new(task_tool));
-    agent_executor.registry().register(Arc::new(ClawhubSearchTool));
-    agent_executor.registry().register(Arc::new(ClawhubRecommendTool));
+    agent_executor
+        .registry()
+        .register(Arc::new(ClawhubSearchTool));
+    agent_executor
+        .registry()
+        .register(Arc::new(ClawhubRecommendTool));
+    agent_executor
+        .registry()
+        .register(Arc::new(EmployeeManageTool::new(db.0.clone())));
 
     // 注册 WebSearch 工具（从 DB 加载搜索 Provider 配置，使用全局缓存）
     {
@@ -584,8 +602,15 @@ pub async fn send_message(
         .await
         .map_err(|e| e.to_string())?;
 
-        if let Some((search_api_format, search_base_url, search_api_key, search_model_name)) = search_config {
-            match create_provider(&search_api_format, &search_base_url, &search_api_key, &search_model_name) {
+        if let Some((search_api_format, search_base_url, search_api_key, search_model_name)) =
+            search_config
+        {
+            match create_provider(
+                &search_api_format,
+                &search_base_url,
+                &search_api_key,
+                &search_model_name,
+            ) {
                 Ok(provider) => {
                     let web_search = WebSearchTool::with_provider(provider, search_cache);
                     agent_executor.registry().register(Arc::new(web_search));
@@ -600,7 +625,7 @@ pub async fn send_message(
 
     // 注册 Memory 工具（基于 Skill ID 的持久存储）
     let app_data_dir = app.path().app_data_dir().unwrap_or_default();
-    let memory_dir = app_data_dir.join("memory").join(&skill_id);
+    let memory_dir = build_memory_dir_for_session(&app_data_dir, &skill_id, &session_employee_id);
     let memory_tool = MemoryTool::new(memory_dir.clone());
     agent_executor.registry().register(Arc::new(memory_tool));
 
@@ -619,7 +644,11 @@ pub async fn send_message(
         }
     }
     if let Ok(profile) = std::env::var("USERPROFILE") {
-        skill_roots.push(std::path::PathBuf::from(profile).join(".claude").join("skills"));
+        skill_roots.push(
+            std::path::PathBuf::from(profile)
+                .join(".claude")
+                .join("skills"),
+        );
     }
     skill_roots.sort();
     skill_roots.dedup();
@@ -633,11 +662,7 @@ pub async fn send_message(
 
     // 注册 AskUser 工具（使用全局响应通道，在 lib.rs 中创建）
     let ask_user_responder = app.state::<AskUserState>().0.clone();
-    let ask_user_tool = AskUserTool::new(
-        app.clone(),
-        session_id.clone(),
-        ask_user_responder,
-    );
+    let ask_user_tool = AskUserTool::new(app.clone(), session_id.clone(), ask_user_responder);
     agent_executor.registry().register(Arc::new(ask_user_tool));
 
     // 获取工具名称列表（在所有工具注册完成后计算，确保列表完整）
@@ -686,7 +711,9 @@ pub async fn send_message(
     // 始终走 Agent 模式；失败时按候选链重试
     let mut final_messages_opt: Option<Vec<Value>> = None;
     let mut last_error: Option<String> = None;
-    for (candidate_api_format, candidate_base_url, candidate_model_name, candidate_api_key) in &route_candidates {
+    for (candidate_api_format, candidate_base_url, candidate_model_name, candidate_api_key) in
+        &route_candidates
+    {
         let mut attempt_idx = 0usize;
         loop {
             let app_clone = app.clone();
@@ -700,12 +727,15 @@ pub async fn send_message(
                     &system_prompt,
                     messages.clone(),
                     move |token: String| {
-                        let _ = app_clone.emit("stream-token", StreamToken {
-                            session_id: session_id_clone.clone(),
-                            token,
-                            done: false,
-                            sub_agent: false,
-                        });
+                        let _ = app_clone.emit(
+                            "stream-token",
+                            StreamToken {
+                                session_id: session_id_clone.clone(),
+                                token,
+                                done: false,
+                                sub_agent: false,
+                            },
+                        );
                     },
                     Some(&app),
                     Some(&session_id),
@@ -809,12 +839,15 @@ pub async fn send_message(
         .ok_or_else(|| last_error.unwrap_or_else(|| "所有候选模型执行失败".to_string()))?;
 
     // 发送结束事件
-    let _ = app.emit("stream-token", StreamToken {
-        session_id: session_id.clone(),
-        token: String::new(),
-        done: true,
-        sub_agent: false,
-    });
+    let _ = app.emit(
+        "stream-token",
+        StreamToken {
+            session_id: session_id.clone(),
+            token: String::new(),
+            done: true,
+            sub_agent: false,
+        },
+    );
 
     // 从新消息中按顺序提取有序项（文字和工具调用交替排列）
     let new_messages: Vec<&Value> = final_messages.iter().skip(history.len()).collect();
@@ -873,9 +906,9 @@ pub async fn send_message(
                 }
                 for tc in tool_calls_arr {
                     let func = &tc["function"];
-                    let input_val = serde_json::from_str::<Value>(
-                        func["arguments"].as_str().unwrap_or("{}")
-                    ).unwrap_or(json!({}));
+                    let input_val =
+                        serde_json::from_str::<Value>(func["arguments"].as_str().unwrap_or("{}"))
+                            .unwrap_or(json!({}));
                     ordered_items.push(json!({
                         "type": "tool_call",
                         "toolCall": {
@@ -932,7 +965,9 @@ pub async fn send_message(
     }
 
     // 组装最终 content：包含有序 items 列表
-    let has_tool_calls = ordered_items.iter().any(|i| i["type"].as_str() == Some("tool_call"));
+    let has_tool_calls = ordered_items
+        .iter()
+        .any(|i| i["type"].as_str() == Some("tool_call"));
     let content = if has_tool_calls {
         serde_json::to_string(&json!({
             "text": final_text,
@@ -961,6 +996,45 @@ pub async fn send_message(
     }
 
     Ok(())
+}
+
+fn sanitize_memory_bucket_component(raw: &str, fallback: &str) -> String {
+    let mut out = String::new();
+    let mut prev_sep = false;
+    for ch in raw.trim().to_lowercase().chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch);
+            prev_sep = false;
+            continue;
+        }
+        if !prev_sep {
+            out.push('_');
+            prev_sep = true;
+        }
+    }
+    let normalized = out.trim_matches('_').to_string();
+    if normalized.is_empty() {
+        fallback.to_string()
+    } else {
+        normalized
+    }
+}
+
+fn build_memory_dir_for_session(
+    app_data_dir: &std::path::Path,
+    skill_id: &str,
+    employee_id: &str,
+) -> std::path::PathBuf {
+    let root = app_data_dir.join("memory");
+    if employee_id.trim().is_empty() {
+        // Keep legacy layout for non-employee sessions.
+        return root.join(skill_id);
+    }
+    let employee_bucket = sanitize_memory_bucket_component(employee_id, "employee");
+    root.join("employees")
+        .join(employee_bucket)
+        .join("skills")
+        .join(skill_id)
 }
 
 fn tool_ctx_from_work_dir(work_dir: &str) -> Option<std::path::PathBuf> {
@@ -1134,36 +1208,39 @@ pub async fn get_messages(
     .await
     .map_err(|e| e.to_string())?;
 
-    Ok(rows.iter().map(|(role, content, created_at)| {
-        // 对 assistant 消息尝试解析结构化 content
-        if role == "assistant" {
-            if let Ok(parsed) = serde_json::from_str::<Value>(content) {
-                if let Some(text) = parsed.get("text") {
-                    // 包含有序 items 列表
-                    if let Some(items) = parsed.get("items") {
-                        // 向后兼容：将旧格式扁平 tool_call 转换为嵌套 toolCall 格式
-                        let normalized = normalize_stream_items(items);
+    Ok(rows
+        .iter()
+        .map(|(role, content, created_at)| {
+            // 对 assistant 消息尝试解析结构化 content
+            if role == "assistant" {
+                if let Ok(parsed) = serde_json::from_str::<Value>(content) {
+                    if let Some(text) = parsed.get("text") {
+                        // 包含有序 items 列表
+                        if let Some(items) = parsed.get("items") {
+                            // 向后兼容：将旧格式扁平 tool_call 转换为嵌套 toolCall 格式
+                            let normalized = normalize_stream_items(items);
+                            return json!({
+                                "role": role,
+                                "content": text,
+                                "created_at": created_at,
+                                "streamItems": normalized,
+                            });
+                        }
+                        // 旧格式：包含 tool_calls 列表（向后兼容）
+                        let tool_calls = parsed.get("tool_calls").cloned().unwrap_or(Value::Null);
                         return json!({
                             "role": role,
                             "content": text,
                             "created_at": created_at,
-                            "streamItems": normalized,
+                            "tool_calls": tool_calls,
                         });
                     }
-                    // 旧格式：包含 tool_calls 列表（向后兼容）
-                    let tool_calls = parsed.get("tool_calls").cloned().unwrap_or(Value::Null);
-                    return json!({
-                        "role": role,
-                        "content": text,
-                        "created_at": created_at,
-                        "tool_calls": tool_calls,
-                    });
                 }
             }
-        }
-        // 其他情况直接返回原始 content
-        json!({"role": role, "content": content, "created_at": created_at})
-    }).collect())
+            // 其他情况直接返回原始 content
+            json!({"role": role, "content": content, "created_at": created_at})
+        })
+        .collect())
 }
 
 #[tauri::command]
@@ -1179,37 +1256,40 @@ pub async fn get_sessions(
     .await
     .map_err(|e| e.to_string())?;
 
-    Ok(rows.iter().map(|(id, title, created_at, model_id, work_dir, permission_mode)| {
-        json!({
-            "id": id,
-            "title": title,
-            "created_at": created_at,
-            "model_id": model_id,
-            "work_dir": work_dir,
-            "permission_mode": permission_mode,
-            "permission_mode_label": permission_mode_label_for_display(permission_mode),
-        })
-    }).collect())
+    Ok(rows
+        .iter()
+        .map(
+            |(id, title, created_at, model_id, work_dir, permission_mode)| {
+                json!({
+                    "id": id,
+                    "title": title,
+                    "created_at": created_at,
+                    "model_id": model_id,
+                    "work_dir": work_dir,
+                    "permission_mode": permission_mode,
+                    "permission_mode_label": permission_mode_label_for_display(permission_mode),
+                })
+            },
+        )
+        .collect())
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_model_route_error, is_supported_protocol, normalize_permission_mode_for_storage,
-        parse_fallback_chain_targets, should_retry_same_candidate, infer_capability_from_user_message,
-        retry_backoff_ms, retry_budget_for_error,
-        parse_permission_mode,
-        permission_mode_label_for_display, extract_skill_prompt_from_decrypted_files, ModelRouteErrorKind,
+        classify_model_route_error, extract_skill_prompt_from_decrypted_files,
+        infer_capability_from_user_message, is_supported_protocol,
+        normalize_permission_mode_for_storage, parse_fallback_chain_targets, parse_permission_mode,
+        permission_mode_label_for_display, retry_backoff_ms, retry_budget_for_error,
+        should_retry_same_candidate, ModelRouteErrorKind,
     };
-    use std::collections::HashMap;
     use crate::agent::permissions::PermissionMode;
+    use std::collections::HashMap;
+    use std::path::Path;
 
     #[test]
     fn normalize_permission_mode_defaults_to_accept_edits() {
-        assert_eq!(
-            normalize_permission_mode_for_storage(None),
-            "accept_edits"
-        );
+        assert_eq!(normalize_permission_mode_for_storage(None), "accept_edits");
         assert_eq!(
             normalize_permission_mode_for_storage(Some("")),
             "accept_edits"
@@ -1239,7 +1319,10 @@ mod tests {
     #[test]
     fn parse_permission_mode_defaults_to_accept_edits() {
         assert_eq!(parse_permission_mode(""), PermissionMode::AcceptEdits);
-        assert_eq!(parse_permission_mode("invalid"), PermissionMode::AcceptEdits);
+        assert_eq!(
+            parse_permission_mode("invalid"),
+            PermissionMode::AcceptEdits
+        );
     }
 
     #[test]
@@ -1257,7 +1340,10 @@ mod tests {
 
     #[test]
     fn permission_mode_label_is_user_friendly() {
-        assert_eq!(permission_mode_label_for_display("accept_edits"), "推荐模式");
+        assert_eq!(
+            permission_mode_label_for_display("accept_edits"),
+            "推荐模式"
+        );
         assert_eq!(permission_mode_label_for_display("default"), "谨慎模式");
         assert_eq!(
             permission_mode_label_for_display("unrestricted"),
@@ -1306,8 +1392,9 @@ mod tests {
 
     #[test]
     fn classify_model_route_error_detects_transport_send_failures_as_network() {
-        let kind =
-            classify_model_route_error("error sending request for url (https://api.minimax.io/anthropic/v1/messages)");
+        let kind = classify_model_route_error(
+            "error sending request for url (https://api.minimax.io/anthropic/v1/messages)",
+        );
         assert_eq!(kind, ModelRouteErrorKind::Network);
     }
 
@@ -1329,10 +1416,46 @@ mod tests {
     #[test]
     fn infer_capability_from_user_message_detects_modalities() {
         assert_eq!(infer_capability_from_user_message("请帮我识图"), "vision");
-        assert_eq!(infer_capability_from_user_message("帮我生成图片"), "image_gen");
-        assert_eq!(infer_capability_from_user_message("这段音频做语音转文字"), "audio_stt");
-        assert_eq!(infer_capability_from_user_message("这段文案做文字转语音"), "audio_tts");
+        assert_eq!(
+            infer_capability_from_user_message("帮我生成图片"),
+            "image_gen"
+        );
+        assert_eq!(
+            infer_capability_from_user_message("这段音频做语音转文字"),
+            "audio_stt"
+        );
+        assert_eq!(
+            infer_capability_from_user_message("这段文案做文字转语音"),
+            "audio_tts"
+        );
         assert_eq!(infer_capability_from_user_message("解释这个报错"), "chat");
+    }
+
+    #[test]
+    fn build_memory_dir_for_session_keeps_legacy_skill_bucket_without_employee() {
+        let base = Path::new("C:/workclaw/app-data");
+        let dir = super::build_memory_dir_for_session(base, "builtin-general", "");
+        assert_eq!(
+            dir,
+            Path::new("C:/workclaw/app-data")
+                .join("memory")
+                .join("builtin-general")
+        );
+    }
+
+    #[test]
+    fn build_memory_dir_for_session_isolates_by_employee_when_provided() {
+        let base = Path::new("C:/workclaw/app-data");
+        let dir = super::build_memory_dir_for_session(base, "builtin-general", "Sales Lead/华东");
+        assert_eq!(
+            dir,
+            Path::new("C:/workclaw/app-data")
+                .join("memory")
+                .join("employees")
+                .join("sales_lead")
+                .join("skills")
+                .join("builtin-general")
+        );
     }
 
     #[test]
@@ -1360,10 +1483,7 @@ pub async fn update_session_workspace(
 }
 
 #[tauri::command]
-pub async fn delete_session(
-    session_id: String,
-    db: State<'_, DbState>,
-) -> Result<(), String> {
+pub async fn delete_session(session_id: String, db: State<'_, DbState>) -> Result<(), String> {
     // 先删除该会话下的所有消息
     sqlx::query("DELETE FROM messages WHERE session_id = ?")
         .bind(&session_id)
@@ -1394,7 +1514,7 @@ pub async fn search_sessions(
          FROM sessions s
          LEFT JOIN messages m ON m.session_id = s.id
          WHERE s.skill_id = ? AND (s.title LIKE ? OR m.content LIKE ?)
-         ORDER BY s.created_at DESC"
+         ORDER BY s.created_at DESC",
     )
     .bind(&skill_id)
     .bind(&pattern)
@@ -1410,10 +1530,7 @@ pub async fn search_sessions(
 
 /// 将会话消息导出为 Markdown 字符串
 #[tauri::command]
-pub async fn export_session(
-    session_id: String,
-    db: State<'_, DbState>,
-) -> Result<String, String> {
+pub async fn export_session(session_id: String, db: State<'_, DbState>) -> Result<String, String> {
     let (title,): (String,) = sqlx::query_as("SELECT title FROM sessions WHERE id = ?")
         .bind(&session_id)
         .fetch_one(&db.0)
@@ -1431,7 +1548,10 @@ pub async fn export_session(
     let mut md = format!("# {}\n\n", title);
     for (role, content, created_at) in &messages {
         let label = if role == "user" { "用户" } else { "助手" };
-        md.push_str(&format!("## {} ({})\n\n{}\n\n---\n\n", label, created_at, content));
+        md.push_str(&format!(
+            "## {} ({})\n\n{}\n\n---\n\n",
+            label, created_at, content
+        ));
     }
     Ok(md)
 }
@@ -1485,9 +1605,7 @@ pub async fn confirm_tool_execution(
 
 /// 取消正在执行的 Agent
 #[tauri::command]
-pub async fn cancel_agent(
-    cancel_flag: State<'_, CancelFlagState>,
-) -> Result<(), String> {
+pub async fn cancel_agent(cancel_flag: State<'_, CancelFlagState>) -> Result<(), String> {
     cancel_flag.0.store(true, Ordering::SeqCst);
     eprintln!("[agent] 收到取消信号");
     Ok(())
@@ -1526,21 +1644,20 @@ pub async fn compact_context(
     let original_tokens = estimate_tokens(&messages);
 
     // 3. 获取模型配置
-    let (model_id,): (String,) = sqlx::query_as(
-        "SELECT model_id FROM sessions WHERE id = ?",
-    )
-    .bind(&session_id)
-    .fetch_one(&db.0)
-    .await
-    .map_err(|e| e.to_string())?;
+    let (model_id,): (String,) = sqlx::query_as("SELECT model_id FROM sessions WHERE id = ?")
+        .bind(&session_id)
+        .fetch_one(&db.0)
+        .await
+        .map_err(|e| e.to_string())?;
 
-    let (api_format, base_url, api_key, model_name) = sqlx::query_as::<_, (String, String, String, String)>(
-        "SELECT api_format, base_url, api_key, model_name FROM model_configs WHERE id = ?",
-    )
-    .bind(&model_id)
-    .fetch_one(&db.0)
-    .await
-    .map_err(|e| e.to_string())?;
+    let (api_format, base_url, api_key, model_name) =
+        sqlx::query_as::<_, (String, String, String, String)>(
+            "SELECT api_format, base_url, api_key, model_name FROM model_configs WHERE id = ?",
+        )
+        .bind(&model_id)
+        .fetch_one(&db.0)
+        .await
+        .map_err(|e| e.to_string())?;
 
     // 4. 创建 transcript 目录
     let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;

@@ -1,17 +1,11 @@
-use sqlx::{SqlitePool, sqlite::SqlitePoolOptions};
-use tauri::{AppHandle, Manager};
 use anyhow::Result;
+use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
+use tauri::{AppHandle, Manager};
 
 fn build_builtin_manifest_json(skill_id: &str, skill_markdown: &str) -> String {
-    let builtin_config = crate::agent::skill_config::SkillConfig::parse(
-        skill_markdown,
-    );
-    let builtin_name = builtin_config
-        .name
-        .unwrap_or_else(|| skill_id.to_string());
-    let builtin_description = builtin_config
-        .description
-        .unwrap_or_default();
+    let builtin_config = crate::agent::skill_config::SkillConfig::parse(skill_markdown);
+    let builtin_name = builtin_config.name.unwrap_or_else(|| skill_id.to_string());
+    let builtin_description = builtin_config.description.unwrap_or_default();
 
     serde_json::json!({
         "id": skill_id,
@@ -70,7 +64,7 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
             last_used_at TEXT,
             username TEXT NOT NULL,
             pack_path TEXT NOT NULL DEFAULT ''
-        )"
+        )",
     )
     .execute(&pool)
     .await?;
@@ -83,8 +77,9 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
             created_at TEXT NOT NULL,
             model_id TEXT NOT NULL,
             permission_mode TEXT NOT NULL DEFAULT 'accept_edits',
-            work_dir TEXT NOT NULL DEFAULT ''
-        )"
+            work_dir TEXT NOT NULL DEFAULT '',
+            employee_id TEXT NOT NULL DEFAULT ''
+        )",
     )
     .execute(&pool)
     .await?;
@@ -96,7 +91,7 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
             role TEXT NOT NULL,
             content TEXT NOT NULL,
             created_at TEXT NOT NULL
-        )"
+        )",
     )
     .execute(&pool)
     .await?;
@@ -110,7 +105,7 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
             model_name TEXT NOT NULL,
             is_default INTEGER DEFAULT 0,
             api_key TEXT NOT NULL DEFAULT ''
-        )"
+        )",
     )
     .execute(&pool)
     .await?;
@@ -124,7 +119,7 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
             env TEXT NOT NULL DEFAULT '{}',
             enabled INTEGER DEFAULT 1,
             created_at TEXT NOT NULL
-        )"
+        )",
     )
     .execute(&pool)
     .await?;
@@ -133,7 +128,7 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
         "CREATE TABLE IF NOT EXISTS app_settings (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
-        )"
+        )",
     )
     .execute(&pool)
     .await?;
@@ -152,7 +147,7 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
             enabled INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
-        )"
+        )",
     )
     .execute(&pool)
     .await?;
@@ -166,7 +161,7 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
             default_model TEXT NOT NULL DEFAULT '',
             fallback_models_json TEXT NOT NULL DEFAULT '[]',
             PRIMARY KEY (provider_id, capability)
-        )"
+        )",
     )
     .execute(&pool)
     .await?;
@@ -179,7 +174,7 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
             fetched_at TEXT NOT NULL,
             ttl_seconds INTEGER NOT NULL DEFAULT 3600,
             PRIMARY KEY (provider_id, model_id)
-        )"
+        )",
     )
     .execute(&pool)
     .await?;
@@ -193,7 +188,7 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
             timeout_ms INTEGER NOT NULL DEFAULT 60000,
             retry_count INTEGER NOT NULL DEFAULT 0,
             enabled INTEGER NOT NULL DEFAULT 1
-        )"
+        )",
     )
     .execute(&pool)
     .await?;
@@ -211,7 +206,7 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
             success INTEGER NOT NULL DEFAULT 0,
             error_message TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL
-        )"
+        )",
     )
     .execute(&pool)
     .await?;
@@ -220,7 +215,7 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
         "CREATE TABLE IF NOT EXISTS im_event_dedup (
             event_id TEXT PRIMARY KEY,
             created_at TEXT NOT NULL
-        )"
+        )",
     )
     .execute(&pool)
     .await?;
@@ -233,7 +228,7 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
             status TEXT NOT NULL DEFAULT 'active',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
-        )"
+        )",
     )
     .execute(&pool)
     .await?;
@@ -245,7 +240,7 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
             role_order INTEGER NOT NULL DEFAULT 0,
             enabled INTEGER NOT NULL DEFAULT 1,
             PRIMARY KEY (thread_id, role_id)
-        )"
+        )",
     )
     .execute(&pool)
     .await?;
@@ -265,7 +260,7 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
             enabled INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
-        )"
+        )",
     )
     .execute(&pool)
     .await?;
@@ -279,7 +274,7 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
             text_preview TEXT NOT NULL DEFAULT '',
             source TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL
-        )"
+        )",
     )
     .execute(&pool)
     .await?;
@@ -303,7 +298,7 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
             is_default INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
-        )"
+        )",
     )
     .execute(&pool)
     .await?;
@@ -314,7 +309,7 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
             skill_id TEXT NOT NULL,
             sort_order INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (employee_id, skill_id)
-        )"
+        )",
     )
     .execute(&pool)
     .await?;
@@ -326,7 +321,7 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
             enabled INTEGER NOT NULL DEFAULT 1,
             role_order INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (thread_id, employee_id)
-        )"
+        )",
     )
     .execute(&pool)
     .await?;
@@ -340,7 +335,7 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             PRIMARY KEY (thread_id, employee_id)
-        )"
+        )",
     )
     .execute(&pool)
     .await?;
@@ -356,7 +351,7 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
             im_message_id TEXT NOT NULL DEFAULT '',
             app_message_id TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL
-        )"
+        )",
     )
     .execute(&pool)
     .await?;
@@ -367,7 +362,7 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
             source_text TEXT NOT NULL,
             translated_text TEXT NOT NULL,
             updated_at TEXT NOT NULL
-        )"
+        )",
     )
     .execute(&pool)
     .await?;
@@ -378,42 +373,62 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
         .await;
 
     // Migration: add permission_mode column to sessions
-    let _ = sqlx::query("ALTER TABLE sessions ADD COLUMN permission_mode TEXT NOT NULL DEFAULT 'accept_edits'")
-        .execute(&pool)
-        .await;
+    let _ = sqlx::query(
+        "ALTER TABLE sessions ADD COLUMN permission_mode TEXT NOT NULL DEFAULT 'accept_edits'",
+    )
+    .execute(&pool)
+    .await;
 
     // Migration: add source_type column to installed_skills（区分加密 vs 本地 Skill）
-    let _ = sqlx::query("ALTER TABLE installed_skills ADD COLUMN source_type TEXT NOT NULL DEFAULT 'encrypted'")
-        .execute(&pool)
-        .await;
+    let _ = sqlx::query(
+        "ALTER TABLE installed_skills ADD COLUMN source_type TEXT NOT NULL DEFAULT 'encrypted'",
+    )
+    .execute(&pool)
+    .await;
 
     // Migration: add work_dir column to sessions（每会话独立工作目录）
     let _ = sqlx::query("ALTER TABLE sessions ADD COLUMN work_dir TEXT NOT NULL DEFAULT ''")
         .execute(&pool)
         .await;
+    let _ = sqlx::query("ALTER TABLE sessions ADD COLUMN employee_id TEXT NOT NULL DEFAULT ''")
+        .execute(&pool)
+        .await;
 
     // Migration: employee-level Feishu credentials
-    let _ = sqlx::query("ALTER TABLE agent_employees ADD COLUMN feishu_app_id TEXT NOT NULL DEFAULT ''")
-        .execute(&pool)
-        .await;
-    let _ = sqlx::query("ALTER TABLE agent_employees ADD COLUMN feishu_app_secret TEXT NOT NULL DEFAULT ''")
-        .execute(&pool)
-        .await;
-    let _ = sqlx::query("ALTER TABLE agent_employees ADD COLUMN openclaw_agent_id TEXT NOT NULL DEFAULT ''")
-        .execute(&pool)
-        .await;
-    let _ = sqlx::query("ALTER TABLE agent_employees ADD COLUMN routing_priority INTEGER NOT NULL DEFAULT 100")
-        .execute(&pool)
-        .await;
-    let _ = sqlx::query("ALTER TABLE agent_employees ADD COLUMN enabled_scopes_json TEXT NOT NULL DEFAULT '[]'")
-        .execute(&pool)
-        .await;
-    let _ = sqlx::query("ALTER TABLE agent_employees ADD COLUMN employee_id TEXT NOT NULL DEFAULT ''")
-        .execute(&pool)
-        .await;
-    let _ = sqlx::query("UPDATE agent_employees SET employee_id = role_id WHERE TRIM(employee_id) = ''")
-        .execute(&pool)
-        .await;
+    let _ = sqlx::query(
+        "ALTER TABLE agent_employees ADD COLUMN feishu_app_id TEXT NOT NULL DEFAULT ''",
+    )
+    .execute(&pool)
+    .await;
+    let _ = sqlx::query(
+        "ALTER TABLE agent_employees ADD COLUMN feishu_app_secret TEXT NOT NULL DEFAULT ''",
+    )
+    .execute(&pool)
+    .await;
+    let _ = sqlx::query(
+        "ALTER TABLE agent_employees ADD COLUMN openclaw_agent_id TEXT NOT NULL DEFAULT ''",
+    )
+    .execute(&pool)
+    .await;
+    let _ = sqlx::query(
+        "ALTER TABLE agent_employees ADD COLUMN routing_priority INTEGER NOT NULL DEFAULT 100",
+    )
+    .execute(&pool)
+    .await;
+    let _ = sqlx::query(
+        "ALTER TABLE agent_employees ADD COLUMN enabled_scopes_json TEXT NOT NULL DEFAULT '[]'",
+    )
+    .execute(&pool)
+    .await;
+    let _ =
+        sqlx::query("ALTER TABLE agent_employees ADD COLUMN employee_id TEXT NOT NULL DEFAULT ''")
+            .execute(&pool)
+            .await;
+    let _ = sqlx::query(
+        "UPDATE agent_employees SET employee_id = role_id WHERE TRIM(employee_id) = ''",
+    )
+    .execute(&pool)
+    .await;
     let _ = sqlx::query(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_employees_employee_id_unique ON agent_employees(employee_id)",
     )
@@ -424,9 +439,11 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
     )
     .execute(&pool)
     .await;
-    let _ = sqlx::query("ALTER TABLE im_thread_sessions ADD COLUMN route_session_key TEXT NOT NULL DEFAULT ''")
-        .execute(&pool)
-        .await;
+    let _ = sqlx::query(
+        "ALTER TABLE im_thread_sessions ADD COLUMN route_session_key TEXT NOT NULL DEFAULT ''",
+    )
+    .execute(&pool)
+    .await;
     let _ = sqlx::query(
         "CREATE INDEX IF NOT EXISTS idx_im_thread_sessions_route_key ON im_thread_sessions(route_session_key)",
     )
@@ -434,18 +451,24 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
     .await;
 
     // 默认路由配置
-    let _ = sqlx::query("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('route_max_call_depth', '4')")
-        .execute(&pool)
-        .await;
+    let _ = sqlx::query(
+        "INSERT OR IGNORE INTO app_settings (key, value) VALUES ('route_max_call_depth', '4')",
+    )
+    .execute(&pool)
+    .await;
     let _ = sqlx::query("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('route_node_timeout_seconds', '60')")
         .execute(&pool)
         .await;
-    let _ = sqlx::query("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('route_retry_count', '0')")
-        .execute(&pool)
-        .await;
-    let _ = sqlx::query("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('runtime_default_work_dir', '')")
-        .execute(&pool)
-        .await;
+    let _ = sqlx::query(
+        "INSERT OR IGNORE INTO app_settings (key, value) VALUES ('route_retry_count', '0')",
+    )
+    .execute(&pool)
+    .await;
+    let _ = sqlx::query(
+        "INSERT OR IGNORE INTO app_settings (key, value) VALUES ('runtime_default_work_dir', '')",
+    )
+    .execute(&pool)
+    .await;
 
     // 内置 Skill：始终存在，无需用户安装，且每次启动同步最新 metadata
     let _ = sync_builtin_skills(&pool).await;
@@ -473,7 +496,7 @@ mod tests {
                 username TEXT NOT NULL,
                 pack_path TEXT NOT NULL DEFAULT '',
                 source_type TEXT NOT NULL DEFAULT 'encrypted'
-            )"
+            )",
         )
         .execute(&pool)
         .await
@@ -519,7 +542,7 @@ mod tests {
             crate::builtin_skills::BUILTIN_GENERAL_SKILL_ID,
             crate::builtin_skills::builtin_general_skill_markdown(),
         ))
-            .expect("parse expected manifest");
+        .expect("parse expected manifest");
 
         assert_eq!(manifest["name"], expected["name"]);
         assert_eq!(manifest["description"], expected["description"]);
@@ -531,20 +554,18 @@ mod tests {
     #[tokio::test]
     async fn sync_builtin_skills_is_idempotent() {
         let pool = setup_memory_pool().await;
-        sync_builtin_skills(&pool)
-            .await
-            .expect("first sync");
-        sync_builtin_skills(&pool)
-            .await
-            .expect("second sync");
+        sync_builtin_skills(&pool).await.expect("first sync");
+        sync_builtin_skills(&pool).await.expect("second sync");
 
-        let (count,): (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM installed_skills WHERE source_type = 'builtin'"
-        )
-        .fetch_one(&pool)
-        .await
-        .expect("count builtin skills");
+        let (count,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM installed_skills WHERE source_type = 'builtin'")
+                .fetch_one(&pool)
+                .await
+                .expect("count builtin skills");
 
-        assert_eq!(count, crate::builtin_skills::builtin_skill_entries().len() as i64);
+        assert_eq!(
+            count,
+            crate::builtin_skills::builtin_skill_entries().len() as i64
+        );
     }
 }

@@ -1,5 +1,5 @@
-use crate::commands::skills::DbState;
 use crate::commands::runtime_preferences::resolve_default_work_dir_with_pool;
+use crate::commands::skills::DbState;
 use crate::im::types::ImEvent;
 use sqlx::{Row, SqlitePool};
 use tauri::State;
@@ -63,7 +63,9 @@ pub struct EnsuredEmployeeSession {
     pub created: bool,
 }
 
-pub async fn list_agent_employees_with_pool(pool: &SqlitePool) -> Result<Vec<AgentEmployee>, String> {
+pub async fn list_agent_employees_with_pool(
+    pool: &SqlitePool,
+) -> Result<Vec<AgentEmployee>, String> {
     let rows = sqlx::query(
         "SELECT id, employee_id, name, role_id, persona, feishu_open_id, feishu_app_id, feishu_app_secret, primary_skill_id, default_work_dir, openclaw_agent_id, routing_priority, enabled_scopes_json, enabled, is_default, created_at, updated_at
          FROM agent_employees
@@ -85,18 +87,14 @@ pub async fn list_agent_employees_with_pool(pool: &SqlitePool) -> Result<Vec<Age
         let feishu_app_secret: String = row
             .try_get("feishu_app_secret")
             .map_err(|e| e.to_string())?;
-        let primary_skill_id: String = row
-            .try_get("primary_skill_id")
-            .map_err(|e| e.to_string())?;
-        let default_work_dir: String = row
-            .try_get("default_work_dir")
-            .map_err(|e| e.to_string())?;
+        let primary_skill_id: String =
+            row.try_get("primary_skill_id").map_err(|e| e.to_string())?;
+        let default_work_dir: String =
+            row.try_get("default_work_dir").map_err(|e| e.to_string())?;
         let openclaw_agent_id: String = row
             .try_get("openclaw_agent_id")
             .map_err(|e| e.to_string())?;
-        let routing_priority: i64 = row
-            .try_get("routing_priority")
-            .map_err(|e| e.to_string())?;
+        let routing_priority: i64 = row.try_get("routing_priority").map_err(|e| e.to_string())?;
         let enabled_scopes_json: String = row
             .try_get("enabled_scopes_json")
             .map_err(|e| e.to_string())?;
@@ -182,7 +180,8 @@ pub async fn upsert_agent_employee_with_pool(
             .join(&employee_id)
             .to_string_lossy()
             .to_string();
-        std::fs::create_dir_all(&by_role).map_err(|e| format!("failed to create employee work dir: {e}"))?;
+        std::fs::create_dir_all(&by_role)
+            .map_err(|e| format!("failed to create employee work dir: {e}"))?;
         by_role
     } else {
         input.default_work_dir.trim().to_string()
@@ -281,7 +280,10 @@ pub async fn upsert_agent_employee_with_pool(
     Ok(id)
 }
 
-pub async fn delete_agent_employee_with_pool(pool: &SqlitePool, employee_id: &str) -> Result<(), String> {
+pub async fn delete_agent_employee_with_pool(
+    pool: &SqlitePool,
+    employee_id: &str,
+) -> Result<(), String> {
     let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
     sqlx::query("DELETE FROM agent_employee_skills WHERE employee_id = ?")
         .bind(employee_id)
@@ -366,7 +368,12 @@ pub async fn resolve_target_employees_for_event(
         .filter(|e| e.enabled)
         .collect::<Vec<_>>();
 
-    if let Some(role_id) = event.role_id.as_ref().map(|v| v.trim()).filter(|v| !v.is_empty()) {
+    if let Some(role_id) = event
+        .role_id
+        .as_ref()
+        .map(|v| v.trim())
+        .filter(|v| !v.is_empty())
+    {
         let targeted = all_enabled
             .iter()
             .filter(|e| {
@@ -469,17 +476,17 @@ pub async fn ensure_employee_sessions_for_event_with_pool(
                 .map_err(|e| e.to_string())?;
                 (session_id, false)
             } else {
-            let now = chrono::Utc::now().to_rfc3339();
-            let session_id = Uuid::new_v4().to_string();
-            let skill_id = if employee.primary_skill_id.trim().is_empty() {
-                "builtin-general".to_string()
-            } else {
-                employee.primary_skill_id.clone()
-            };
+                let now = chrono::Utc::now().to_rfc3339();
+                let session_id = Uuid::new_v4().to_string();
+                let skill_id = if employee.primary_skill_id.trim().is_empty() {
+                    "builtin-general".to_string()
+                } else {
+                    employee.primary_skill_id.clone()
+                };
 
-            sqlx::query(
-                "INSERT INTO sessions (id, skill_id, title, created_at, model_id, permission_mode, work_dir)
-                 VALUES (?, ?, ?, ?, ?, 'accept_edits', ?)",
+                sqlx::query(
+                "INSERT INTO sessions (id, skill_id, title, created_at, model_id, permission_mode, work_dir, employee_id)
+                 VALUES (?, ?, ?, ?, ?, 'accept_edits', ?, ?)",
             )
             .bind(&session_id)
             .bind(&skill_id)
@@ -487,11 +494,12 @@ pub async fn ensure_employee_sessions_for_event_with_pool(
             .bind(&now)
             .bind(&default_model_id)
             .bind(employee.default_work_dir.trim())
+            .bind(employee.employee_id.trim())
             .execute(pool)
             .await
             .map_err(|e| e.to_string())?;
 
-            sqlx::query(
+                sqlx::query(
                 "INSERT INTO im_thread_sessions (thread_id, employee_id, session_id, route_session_key, created_at, updated_at)
                  VALUES (?, ?, ?, ?, ?, ?)",
             )
@@ -505,9 +513,15 @@ pub async fn ensure_employee_sessions_for_event_with_pool(
             .await
             .map_err(|e| e.to_string())?;
 
-            (session_id, true)
+                (session_id, true)
             }
         };
+
+        let _ = sqlx::query("UPDATE sessions SET employee_id = ? WHERE id = ?")
+            .bind(employee.employee_id.trim())
+            .bind(&session_id)
+            .execute(pool)
+            .await;
 
         results.push(EnsuredEmployeeSession {
             employee_id: employee.id.clone(),
@@ -574,8 +588,7 @@ pub async fn upsert_agent_employee(
 ) -> Result<String, String> {
     let id = upsert_agent_employee_with_pool(&db.0, input).await?;
     let _ = crate::commands::feishu_gateway::reconcile_feishu_employee_connections_with_pool(
-        &db.0,
-        None,
+        &db.0, None,
     )
     .await;
     let _ = crate::commands::feishu_gateway::start_feishu_event_relay_with_pool_and_app(
@@ -599,8 +612,7 @@ pub async fn delete_agent_employee(
 ) -> Result<(), String> {
     delete_agent_employee_with_pool(&db.0, &employee_id).await?;
     let _ = crate::commands::feishu_gateway::reconcile_feishu_employee_connections_with_pool(
-        &db.0,
-        None,
+        &db.0, None,
     )
     .await;
     let _ = crate::commands::feishu_gateway::start_feishu_event_relay_with_pool_and_app(

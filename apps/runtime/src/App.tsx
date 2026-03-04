@@ -772,7 +772,12 @@ export default function App() {
   );
 
   const handleSessionRefresh = useCallback(() => {
-    if (selectedSkillId) loadSessions(selectedSkillId);
+    if (selectedSkillId) {
+      loadSessions(selectedSkillId);
+      if (selectedSkillId === BUILTIN_EMPLOYEE_CREATOR_SKILL_ID) {
+        void loadEmployees();
+      }
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedSkillId]);
 

@@ -62,6 +62,8 @@ vi.mock("../components/employees/EmployeeHubView", () => ({
 describe("App employee chat entry", () => {
   beforeEach(() => {
     invokeMock.mockReset();
+    window.localStorage.clear();
+    window.location.hash = "#/employees";
     invokeMock.mockImplementation((command: string, payload?: any) => {
       if (command === "list_skills") {
         return Promise.resolve([
@@ -147,24 +149,19 @@ describe("App employee chat entry", () => {
     render(<App />);
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "open-employees" })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: "open-employees" }));
-
-    await waitFor(() => {
       expect(screen.getByRole("button", { name: "chat-with-employee" })).toBeInTheDocument();
     });
 
     fireEvent.click(screen.getByRole("button", { name: "chat-with-employee" }));
 
     await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith(
+        expect(invokeMock).toHaveBeenCalledWith(
         "create_session",
         expect.objectContaining({
           skillId: "skill-sales",
           modelId: "model-a",
           workDir: "D:\\\\workspace\\\\sales",
+          employeeId: "sales_lead",
           permissionMode: "accept_edits",
         }),
       );

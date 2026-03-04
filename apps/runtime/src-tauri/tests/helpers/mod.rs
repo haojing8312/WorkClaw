@@ -1,7 +1,7 @@
 use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::SqlitePool;
-use tempfile::TempDir;
 use std::path::PathBuf;
+use tempfile::TempDir;
 
 /// 创建临时 SQLite 数据库，复制完整 schema（与 db.rs 保持一致）
 pub async fn setup_test_db() -> (SqlitePool, TempDir) {
@@ -39,7 +39,8 @@ pub async fn setup_test_db() -> (SqlitePool, TempDir) {
             created_at TEXT NOT NULL,
             model_id TEXT NOT NULL,
             permission_mode TEXT NOT NULL DEFAULT 'accept_edits',
-            work_dir TEXT NOT NULL DEFAULT ''
+            work_dir TEXT NOT NULL DEFAULT '',
+            employee_id TEXT NOT NULL DEFAULT ''
         )",
     )
     .execute(&pool)
