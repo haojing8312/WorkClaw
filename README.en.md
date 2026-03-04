@@ -406,6 +406,15 @@ Desktop Agents have powerful capabilities including file system access and comma
 
 For security best practices, see [SECURITY.md](SECURITY.md).
 
+## Advanced Technical Docs (Integrators & Maintainers)
+
+The following docs are optional for most end users and mainly target integrators and maintainers:
+
+- Feishu routing integration (CN): [docs/integrations/feishu-routing.md](docs/integrations/feishu-routing.md)
+- Employee identity model (`employee_id`) (CN): [docs/architecture/employee-identity-model.md](docs/architecture/employee-identity-model.md)
+- OpenClaw upgrade runbook (CN): [docs/maintainers/openclaw-upgrade.md](docs/maintainers/openclaw-upgrade.md)
+- Skill installation troubleshooting (CN): [docs/troubleshooting/skill-installation.md](docs/troubleshooting/skill-installation.md)
+
 ## License
 
 Apache 2.0 - see [LICENSE](LICENSE)

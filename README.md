@@ -439,38 +439,14 @@ git push origin v0.1.0
 
 安全最佳实践请参见 [SECURITY.md](SECURITY.md)。
 
-## OpenClaw Feishu 路由（内置）
+## 进阶技术文档（面向集成与维护）
 
-当前版本已内置 OpenClaw 路由核心（不依赖外部 OpenClaw 运行时），并提供：
-- Sidecar vendored 路由引擎（`apps/runtime/sidecar/vendor/openclaw-core/`）
-- Rust 路由规则持久化（`im_routing_bindings`）
-- 设置页「飞书路由规则向导」可视化配置 + 模拟路由
-- 聊天页路由决策卡片（`matched_by` / `session_key` / `agent_id`）
+以下内容主要面向集成方、二开团队和维护者；普通用户可直接跳过：
 
-## OpenClaw 员工配置（`employee_id` + 对话向导）
-
-当前版本将员工身份统一为单字段 `employee_id`（员工编号）：
-- 前端只暴露员工编号，不再要求普通用户理解 `role_id / openclaw_agent_id`。
-- 后端保存时自动镜像：`role_id = employee_id`、`openclaw_agent_id = employee_id`。
-- 数据库迁移会回填历史数据：`employee_id` 为空时自动使用 `role_id`。
-
-同时新增「对话配置智能体」流程：
-- 在员工页可按问答方式生成并预览 `AGENTS.md / SOUL.md / USER.md`。
-- 一键应用后写入员工目录：`<employee_work_dir>/openclaw/<employee_id>/`。
-
-技能安装/导入新增重名保护：
-- 若显示名冲突，返回 `DUPLICATE_SKILL_NAME:<name>`，前端提示重命名后重试。
-
-## OpenClaw 升级流程
-
-1. 准备 OpenClaw 上游仓库并设置 `OPENCLAW_UPSTREAM_PATH`。
-2. 执行 `node scripts/sync-openclaw-core.mjs`。
-3. 核对并更新：
-   - `apps/runtime/sidecar/vendor/openclaw-core/UPSTREAM_COMMIT`
-   - `apps/runtime/sidecar/vendor/openclaw-core/PATCHES.md`
-4. 执行回归验证：
-   - `pnpm --dir apps/runtime/sidecar test`
-   - `cargo test --test test_openclaw_gateway --test test_openclaw_route_regression -- --nocapture`
+- 飞书路由集成说明：[docs/integrations/feishu-routing.md](docs/integrations/feishu-routing.md)
+- 员工身份模型（`employee_id`）：[docs/architecture/employee-identity-model.md](docs/architecture/employee-identity-model.md)
+- OpenClaw 升级维护手册：[docs/maintainers/openclaw-upgrade.md](docs/maintainers/openclaw-upgrade.md)
+- 技能安装排错（重名冲突等）：[docs/troubleshooting/skill-installation.md](docs/troubleshooting/skill-installation.md)
 
 ## 许可证
 
