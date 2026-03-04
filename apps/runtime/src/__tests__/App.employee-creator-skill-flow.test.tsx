@@ -66,6 +66,7 @@ vi.mock("../components/employees/EmployeeHubView", () => ({
       <div data-testid="employee-highlight-id">{props.highlightEmployeeId || ""}</div>
       <div data-testid="employee-highlight-message">{props.highlightMessage || ""}</div>
       <button onClick={() => props.onOpenEmployeeCreatorSkill?.()}>open-employee-creator</button>
+      <button onClick={() => props.onDismissHighlight?.()}>dismiss-employee-highlight</button>
     </div>
   ),
 }));
@@ -205,6 +206,13 @@ describe("App employee creator skill flow", () => {
       expect(screen.getByTestId("employee-count")).toHaveTextContent("1");
       expect(screen.getByTestId("employee-highlight-id")).toHaveTextContent("emp-created");
       expect(screen.getByTestId("employee-highlight-message")).toHaveTextContent("已由创建员工助手生成");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "dismiss-employee-highlight" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("employee-highlight-id")).toHaveTextContent("");
+      expect(screen.getByTestId("employee-highlight-message")).toHaveTextContent("");
     });
   });
 });

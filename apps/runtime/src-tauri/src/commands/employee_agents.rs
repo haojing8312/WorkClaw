@@ -2,7 +2,7 @@ use crate::commands::runtime_preferences::resolve_default_work_dir_with_pool;
 use crate::commands::skills::DbState;
 use crate::im::types::ImEvent;
 use sqlx::{Row, SqlitePool};
-use tauri::State;
+use tauri::{Manager, State};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -61,6 +61,270 @@ pub struct EnsuredEmployeeSession {
     pub employee_name: String,
     pub session_id: String,
     pub created: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct EmployeeMemorySkillStats {
+    pub skill_id: String,
+    pub total_files: u64,
+    pub total_bytes: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct EmployeeMemoryStats {
+    pub employee_id: String,
+    pub total_files: u64,
+    pub total_bytes: u64,
+    pub skills: Vec<EmployeeMemorySkillStats>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct EmployeeMemoryExportFile {
+    pub skill_id: String,
+    pub relative_path: String,
+    pub size_bytes: u64,
+    pub modified_at: Option<String>,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct EmployeeMemoryExport {
+    pub employee_id: String,
+    pub skill_id: Option<String>,
+    pub exported_at: String,
+    pub total_files: u64,
+    pub total_bytes: u64,
+    pub files: Vec<EmployeeMemoryExportFile>,
+}
+
+fn sanitize_memory_bucket_component(raw: &str, fallback: &str) -> String {
+    let mut out = String::new();
+    let mut prev_sep = false;
+    for ch in raw.trim().to_lowercase().chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch);
+            prev_sep = false;
+            continue;
+        }
+        if !prev_sep {
+            out.push('_');
+            prev_sep = true;
+        }
+    }
+    let normalized = out.trim_matches('_').to_string();
+    if normalized.is_empty() {
+        fallback.to_string()
+    } else {
+        normalized
+    }
+}
+
+fn normalize_employee_id(employee_id: &str) -> Result<String, String> {
+    let normalized = employee_id.trim().to_string();
+    if normalized.is_empty() {
+        return Err("employee_id is required".to_string());
+    }
+    Ok(normalized)
+}
+
+fn normalize_memory_skill_scope(skill_id: Option<&str>) -> Result<Option<String>, String> {
+    let normalized = skill_id.map(|v| v.trim()).unwrap_or_default();
+    if normalized.is_empty() {
+        return Ok(None);
+    }
+    if normalized.contains("..") || normalized.contains('/') || normalized.contains('\\') {
+        return Err("invalid skill_id".to_string());
+    }
+    Ok(Some(normalized.to_string()))
+}
+
+fn employee_memory_skills_root(app_data_dir: &std::path::Path, employee_id: &str) -> std::path::PathBuf {
+    let employee_bucket = sanitize_memory_bucket_component(employee_id, "employee");
+    app_data_dir
+        .join("memory")
+        .join("employees")
+        .join(employee_bucket)
+        .join("skills")
+}
+
+fn list_scope_skill_dirs(
+    skills_root: &std::path::Path,
+    skill_scope: Option<&str>,
+) -> Result<Vec<(String, std::path::PathBuf)>, String> {
+    if let Some(skill_id) = skill_scope {
+        let skill_root = skills_root.join(skill_id);
+        if !skill_root.exists() {
+            return Ok(Vec::new());
+        }
+        return Ok(vec![(skill_id.to_string(), skill_root)]);
+    }
+
+    if !skills_root.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut dirs = Vec::new();
+    for entry in std::fs::read_dir(skills_root).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let skill_id = entry.file_name().to_string_lossy().to_string();
+        if skill_id.trim().is_empty() {
+            continue;
+        }
+        dirs.push((skill_id, path));
+    }
+    dirs.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(dirs)
+}
+
+fn system_time_to_rfc3339(system_time: std::time::SystemTime) -> String {
+    chrono::DateTime::<chrono::Utc>::from(system_time).to_rfc3339()
+}
+
+fn collect_skill_file_entries(
+    skill_id: &str,
+    skill_root: &std::path::Path,
+    include_content: bool,
+) -> Result<(u64, u64, Vec<EmployeeMemoryExportFile>), String> {
+    let mut entries = Vec::new();
+    if !skill_root.exists() {
+        return Ok((0, 0, entries));
+    }
+
+    let mut total_files = 0u64;
+    let mut total_bytes = 0u64;
+    let mut stack = vec![skill_root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for item in std::fs::read_dir(&dir).map_err(|e| e.to_string())? {
+            let item = item.map_err(|e| e.to_string())?;
+            let path = item.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if !path.is_file() {
+                continue;
+            }
+            let metadata = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+            let size_bytes = metadata.len();
+            total_files += 1;
+            total_bytes += size_bytes;
+
+            let relative_path = path
+                .strip_prefix(skill_root)
+                .map_err(|e| e.to_string())?
+                .to_string_lossy()
+                .replace('\\', "/");
+            let modified_at = metadata.modified().ok().map(system_time_to_rfc3339);
+            let content = if include_content {
+                let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+                String::from_utf8_lossy(&bytes).to_string()
+            } else {
+                String::new()
+            };
+
+            entries.push(EmployeeMemoryExportFile {
+                skill_id: skill_id.to_string(),
+                relative_path,
+                size_bytes,
+                modified_at,
+                content,
+            });
+        }
+    }
+    entries.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
+    Ok((total_files, total_bytes, entries))
+}
+
+pub(crate) fn collect_employee_memory_stats_from_root(
+    employee_id: &str,
+    skill_id: Option<&str>,
+    skills_root: &std::path::Path,
+) -> Result<EmployeeMemoryStats, String> {
+    let employee_id = normalize_employee_id(employee_id)?;
+    let skill_scope = normalize_memory_skill_scope(skill_id)?;
+    let skill_dirs = list_scope_skill_dirs(skills_root, skill_scope.as_deref())?;
+
+    let mut total_files = 0u64;
+    let mut total_bytes = 0u64;
+    let mut skills = Vec::with_capacity(skill_dirs.len());
+    for (skill_key, skill_root) in skill_dirs {
+        let (files, bytes, _entries) = collect_skill_file_entries(&skill_key, &skill_root, false)?;
+        total_files += files;
+        total_bytes += bytes;
+        skills.push(EmployeeMemorySkillStats {
+            skill_id: skill_key,
+            total_files: files,
+            total_bytes: bytes,
+        });
+    }
+    skills.sort_by(|a, b| a.skill_id.cmp(&b.skill_id));
+
+    Ok(EmployeeMemoryStats {
+        employee_id,
+        total_files,
+        total_bytes,
+        skills,
+    })
+}
+
+pub(crate) fn export_employee_memory_from_root(
+    employee_id: &str,
+    skill_id: Option<&str>,
+    skills_root: &std::path::Path,
+) -> Result<EmployeeMemoryExport, String> {
+    let employee_id = normalize_employee_id(employee_id)?;
+    let skill_scope = normalize_memory_skill_scope(skill_id)?;
+    let skill_dirs = list_scope_skill_dirs(skills_root, skill_scope.as_deref())?;
+
+    let mut total_files = 0u64;
+    let mut total_bytes = 0u64;
+    let mut files = Vec::new();
+    for (skill_key, skill_root) in skill_dirs {
+        let (file_count, byte_count, mut entries) =
+            collect_skill_file_entries(&skill_key, &skill_root, true)?;
+        total_files += file_count;
+        total_bytes += byte_count;
+        files.append(&mut entries);
+    }
+    files.sort_by(|a, b| {
+        a.skill_id
+            .cmp(&b.skill_id)
+            .then_with(|| a.relative_path.cmp(&b.relative_path))
+    });
+
+    Ok(EmployeeMemoryExport {
+        employee_id,
+        skill_id: skill_scope,
+        exported_at: chrono::Utc::now().to_rfc3339(),
+        total_files,
+        total_bytes,
+        files,
+    })
+}
+
+pub(crate) fn clear_employee_memory_from_root(
+    employee_id: &str,
+    skill_id: Option<&str>,
+    skills_root: &std::path::Path,
+) -> Result<(), String> {
+    let _employee_id = normalize_employee_id(employee_id)?;
+    let skill_scope = normalize_memory_skill_scope(skill_id)?;
+    if let Some(skill) = skill_scope {
+        let target = skills_root.join(skill);
+        if target.exists() {
+            std::fs::remove_dir_all(target).map_err(|e| e.to_string())?;
+        }
+        return Ok(());
+    }
+
+    if skills_root.exists() {
+        std::fs::remove_dir_all(skills_root).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 pub async fn list_agent_employees_with_pool(
@@ -575,6 +839,51 @@ pub async fn link_inbound_event_to_session_with_pool(
 }
 
 #[tauri::command]
+pub async fn get_employee_memory_stats(
+    employee_id: String,
+    skill_id: Option<String>,
+    app: tauri::AppHandle,
+) -> Result<EmployeeMemoryStats, String> {
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let normalized_employee_id = normalize_employee_id(&employee_id)?;
+    let skills_root = employee_memory_skills_root(&app_data_dir, &normalized_employee_id);
+    collect_employee_memory_stats_from_root(
+        &normalized_employee_id,
+        skill_id.as_deref(),
+        &skills_root,
+    )
+}
+
+#[tauri::command]
+pub async fn export_employee_memory(
+    employee_id: String,
+    skill_id: Option<String>,
+    app: tauri::AppHandle,
+) -> Result<EmployeeMemoryExport, String> {
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let normalized_employee_id = normalize_employee_id(&employee_id)?;
+    let skills_root = employee_memory_skills_root(&app_data_dir, &normalized_employee_id);
+    export_employee_memory_from_root(&normalized_employee_id, skill_id.as_deref(), &skills_root)
+}
+
+#[tauri::command]
+pub async fn clear_employee_memory(
+    employee_id: String,
+    skill_id: Option<String>,
+    app: tauri::AppHandle,
+) -> Result<EmployeeMemoryStats, String> {
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let normalized_employee_id = normalize_employee_id(&employee_id)?;
+    let skills_root = employee_memory_skills_root(&app_data_dir, &normalized_employee_id);
+    clear_employee_memory_from_root(&normalized_employee_id, skill_id.as_deref(), &skills_root)?;
+    collect_employee_memory_stats_from_root(
+        &normalized_employee_id,
+        skill_id.as_deref(),
+        &skills_root,
+    )
+}
+
+#[tauri::command]
 pub async fn list_agent_employees(db: State<'_, DbState>) -> Result<Vec<AgentEmployee>, String> {
     list_agent_employees_with_pool(&db.0).await
 }
@@ -642,4 +951,94 @@ pub async fn get_thread_employee_bindings(
     db: State<'_, DbState>,
 ) -> Result<ThreadEmployeeBinding, String> {
     get_thread_employee_bindings_with_pool(&db.0, &thread_id).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        clear_employee_memory_from_root, collect_employee_memory_stats_from_root,
+        export_employee_memory_from_root,
+    };
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn build_skill_file(root: &std::path::Path, skill_id: &str, rel: &str, content: &str) {
+        let path = root.join(skill_id).join(rel);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("create dir");
+        }
+        fs::write(path, content).expect("write file");
+    }
+
+    #[test]
+    fn collect_employee_memory_stats_supports_all_and_single_skill_scope() {
+        let tmp = TempDir::new().expect("tmp");
+        let skills_root = tmp.path().join("skills");
+        build_skill_file(&skills_root, "skill-alpha", "roles/main/MEMORY.md", "alpha fact");
+        build_skill_file(&skills_root, "skill-beta", "sessions/t1.md", "beta fact");
+
+        let all = collect_employee_memory_stats_from_root("sales_lead", None, &skills_root)
+            .expect("collect all");
+        assert_eq!(all.employee_id, "sales_lead");
+        assert_eq!(all.total_files, 2);
+        assert_eq!(all.skills.len(), 2);
+        assert!(all.total_bytes >= 18);
+
+        let alpha = collect_employee_memory_stats_from_root(
+            "sales_lead",
+            Some("skill-alpha"),
+            &skills_root,
+        )
+        .expect("collect alpha");
+        assert_eq!(alpha.total_files, 1);
+        assert_eq!(alpha.skills.len(), 1);
+        assert_eq!(alpha.skills[0].skill_id, "skill-alpha");
+    }
+
+    #[test]
+    fn clear_employee_memory_respects_skill_scope() {
+        let tmp = TempDir::new().expect("tmp");
+        let skills_root = tmp.path().join("skills");
+        build_skill_file(&skills_root, "skill-alpha", "roles/main/MEMORY.md", "alpha");
+        build_skill_file(&skills_root, "skill-beta", "sessions/t1.md", "beta");
+
+        clear_employee_memory_from_root("sales_lead", Some("skill-alpha"), &skills_root)
+            .expect("clear alpha");
+
+        let remained = collect_employee_memory_stats_from_root("sales_lead", None, &skills_root)
+            .expect("collect remained");
+        assert_eq!(remained.total_files, 1);
+        assert_eq!(remained.skills.len(), 1);
+        assert_eq!(remained.skills[0].skill_id, "skill-beta");
+
+        clear_employee_memory_from_root("sales_lead", None, &skills_root)
+            .expect("clear all");
+        let empty = collect_employee_memory_stats_from_root("sales_lead", None, &skills_root)
+            .expect("collect empty");
+        assert_eq!(empty.total_files, 0);
+        assert_eq!(empty.total_bytes, 0);
+        assert!(empty.skills.is_empty());
+    }
+
+    #[test]
+    fn export_employee_memory_returns_structured_json_payload() {
+        let tmp = TempDir::new().expect("tmp");
+        let skills_root = tmp.path().join("skills");
+        build_skill_file(
+            &skills_root,
+            "skill-alpha",
+            "roles/main/MEMORY.md",
+            "customer prefers weekly summary",
+        );
+
+        let exported = export_employee_memory_from_root("sales_lead", Some("skill-alpha"), &skills_root)
+            .expect("export");
+        assert_eq!(exported.employee_id, "sales_lead");
+        assert_eq!(exported.total_files, 1);
+        assert_eq!(exported.total_bytes, 31);
+        assert_eq!(exported.files.len(), 1);
+        assert_eq!(exported.files[0].skill_id, "skill-alpha");
+        assert_eq!(exported.files[0].relative_path, "roles/main/MEMORY.md");
+        assert_eq!(exported.files[0].content, "customer prefers weekly summary");
+    }
 }

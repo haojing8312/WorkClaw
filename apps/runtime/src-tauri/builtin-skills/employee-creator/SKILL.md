@@ -21,12 +21,13 @@ allowed_tools:
 
 2. 盘点能力与技能
 - 先调用 `employee_manage` 的 `list_skills` 查看当前已安装技能。
+- 先调用 `employee_manage` 的 `list_employees` 查看已有员工，避免姓名或 `employee_id` 冲突。
 - 若用户目标缺少合适技能：
   - 先用 `skill` 调用“找技能”获取候选；
   - 若没有可用技能，再用 `skill` 调用“创建技能”补齐。
 
 3. 生成配置草案
-- 给出以下字段草案并解释理由：
+- 先输出“配置草案（JSON）”，再给出解释理由。JSON 必须包含以下字段：
   - `employee_id`
   - `name`
   - `persona`
@@ -36,7 +37,8 @@ allowed_tools:
   - `routing_priority`
 
 4. 确认后创建
-- 在用户明确同意后，调用 `employee_manage` 的 `create_employee`。
+- 在用户回复“确认创建”后，调用 `employee_manage` 的 `create_employee`。
+- 如果用户未确认创建，只能继续修改草案，不能直接落库。
 - 不要在未确认时直接落库。
 
 5. 交付结果

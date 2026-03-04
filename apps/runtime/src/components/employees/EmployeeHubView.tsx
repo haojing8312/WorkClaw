@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import {
   AgentEmployee,
+  EmployeeMemoryExport,
+  EmployeeMemoryStats,
   FeishuEmployeeConnectionStatuses,
   FeishuEmployeeWsStatus,
   RuntimePreferences,
@@ -95,6 +98,13 @@ function ensureUniqueEmployeeId(base: string, employees: AgentEmployee[], curren
   return `${base}_${index}`;
 }
 
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
 export function EmployeeHubView({
   employees,
   skills,
@@ -118,6 +128,11 @@ export function EmployeeHubView({
   const [globalDefaultWorkDir, setGlobalDefaultWorkDir] = useState("");
   const [savingGlobalWorkDir, setSavingGlobalWorkDir] = useState(false);
   const [pendingDeleteEmployee, setPendingDeleteEmployee] = useState<{ id: string; name: string } | null>(null);
+  const [memoryScopeSkillId, setMemoryScopeSkillId] = useState("__all__");
+  const [memoryStats, setMemoryStats] = useState<EmployeeMemoryStats | null>(null);
+  const [memoryLoading, setMemoryLoading] = useState(false);
+  const [memoryActionLoading, setMemoryActionLoading] = useState<"export" | "clear" | null>(null);
+  const [pendingClearMemory, setPendingClearMemory] = useState(false);
 
   const skillOptions = useMemo(
     () => skills.filter((s) => s.id !== "builtin-general"),
@@ -127,6 +142,22 @@ export function EmployeeHubView({
     () => employees.find((item) => item.id === selectedEmployeeId) ?? null,
     [employees, selectedEmployeeId],
   );
+  const selectedEmployeeMemoryId = useMemo(
+    () => (selectedEmployee?.employee_id || selectedEmployee?.role_id || "").trim(),
+    [selectedEmployee],
+  );
+  const memorySkillScopeOptions = useMemo(() => {
+    if (!selectedEmployee) return [];
+    const ids = new Set<string>();
+    if (selectedEmployee.primary_skill_id.trim()) {
+      ids.add(selectedEmployee.primary_skill_id.trim());
+    }
+    for (const id of selectedEmployee.skill_ids) {
+      const normalized = id.trim();
+      if (normalized) ids.add(normalized);
+    }
+    return Array.from(ids.values());
+  }, [selectedEmployee]);
 
   useEffect(() => {
     (async () => {
@@ -172,6 +203,12 @@ export function EmployeeHubView({
     }
   }, [selectedEmployeeId]);
 
+  useEffect(() => {
+    setMemoryScopeSkillId("__all__");
+    setMemoryStats(null);
+    setPendingClearMemory(false);
+  }, [selectedEmployeeId]);
+
   const feishuStatusByEmployeeId = useMemo(() => {
     const map = new Map<string, FeishuEmployeeWsStatus>();
     for (const item of feishuStatuses?.sidecar?.items || []) {
@@ -209,6 +246,81 @@ export function EmployeeHubView({
       label: "飞书连接异常",
       error,
     };
+  }
+
+  async function refreshEmployeeMemoryStats(scopeSkillId?: string) {
+    if (!selectedEmployeeMemoryId) {
+      setMemoryStats(null);
+      return;
+    }
+    const nextScope = scopeSkillId ?? memoryScopeSkillId;
+    const normalizedSkillId = nextScope === "__all__" ? null : nextScope;
+    setMemoryLoading(true);
+    try {
+      const stats = await invoke<EmployeeMemoryStats>("get_employee_memory_stats", {
+        employeeId: selectedEmployeeMemoryId,
+        skillId: normalizedSkillId,
+      });
+      setMemoryStats(stats);
+    } catch (e) {
+      setMessage(`加载长期记忆统计失败: ${String(e)}`);
+    } finally {
+      setMemoryLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!selectedEmployeeMemoryId) {
+      setMemoryStats(null);
+      return;
+    }
+    void refreshEmployeeMemoryStats();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedEmployeeMemoryId, memoryScopeSkillId]);
+
+  async function exportEmployeeMemory() {
+    if (!selectedEmployeeMemoryId || memoryActionLoading) return;
+    setMemoryActionLoading("export");
+    try {
+      const skillId = memoryScopeSkillId === "__all__" ? null : memoryScopeSkillId;
+      const payload = await invoke<EmployeeMemoryExport>("export_employee_memory", {
+        employeeId: selectedEmployeeMemoryId,
+        skillId,
+      });
+      const filePath = await saveDialog({
+        defaultPath: `employee-memory-${selectedEmployeeMemoryId}-${skillId || "all"}.json`,
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (!filePath) return;
+      await invoke("write_export_file", {
+        path: filePath,
+        content: JSON.stringify(payload, null, 2),
+      });
+      setMessage("长期记忆已导出");
+    } catch (e) {
+      setMessage(`导出长期记忆失败: ${String(e)}`);
+    } finally {
+      setMemoryActionLoading(null);
+    }
+  }
+
+  async function confirmClearEmployeeMemory() {
+    if (!selectedEmployeeMemoryId || memoryActionLoading) return;
+    setMemoryActionLoading("clear");
+    try {
+      const skillId = memoryScopeSkillId === "__all__" ? null : memoryScopeSkillId;
+      const stats = await invoke<EmployeeMemoryStats>("clear_employee_memory", {
+        employeeId: selectedEmployeeMemoryId,
+        skillId,
+      });
+      setMemoryStats(stats);
+      setMessage("长期记忆已清空");
+    } catch (e) {
+      setMessage(`清空长期记忆失败: ${String(e)}`);
+    } finally {
+      setMemoryActionLoading(null);
+      setPendingClearMemory(false);
+    }
   }
 
   function pickEmployee(id: string) {
@@ -352,6 +464,14 @@ export function EmployeeHubView({
     : "确定删除该员工吗？";
   const deleteDialogImpact = pendingDeleteEmployee
     ? `员工ID: ${pendingDeleteEmployee.id}`
+    : undefined;
+  const clearMemoryScopeLabel =
+    memoryScopeSkillId === "__all__" ? "全部技能" : `技能 ${memoryScopeSkillId}`;
+  const clearMemoryDialogSummary = selectedEmployee
+    ? `确定清空员工「${selectedEmployee.name}」在${clearMemoryScopeLabel}下的长期记忆吗？`
+    : `确定清空${clearMemoryScopeLabel}下的长期记忆吗？`;
+  const clearMemoryDialogImpact = selectedEmployeeMemoryId
+    ? `员工编号: ${selectedEmployeeMemoryId}`
     : undefined;
   const selectedEmployeeFeishuStatus = selectedEmployee
     ? resolveFeishuStatus(selectedEmployee)
@@ -724,9 +844,93 @@ export function EmployeeHubView({
             </div>
               </>
             )}
+            <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-3 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-xs font-medium text-indigo-900">长期记忆管理</div>
+                {memoryLoading && <div className="text-[11px] text-indigo-600">统计刷新中...</div>}
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+                <select
+                  data-testid="employee-memory-scope"
+                  className="border border-indigo-200 rounded px-2 py-1.5 text-xs bg-white"
+                  value={memoryScopeSkillId}
+                  onChange={(e) => setMemoryScopeSkillId(e.target.value)}
+                >
+                  <option value="__all__">全部技能</option>
+                  {memorySkillScopeOptions.map((id) => (
+                    <option key={id} value={id}>
+                      {id}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  data-testid="employee-memory-refresh"
+                  onClick={() => refreshEmployeeMemoryStats()}
+                  disabled={memoryLoading || memoryActionLoading !== null || !selectedEmployeeMemoryId}
+                  className="h-8 rounded border border-indigo-200 hover:bg-indigo-100 disabled:bg-gray-100 text-indigo-700 text-xs"
+                >
+                  刷新统计
+                </button>
+                <button
+                  type="button"
+                  data-testid="employee-memory-export"
+                  onClick={exportEmployeeMemory}
+                  disabled={memoryLoading || memoryActionLoading !== null || !selectedEmployeeMemoryId}
+                  className="h-8 rounded border border-indigo-200 hover:bg-indigo-100 disabled:bg-gray-100 text-indigo-700 text-xs"
+                >
+                  {memoryActionLoading === "export" ? "导出中..." : "导出 JSON"}
+                </button>
+                <button
+                  type="button"
+                  data-testid="employee-memory-clear"
+                  onClick={() => setPendingClearMemory(true)}
+                  disabled={memoryLoading || memoryActionLoading !== null || !selectedEmployeeMemoryId}
+                  className="h-8 rounded border border-red-200 hover:bg-red-50 disabled:bg-gray-100 text-red-600 text-xs"
+                >
+                  清空记忆
+                </button>
+              </div>
+              <div className="text-xs text-indigo-800 flex items-center gap-4">
+                <span data-testid="employee-memory-total-files">文件数：{memoryStats?.total_files ?? 0}</span>
+                <span data-testid="employee-memory-total-bytes">大小：{memoryStats?.total_bytes ?? 0}</span>
+                <span>({formatBytes(memoryStats?.total_bytes ?? 0)})</span>
+              </div>
+              <div className="max-h-32 overflow-y-auto rounded border border-indigo-100 bg-white p-2 space-y-1">
+                {(memoryStats?.skills || []).length === 0 ? (
+                  <div className="text-[11px] text-gray-500">暂无长期记忆文件</div>
+                ) : (
+                  (memoryStats?.skills || []).map((item) => (
+                    <div
+                      key={item.skill_id}
+                      data-testid={`employee-memory-skill-${item.skill_id}`}
+                      className="text-[11px] text-gray-700 flex items-center justify-between"
+                    >
+                      <span>{item.skill_id}</span>
+                      <span>
+                        {item.total_files} 文件 / {formatBytes(item.total_bytes)}
+                      </span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
           </div>
         </div>
       </div>
+      <RiskConfirmDialog
+        open={pendingClearMemory}
+        level="high"
+        title="清空长期记忆"
+        summary={clearMemoryDialogSummary}
+        impact={clearMemoryDialogImpact}
+        irreversible
+        confirmLabel="确认清空"
+        cancelLabel="取消"
+        loading={memoryActionLoading === "clear"}
+        onConfirm={confirmClearEmployeeMemory}
+        onCancel={() => setPendingClearMemory(false)}
+      />
       <RiskConfirmDialog
         open={Boolean(pendingDeleteEmployee)}
         level="high"

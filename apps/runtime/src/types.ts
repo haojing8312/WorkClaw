@@ -303,6 +303,36 @@ export interface AgentEmployee {
   updated_at: string;
 }
 
+export interface EmployeeMemorySkillStats {
+  skill_id: string;
+  total_files: number;
+  total_bytes: number;
+}
+
+export interface EmployeeMemoryStats {
+  employee_id: string;
+  total_files: number;
+  total_bytes: number;
+  skills: EmployeeMemorySkillStats[];
+}
+
+export interface EmployeeMemoryExportFile {
+  skill_id: string;
+  relative_path: string;
+  size_bytes: number;
+  modified_at?: string | null;
+  content: string;
+}
+
+export interface EmployeeMemoryExport {
+  employee_id: string;
+  skill_id?: string | null;
+  exported_at: string;
+  total_files: number;
+  total_bytes: number;
+  files: EmployeeMemoryExportFile[];
+}
+
 export interface UpsertAgentEmployeeInput {
   id?: string;
   employee_id: string;

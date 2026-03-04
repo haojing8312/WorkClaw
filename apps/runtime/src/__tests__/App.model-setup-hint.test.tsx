@@ -124,6 +124,9 @@ describe("App model setup hint", () => {
     await waitFor(() => {
       expect(screen.getByTestId("model-setup-hint")).toBeInTheDocument();
     });
+    expect(
+      screen.getByText("只需 1 分钟完成配置。配置后就能创建会话、执行技能和驱动智能体员工协作。"),
+    ).toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId("model-setup-hint-open-settings"));
 
@@ -260,6 +263,9 @@ describe("App model setup hint", () => {
       expect(screen.getByTestId("model-setup-gate")).toBeInTheDocument();
     });
     expect(screen.queryByTestId("model-setup-hint")).not.toBeInTheDocument();
+    expect(
+      screen.getByText("完成模型配置后，才能开始任务、创建会话并驱动智能体员工执行技能。现在只需 1 分钟。"),
+    ).toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId("model-setup-gate-open-quick-setup"));
 

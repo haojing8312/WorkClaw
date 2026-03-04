@@ -109,4 +109,22 @@ mod tests {
         assert!(builtin_skill_markdown(BUILTIN_FIND_SKILLS_ID).is_some());
         assert!(builtin_skill_markdown(BUILTIN_EMPLOYEE_CREATOR_ID).is_some());
     }
+
+    #[test]
+    fn builtin_employee_creator_skill_enforces_review_before_create() {
+        let markdown = builtin_skill_markdown(BUILTIN_EMPLOYEE_CREATOR_ID)
+            .expect("builtin employee creator markdown should exist");
+        assert!(
+            markdown.contains("list_employees"),
+            "employee creator should inspect existing employees before create"
+        );
+        assert!(
+            markdown.contains("JSON"),
+            "employee creator should provide a structured draft preview"
+        );
+        assert!(
+            markdown.contains("确认创建"),
+            "employee creator should require explicit confirmation before create"
+        );
+    }
 }
