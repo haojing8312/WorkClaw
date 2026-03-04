@@ -16,6 +16,21 @@ WorkClaw is a beginner-friendly OpenClaw desktop agent distribution that removes
 
 ⭐ If you believe AI employee teams should be accessible to everyone, please Star this repository.
 
+## Quick Links
+
+- Getting started: [Getting Started](#getting-started)
+- Documentation: [docs/](docs/)
+- Releases: [Releases](https://github.com/haojing8312/WorkClaw/releases)
+- Roadmap: [Roadmap](#roadmap)
+- Contributing & support: [CONTRIBUTING.md](CONTRIBUTING.md) · [SUPPORT.md](SUPPORT.md)
+
+## Project Status
+
+- Stage: `Active Development (MVP)`
+- Primary branch: `main`
+- Maintenance mode: ongoing feature iteration + stabilization
+- Detailed plans and execution logs: [docs/plans/](docs/plans/)
+
 > **🧪 AI-Powered Development Experiment**
 > This project is an experimental demonstration of **100% AI-driven development** - the entire codebase is designed and implemented by AI (Claude Code, GPT-5.3-Codex) without manual code inspection by the developer. This serves as a real-world test of AI's capability to build production-grade software autonomously.
 
@@ -237,132 +252,22 @@ Before publishing, CI validates that `tag(vX.Y.Z)` matches `tauri.conf.json` `ve
 
 ## Roadmap
 
-### Milestone 1: Agent Runtime MVP ✨ (Current Focus)
+### Now (Current Focus)
+- Complete the desktop Agent core loop: task execution, tool usage, Skill install, and packaging.
+- Improve first-time user experience: conversational setup, model onboarding, and key UX guidance.
+- Increase reliability: regression coverage on critical paths and stronger runtime observability.
 
-**Core Agent Capabilities** (80% Complete):
-- [x] ReAct loop executor with Tool trait abstraction
-- [x] File operations: Read, Write, Glob, Grep, Edit
-- [x] Bash/PowerShell execution with cross-platform support
-- [x] Sub-Agent system (Task tool) for parallel task distribution
-- [x] TodoWrite for task management and memory
-- [x] Context compression (token budget management)
-- [x] Web Search (DuckDuckGo)
-- [x] WebFetch for URL content retrieval
-- [x] AskUser for interactive user input
-- [x] Tool output truncation (30k char limit)
-- [x] Permission system (planned, multi-layer validation)
-- [ ] Local secure workspace folder configuration
-- [ ] MCP server dynamic registration UI (70% - backend done)
+### Next
+- Ship distribution capabilities: auto-update, cross-platform installers, and release channels.
+- Strengthen creator workflows: templates, visual editing, and publishing flow.
+- Expand ecosystem connectivity: IM remote control, marketplace compatibility, and mobile collaboration.
 
-**Skill System**:
-- [x] Skill YAML frontmatter parsing
-- [x] .skillpack encryption/decryption (Rust)
-- [x] Install, list, delete Skill commands
-- [x] Dynamic Skill loading from `.claude/skills/` directory
-- [x] Skill-based system prompt injection
-- [ ] Hot reload during development
+### Later
+- Enterprise capabilities: multi-tenant, RBAC, audit, SSO, quotas, and billing.
+- Agent evolution: EvoMap / GEP / A2A integration with traceable evolution.
+- Open ecosystem: ongoing compatibility with OpenClaw / ClawHub.
 
-**Sidecar Integration**:
-- [x] Node.js sidecar manager (lifecycle control)
-- [x] Hono HTTP server (localhost:8765)
-- [ ] Playwright browser automation (15+ tools)
-- [x] MCP client integration (connect, list tools, invoke)
-- [ ] Browser controller with normalized coordinates
-
-**Multi-Model Support**:
-- [x] Anthropic Messages API adapter (Claude models)
-- [x] OpenAI-compatible adapter (GPT, MiniMax, DeepSeek, etc.)
-- [x] Reasoning content filtering (DeepSeek, MiniMax)
-- [x] Model configuration UI (API key, base URL, model name)
-- [x] 9 provider presets (Claude, OpenAI, MiniMax, DeepSeek, Qwen, Moonshot, GLM, Yi, Custom)
-
-**User Interface**:
-- [x] Chat view with streaming messages
-- [x] Markdown rendering with syntax highlighting
-- [x] Tool call visualization cards
-- [x] Sub-Agent nested display
-- [x] Session history sidebar
-- [x] Settings view (models, MCP servers)
-- [x] AskUser interactive input cards
-- [ ] File upload support
-- [ ] Secure workspace configuration UI
-
-### Milestone 2: Distribution & Updates 🚀
-
-**Auto-Update**:
-- [ ] Application auto-update mechanism (Tauri updater)
-- [ ] Update server infrastructure
-- [ ] Version check and notification
-- [ ] Background download and install
-
-**Skill Version Control**:
-- [ ] Skill versioning system (semver)
-- [ ] Upgrade/downgrade capabilities
-- [ ] Dependency resolution
-- [ ] Breaking change detection
-
-**Packaging & Installers**:
-- [ ] Windows: NSIS installer + code signing
-- [ ] macOS: DMG + notarization
-- [ ] Linux: AppImage + deb/rpm packages
-
-**Distribution**:
-- [ ] Official download server
-- [ ] Mirror CDN setup
-- [ ] Update channels (stable, beta, dev)
-
-### Milestone 3: Ecosystem & Enterprise 🏢
-
-**Creator Capabilities (Built into WorkClaw App)**:
-- [ ] Monaco Editor integration
-- [ ] Skill structure visual editor
-- [ ] Embedded testing chat (Claude Code integration)
-- [ ] One-click packaging UI
-- [ ] Template library
-- [ ] Publishing workflow
-
-**Marketplace**:
-- [ ] Web-based Skill marketplace
-- [ ] Search and browse functionality
-- [ ] User reviews and ratings
-- [ ] Payment integration (Stripe/Alipay)
-- [ ] Creator analytics dashboard
-
-**Enterprise Features** (Inspired by enterprise agent architecture):
-- [ ] User registration and authentication (JWT)
-- [ ] Multi-tenant support (team workspaces)
-- [ ] Unified model configuration management
-- [ ] Usage quota and billing
-- [ ] Admin dashboard with analytics
-- [ ] SSO integration (LDAP, OAuth)
-- [ ] Audit logging and compliance
-- [ ] Private Skill repositories
-- [ ] Role-based access control (RBAC)
-- [ ] Resource usage monitoring
-
-### Milestone 4: Agent Evolution & Ecosystem Integration 🧬
-
-**EvoMap Integration** (Agent Self-Evolution):
-- [ ] GEP (Genome Evolution Protocol) support
-- [ ] Gene and Capsule data structures
-- [ ] Six-step evolution cycle (Scan → Signal → Intent → Mutate → Validate → Solidify)
-- [ ] A2A (Agent-to-Agent) protocol client
-- [ ] Automatic capability inheritance from global gene pool
-- [ ] Local evolution history and audit logs
-- [ ] 70/30 resource allocation (repair vs exploration)
-
-**OpenClaw Ecosystem Integration**:
-- [ ] ClawHub Skill marketplace browser
-- [ ] One-click Skill import from ClawHub
-- [ ] Skill quality scoring and security scanning
-- [ ] Community Skill discovery and installation
-
-**Remote Access via IM** (Instant Messaging Integration):
-- [ ] WeChat Work / DingTalk bot adapters
-- [ ] Secure command relay with authentication
-- [ ] Mobile-to-desktop Skill execution
-- [ ] Task status notification and streaming results
-- [ ] Multi-user permission isolation
+Detailed planning and execution logs are maintained in [docs/plans/](docs/plans/).
 
 ## Why "WorkClaw"?
 
@@ -375,15 +280,9 @@ Think of it as **"putting your AI employee team to work under your command."**
 
 Similar to how Cursor and Claude Code democratized AI-assisted coding, WorkClaw aims to democratize AI Skill distribution. Package your expertise once, distribute securely to thousands.
 
-## Future Integration Roadmap
+## Planning Notes
 
-**Agent Evolution**:
-- EvoMap's GEP (Genome Evolution Protocol) and A2A communication
-- Agent capability inheritance and evolution mechanisms
-
-**Ecosystem Integration**:
-- ClawHub marketplace integration strategies
-- Community Skill discovery and distribution
+This README keeps a high-level roadmap only. Detailed technical plans and iteration logs live in [docs/plans/](docs/plans/).
 
 ## ⚠️ Security Disclaimer
 
@@ -429,6 +328,9 @@ Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for de
 - Documentation: [docs/](docs/)
 - Examples: [examples/](examples/)
 - Reference: [reference/](reference/) - Open-source project analysis
+- Support channels: [SUPPORT.md](SUPPORT.md)
+- Security reporting: [SECURITY.md](SECURITY.md)
+- Code of conduct: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
 
 ## Acknowledgements
 
