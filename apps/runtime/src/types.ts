@@ -274,6 +274,11 @@ export interface RecentImThread {
   last_seen_at: string;
 }
 
+export interface ThreadEmployeeBinding {
+  thread_id: string;
+  employee_ids: string[];
+}
+
 export interface ThreadRoleConfig {
   thread_id: string;
   tenant_id: string;
@@ -294,7 +299,6 @@ export interface AgentEmployee {
   primary_skill_id: string;
   default_work_dir: string;
   openclaw_agent_id: string;
-  routing_priority: number;
   enabled_scopes: string[];
   enabled: boolean;
   is_default: boolean;
@@ -345,16 +349,10 @@ export interface UpsertAgentEmployeeInput {
   primary_skill_id: string;
   default_work_dir: string;
   openclaw_agent_id: string;
-  routing_priority: number;
   enabled_scopes: string[];
   enabled: boolean;
   is_default: boolean;
   skill_ids: string[];
-}
-
-export interface ThreadEmployeeBinding {
-  thread_id: string;
-  employee_ids: string[];
 }
 
 export interface AgentProfileAnswerInput {

@@ -7,10 +7,8 @@ import {
   EmployeeMemoryStats,
   FeishuEmployeeConnectionStatuses,
   FeishuEmployeeWsStatus,
-  RecentImThread,
   RuntimePreferences,
   SkillManifest,
-  ThreadEmployeeBinding,
   UpsertAgentEmployeeInput,
 } from "../../types";
 import { RiskConfirmDialog } from "../RiskConfirmDialog";
@@ -43,7 +41,6 @@ const blankForm: UpsertAgentEmployeeInput = {
   primary_skill_id: "",
   default_work_dir: "",
   openclaw_agent_id: "",
-  routing_priority: 100,
   enabled_scopes: ["feishu"],
   enabled: true,
   is_default: false,
@@ -134,13 +131,6 @@ export function EmployeeHubView({
   const [memoryLoading, setMemoryLoading] = useState(false);
   const [memoryActionLoading, setMemoryActionLoading] = useState<"export" | "clear" | null>(null);
   const [pendingClearMemory, setPendingClearMemory] = useState(false);
-  const [recentThreads, setRecentThreads] = useState<RecentImThread[]>([]);
-  const [threadBindingsByThread, setThreadBindingsByThread] = useState<Record<string, string[]>>({});
-  const [threadBindingLoading, setThreadBindingLoading] = useState(false);
-  const [selectedThreadId, setSelectedThreadId] = useState("");
-  const [selectedThreadEmployeeId, setSelectedThreadEmployeeId] = useState("");
-  const [threadBindingSaving, setThreadBindingSaving] = useState(false);
-  const [threadBindingMessage, setThreadBindingMessage] = useState("");
 
   const skillOptions = useMemo(
     () => skills.filter((s) => s.id !== "builtin-general"),
@@ -150,13 +140,6 @@ export function EmployeeHubView({
     () => employees.find((item) => item.id === selectedEmployeeId) ?? null,
     [employees, selectedEmployeeId],
   );
-  const employeeNameByDbId = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const employee of employees) {
-      map.set(employee.id, employee.name || employee.employee_id || employee.role_id || employee.id);
-    }
-    return map;
-  }, [employees]);
   const selectedEmployeeMemoryId = useMemo(
     () => (selectedEmployee?.employee_id || selectedEmployee?.role_id || "").trim(),
     [selectedEmployee],
@@ -211,65 +194,6 @@ export function EmployeeHubView({
       clearInterval(timer);
     };
   }, []);
-
-  async function loadRecentThreadsAndBindings() {
-    setThreadBindingLoading(true);
-    setThreadBindingMessage("");
-    try {
-      const threads = await invoke<RecentImThread[]>("list_recent_im_threads", { limit: 20 });
-      const safeThreads = Array.isArray(threads) ? threads : [];
-      setRecentThreads(safeThreads);
-
-      const entries: Array<[string, string[]]> = await Promise.all(
-        safeThreads.map(async (thread) => {
-          try {
-            const binding = await invoke<ThreadEmployeeBinding>("get_thread_employee_bindings", {
-              threadId: thread.thread_id,
-            });
-            const employeeIds = Array.isArray(binding?.employee_ids)
-              ? binding.employee_ids.filter((id) => id.trim().length > 0).slice(0, 1)
-              : [];
-            return [thread.thread_id, employeeIds];
-          } catch {
-            return [thread.thread_id, []];
-          }
-        }),
-      );
-      const nextMap: Record<string, string[]> = {};
-      for (const [threadId, employeeIds] of entries) {
-        nextMap[threadId] = employeeIds;
-      }
-      setThreadBindingsByThread(nextMap);
-      setSelectedThreadId((prev) => {
-        if (prev && safeThreads.some((thread) => thread.thread_id === prev)) {
-          return prev;
-        }
-        return safeThreads[0]?.thread_id || "";
-      });
-    } catch (e) {
-      setThreadBindingMessage(`加载飞书线程失败: ${String(e)}`);
-      setRecentThreads([]);
-      setThreadBindingsByThread({});
-      setSelectedThreadId("");
-      setSelectedThreadEmployeeId("");
-    } finally {
-      setThreadBindingLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    void loadRecentThreadsAndBindings();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    if (!selectedThreadId) {
-      setSelectedThreadEmployeeId("");
-      return;
-    }
-    const ownerId = threadBindingsByThread[selectedThreadId]?.[0] || "";
-    setSelectedThreadEmployeeId(ownerId);
-  }, [selectedThreadId, threadBindingsByThread]);
 
   useEffect(() => {
     setMemoryScopeSkillId("__all__");
@@ -407,7 +331,6 @@ export function EmployeeHubView({
       primary_skill_id: e.primary_skill_id || "",
       default_work_dir: e.default_work_dir || "",
       openclaw_agent_id: e.openclaw_agent_id || e.employee_id || e.role_id || "",
-      routing_priority: Number.isFinite(e.routing_priority) ? e.routing_priority : 100,
       enabled_scopes: e.enabled_scopes?.length > 0 ? e.enabled_scopes : ["feishu"],
       enabled: e.enabled,
       is_default: e.is_default,
@@ -441,7 +364,6 @@ export function EmployeeHubView({
         employee_id: employeeId,
         role_id: employeeId,
         openclaw_agent_id: employeeId,
-        routing_priority: Number.isFinite(form.routing_priority) ? form.routing_priority : 100,
         enabled_scopes: form.enabled_scopes?.length > 0 ? form.enabled_scopes : ["feishu"],
         skill_ids: form.is_default ? [] : form.skill_ids,
       });
@@ -526,39 +448,6 @@ export function EmployeeHubView({
     setEmployeeIdEdited(true);
   }
 
-  async function saveThreadBinding() {
-    if (!selectedThreadId || threadBindingSaving) return;
-    setThreadBindingSaving(true);
-    setThreadBindingMessage("");
-    const employeeIds = selectedThreadEmployeeId ? [selectedThreadEmployeeId] : [];
-    try {
-      await invoke("bind_thread_employees", {
-        threadId: selectedThreadId,
-        employeeIds,
-      });
-      const refreshed = await invoke<ThreadEmployeeBinding>("get_thread_employee_bindings", {
-        threadId: selectedThreadId,
-      });
-      const normalized = Array.isArray(refreshed?.employee_ids)
-        ? refreshed.employee_ids.filter((id) => id.trim().length > 0).slice(0, 1)
-        : [];
-      setThreadBindingsByThread((prev) => ({
-        ...prev,
-        [selectedThreadId]: normalized,
-      }));
-      if (normalized.length > 0) {
-        const ownerName = employeeNameByDbId.get(normalized[0]) || normalized[0];
-        setThreadBindingMessage(`线程 ${selectedThreadId} 已绑定到 ${ownerName}`);
-      } else {
-        setThreadBindingMessage(`线程 ${selectedThreadId} 已取消绑定`);
-      }
-    } catch (e) {
-      setThreadBindingMessage(`保存 1:1 绑定失败: ${String(e)}`);
-    } finally {
-      setThreadBindingSaving(false);
-    }
-  }
-
   const deleteDialogSummary = pendingDeleteEmployee
     ? `确定删除员工「${pendingDeleteEmployee.name}」吗？`
     : "确定删除该员工吗？";
@@ -573,13 +462,6 @@ export function EmployeeHubView({
   const clearMemoryDialogImpact = selectedEmployeeMemoryId
     ? `员工编号: ${selectedEmployeeMemoryId}`
     : undefined;
-  const selectedThread = recentThreads.find((thread) => thread.thread_id === selectedThreadId) || null;
-  const selectedThreadBoundEmployeeId = selectedThread
-    ? threadBindingsByThread[selectedThread.thread_id]?.[0] || ""
-    : "";
-  const selectedThreadBoundEmployeeName = selectedThreadBoundEmployeeId
-    ? employeeNameByDbId.get(selectedThreadBoundEmployeeId) || selectedThreadBoundEmployeeId
-    : "未绑定";
   const selectedEmployeeFeishuStatus = selectedEmployee
     ? resolveFeishuStatus(selectedEmployee)
     : null;
@@ -646,107 +528,6 @@ export function EmployeeHubView({
           >
             保存默认目录
           </button>
-        </div>
-
-        <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-3">
-          <div className="flex items-center justify-between gap-2">
-            <div>
-              <div className="text-sm font-medium text-gray-800">飞书线程 1:1 绑定</div>
-              <div className="text-xs text-gray-500 mt-1">
-                每个飞书线程只绑定一个智能体员工，后续消息默认由该员工接管。
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => void loadRecentThreadsAndBindings()}
-              disabled={threadBindingLoading || threadBindingSaving}
-              className="h-8 px-3 rounded border border-gray-200 hover:bg-gray-50 disabled:bg-gray-100 text-xs text-gray-700"
-            >
-              {threadBindingLoading ? "刷新中..." : "刷新线程"}
-            </button>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div className="rounded-lg border border-gray-200 p-2 max-h-56 overflow-y-auto space-y-1">
-              {recentThreads.length === 0 ? (
-                <div className="text-xs text-gray-400 px-2 py-4">暂无最近飞书线程</div>
-              ) : (
-                recentThreads.map((thread) => {
-                  const currentOwnerId = threadBindingsByThread[thread.thread_id]?.[0] || "";
-                  const currentOwnerName = currentOwnerId
-                    ? employeeNameByDbId.get(currentOwnerId) || currentOwnerId
-                    : "未绑定";
-                  const selected = selectedThreadId === thread.thread_id;
-                  return (
-                    <button
-                      key={thread.thread_id}
-                      type="button"
-                      data-testid={`thread-binding-row-${thread.thread_id}`}
-                      onClick={() => setSelectedThreadId(thread.thread_id)}
-                      className={
-                        "w-full text-left rounded border px-2 py-2 text-xs transition-colors " +
-                        (selected
-                          ? "border-blue-300 bg-blue-50"
-                          : "border-gray-200 bg-white hover:border-blue-200 hover:bg-blue-50/40")
-                      }
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="font-mono text-gray-700 truncate">{thread.thread_id}</span>
-                        <span
-                          data-testid={`thread-binding-owner-${thread.thread_id}`}
-                          className="text-[11px] text-gray-500 truncate"
-                        >
-                          {currentOwnerName}
-                        </span>
-                      </div>
-                      <div className="text-[11px] text-gray-500 mt-1 line-clamp-1">{thread.last_text_preview || "-"}</div>
-                    </button>
-                  );
-                })
-              )}
-            </div>
-            <div className="rounded-lg border border-gray-200 p-3 space-y-2">
-              {selectedThread ? (
-                <>
-                  <div className="text-xs text-gray-500">线程 ID</div>
-                  <div className="text-xs font-mono text-gray-700 break-all">{selectedThread.thread_id}</div>
-                  <div className="text-xs text-gray-500">最近消息</div>
-                  <div className="text-xs text-gray-700">{selectedThread.last_text_preview || "-"}</div>
-                  <div className="text-xs text-gray-500">当前绑定</div>
-                  <div className="text-xs text-gray-700">{selectedThreadBoundEmployeeName}</div>
-                  <div className="text-xs text-gray-500">绑定员工</div>
-                  <select
-                    data-testid="thread-binding-employee-select"
-                    className="w-full border border-gray-200 rounded px-2 py-1.5 text-xs bg-white"
-                    value={selectedThreadEmployeeId}
-                    onChange={(e) => setSelectedThreadEmployeeId(e.target.value)}
-                    disabled={threadBindingSaving}
-                  >
-                    <option value="">未绑定</option>
-                    {employees.map((employee) => (
-                      <option key={employee.id} value={employee.id}>
-                        {employee.name} ({employee.employee_id || employee.role_id || employee.id})
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    type="button"
-                    onClick={() => void saveThreadBinding()}
-                    disabled={threadBindingSaving || threadBindingLoading}
-                    className="h-8 px-3 rounded bg-blue-500 hover:bg-blue-600 disabled:bg-blue-300 text-white text-xs"
-                  >
-                    {threadBindingSaving ? "保存中..." : "保存 1:1 绑定"}
-                  </button>
-                </>
-              ) : (
-                <div className="text-xs text-gray-400">选择左侧线程后设置绑定员工</div>
-              )}
-            </div>
-          </div>
-          {threadBindingMessage && (
-            <div data-testid="thread-binding-message" className="text-xs text-blue-700 bg-blue-50 border border-blue-100 rounded px-2 py-1">
-              {threadBindingMessage}
-            </div>
-          )}
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

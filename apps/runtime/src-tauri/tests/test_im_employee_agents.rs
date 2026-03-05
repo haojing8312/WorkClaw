@@ -1,10 +1,9 @@
 mod helpers;
 
 use runtime_lib::commands::employee_agents::{
-    bind_thread_employees_with_pool, ensure_employee_sessions_for_event_with_pool,
-    get_thread_employee_bindings_with_pool, link_inbound_event_to_session_with_pool,
-    list_agent_employees_with_pool, resolve_target_employees_for_event,
-    upsert_agent_employee_with_pool, UpsertAgentEmployeeInput,
+    ensure_employee_sessions_for_event_with_pool, link_inbound_event_to_session_with_pool,
+    list_agent_employees_with_pool, resolve_target_employees_for_event, upsert_agent_employee_with_pool,
+    UpsertAgentEmployeeInput,
 };
 use runtime_lib::im::types::{ImEvent, ImEventType};
 
@@ -49,14 +48,6 @@ async fn employee_config_and_im_session_mapping_work() {
         .expect("list employees");
     assert_eq!(employees.len(), 1);
     assert_eq!(employees[0].skill_ids, vec!["builtin-general".to_string()]);
-
-    bind_thread_employees_with_pool(&pool, "chat_001", std::slice::from_ref(&employee_id))
-        .await
-        .expect("bind thread employees");
-    let binding = get_thread_employee_bindings_with_pool(&pool, "chat_001")
-        .await
-        .expect("get thread bindings");
-    assert_eq!(binding.employee_ids, vec![employee_id.clone()]);
 
     let event = ImEvent {
         event_type: ImEventType::MessageCreated,
@@ -137,7 +128,7 @@ async fn group_message_without_mention_routes_to_main_employee() {
     .await
     .expect("upsert main");
 
-    let other_id = upsert_agent_employee_with_pool(
+    upsert_agent_employee_with_pool(
         &pool,
         UpsertAgentEmployeeInput {
             id: None,
@@ -160,10 +151,6 @@ async fn group_message_without_mention_routes_to_main_employee() {
     )
     .await
     .expect("upsert other");
-
-    bind_thread_employees_with_pool(&pool, "chat_group_1", &[other_id.clone(), main_id.clone()])
-        .await
-        .expect("bind thread employees");
 
     let targets = resolve_target_employees_for_event(
         &pool,

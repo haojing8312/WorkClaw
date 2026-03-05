@@ -41,6 +41,7 @@ pub struct UpsertAgentEmployeeInput {
     pub primary_skill_id: String,
     pub default_work_dir: String,
     pub openclaw_agent_id: String,
+    #[serde(default = "default_routing_priority")]
     pub routing_priority: i64,
     pub enabled_scopes: Vec<String>,
     pub enabled: bool,
@@ -48,10 +49,8 @@ pub struct UpsertAgentEmployeeInput {
     pub skill_ids: Vec<String>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-pub struct ThreadEmployeeBinding {
-    pub thread_id: String,
-    pub employee_ids: Vec<String>,
+fn default_routing_priority() -> i64 {
+    100
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -557,11 +556,6 @@ pub async fn delete_agent_employee_with_pool(
         .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
-    sqlx::query("DELETE FROM im_thread_employee_bindings WHERE employee_id = ?")
-        .bind(employee_id)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| e.to_string())?;
     sqlx::query("DELETE FROM im_thread_sessions WHERE employee_id = ?")
         .bind(employee_id)
         .execute(&mut *tx)
@@ -574,55 +568,6 @@ pub async fn delete_agent_employee_with_pool(
         .map_err(|e| e.to_string())?;
     tx.commit().await.map_err(|e| e.to_string())?;
     Ok(())
-}
-
-pub async fn bind_thread_employees_with_pool(
-    pool: &SqlitePool,
-    thread_id: &str,
-    employee_ids: &[String],
-) -> Result<(), String> {
-    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
-    sqlx::query("DELETE FROM im_thread_employee_bindings WHERE thread_id = ?")
-        .bind(thread_id)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    for (idx, employee_id) in employee_ids.iter().enumerate() {
-        sqlx::query(
-            "INSERT INTO im_thread_employee_bindings (thread_id, employee_id, enabled, role_order)
-             VALUES (?, ?, 1, ?)",
-        )
-        .bind(thread_id)
-        .bind(employee_id)
-        .bind(idx as i64)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| e.to_string())?;
-    }
-    tx.commit().await.map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-pub async fn get_thread_employee_bindings_with_pool(
-    pool: &SqlitePool,
-    thread_id: &str,
-) -> Result<ThreadEmployeeBinding, String> {
-    let rows = sqlx::query_as::<_, (String,)>(
-        "SELECT employee_id
-         FROM im_thread_employee_bindings
-         WHERE thread_id = ? AND enabled = 1
-         ORDER BY role_order ASC",
-    )
-    .bind(thread_id)
-    .fetch_all(pool)
-    .await
-    .map_err(|e| e.to_string())?;
-
-    Ok(ThreadEmployeeBinding {
-        thread_id: thread_id.to_string(),
-        employee_ids: rows.into_iter().map(|(id,)| id).collect(),
-    })
 }
 
 pub async fn resolve_target_employees_for_event(
@@ -662,18 +607,6 @@ pub async fn resolve_target_employees_for_event(
         return Ok(vec![defaults[0].clone()]);
     }
 
-    let binding = get_thread_employee_bindings_with_pool(pool, &event.thread_id).await?;
-    if !binding.employee_ids.is_empty() {
-        let targeted = all_enabled
-            .iter()
-            .filter(|e| binding.employee_ids.iter().any(|id| id == &e.id))
-            .cloned()
-            .collect::<Vec<_>>();
-        if !targeted.is_empty() {
-            return Ok(targeted);
-        }
-    }
-
     Ok(all_enabled.iter().take(1).cloned().collect())
 }
 
@@ -695,8 +628,7 @@ pub async fn ensure_employee_sessions_for_event_with_pool(
     .map(|(id,)| id)
     .ok_or_else(|| "no model config found".to_string())?;
 
-    // 1:1 绑定策略：同一个 IM thread 始终复用同一个 session_id。
-    // 如果 thread 已存在任意员工映射，则后续员工映射都复用该 session。
+    // 同一个 IM thread 尽量复用同一个 session_id，保证线程上下文连续。
     let mut shared_thread_session_id = sqlx::query_as::<_, (String,)>(
         "SELECT session_id
          FROM im_thread_sessions
@@ -940,28 +872,11 @@ pub async fn delete_agent_employee(
     Ok(())
 }
 
-#[tauri::command]
-pub async fn bind_thread_employees(
-    thread_id: String,
-    employee_ids: Vec<String>,
-    db: State<'_, DbState>,
-) -> Result<(), String> {
-    bind_thread_employees_with_pool(&db.0, &thread_id, &employee_ids).await
-}
-
-#[tauri::command]
-pub async fn get_thread_employee_bindings(
-    thread_id: String,
-    db: State<'_, DbState>,
-) -> Result<ThreadEmployeeBinding, String> {
-    get_thread_employee_bindings_with_pool(&db.0, &thread_id).await
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
         clear_employee_memory_from_root, collect_employee_memory_stats_from_root,
-        export_employee_memory_from_root,
+        export_employee_memory_from_root, UpsertAgentEmployeeInput,
     };
     use std::fs;
     use tempfile::TempDir;
@@ -1049,5 +964,28 @@ mod tests {
         assert_eq!(exported.files[0].skill_id, "skill-alpha");
         assert_eq!(exported.files[0].relative_path, "roles/main/MEMORY.md");
         assert_eq!(exported.files[0].content, "customer prefers weekly summary");
+    }
+
+    #[test]
+    fn upsert_input_defaults_routing_priority_when_missing() {
+        let payload = serde_json::json!({
+            "employee_id": "project_manager",
+            "name": "项目经理",
+            "role_id": "project_manager",
+            "persona": "负责推进交付",
+            "feishu_open_id": "",
+            "feishu_app_id": "",
+            "feishu_app_secret": "",
+            "primary_skill_id": "builtin-general",
+            "default_work_dir": "",
+            "openclaw_agent_id": "project_manager",
+            "enabled_scopes": ["feishu"],
+            "enabled": true,
+            "is_default": false,
+            "skill_ids": []
+        });
+        let parsed: UpsertAgentEmployeeInput =
+            serde_json::from_value(payload).expect("deserialize upsert input");
+        assert_eq!(parsed.routing_priority, 100);
     }
 }
