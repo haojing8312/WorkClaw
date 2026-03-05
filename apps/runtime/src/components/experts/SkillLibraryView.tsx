@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ClawhubLibraryItem } from "../../types";
 import { RiskConfirmDialog } from "../RiskConfirmDialog";
+import { useImmersiveTranslation } from "../../hooks/useImmersiveTranslation";
 
 interface Props {
   installedSkillIds: Set<string>;
@@ -22,8 +23,6 @@ export function SkillLibraryView({ installedSkillIds, onInstall }: Props) {
   const [selectedTag, setSelectedTag] = useState<string>("全部");
   const [installingSlug, setInstallingSlug] = useState<string>("");
   const [pendingInstall, setPendingInstall] = useState<ClawhubLibraryItem | null>(null);
-  const [textZhMap, setTextZhMap] = useState<Record<string, string>>({});
-  const [translating, setTranslating] = useState(false);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
 
   async function loadMore(reset = false) {
@@ -77,41 +76,15 @@ export function SkillLibraryView({ installedSkillIds, onInstall }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sentinelRef.current, nextCursor, loading, initialized]);
 
-  useEffect(() => {
-    const candidates = Array.from(
-      new Set(
-        items
-          .flatMap((item) => [item.name, item.summary, ...(item.tags ?? [])])
-          .map((v) => v?.trim())
-          .filter((v): v is string => Boolean(v) && !textZhMap[v!])
-      )
-    );
-
-    if (candidates.length === 0 || translating) return;
-    let cancelled = false;
-    setTranslating(true);
-    void (async () => {
-      try {
-        const limited = candidates.slice(0, 80);
-        const translated = await invoke<string[]>("translate_clawhub_texts", {
-          texts: limited,
-        });
-        if (cancelled) return;
-        const next: Record<string, string> = {};
-        for (let i = 0; i < limited.length; i += 1) {
-          next[limited[i]] = translated[i] ?? limited[i];
-        }
-        setTextZhMap((prev) => ({ ...prev, ...next }));
-      } catch {
-        // silently fallback to original text
-      } finally {
-        if (!cancelled) setTranslating(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [items, textZhMap, translating]);
+  const translationTexts = useMemo(
+    () =>
+      items.flatMap((item) => [item.name, item.summary, ...(item.tags ?? [])]),
+    [items],
+  );
+  const { renderDisplayText } = useImmersiveTranslation(translationTexts, {
+    scene: "experts-library",
+    batchSize: 80,
+  });
 
   const tagOptions = useMemo(() => {
     const counter = new Map<string, number>();
@@ -186,14 +159,14 @@ export function SkillLibraryView({ installedSkillIds, onInstall }: Props) {
               <div key={item.slug} className="bg-white border border-gray-200 rounded-xl p-4">
                 <div className="flex items-center justify-between gap-2 mb-2">
                   <div className="text-sm font-medium text-gray-800 truncate">
-                    {textZhMap[item.name] ?? item.name}
+                    {renderDisplayText(item.name)}
                   </div>
                   <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-50 text-gray-500 border border-gray-100">
                     ★ {item.stars}
                   </span>
                 </div>
                 <div className="text-xs text-gray-500 line-clamp-3 min-h-[48px]">
-                  {item.summary ? textZhMap[item.summary] ?? item.summary : "暂无描述"}
+                  {item.summary ? renderDisplayText(item.summary) : "暂无描述"}
                 </div>
                 <div className="mt-2 flex flex-wrap gap-1 min-h-[20px]">
                   {(item.tags ?? [])
@@ -204,7 +177,7 @@ export function SkillLibraryView({ installedSkillIds, onInstall }: Props) {
                         key={`${item.slug}-${tag}`}
                         className="text-[10px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-600 border border-blue-100"
                       >
-                        {textZhMap[tag] ?? tag}
+                        {renderDisplayText(tag)}
                       </span>
                     ))}
                 </div>
@@ -238,7 +211,7 @@ export function SkillLibraryView({ installedSkillIds, onInstall }: Props) {
         open={Boolean(pendingInstall)}
         level="medium"
         title="安装技能"
-        summary={pendingInstall ? `确定安装「${textZhMap[pendingInstall.name] ?? pendingInstall.name}」吗？` : "确定安装该技能吗？"}
+        summary={pendingInstall ? `确定安装「${renderDisplayText(pendingInstall.name)}」吗？` : "确定安装该技能吗？"}
         impact={pendingInstall ? `slug: ${pendingInstall.slug}` : undefined}
         irreversible={false}
         confirmLabel="确认安装"

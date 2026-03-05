@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import ReactMarkdown from "react-markdown";
@@ -8,6 +8,7 @@ import { SkillManifest, ModelConfig, Message, StreamItem, FileAttachment, SkillR
 import { motion, AnimatePresence } from "framer-motion";
 import { ToolIsland } from "./ToolIsland";
 import { RiskConfirmDialog } from "./RiskConfirmDialog";
+import { useImmersiveTranslation } from "../hooks/useImmersiveTranslation";
 
 type ClawhubInstallCandidate = {
   slug: string;
@@ -694,6 +695,29 @@ export function ChatView({
     return Array.from(map.values());
   }
 
+  const candidateTranslationTexts = useMemo(
+    () => [
+      ...messages.flatMap((m) =>
+        extractInstallCandidates(m.streamItems).flatMap((candidate) => [
+          candidate.name,
+          candidate.description ?? "",
+        ]),
+      ),
+      ...extractInstallCandidates(streamItems).flatMap((candidate) => [
+        candidate.name,
+        candidate.description ?? "",
+      ]),
+    ],
+    [messages, streamItems],
+  );
+  const { renderDisplayText: renderCandidateText } = useImmersiveTranslation(
+    candidateTranslationTexts,
+    {
+      scene: "experts-finder",
+      batchSize: 80,
+    },
+  );
+
   function renderInstallCandidates(candidates: ClawhubInstallCandidate[]) {
     if (candidates.length === 0) return null;
     return (
@@ -707,7 +731,9 @@ export function ChatView({
               <div key={candidate.slug} className="rounded-lg border border-blue-100 bg-white p-2.5">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <div className="text-sm font-medium text-gray-800 truncate">{candidate.name}</div>
+                    <div className="text-sm font-medium text-gray-800 truncate">
+                      {renderCandidateText(candidate.name)}
+                    </div>
                     <div className="text-[11px] text-gray-400">slug: {candidate.slug}</div>
                   </div>
                   <button
@@ -730,7 +756,9 @@ export function ChatView({
                   </button>
                 </div>
                 {candidate.description && (
-                  <div className="mt-1.5 text-xs text-gray-600 line-clamp-2">{candidate.description}</div>
+                  <div className="mt-1.5 text-xs text-gray-600 line-clamp-2">
+                    {renderCandidateText(candidate.description)}
+                  </div>
                 )}
                 <div className="mt-1.5 text-[11px] text-gray-400">
                   stars: {candidate.stars ?? 0}
@@ -1083,7 +1111,11 @@ export function ChatView({
           open={showInstallConfirm && Boolean(pendingInstallSkill)}
           level="medium"
           title="安装技能"
-          summary={pendingInstallSkill ? `是否安装「${pendingInstallSkill.name}」？` : "是否安装该技能？"}
+          summary={
+            pendingInstallSkill
+              ? `是否安装「${renderCandidateText(pendingInstallSkill.name)}」？`
+              : "是否安装该技能？"
+          }
           impact={pendingInstallSkill ? `slug: ${pendingInstallSkill.slug}` : undefined}
           irreversible={false}
           confirmLabel="确认安装"

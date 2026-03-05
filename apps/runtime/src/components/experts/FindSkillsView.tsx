@@ -2,6 +2,7 @@ import { FormEvent, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ClawhubSkillRecommendation } from "../../types";
 import { RiskConfirmDialog } from "../RiskConfirmDialog";
+import { useImmersiveTranslation } from "../../hooks/useImmersiveTranslation";
 
 interface Props {
   installedSkillIds: Set<string>;
@@ -22,6 +23,18 @@ export function FindSkillsView({ installedSkillIds, onInstall }: Props) {
   const [installError, setInstallError] = useState("");
   const [pendingInstall, setPendingInstall] = useState<ClawhubSkillRecommendation | null>(null);
   const [turns, setTurns] = useState<Turn[]>([]);
+
+  const translationTexts = useMemo(
+    () =>
+      turns.flatMap((turn) =>
+        (turn.recommendations ?? []).flatMap((item) => [item.name, item.description, item.reason]),
+      ),
+    [turns],
+  );
+  const { renderDisplayText } = useImmersiveTranslation(translationTexts, {
+    scene: "experts-finder",
+    batchSize: 80,
+  });
 
   const empty = useMemo(() => turns.length === 0, [turns.length]);
 
@@ -126,15 +139,21 @@ export function FindSkillsView({ installedSkillIds, onInstall }: Props) {
                     return (
                       <div key={`${turn.id}-${item.slug}`} className="border border-gray-100 rounded-lg p-3">
                         <div className="flex items-center justify-between gap-2">
-                          <div className="text-sm font-medium text-gray-800 truncate">{item.name}</div>
+                          <div className="text-sm font-medium text-gray-800 truncate">
+                            {renderDisplayText(item.name)}
+                          </div>
                           <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-50 text-gray-500 border border-gray-100">
                             ★ {item.stars}
                           </span>
                         </div>
                         <div className="text-xs text-gray-500 mt-1 line-clamp-2 min-h-[32px]">
-                          {item.description || "暂无描述"}
+                          {item.description
+                            ? renderDisplayText(item.description)
+                            : "暂无描述"}
                         </div>
-                        <div className="text-[11px] text-blue-700 mt-2">{item.reason}</div>
+                        <div className="text-[11px] text-blue-700 mt-2">
+                          {renderDisplayText(item.reason)}
+                        </div>
                         <div className="mt-3">
                           <button
                             onClick={() => {
@@ -164,7 +183,11 @@ export function FindSkillsView({ installedSkillIds, onInstall }: Props) {
         open={Boolean(pendingInstall)}
         level="medium"
         title="安装技能"
-        summary={pendingInstall ? `确定安装「${pendingInstall.name}」吗？` : "确定安装该技能吗？"}
+        summary={
+          pendingInstall
+            ? `确定安装「${renderDisplayText(pendingInstall.name)}」吗？`
+            : "确定安装该技能吗？"
+        }
         impact={pendingInstall ? `slug: ${pendingInstall.slug}` : undefined}
         irreversible={false}
         confirmLabel="确认安装"
