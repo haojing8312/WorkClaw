@@ -844,6 +844,7 @@ export default function App() {
   }, []);
 
   function handleOpenStartTask() {
+    setShowSettings(false);
     const mainEmployee = employees.find((e) => e.is_default) ?? employees[0];
     if (mainEmployee) {
       setSelectedEmployeeId(mainEmployee.id);
@@ -1150,8 +1151,14 @@ export default function App() {
       <Sidebar
         activeMainView={activeMainView}
         onOpenStartTask={handleOpenStartTask}
-        onOpenExperts={() => navigate("experts")}
-        onOpenEmployees={() => navigate("employees")}
+        onOpenExperts={() => {
+          setShowSettings(false);
+          navigate("experts");
+        }}
+        onOpenEmployees={() => {
+          setShowSettings(false);
+          navigate("employees");
+        }}
         selectedSkillId={selectedSkillId}
         sessions={sessions}
         selectedSessionId={selectedSessionId}

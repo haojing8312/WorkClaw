@@ -21,6 +21,7 @@ vi.mock("../components/Sidebar", () => ({
     <div>
       <button onClick={props.onOpenStartTask}>start-task</button>
       <button onClick={props.onOpenExperts}>experts</button>
+      <button onClick={props.onSettings}>settings</button>
     </div>
   ),
 }));
@@ -292,5 +293,31 @@ describe("App experts routing", () => {
     await waitFor(() => {
       expect(screen.getByTestId("install-dialog")).toBeInTheDocument();
     });
+  });
+
+  test("leaves settings when opening experts or start task from sidebar", async () => {
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: "settings" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("settings-view")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "experts" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("experts-view")).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId("settings-view")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "settings" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("settings-view")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "start-task" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("new-session-landing")).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId("settings-view")).not.toBeInTheDocument();
   });
 });
