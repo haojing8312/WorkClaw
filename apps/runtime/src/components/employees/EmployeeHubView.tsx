@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import {
   AgentEmployee,
+  EmployeeGroup,
   AgentProfileFilesView,
   EmployeeMemoryExport,
   EmployeeMemoryStats,
@@ -74,6 +75,12 @@ export function EmployeeHubView({
     appId: "",
     appSecret: "",
   });
+  const [groupName, setGroupName] = useState("");
+  const [groupCoordinatorId, setGroupCoordinatorId] = useState("");
+  const [groupMemberIds, setGroupMemberIds] = useState<string[]>([]);
+  const [employeeGroups, setEmployeeGroups] = useState<EmployeeGroup[]>([]);
+  const [groupSubmitting, setGroupSubmitting] = useState(false);
+  const [groupDeletingId, setGroupDeletingId] = useState<string | null>(null);
 
   const selectedEmployee = useMemo(
     () => employees.find((item) => item.id === selectedEmployeeId) ?? null,
@@ -114,6 +121,27 @@ export function EmployeeHubView({
         // ignore
       }
     })();
+  }, []);
+
+  useEffect(() => {
+    const normalized = employees
+      .map((item) => (item.employee_id || item.role_id || "").trim())
+      .filter((item) => item.length > 0);
+    setGroupMemberIds((prev) => prev.filter((id) => normalized.includes(id)));
+    setGroupCoordinatorId((prev) => (normalized.includes(prev) ? prev : normalized[0] || ""));
+  }, [employees]);
+
+  async function loadEmployeeGroups() {
+    try {
+      const groups = await invoke<EmployeeGroup[]>("list_employee_groups");
+      setEmployeeGroups(Array.isArray(groups) ? groups : []);
+    } catch {
+      setEmployeeGroups([]);
+    }
+  }
+
+  useEffect(() => {
+    void loadEmployeeGroups();
   }, []);
 
   useEffect(() => {
@@ -342,6 +370,67 @@ export function EmployeeHubView({
     }
   }
 
+  async function createEmployeeGroup() {
+    const name = groupName.trim();
+    const coordinator = groupCoordinatorId.trim();
+    const members = Array.from(new Set(groupMemberIds.map((item) => item.trim()).filter((item) => item.length > 0)));
+
+    if (!name) {
+      setMessage("请填写群组名称");
+      return;
+    }
+    if (!coordinator) {
+      setMessage("请先选择协调员");
+      return;
+    }
+    if (members.length === 0) {
+      setMessage("请至少选择 1 个成员");
+      return;
+    }
+    if (members.length > 10) {
+      setMessage("群组成员最多 10 人");
+      return;
+    }
+    if (!members.includes(coordinator)) {
+      setMessage("协调员必须包含在群组成员中");
+      return;
+    }
+
+    setGroupSubmitting(true);
+    setMessage("");
+    try {
+      await invoke<string>("create_employee_group", {
+        input: {
+          name,
+          coordinator_employee_id: coordinator,
+          member_employee_ids: members,
+        },
+      });
+      setGroupName("");
+      setGroupMemberIds([coordinator]);
+      await loadEmployeeGroups();
+      setMessage("协作群组已创建");
+    } catch (e) {
+      setMessage(`创建群组失败: ${String(e)}`);
+    } finally {
+      setGroupSubmitting(false);
+    }
+  }
+
+  async function deleteEmployeeGroup(groupId: string) {
+    if (!groupId) return;
+    setGroupDeletingId(groupId);
+    try {
+      await invoke("delete_employee_group", { groupId });
+      await loadEmployeeGroups();
+      setMessage("协作群组已删除");
+    } catch (e) {
+      setMessage(`删除群组失败: ${String(e)}`);
+    } finally {
+      setGroupDeletingId(null);
+    }
+  }
+
   function requestRemoveCurrent() {
     if (!selectedEmployeeId || saving) return;
     const target = employees.find((x) => x.id === selectedEmployeeId);
@@ -411,6 +500,106 @@ export function EmployeeHubView({
             <button type="button" data-testid="employee-creator-highlight-dismiss" onClick={() => onDismissHighlight?.()} className="h-7 px-2.5 rounded border border-emerald-200 hover:bg-emerald-100 text-emerald-700 text-xs">知道了</button>
           </div>
         )}
+        <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <div className="text-sm font-medium text-gray-900">拉群协作（最多 10 人）</div>
+              <div className="text-xs text-gray-500 mt-1">创建协作群后，可由协调员按轮次调度成员执行。</div>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+            <input
+              data-testid="employee-group-name"
+              className="border border-gray-200 rounded px-2 py-1.5 text-sm"
+              placeholder="群组名称"
+              value={groupName}
+              onChange={(e) => setGroupName(e.target.value)}
+            />
+            <select
+              data-testid="employee-group-coordinator"
+              className="border border-gray-200 rounded px-2 py-1.5 text-sm bg-white"
+              value={groupCoordinatorId}
+              onChange={(e) => setGroupCoordinatorId(e.target.value)}
+            >
+              <option value="">选择协调员</option>
+              {employees.map((item) => {
+                const id = (item.employee_id || item.role_id || "").trim();
+                if (!id) return null;
+                return (
+                  <option key={item.id} value={id}>
+                    {item.name}（{id}）
+                  </option>
+                );
+              })}
+            </select>
+            <button
+              type="button"
+              data-testid="employee-group-create"
+              disabled={groupSubmitting}
+              onClick={createEmployeeGroup}
+              className="h-9 rounded bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white text-sm"
+            >
+              {groupSubmitting ? "创建中..." : "创建协作群"}
+            </button>
+          </div>
+          <div className="rounded border border-gray-200 p-2">
+            <div className="text-[11px] text-gray-500 mb-1">选择成员（{groupMemberIds.length}/10）</div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-1.5">
+              {employees.map((item) => {
+                const employeeCode = (item.employee_id || item.role_id || "").trim();
+                if (!employeeCode) return null;
+                const checked = groupMemberIds.includes(employeeCode);
+                return (
+                  <label key={item.id} className="flex items-center gap-2 text-xs text-gray-700">
+                    <input
+                      data-testid={`employee-group-member-${item.id}`}
+                      type="checkbox"
+                      checked={checked}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setGroupMemberIds((prev) => {
+                            if (prev.includes(employeeCode)) return prev;
+                            if (prev.length >= 10) {
+                              setMessage("群组成员最多 10 人");
+                              return prev;
+                            }
+                            return [...prev, employeeCode];
+                          });
+                        } else {
+                          setGroupMemberIds((prev) => prev.filter((id) => id !== employeeCode));
+                        }
+                      }}
+                    />
+                    <span>{item.name}（{employeeCode}）</span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+          <div className="space-y-1">
+            {employeeGroups.length === 0 ? (
+              <div className="text-xs text-gray-500">暂无协作群组</div>
+            ) : (
+              employeeGroups.map((group) => (
+                <div key={group.id} data-testid={`employee-group-item-${group.id}`} className="flex items-center justify-between gap-2 rounded border border-gray-200 px-2 py-1.5">
+                  <div className="text-xs text-gray-700">
+                    <span className="font-medium">{group.name}</span>
+                    <span className="text-gray-500"> · 协调员 {group.coordinator_employee_id} · {group.member_count} 人</span>
+                  </div>
+                  <button
+                    type="button"
+                    data-testid={`employee-group-delete-${group.id}`}
+                    onClick={() => deleteEmployeeGroup(group.id)}
+                    disabled={groupDeletingId === group.id}
+                    className="h-7 px-2 rounded border border-red-200 hover:bg-red-50 disabled:bg-gray-100 text-red-600 text-xs"
+                  >
+                    {groupDeletingId === group.id ? "删除中..." : "删除"}
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
         <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-2">
           <div className="text-xs text-gray-500">全局默认工作目录（新建会话默认使用）</div>
           <input className="w-full border border-gray-200 rounded px-2 py-1.5 text-sm" placeholder="例如 D:\\workspace\\workclaw" value={globalDefaultWorkDir} onChange={(e) => setGlobalDefaultWorkDir(e.target.value)} />

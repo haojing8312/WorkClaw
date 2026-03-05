@@ -339,6 +339,16 @@ export interface AgentEmployee {
   updated_at: string;
 }
 
+export interface EmployeeGroup {
+  id: string;
+  name: string;
+  coordinator_employee_id: string;
+  member_employee_ids: string[];
+  member_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface EmployeeMemorySkillStats {
   skill_id: string;
   total_files: number;
