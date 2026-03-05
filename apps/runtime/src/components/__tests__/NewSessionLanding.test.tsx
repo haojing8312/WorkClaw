@@ -22,7 +22,7 @@ describe("NewSessionLanding", () => {
       />
     );
 
-    expect(screen.getByText("把你的电脑任务，交给 AI 助手协作完成")).toBeInTheDocument();
+    expect(screen.getByText("把你的电脑任务，交给 AI 助手（打工虾）协作完成")).toBeInTheDocument();
     expect(
       screen.getByText(
         "一句话描述需求，它可以帮你创建和修改文件、分析本地数据、整理文件、操作浏览器，并持续反馈执行过程。"
