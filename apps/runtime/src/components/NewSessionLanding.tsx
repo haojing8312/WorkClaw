@@ -117,7 +117,7 @@ export function NewSessionLanding({
           transition={{ duration: 0.28, ease: "easeOut" }}
         >
           <h1 className="text-3xl md:text-4xl font-semibold tracking-tight text-gray-900 mb-3">
-            把你的电脑任务，交给 AI 助手（打工虾）协作完成
+            你的电脑任务，交给打工虾们协作完成
           </h1>
           <p className="text-sm text-gray-600 max-w-2xl mx-auto">
             一句话描述需求，它可以帮你创建和修改文件、分析本地数据、整理文件、操作浏览器，并持续反馈执行过程。
