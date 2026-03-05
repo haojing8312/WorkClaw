@@ -96,6 +96,45 @@ pub struct CreateEmployeeGroupInput {
     pub member_employee_ids: Vec<String>,
 }
 
+fn default_group_execution_window() -> usize {
+    3
+}
+
+fn default_group_max_retry() -> usize {
+    1
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct StartEmployeeGroupRunInput {
+    pub group_id: String,
+    pub user_goal: String,
+    #[serde(default = "default_group_execution_window")]
+    pub execution_window: usize,
+    #[serde(default)]
+    pub timeout_employee_ids: Vec<String>,
+    #[serde(default = "default_group_max_retry")]
+    pub max_retry_per_step: usize,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct EmployeeGroupRunStep {
+    pub id: String,
+    pub round_no: i64,
+    pub assignee_employee_id: String,
+    pub status: String,
+    pub output: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct EmployeeGroupRunResult {
+    pub run_id: String,
+    pub group_id: String,
+    pub state: String,
+    pub current_round: i64,
+    pub final_report: String,
+    pub steps: Vec<EmployeeGroupRunStep>,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct EmployeeMemorySkillStats {
     pub skill_id: String,
@@ -707,6 +746,119 @@ pub async fn delete_employee_group_with_pool(pool: &SqlitePool, group_id: &str) 
     Ok(())
 }
 
+pub async fn start_employee_group_run_with_pool(
+    pool: &SqlitePool,
+    input: StartEmployeeGroupRunInput,
+) -> Result<EmployeeGroupRunResult, String> {
+    let group_id = input.group_id.trim().to_string();
+    if group_id.is_empty() {
+        return Err("group_id is required".to_string());
+    }
+    let user_goal = input.user_goal.trim().to_string();
+    if user_goal.is_empty() {
+        return Err("user_goal is required".to_string());
+    }
+
+    let row = sqlx::query(
+        "SELECT coordinator_employee_id, member_employee_ids_json
+         FROM employee_groups WHERE id = ?",
+    )
+    .bind(&group_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| e.to_string())?
+    .ok_or_else(|| "employee group not found".to_string())?;
+
+    let coordinator_employee_id: String = row
+        .try_get("coordinator_employee_id")
+        .map_err(|e| e.to_string())?;
+    let members_json: String = row
+        .try_get("member_employee_ids_json")
+        .map_err(|e| e.to_string())?;
+    let member_employee_ids =
+        serde_json::from_str::<Vec<String>>(&members_json).unwrap_or_default();
+
+    let request = crate::agent::group_orchestrator::GroupRunRequest {
+        group_id: group_id.clone(),
+        coordinator_employee_id: coordinator_employee_id.clone(),
+        member_employee_ids,
+        user_goal: user_goal.clone(),
+        execution_window: input.execution_window,
+        timeout_employee_ids: input.timeout_employee_ids,
+        max_retry_per_step: input.max_retry_per_step,
+    };
+    let outcome = crate::agent::group_orchestrator::simulate_group_run(request);
+    let state = outcome
+        .states
+        .last()
+        .copied()
+        .unwrap_or(crate::agent::group_orchestrator::GroupRunState::Failed)
+        .as_str()
+        .to_string();
+    let current_round = outcome.execution.iter().map(|step| step.round_no).max().unwrap_or(0);
+    let now = chrono::Utc::now().to_rfc3339();
+    let run_id = Uuid::new_v4().to_string();
+
+    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
+    sqlx::query(
+        "INSERT INTO group_runs (
+            id, group_id, session_id, user_goal, state, current_round, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&run_id)
+    .bind(&group_id)
+    .bind("")
+    .bind(&user_goal)
+    .bind(&state)
+    .bind(current_round)
+    .bind(&now)
+    .bind(&now)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let mut steps = Vec::with_capacity(outcome.execution.len());
+    for execution in outcome.execution {
+        let step_id = Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO group_run_steps (
+                id, run_id, round_no, assignee_employee_id, step_type, input, output, status, started_at, finished_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&step_id)
+        .bind(&run_id)
+        .bind(execution.round_no)
+        .bind(&execution.assignee_employee_id)
+        .bind("execute")
+        .bind(&user_goal)
+        .bind(&execution.output)
+        .bind(&execution.status)
+        .bind(&now)
+        .bind(&now)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+        steps.push(EmployeeGroupRunStep {
+            id: step_id,
+            round_no: execution.round_no,
+            assignee_employee_id: execution.assignee_employee_id,
+            status: execution.status,
+            output: execution.output,
+        });
+    }
+
+    tx.commit().await.map_err(|e| e.to_string())?;
+
+    Ok(EmployeeGroupRunResult {
+        run_id,
+        group_id,
+        state,
+        current_round,
+        final_report: outcome.final_report,
+        steps,
+    })
+}
+
 pub async fn resolve_target_employees_for_event(
     pool: &SqlitePool,
     event: &ImEvent,
@@ -1067,6 +1219,14 @@ pub async fn list_employee_groups(db: State<'_, DbState>) -> Result<Vec<Employee
 #[tauri::command]
 pub async fn delete_employee_group(group_id: String, db: State<'_, DbState>) -> Result<(), String> {
     delete_employee_group_with_pool(&db.0, &group_id).await
+}
+
+#[tauri::command]
+pub async fn start_employee_group_run(
+    input: StartEmployeeGroupRunInput,
+    db: State<'_, DbState>,
+) -> Result<EmployeeGroupRunResult, String> {
+    start_employee_group_run_with_pool(&db.0, input).await
 }
 
 #[tauri::command]

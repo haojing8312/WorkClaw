@@ -4,6 +4,7 @@ import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import {
   AgentEmployee,
   EmployeeGroup,
+  EmployeeGroupRunResult,
   AgentProfileFilesView,
   EmployeeMemoryExport,
   EmployeeMemoryStats,
@@ -81,6 +82,9 @@ export function EmployeeHubView({
   const [employeeGroups, setEmployeeGroups] = useState<EmployeeGroup[]>([]);
   const [groupSubmitting, setGroupSubmitting] = useState(false);
   const [groupDeletingId, setGroupDeletingId] = useState<string | null>(null);
+  const [groupRunGoalById, setGroupRunGoalById] = useState<Record<string, string>>({});
+  const [groupRunSubmittingId, setGroupRunSubmittingId] = useState<string | null>(null);
+  const [groupRunReportById, setGroupRunReportById] = useState<Record<string, string>>({});
 
   const selectedEmployee = useMemo(
     () => employees.find((item) => item.id === selectedEmployeeId) ?? null,
@@ -422,12 +426,50 @@ export function EmployeeHubView({
     setGroupDeletingId(groupId);
     try {
       await invoke("delete_employee_group", { groupId });
+      setGroupRunGoalById((prev) => {
+        const next = { ...prev };
+        delete next[groupId];
+        return next;
+      });
+      setGroupRunReportById((prev) => {
+        const next = { ...prev };
+        delete next[groupId];
+        return next;
+      });
       await loadEmployeeGroups();
       setMessage("协作群组已删除");
     } catch (e) {
       setMessage(`删除群组失败: ${String(e)}`);
     } finally {
       setGroupDeletingId(null);
+    }
+  }
+
+  async function startEmployeeGroupRun(groupId: string) {
+    if (!groupId || groupRunSubmittingId) return;
+    const userGoal = (groupRunGoalById[groupId] || "").trim();
+    if (!userGoal) {
+      setMessage("请先填写协作指令");
+      return;
+    }
+    setGroupRunSubmittingId(groupId);
+    setMessage("");
+    try {
+      const result = await invoke<EmployeeGroupRunResult>("start_employee_group_run", {
+        input: {
+          group_id: groupId,
+          user_goal: userGoal,
+          execution_window: 3,
+          max_retry_per_step: 1,
+          timeout_employee_ids: [],
+        },
+      });
+      setGroupRunReportById((prev) => ({ ...prev, [groupId]: result.final_report || "" }));
+      setMessage(`协作任务已完成（第 ${result.current_round || 1} 轮）`);
+    } catch (e) {
+      setMessage(`发起协作失败: ${String(e)}`);
+    } finally {
+      setGroupRunSubmittingId(null);
     }
   }
 
@@ -581,20 +623,50 @@ export function EmployeeHubView({
               <div className="text-xs text-gray-500">暂无协作群组</div>
             ) : (
               employeeGroups.map((group) => (
-                <div key={group.id} data-testid={`employee-group-item-${group.id}`} className="flex items-center justify-between gap-2 rounded border border-gray-200 px-2 py-1.5">
-                  <div className="text-xs text-gray-700">
-                    <span className="font-medium">{group.name}</span>
-                    <span className="text-gray-500"> · 协调员 {group.coordinator_employee_id} · {group.member_count} 人</span>
+                <div key={group.id} data-testid={`employee-group-item-${group.id}`} className="rounded border border-gray-200 px-2 py-1.5 space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-xs text-gray-700">
+                      <span className="font-medium">{group.name}</span>
+                      <span className="text-gray-500"> · 协调员 {group.coordinator_employee_id} · {group.member_count} 人</span>
+                    </div>
+                    <button
+                      type="button"
+                      data-testid={`employee-group-delete-${group.id}`}
+                      onClick={() => deleteEmployeeGroup(group.id)}
+                      disabled={groupDeletingId === group.id}
+                      className="h-7 px-2 rounded border border-red-200 hover:bg-red-50 disabled:bg-gray-100 text-red-600 text-xs"
+                    >
+                      {groupDeletingId === group.id ? "删除中..." : "删除"}
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    data-testid={`employee-group-delete-${group.id}`}
-                    onClick={() => deleteEmployeeGroup(group.id)}
-                    disabled={groupDeletingId === group.id}
-                    className="h-7 px-2 rounded border border-red-200 hover:bg-red-50 disabled:bg-gray-100 text-red-600 text-xs"
-                  >
-                    {groupDeletingId === group.id ? "删除中..." : "删除"}
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <input
+                      data-testid={`employee-group-run-goal-${group.id}`}
+                      className="flex-1 border border-gray-200 rounded px-2 py-1.5 text-xs"
+                      placeholder="给该群组发送协作指令"
+                      value={groupRunGoalById[group.id] || ""}
+                      onChange={(e) =>
+                        setGroupRunGoalById((prev) => ({ ...prev, [group.id]: e.target.value }))
+                      }
+                    />
+                    <button
+                      type="button"
+                      data-testid={`employee-group-run-start-${group.id}`}
+                      onClick={() => startEmployeeGroupRun(group.id)}
+                      disabled={groupRunSubmittingId === group.id}
+                      className="h-7 px-2.5 rounded bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white text-xs"
+                    >
+                      {groupRunSubmittingId === group.id ? "执行中..." : "发起协作"}
+                    </button>
+                  </div>
+                  {groupRunReportById[group.id] && (
+                    <div
+                      data-testid={`employee-group-run-report-${group.id}`}
+                      className="rounded border border-indigo-100 bg-indigo-50 px-2 py-1.5 text-[11px] text-indigo-900 whitespace-pre-wrap"
+                    >
+                      {groupRunReportById[group.id]}
+                    </div>
+                  )}
                 </div>
               ))
             )}

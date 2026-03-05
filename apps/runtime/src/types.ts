@@ -349,6 +349,23 @@ export interface EmployeeGroup {
   updated_at: string;
 }
 
+export interface EmployeeGroupRunStep {
+  id: string;
+  round_no: number;
+  assignee_employee_id: string;
+  status: "running" | "completed" | "failed" | string;
+  output: string;
+}
+
+export interface EmployeeGroupRunResult {
+  run_id: string;
+  group_id: string;
+  state: string;
+  current_round: number;
+  final_report: string;
+  steps: EmployeeGroupRunStep[];
+}
+
 export interface EmployeeMemorySkillStats {
   skill_id: string;
   total_files: number;

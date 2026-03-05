@@ -4,7 +4,8 @@ use runtime_lib::commands::employee_agents::{
     create_employee_group_with_pool, delete_employee_group_with_pool,
     ensure_employee_sessions_for_event_with_pool, link_inbound_event_to_session_with_pool,
     list_agent_employees_with_pool, list_employee_groups_with_pool, resolve_target_employees_for_event,
-    upsert_agent_employee_with_pool, CreateEmployeeGroupInput, UpsertAgentEmployeeInput,
+    start_employee_group_run_with_pool, upsert_agent_employee_with_pool, CreateEmployeeGroupInput,
+    StartEmployeeGroupRunInput, UpsertAgentEmployeeInput,
 };
 use runtime_lib::im::types::{ImEvent, ImEventType};
 
@@ -512,4 +513,59 @@ async fn create_employee_group_rejects_more_than_ten_members_and_missing_coordin
     .await
     .expect_err("coordinator must be in members");
     assert!(missing_coordinator.contains("must be included in members"));
+}
+
+#[tokio::test]
+async fn start_employee_group_run_persists_run_and_steps() {
+    let (pool, _tmp) = helpers::setup_test_db().await;
+
+    let group_id = create_employee_group_with_pool(
+        &pool,
+        CreateEmployeeGroupInput {
+            name: "交付战队".to_string(),
+            coordinator_employee_id: "project_manager".to_string(),
+            member_employee_ids: vec![
+                "project_manager".to_string(),
+                "dev_team".to_string(),
+                "qa_team".to_string(),
+            ],
+        },
+    )
+    .await
+    .expect("create group");
+
+    let outcome = start_employee_group_run_with_pool(
+        &pool,
+        StartEmployeeGroupRunInput {
+            group_id: group_id.clone(),
+            user_goal: "完成版本发布方案".to_string(),
+            execution_window: 3,
+            max_retry_per_step: 1,
+            timeout_employee_ids: vec![],
+        },
+    )
+    .await
+    .expect("start run");
+
+    assert_eq!(outcome.group_id, group_id);
+    assert_eq!(outcome.state, "done");
+    assert!(outcome.current_round >= 1);
+    assert!(outcome.final_report.contains("计划"));
+    assert!(outcome.final_report.contains("执行"));
+    assert!(outcome.final_report.contains("汇报"));
+    assert_eq!(outcome.steps.len(), 3);
+
+    let (run_count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM group_runs WHERE id = ?")
+        .bind(&outcome.run_id)
+        .fetch_one(&pool)
+        .await
+        .expect("count group run");
+    assert_eq!(run_count, 1);
+
+    let (step_count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM group_run_steps WHERE run_id = ?")
+        .bind(&outcome.run_id)
+        .fetch_one(&pool)
+        .await
+        .expect("count run steps");
+    assert_eq!(step_count, 3);
 }

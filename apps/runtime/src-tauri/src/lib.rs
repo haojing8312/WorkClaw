@@ -306,6 +306,7 @@ pub fn run() {
             commands::employee_agents::create_employee_group,
             commands::employee_agents::list_employee_groups,
             commands::employee_agents::delete_employee_group,
+            commands::employee_agents::start_employee_group_run,
             commands::employee_agents::upsert_agent_employee,
             commands::employee_agents::delete_agent_employee,
             commands::employee_agents::get_employee_memory_stats,
