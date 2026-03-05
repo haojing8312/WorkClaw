@@ -123,7 +123,11 @@ pub async fn apply_agent_profile_with_pool(
 ) -> Result<ApplyAgentProfileResult, String> {
     let employee = find_employee_with_pool(pool, payload.employee_db_id.trim()).await?;
     let draft = render_markdown(&employee, &payload.answers);
-    let fallback_base = resolve_default_work_dir_with_pool(pool).await?;
+    let fallback_base = if employee.default_work_dir.trim().is_empty() {
+        resolve_default_work_dir_with_pool(pool).await?
+    } else {
+        String::new()
+    };
     let profile_dir = resolve_profile_dir(&employee, &fallback_base);
     std::fs::create_dir_all(&profile_dir)
         .map_err(|e| format!("failed to create profile dir: {e}"))?;

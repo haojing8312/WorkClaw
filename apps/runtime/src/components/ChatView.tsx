@@ -342,11 +342,16 @@ export function ChatView({
   useEffect(() => {
     const unlistenPromise = listen<ImRoleDispatchRequest>("im-role-dispatch-request", ({ payload }) => {
       if (payload.session_id !== sessionId) return;
+      const cleanPrompt = (payload.prompt || "")
+        .replace(/@_[A-Za-z0-9_]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+      const roleLabel = payload.role_name || payload.role_id;
       setMessages((prev) => [
         ...prev,
         {
           role: "user",
-          content: payload.prompt || "",
+          content: `【${roleLabel}】${cleanPrompt || payload.prompt || ""}`,
           created_at: new Date().toISOString(),
         },
       ]);
@@ -358,7 +363,7 @@ export function ChatView({
           role_id: payload.role_id,
           role_name: payload.role_name,
           status: "running",
-          summary: `任务已分发(${payload.agent_type})`,
+          summary: `任务已分发(${payload.agent_type}) -> ${roleLabel}`,
         },
       ]);
     });

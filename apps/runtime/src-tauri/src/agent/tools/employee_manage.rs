@@ -1,4 +1,7 @@
 use crate::agent::types::{Tool, ToolContext};
+use crate::commands::agent_profile::{
+    apply_agent_profile_with_pool, AgentProfileAnswerInput, AgentProfilePayload,
+};
 use crate::commands::employee_agents::{
     list_agent_employees_with_pool, upsert_agent_employee_with_pool, UpsertAgentEmployeeInput,
 };
@@ -28,6 +31,38 @@ impl EmployeeManageTool {
                     .map(str::trim)
                     .filter(|v| !v.is_empty())
                     .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    }
+
+    fn parse_profile_answers(input: &Value) -> Vec<AgentProfileAnswerInput> {
+        input["profile_answers"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|item| {
+                        let key = item["key"].as_str().map(str::trim).unwrap_or("");
+                        if key.is_empty() {
+                            return None;
+                        }
+                        let question = item["question"]
+                            .as_str()
+                            .map(str::trim)
+                            .filter(|v| !v.is_empty())
+                            .unwrap_or(key)
+                            .to_string();
+                        let answer = item["answer"]
+                            .as_str()
+                            .map(str::trim)
+                            .unwrap_or("")
+                            .to_string();
+                        Some(AgentProfileAnswerInput {
+                            key: key.to_string(),
+                            question,
+                            answer,
+                        })
+                    })
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default()
@@ -142,7 +177,7 @@ impl EmployeeManageTool {
             .map(ToString::to_string)
             .unwrap_or_else(|| Self::default_employee_work_dir(&employee_id));
 
-        let input = UpsertAgentEmployeeInput {
+        let upsert_input = UpsertAgentEmployeeInput {
             id: input["id"]
                 .as_str()
                 .map(str::trim)
@@ -184,17 +219,75 @@ impl EmployeeManageTool {
             skill_ids: Self::parse_string_array(&input, "skill_ids"),
         };
 
-        let created_id = upsert_agent_employee_with_pool(&pool, input).await?;
+        let created_id = upsert_agent_employee_with_pool(&pool, upsert_input).await?;
         let employees = list_agent_employees_with_pool(&pool).await?;
         let created = employees
             .into_iter()
             .find(|item| item.id == created_id)
             .ok_or_else(|| "创建成功但未找到员工记录".to_string())?;
 
+        let auto_apply_profile = input["auto_apply_profile"].as_bool().unwrap_or(true);
+        let profile = if auto_apply_profile {
+            let payload = AgentProfilePayload {
+                employee_db_id: created_id.clone(),
+                answers: Self::parse_profile_answers(&input),
+            };
+            match apply_agent_profile_with_pool(&pool, payload).await {
+                Ok(result) => json!({
+                    "applied": true,
+                    "files": result.files,
+                }),
+                Err(error) => json!({
+                    "applied": false,
+                    "error": error,
+                }),
+            }
+        } else {
+            json!({
+                "applied": false,
+                "skipped": true,
+            })
+        };
+
         Ok(json!({
             "action": "create_employee",
             "ok": true,
             "employee": created,
+            "profile": profile,
+        }))
+    }
+
+    async fn apply_profile(pool: SqlitePool, input: Value) -> std::result::Result<Value, String> {
+        let employee_db_id = input["employee_db_id"].as_str().map(str::trim).unwrap_or("");
+        let employee_id = input["employee_id"].as_str().map(str::trim).unwrap_or("");
+
+        let resolved_db_id = if !employee_db_id.is_empty() {
+            employee_db_id.to_string()
+        } else if !employee_id.is_empty() {
+            let employees = list_agent_employees_with_pool(&pool).await?;
+            let matched = employees
+                .into_iter()
+                .find(|item| {
+                    item.id.eq_ignore_ascii_case(employee_id)
+                        || item.employee_id.eq_ignore_ascii_case(employee_id)
+                        || item.role_id.eq_ignore_ascii_case(employee_id)
+                })
+                .ok_or_else(|| "apply_profile 未找到对应员工".to_string())?;
+            matched.id
+        } else {
+            return Err("apply_profile 缺少 employee_db_id 或 employee_id 参数".to_string());
+        };
+
+        let payload = AgentProfilePayload {
+            employee_db_id: resolved_db_id.clone(),
+            answers: Self::parse_profile_answers(&input),
+        };
+        let result = apply_agent_profile_with_pool(&pool, payload).await?;
+        Ok(json!({
+            "action": "apply_profile",
+            "ok": true,
+            "employee_db_id": resolved_db_id,
+            "files": result.files,
         }))
     }
 }
@@ -205,7 +298,7 @@ impl Tool for EmployeeManageTool {
     }
 
     fn description(&self) -> &str {
-        "员工配置管理工具。支持 list_skills、list_employees、create_employee 三种操作。"
+        "员工配置管理工具。支持 list_skills、list_employees、create_employee、apply_profile 四种操作。"
     }
 
     fn input_schema(&self) -> Value {
@@ -214,10 +307,11 @@ impl Tool for EmployeeManageTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["list_skills", "list_employees", "create_employee"],
+                    "enum": ["list_skills", "list_employees", "create_employee", "apply_profile"],
                     "description": "执行动作"
                 },
                 "id": { "type": "string" },
+                "employee_db_id": { "type": "string" },
                 "employee_id": { "type": "string" },
                 "name": { "type": "string" },
                 "persona": { "type": "string" },
@@ -233,10 +327,23 @@ impl Tool for EmployeeManageTool {
                 "routing_priority": { "type": "integer" },
                 "enabled": { "type": "boolean" },
                 "is_default": { "type": "boolean" },
+                "auto_apply_profile": { "type": "boolean" },
                 "default_work_dir": { "type": "string" },
                 "feishu_open_id": { "type": "string" },
                 "feishu_app_id": { "type": "string" },
-                "feishu_app_secret": { "type": "string" }
+                "feishu_app_secret": { "type": "string" },
+                "profile_answers": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "key": { "type": "string" },
+                            "question": { "type": "string" },
+                            "answer": { "type": "string" }
+                        },
+                        "required": ["key", "answer"]
+                    }
+                }
             },
             "required": ["action"]
         })
@@ -252,6 +359,7 @@ impl Tool for EmployeeManageTool {
             "create_employee" => {
                 self.block_on(Self::create_employee(self.pool.clone(), input.clone()))?
             }
+            "apply_profile" => self.block_on(Self::apply_profile(self.pool.clone(), input.clone()))?,
             _ => return Err(anyhow!("未知 action: {}", action)),
         };
         serde_json::to_string_pretty(&payload).map_err(|e| anyhow!("序列化结果失败: {}", e))
@@ -262,6 +370,7 @@ impl Tool for EmployeeManageTool {
 mod tests {
     use super::*;
     use sqlx::sqlite::SqlitePoolOptions;
+    use std::path::Path;
 
     fn setup_pool() -> SqlitePool {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -376,6 +485,9 @@ mod tests {
     fn employee_manage_creates_employee_and_can_list() {
         let pool = setup_pool();
         let tool = EmployeeManageTool::new(pool);
+        let profile_root = std::env::temp_dir()
+            .join(format!("employee-manage-profile-{}", Uuid::new_v4()));
+        let profile_root_text = profile_root.to_string_lossy().to_string();
         let create_output = tool
             .execute(
                 json!({
@@ -384,7 +496,12 @@ mod tests {
                     "persona": "推进需求交付并协调多技能执行",
                     "primary_skill_id": "builtin-general",
                     "skill_ids": ["builtin-general"],
-                    "enabled_scopes": ["feishu"]
+                    "enabled_scopes": ["feishu"],
+                    "default_work_dir": profile_root_text,
+                    "profile_answers": [
+                        { "key": "mission", "question": "核心使命", "answer": "推进需求上线交付" },
+                        { "key": "tone", "question": "沟通风格", "answer": "结论先行、简洁明确" }
+                    ]
                 }),
                 &ToolContext::default(),
             )
@@ -396,6 +513,24 @@ mod tests {
         assert!(created["employee"]["employee_id"]
             .as_str()
             .is_some_and(|v| !v.is_empty()));
+        assert_eq!(created["profile"]["applied"], true);
+        assert_eq!(
+            created["profile"]["files"]
+                .as_array()
+                .map(|items| items.len())
+                .unwrap_or_default(),
+            3
+        );
+        let has_agents = created["profile"]["files"]
+            .as_array()
+            .is_some_and(|items| {
+                items.iter().any(|item| {
+                    item["path"]
+                        .as_str()
+                        .is_some_and(|path| path.ends_with("AGENTS.md") && Path::new(path).exists())
+                })
+            });
+        assert!(has_agents);
 
         let list_output = tool
             .execute(
@@ -406,5 +541,75 @@ mod tests {
         let listed: Value = serde_json::from_str(&list_output).expect("parse list output");
         assert_eq!(listed["action"], "list_employees");
         assert_eq!(listed["items"][0]["name"], "项目经理");
+        let _ = std::fs::remove_dir_all(&profile_root);
+    }
+
+    #[test]
+    fn employee_manage_can_apply_profile_for_existing_employee() {
+        let pool = setup_pool();
+        let tool = EmployeeManageTool::new(pool);
+        let profile_root = std::env::temp_dir()
+            .join(format!("employee-manage-apply-profile-{}", Uuid::new_v4()));
+        let profile_root_text = profile_root.to_string_lossy().to_string();
+
+        let create_output = tool
+            .execute(
+                json!({
+                    "action": "create_employee",
+                    "name": "客服专员",
+                    "employee_id": "service_agent",
+                    "primary_skill_id": "builtin-general",
+                    "default_work_dir": profile_root_text,
+                    "auto_apply_profile": false
+                }),
+                &ToolContext::default(),
+            )
+            .expect("create employee");
+        let created: Value = serde_json::from_str(&create_output).expect("parse create output");
+        assert_eq!(created["profile"]["applied"], false);
+
+        let apply_output = tool
+            .execute(
+                json!({
+                    "action": "apply_profile",
+                    "employee_id": "service_agent",
+                    "profile_answers": [
+                        { "key": "mission", "question": "核心使命", "answer": "保障客户问题闭环" },
+                        { "key": "boundaries", "question": "边界规则", "answer": "高风险操作需二次确认" }
+                    ]
+                }),
+                &ToolContext::default(),
+            )
+            .expect("apply profile");
+        let applied: Value = serde_json::from_str(&apply_output).expect("parse apply output");
+        assert_eq!(applied["action"], "apply_profile");
+        assert_eq!(applied["ok"], true);
+        assert_eq!(
+            applied["files"]
+                .as_array()
+                .map(|items| items.len())
+                .unwrap_or_default(),
+            3
+        );
+        let has_user = applied["files"].as_array().is_some_and(|items| {
+            items.iter().any(|item| {
+                item["path"]
+                    .as_str()
+                    .is_some_and(|path| path.ends_with("USER.md") && Path::new(path).exists())
+            })
+        });
+        assert!(has_user);
+        let _ = std::fs::remove_dir_all(&profile_root);
+    }
+
+    #[test]
+    fn employee_manage_schema_hides_routing_priority() {
+        let pool = setup_pool();
+        let tool = EmployeeManageTool::new(pool);
+        let schema = tool.input_schema();
+        assert!(
+            schema["properties"].get("routing_priority").is_none(),
+            "routing priority should not be exposed in employee_manage schema"
+        );
     }
 }

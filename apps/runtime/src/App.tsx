@@ -64,6 +64,7 @@ const QUICK_MODEL_PRESETS: Array<{
 
 type ImBridgeSessionContext = {
   threadId: string;
+  primaryRoleName: string;
   roleName: string;
   streamBuffer: string;
   streamSentCount: number;
@@ -228,6 +229,11 @@ export default function App() {
     const sessionContexts = new Map<string, ImBridgeSessionContext>();
     const STREAM_CHUNK_SIZE = 120;
     const STREAM_FLUSH_INTERVAL_MS = 1200;
+    const sanitizeInboundPrompt = (raw: string): string =>
+      raw
+        .replace(/@_[A-Za-z0-9_]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
 
     const markImManagedSession = (sessionId: string) => {
       setImManagedSessionIds((prev) => {
@@ -309,14 +315,18 @@ export default function App() {
     };
 
     const unlistenDispatchPromise = listen<ImRoleDispatchRequest>("im-role-dispatch-request", async ({ payload }) => {
-      const key = `${payload.session_id}|${payload.role_id}|${payload.prompt}`;
+      const cleanedPrompt = sanitizeInboundPrompt(payload.prompt || "");
+      const dispatchPrompt = cleanedPrompt || (payload.prompt || "").trim();
+      const key = `${payload.session_id}|${payload.role_id}|${dispatchPrompt}`;
       if (seen.has(key)) return;
       seen.add(key);
 
       const existing = sessionContexts.get(payload.session_id);
+      const primaryRoleName = payload.role_name || payload.role_id;
       const ctx: ImBridgeSessionContext = {
         threadId: payload.thread_id,
-        roleName: payload.role_name || payload.role_id,
+        primaryRoleName,
+        roleName: existing?.roleName || primaryRoleName,
         streamBuffer: existing?.streamBuffer ?? "",
         streamSentCount: 0,
         waitingForAnswer: existing?.waitingForAnswer ?? false,
@@ -324,17 +334,21 @@ export default function App() {
         lastStreamFlushAt: existing?.lastStreamFlushAt ?? 0,
         streamFlushInFlight: existing?.streamFlushInFlight ?? false,
       };
+      ctx.primaryRoleName = primaryRoleName;
+      if (!ctx.roleName.trim()) {
+        ctx.roleName = primaryRoleName;
+      }
       sessionContexts.set(payload.session_id, ctx);
       markImManagedSession(payload.session_id);
 
       try {
         if (ctx.waitingForAnswer) {
           ctx.waitingForAnswer = false;
-          await invoke("answer_user_question", { answer: payload.prompt });
+          await invoke("answer_user_question", { answer: dispatchPrompt });
         } else {
           await invoke("send_message", {
             sessionId: payload.session_id,
-            userMessage: payload.prompt,
+            userMessage: dispatchPrompt,
           });
         }
 
@@ -365,12 +379,28 @@ export default function App() {
       token: string;
       done: boolean;
       sub_agent?: boolean;
+      role_id?: string;
+      role_name?: string;
     }>("stream-token", ({ payload }) => {
       const ctx = sessionContexts.get(payload.session_id);
       if (!ctx) return;
       if (payload.done) {
         void flushImStream(payload.session_id, { force: true });
         return;
+      }
+      if (payload.sub_agent) {
+        const delegatedRole = (payload.role_name || payload.role_id || "").trim();
+        if (delegatedRole) {
+          if (ctx.roleName !== delegatedRole && ctx.streamBuffer.trim().length > 0) {
+            void flushImStream(payload.session_id, { force: true });
+          }
+          ctx.roleName = delegatedRole;
+        }
+      } else if (ctx.roleName !== ctx.primaryRoleName) {
+        if (ctx.streamBuffer.trim().length > 0) {
+          void flushImStream(payload.session_id, { force: true });
+        }
+        ctx.roleName = ctx.primaryRoleName;
       }
       ctx.streamBuffer += payload.token || "";
       if (ctx.streamBuffer.length >= STREAM_CHUNK_SIZE) {

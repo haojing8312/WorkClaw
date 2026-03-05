@@ -47,12 +47,13 @@ describe("EmployeeHubView employee_id flow", () => {
       />,
     );
 
-    expect(screen.queryByPlaceholderText("角色ID（如 project_manager）")).not.toBeInTheDocument();
-    expect(screen.queryByPlaceholderText("OpenClaw Agent ID（默认同角色ID）")).not.toBeInTheDocument();
-    expect(screen.queryByPlaceholderText("员工名称")).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "手动新建" }));
     expect(screen.getByPlaceholderText("员工名称")).toBeInTheDocument();
+    expect(screen.getByText("主技能（用于新会话默认技能路由）")).toBeInTheDocument();
+    expect(screen.getByText("默认工作目录（该员工新会话默认目录）")).toBeInTheDocument();
+    expect(screen.queryByTestId("employee-routing-priority-input")).not.toBeInTheDocument();
+    expect(
+      screen.getByText("技能合集（补充授权能力；当前会话默认仍优先使用“主技能”）"),
+    ).toBeInTheDocument();
 
     fireEvent.change(screen.getByPlaceholderText("员工名称"), {
       target: { value: "Project Manager" },

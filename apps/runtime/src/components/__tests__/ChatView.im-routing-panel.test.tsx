@@ -106,7 +106,7 @@ describe("ChatView IM routing panel", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText("场景=opportunity_review。用户输入：请开始评审")).toBeInTheDocument();
+      expect(screen.getByText("【架构师】场景=opportunity_review。用户输入：请开始评审")).toBeInTheDocument();
     });
 
     await waitFor(() => {
@@ -119,7 +119,7 @@ describe("ChatView IM routing panel", () => {
       expect(screen.getByText("IM 协作时间线")).toBeInTheDocument();
       expect(screen.getAllByText("架构师").length).toBeGreaterThan(0);
       expect(screen.getByText("正在评估技术可行性")).toBeInTheDocument();
-      expect(screen.getByText("任务已分发(plan)")).toBeInTheDocument();
+      expect(screen.getByText("任务已分发(plan) -> 架构师")).toBeInTheDocument();
       expect(screen.getByText("路由决策")).toBeInTheDocument();
       expect(screen.getByText("agent: peer-agent")).toBeInTheDocument();
       expect(screen.getByText("matched_by: binding.peer")).toBeInTheDocument();

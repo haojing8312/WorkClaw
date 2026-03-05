@@ -138,7 +138,10 @@ fn normalize_memory_skill_scope(skill_id: Option<&str>) -> Result<Option<String>
     Ok(Some(normalized.to_string()))
 }
 
-fn employee_memory_skills_root(app_data_dir: &std::path::Path, employee_id: &str) -> std::path::PathBuf {
+fn employee_memory_skills_root(
+    app_data_dir: &std::path::Path,
+    employee_id: &str,
+) -> std::path::PathBuf {
     let employee_bucket = sanitize_memory_bucket_component(employee_id, "employee");
     app_data_dir
         .join("memory")
@@ -692,9 +695,24 @@ pub async fn ensure_employee_sessions_for_event_with_pool(
     .map(|(id,)| id)
     .ok_or_else(|| "no model config found".to_string())?;
 
+    // 1:1 绑定策略：同一个 IM thread 始终复用同一个 session_id。
+    // 如果 thread 已存在任意员工映射，则后续员工映射都复用该 session。
+    let mut shared_thread_session_id = sqlx::query_as::<_, (String,)>(
+        "SELECT session_id
+         FROM im_thread_sessions
+         WHERE thread_id = ?
+         ORDER BY updated_at DESC
+         LIMIT 1",
+    )
+    .bind(&event.thread_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| e.to_string())?
+    .map(|(sid,)| sid);
+
     let mut results = Vec::with_capacity(employees.len());
     for employee in employees {
-        let route_session_key = build_route_session_key(event, &employee);
+        let route_session_key = build_route_session_key(event);
         let existing = sqlx::query_as::<_, (String,)>(
             "SELECT session_id FROM im_thread_sessions WHERE thread_id = ? AND employee_id = ? LIMIT 1",
         )
@@ -706,49 +724,36 @@ pub async fn ensure_employee_sessions_for_event_with_pool(
 
         let (session_id, created) = if let Some((session_id,)) = existing {
             (session_id, false)
-        } else {
-            let by_route = sqlx::query_as::<_, (String,)>(
-                "SELECT session_id
-                 FROM im_thread_sessions
-                 WHERE employee_id = ? AND route_session_key = ?
-                 ORDER BY updated_at DESC
-                 LIMIT 1",
+        } else if let Some(session_id) = shared_thread_session_id.clone() {
+            let now = chrono::Utc::now().to_rfc3339();
+            sqlx::query(
+                "INSERT INTO im_thread_sessions (thread_id, employee_id, session_id, route_session_key, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?)
+                 ON CONFLICT(thread_id, employee_id) DO UPDATE SET
+                    session_id = excluded.session_id,
+                    route_session_key = excluded.route_session_key,
+                    updated_at = excluded.updated_at",
             )
+            .bind(&event.thread_id)
             .bind(&employee.id)
+            .bind(&session_id)
             .bind(&route_session_key)
-            .fetch_optional(pool)
+            .bind(&now)
+            .bind(&now)
+            .execute(pool)
             .await
             .map_err(|e| e.to_string())?;
-            if let Some((session_id,)) = by_route {
-                let now = chrono::Utc::now().to_rfc3339();
-                sqlx::query(
-                    "INSERT INTO im_thread_sessions (thread_id, employee_id, session_id, route_session_key, created_at, updated_at)
-                     VALUES (?, ?, ?, ?, ?, ?)
-                     ON CONFLICT(thread_id, employee_id) DO UPDATE SET
-                        session_id = excluded.session_id,
-                        route_session_key = excluded.route_session_key,
-                        updated_at = excluded.updated_at",
-                )
-                .bind(&event.thread_id)
-                .bind(&employee.id)
-                .bind(&session_id)
-                .bind(&route_session_key)
-                .bind(&now)
-                .bind(&now)
-                .execute(pool)
-                .await
-                .map_err(|e| e.to_string())?;
-                (session_id, false)
+            (session_id, false)
+        } else {
+            let now = chrono::Utc::now().to_rfc3339();
+            let session_id = Uuid::new_v4().to_string();
+            let skill_id = if employee.primary_skill_id.trim().is_empty() {
+                "builtin-general".to_string()
             } else {
-                let now = chrono::Utc::now().to_rfc3339();
-                let session_id = Uuid::new_v4().to_string();
-                let skill_id = if employee.primary_skill_id.trim().is_empty() {
-                    "builtin-general".to_string()
-                } else {
-                    employee.primary_skill_id.clone()
-                };
+                employee.primary_skill_id.clone()
+            };
 
-                sqlx::query(
+            sqlx::query(
                 "INSERT INTO sessions (id, skill_id, title, created_at, model_id, permission_mode, work_dir, employee_id)
                  VALUES (?, ?, ?, ?, ?, 'accept_edits', ?, ?)",
             )
@@ -763,7 +768,7 @@ pub async fn ensure_employee_sessions_for_event_with_pool(
             .await
             .map_err(|e| e.to_string())?;
 
-                sqlx::query(
+            sqlx::query(
                 "INSERT INTO im_thread_sessions (thread_id, employee_id, session_id, route_session_key, created_at, updated_at)
                  VALUES (?, ?, ?, ?, ?, ?)",
             )
@@ -777,8 +782,11 @@ pub async fn ensure_employee_sessions_for_event_with_pool(
             .await
             .map_err(|e| e.to_string())?;
 
-                (session_id, true)
-            }
+            (session_id, true)
+        };
+
+        if shared_thread_session_id.is_none() {
+            shared_thread_session_id = Some(session_id.clone());
         };
 
         let _ = sqlx::query("UPDATE sessions SET employee_id = ? WHERE id = ?")
@@ -799,19 +807,15 @@ pub async fn ensure_employee_sessions_for_event_with_pool(
     Ok(results)
 }
 
-fn build_route_session_key(event: &ImEvent, employee: &AgentEmployee) -> String {
+fn build_route_session_key(event: &ImEvent) -> String {
     let tenant = event
         .tenant_id
         .as_ref()
         .map(|v| v.trim().to_lowercase())
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| "default".to_string());
-    let agent_id = if employee.openclaw_agent_id.trim().is_empty() {
-        employee.employee_id.trim().to_lowercase()
-    } else {
-        employee.openclaw_agent_id.trim().to_lowercase()
-    };
-    format!("feishu:{}:{}", tenant, agent_id)
+    let thread = event.thread_id.trim().to_lowercase();
+    format!("feishu:{}:thread:{}", tenant, thread)
 }
 
 pub async fn link_inbound_event_to_session_with_pool(
@@ -974,7 +978,12 @@ mod tests {
     fn collect_employee_memory_stats_supports_all_and_single_skill_scope() {
         let tmp = TempDir::new().expect("tmp");
         let skills_root = tmp.path().join("skills");
-        build_skill_file(&skills_root, "skill-alpha", "roles/main/MEMORY.md", "alpha fact");
+        build_skill_file(
+            &skills_root,
+            "skill-alpha",
+            "roles/main/MEMORY.md",
+            "alpha fact",
+        );
         build_skill_file(&skills_root, "skill-beta", "sessions/t1.md", "beta fact");
 
         let all = collect_employee_memory_stats_from_root("sales_lead", None, &skills_root)
@@ -1011,8 +1020,7 @@ mod tests {
         assert_eq!(remained.skills.len(), 1);
         assert_eq!(remained.skills[0].skill_id, "skill-beta");
 
-        clear_employee_memory_from_root("sales_lead", None, &skills_root)
-            .expect("clear all");
+        clear_employee_memory_from_root("sales_lead", None, &skills_root).expect("clear all");
         let empty = collect_employee_memory_stats_from_root("sales_lead", None, &skills_root)
             .expect("collect empty");
         assert_eq!(empty.total_files, 0);
@@ -1031,8 +1039,9 @@ mod tests {
             "customer prefers weekly summary",
         );
 
-        let exported = export_employee_memory_from_root("sales_lead", Some("skill-alpha"), &skills_root)
-            .expect("export");
+        let exported =
+            export_employee_memory_from_root("sales_lead", Some("skill-alpha"), &skills_root)
+                .expect("export");
         assert_eq!(exported.employee_id, "sales_lead");
         assert_eq!(exported.total_files, 1);
         assert_eq!(exported.total_bytes, 31);

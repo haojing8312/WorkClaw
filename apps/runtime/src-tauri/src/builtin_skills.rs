@@ -126,5 +126,23 @@ mod tests {
             markdown.contains("确认创建"),
             "employee creator should require explicit confirmation before create"
         );
+        assert!(
+            markdown.contains("AGENTS.md") && markdown.contains("SOUL.md") && markdown.contains("USER.md"),
+            "employee creator should include AGENTS/SOUL/USER delivery"
+        );
+        assert!(
+            markdown.contains("profile_answers"),
+            "employee creator should pass profile answers into employee creation"
+        );
+        assert!(
+            !markdown.contains("routing_priority"),
+            "employee creator should not ask users to configure routing priority"
+        );
+        assert!(
+            markdown.contains("AGENTS.md`：定义员工的角色定位")
+                && markdown.contains("SOUL.md`：定义行为准则")
+                && markdown.contains("USER.md`：定义服务对象画像"),
+            "employee creator should explain the purpose of AGENTS/SOUL/USER files"
+        );
     }
 }

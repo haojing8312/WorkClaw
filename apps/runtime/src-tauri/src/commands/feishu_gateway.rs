@@ -95,12 +95,23 @@ struct FeishuMention {
     key: Option<String>,
     #[serde(rename = "id")]
     mention_id: Option<FeishuMentionId>,
-    name: Option<String>,
+    #[serde(default)]
+    open_id: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
 struct FeishuMentionId {
     open_id: Option<String>,
+}
+
+fn mention_open_id(mention: &FeishuMention) -> Option<String> {
+    mention
+        .mention_id
+        .as_ref()
+        .and_then(|id| id.open_id.clone())
+        .or_else(|| mention.open_id.clone())
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
 }
 
 pub fn parse_feishu_payload(payload: &str) -> Result<ParsedFeishuPayload, String> {
@@ -124,15 +135,14 @@ pub fn parse_feishu_payload(payload: &str) -> Result<ParsedFeishuPayload, String
         .message
         .ok_or_else(|| "feishu payload missing message".to_string())?;
 
-    let content_text = parse_message_text(message.content.as_deref().unwrap_or(""));
-    let role_id = event
-        .mentions
-        .unwrap_or_default()
-        .into_iter()
-        .find(|m| {
-            m.key.as_deref() == Some("@_all") || m.name.as_deref().unwrap_or("").contains("智能体")
-        })
-        .and_then(|m| m.mention_id.and_then(|id| id.open_id));
+    let mentions = event.mentions.unwrap_or_default();
+    let mention_keys = mentions
+        .iter()
+        .filter_map(|m| m.key.as_ref().map(|v| v.trim().to_string()))
+        .filter(|v| !v.is_empty())
+        .collect::<Vec<_>>();
+    let content_text = parse_message_text(message.content.as_deref().unwrap_or(""), &mention_keys);
+    let role_id = mentions.iter().find_map(mention_open_id);
 
     let event_type = match header
         .event_type
@@ -167,17 +177,59 @@ pub fn parse_feishu_payload(payload: &str) -> Result<ParsedFeishuPayload, String
     }))
 }
 
-fn parse_message_text(raw: &str) -> Option<String> {
+fn strip_placeholder_mentions(mut text: String) -> String {
+    let chars = text.chars().collect::<Vec<_>>();
+    let mut cleaned = String::with_capacity(chars.len());
+    let mut i = 0usize;
+    while i < chars.len() {
+        if chars[i] == '@' && i + 1 < chars.len() && chars[i + 1] == '_' {
+            i += 2;
+            while i < chars.len() {
+                let c = chars[i];
+                if c.is_ascii_alphanumeric() || c == '_' {
+                    i += 1;
+                    continue;
+                }
+                break;
+            }
+            continue;
+        }
+        cleaned.push(chars[i]);
+        i += 1;
+    }
+    text.clear();
+    text.push_str(
+        cleaned
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .as_str(),
+    );
+    text
+}
+
+fn parse_message_text(raw: &str, mention_keys: &[String]) -> Option<String> {
     if raw.trim().is_empty() {
         return None;
     }
-    if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) {
-        return v
-            .get("text")
+    let base = if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) {
+        v.get("text")
             .and_then(serde_json::Value::as_str)
-            .map(str::to_string);
+            .unwrap_or(raw)
+            .to_string()
+    } else {
+        raw.to_string()
+    };
+    let mut stripped = base;
+    for key in mention_keys {
+        stripped = stripped.replace(key, " ");
     }
-    Some(raw.to_string())
+    let stripped = strip_placeholder_mentions(stripped);
+    if stripped.trim().is_empty() {
+        None
+    } else {
+        Some(stripped)
+    }
 }
 
 pub async fn validate_feishu_auth_with_pool(
@@ -1157,4 +1209,78 @@ pub async fn get_feishu_event_relay_status(
     relay: State<'_, FeishuEventRelayState>,
 ) -> Result<FeishuEventRelayStatus, String> {
     Ok(feishu_event_relay_status(relay.inner()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_feishu_payload, ParsedFeishuPayload};
+
+    #[test]
+    fn parse_feishu_payload_extracts_mention_role_and_cleans_text() {
+        let payload = serde_json::json!({
+            "header": {
+                "event_id": "evt_1",
+                "event_type": "im.message.receive_v1",
+                "tenant_key": "tenant_1"
+            },
+            "event": {
+                "message": {
+                    "message_id": "om_1",
+                    "chat_id": "oc_1",
+                    "content": "{\"text\":\"@_user_1 你细化一下技术方案\"}"
+                },
+                "sender": {
+                    "sender_id": {
+                        "open_id": "ou_sender"
+                    }
+                },
+                "mentions": [
+                    {
+                        "key": "@_user_1",
+                        "id": {
+                            "open_id": "ou_dev_agent"
+                        },
+                        "name": "开发团队"
+                    }
+                ]
+            }
+        });
+
+        let parsed = parse_feishu_payload(&payload.to_string()).expect("payload should parse");
+        match parsed {
+            ParsedFeishuPayload::Event(event) => {
+                assert_eq!(event.thread_id, "oc_1");
+                assert_eq!(event.role_id.as_deref(), Some("ou_dev_agent"));
+                assert_eq!(event.text.as_deref(), Some("你细化一下技术方案"));
+                assert_eq!(event.tenant_id.as_deref(), Some("tenant_1"));
+            }
+            ParsedFeishuPayload::Challenge(_) => panic!("should parse as event"),
+        }
+    }
+
+    #[test]
+    fn parse_feishu_payload_keeps_plain_text_when_no_mentions() {
+        let payload = serde_json::json!({
+            "header": {
+                "event_id": "evt_2",
+                "event_type": "im.message.receive_v1"
+            },
+            "event": {
+                "message": {
+                    "message_id": "om_2",
+                    "chat_id": "oc_2",
+                    "content": "{\"text\":\"请给出实施方案\"}"
+                }
+            }
+        });
+
+        let parsed = parse_feishu_payload(&payload.to_string()).expect("payload should parse");
+        match parsed {
+            ParsedFeishuPayload::Event(event) => {
+                assert_eq!(event.role_id, None);
+                assert_eq!(event.text.as_deref(), Some("请给出实施方案"));
+            }
+            ParsedFeishuPayload::Challenge(_) => panic!("should parse as event"),
+        }
+    }
 }

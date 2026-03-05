@@ -194,6 +194,28 @@ describe("App feishu IM bridge", () => {
     expect(sendMessageCalls).toHaveLength(1);
   });
 
+  test("sanitizes feishu mention placeholders before dispatching to desktop session", async () => {
+    render(<App />);
+
+    await act(async () => {
+      emit("im-role-dispatch-request", {
+        session_id: "session-im-mention-clean",
+        thread_id: "chat-feishu-mention-clean",
+        role_id: "dev_team",
+        role_name: "开发团队",
+        prompt: "@_user_1 你细化一下技术方案 ",
+        agent_type: "general-purpose",
+      });
+    });
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("send_message", {
+        sessionId: "session-im-mention-clean",
+        userMessage: "你细化一下技术方案",
+      });
+    });
+  });
+
   test("forwards stream token chunks to Feishu during IM session", async () => {
     render(<App />);
 

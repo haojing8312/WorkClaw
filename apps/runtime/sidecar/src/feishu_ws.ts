@@ -72,13 +72,70 @@ type ConnectionState = {
   credentialsHash: string | null;
 };
 
-function parseText(content: unknown): string {
+function normalizeInlineText(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+function collectMentions(data: any): any[] {
+  const rootMentions = Array.isArray(data?.mentions) ? data.mentions : [];
+  const messageMentions = Array.isArray(data?.message?.mentions) ? data.message.mentions : [];
+  if (rootMentions.length === 0) return messageMentions;
+  if (messageMentions.length === 0) return rootMentions;
+  return [...rootMentions, ...messageMentions];
+}
+
+function sanitizeMentionTokens(text: string, mentions: any[]): string {
+  let next = text;
+  for (const mention of mentions) {
+    const key = typeof mention?.key === 'string' ? mention.key.trim() : '';
+    if (key) {
+      next = next.split(key).join(' ');
+    }
+  }
+  // 兜底移除飞书占位 @（例如 @_user_1），避免进入桌面端会话提示词。
+  next = next.replace(/@_[A-Za-z0-9_]+/g, ' ');
+  return normalizeInlineText(next);
+}
+
+function parseText(content: unknown, mentions: any[]): string {
   if (typeof content !== 'string' || !content.trim()) return '';
+  const raw = (() => {
+    try {
+      const obj = JSON.parse(content);
+      return typeof obj.text === 'string' ? obj.text : content;
+    } catch {
+      return content;
+    }
+  })();
+  return sanitizeMentionTokens(raw, mentions);
+}
+
+function extractMentionOpenIdFromMentions(mentions: any[]): string {
+  for (const mention of mentions) {
+    const openId =
+      mention?.id?.open_id ||
+      mention?.mention_id?.open_id ||
+      mention?.open_id ||
+      '';
+    if (typeof openId === 'string' && openId.trim()) {
+      return openId.trim();
+    }
+  }
+  return '';
+}
+
+function extractMentionOpenId(data: any): string {
+  const mentions = collectMentions(data);
+  if (mentions.length > 0) {
+    return extractMentionOpenIdFromMentions(mentions);
+  }
   try {
-    const obj = JSON.parse(content);
-    return typeof obj.text === 'string' ? obj.text : content;
+    const messageContent = typeof data?.message?.content === 'string' ? data.message.content : '';
+    const parsed = JSON.parse(messageContent);
+    const contentMentions = Array.isArray(parsed?.mentions) ? parsed.mentions : [];
+    return extractMentionOpenIdFromMentions(contentMentions);
   } catch {
-    return content;
+    return '';
   }
 }
 
@@ -95,21 +152,6 @@ function buildStableEventId(chatId: string, messageId: string): string {
     return `${chat}:${Date.now()}`;
   }
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
-function extractMentionOpenId(data: any): string {
-  const mentions = Array.isArray(data?.mentions) ? data.mentions : [];
-  for (const mention of mentions) {
-    const openId =
-      mention?.id?.open_id ||
-      mention?.mention_id?.open_id ||
-      mention?.open_id ||
-      '';
-    if (typeof openId === 'string' && openId.trim()) {
-      return openId.trim();
-    }
-  }
-  return '';
 }
 
 export class FeishuLongConnectionManager {
@@ -196,13 +238,14 @@ export class FeishuLongConnectionManager {
         const now = new Date().toISOString();
         const chatId = data?.message?.chat_id || '';
         const messageId = data?.message?.message_id || '';
+        const mentions = collectMentions(data);
         const rec: FeishuWsEventRecord = {
           employee_id: employeeId,
           id: buildStableEventId(chatId, messageId),
           event_type: 'im.message.receive_v1',
           chat_id: chatId,
           message_id: messageId,
-          text: parseText(data?.message?.content),
+          text: parseText(data?.message?.content, mentions),
           mention_open_id: extractMentionOpenId(data),
           sender_open_id: data?.sender?.sender_id?.open_id || '',
           received_at: now,

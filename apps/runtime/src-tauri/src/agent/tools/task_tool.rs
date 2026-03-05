@@ -90,6 +90,14 @@ impl Tool for TaskTool {
                     "type": "string",
                     "enum": ["general-purpose", "explore", "plan"],
                     "description": "子 Agent 类型（默认 general-purpose）"
+                },
+                "delegate_role_id": {
+                    "type": "string",
+                    "description": "可选：委托的目标员工/角色ID（用于多员工协作标注）"
+                },
+                "delegate_role_name": {
+                    "type": "string",
+                    "description": "可选：委托的目标员工显示名（用于桌面端与飞书同步区分）"
                 }
             },
             "required": ["prompt"]
@@ -105,6 +113,23 @@ impl Tool for TaskTool {
             .as_str()
             .unwrap_or("general-purpose")
             .to_string();
+        let delegate_role_id = input["delegate_role_id"]
+            .as_str()
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let delegate_role_name = input["delegate_role_name"]
+            .as_str()
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let delegate_display_name = if !delegate_role_name.is_empty() {
+            delegate_role_name.clone()
+        } else if !delegate_role_id.is_empty() {
+            delegate_role_id.clone()
+        } else {
+            "子智能体".to_string()
+        };
 
         // 根据类型确定工具白名单和迭代限制
         let (allowed_tools, max_iter): (Option<Vec<String>>, usize) = match agent_type.as_str() {
@@ -121,6 +146,9 @@ impl Tool for TaskTool {
         let base_url = self.base_url.clone();
         let api_key = self.api_key.clone();
         let model = self.model.clone();
+        let delegated_role_id = delegate_role_id.clone();
+        let delegated_role_name = delegate_role_name.clone();
+        let delegated_display = delegate_display_name.clone();
 
         // 在线程 spawn 前克隆，避免所有权冲突
         let sub_app_handle = self.app_handle.clone();
@@ -136,8 +164,8 @@ impl Tool for TaskTool {
                 let sub_executor = AgentExecutor::with_max_iterations(registry, max_iter);
 
                 let system_prompt = format!(
-                    "你是一个专注的子 Agent (类型: {})。完成以下任务后返回结果。简洁地报告你的发现。",
-                    agent_type,
+                    "你是一个专注的子 Agent (类型: {})，当前承接角色: {}。完成以下任务后返回结果。简洁地报告你的发现。",
+                    agent_type, delegated_display
                 );
 
                 let messages = vec![json!({"role": "user", "content": prompt})];
@@ -151,6 +179,8 @@ impl Tool for TaskTool {
                         (Some(app), Some(sid)) => {
                             let app = app.clone();
                             let sid = sid.clone();
+                            let role_id = delegated_role_id.clone();
+                            let role_name = delegated_role_name.clone();
                             Arc::new(move |token: String| {
                                 let _ = app.emit(
                                     "stream-token",
@@ -159,6 +189,8 @@ impl Tool for TaskTool {
                                         "token": token,
                                         "done": false,
                                         "sub_agent": true,
+                                        "role_id": role_id,
+                                        "role_name": role_name,
                                     }),
                                 );
                             })
@@ -210,16 +242,16 @@ impl Tool for TaskTool {
                     .unwrap_or_else(|| "子 Agent 未返回文本结果".to_string());
 
                 Ok(format!(
-                    "子 Agent ({}) 执行完成:\n\n{}",
-                    agent_type_display, last_text
+                    "子 Agent ({}, 角色: {}) 执行完成:\n\n{}",
+                    agent_type_display, delegate_display_name, last_text
                 ))
             }
             Err(e) => {
                 let err_str = e.to_string();
                 if err_str.contains("最大迭代次数") {
                     Ok(format!(
-                        "子 Agent ({}) 达到最大迭代次数 ({}):\n\n最后状态: 未完成",
-                        agent_type_display, max_iter
+                        "子 Agent ({}, 角色: {}) 达到最大迭代次数 ({}):\n\n最后状态: 未完成",
+                        agent_type_display, delegate_display_name, max_iter
                     ))
                 } else {
                     Err(anyhow!("子 Agent 执行失败: {}", err_str))

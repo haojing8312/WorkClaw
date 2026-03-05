@@ -1,3 +1,4 @@
+use super::employee_agents::{list_agent_employees_with_pool, AgentEmployee};
 use super::models::load_routing_settings_from_pool;
 use super::runtime_preferences::resolve_default_work_dir_with_pool;
 use super::skills::DbState;
@@ -187,6 +188,64 @@ fn parse_fallback_chain_targets(raw: &str) -> Vec<(String, String)> {
             Some((provider_id, model))
         })
         .collect()
+}
+
+fn employee_matches_session(session_employee_id: &str, employee: &AgentEmployee) -> bool {
+    let target = session_employee_id.trim();
+    if target.is_empty() {
+        return false;
+    }
+    target.eq_ignore_ascii_case(employee.employee_id.trim())
+        || target.eq_ignore_ascii_case(employee.role_id.trim())
+        || target.eq_ignore_ascii_case(employee.id.trim())
+}
+
+fn build_employee_collaboration_guidance(
+    session_employee_id: &str,
+    employees: &[AgentEmployee],
+) -> Option<String> {
+    let current = employees
+        .iter()
+        .find(|e| employee_matches_session(session_employee_id, e))?;
+    let collaborators = employees
+        .iter()
+        .filter(|e| e.enabled && e.id != current.id)
+        .collect::<Vec<_>>();
+    if collaborators.is_empty() {
+        return None;
+    }
+
+    let mut lines = vec![
+        "员工协作协议:".to_string(),
+        format!(
+            "- 当前员工: {} (employee_id={})",
+            current.name, current.employee_id
+        ),
+        "- 可委托员工清单:".to_string(),
+    ];
+    for employee in collaborators {
+        lines.push(format!(
+            "  - {} (employee_id={}, role_id={}, feishu_open_id={})",
+            employee.name,
+            employee.employee_id,
+            employee.role_id,
+            if employee.feishu_open_id.trim().is_empty() {
+                "-"
+            } else {
+                employee.feishu_open_id.trim()
+            }
+        ));
+    }
+    lines.push(
+        "- 当任务需要专项能力时，优先调用 task 工具委托，并在参数中填入 delegate_role_id / delegate_role_name。".to_string(),
+    );
+    lines.push(
+        "- task.prompt 必须写清目标、输入上下文、输出格式、验收标准。收到子任务结果后再统一汇总回复用户。".to_string(),
+    );
+    lines.push(
+        "- 如果在 IM/飞书场景需要转交某员工，先在回复中明确“已转交给谁”，再执行委托，不得只给笼统答复。".to_string(),
+    );
+    Some(lines.join("\n"))
 }
 
 fn extract_skill_prompt_from_decrypted_files(
@@ -677,6 +736,17 @@ pub async fn send_message(
             .join(", "),
     };
 
+    let employee_collaboration_guidance = if session_employee_id.trim().is_empty() {
+        None
+    } else {
+        match list_agent_employees_with_pool(&db.0).await {
+            Ok(all_employees) => {
+                build_employee_collaboration_guidance(&session_employee_id, &all_employees)
+            }
+            Err(_) => None,
+        }
+    };
+
     // 构建完整 system prompt（含运行环境信息）
     let system_prompt = if work_dir.is_empty() {
         format!(
@@ -688,6 +758,12 @@ pub async fn send_message(
             "{}\n\n---\n运行环境:\n- 工作目录: {}\n- 可用工具: {}\n- 模型: {}\n- 最大迭代次数: {}\n\n注意: 所有文件操作必须限制在工作目录范围内。",
             skill_config.system_prompt, work_dir, tool_names, model_name, max_iter,
         )
+    };
+
+    let system_prompt = if let Some(collaboration) = employee_collaboration_guidance {
+        format!("{}\n\n---\n{}", system_prompt, collaboration)
+    } else {
+        system_prompt
     };
 
     // 如果存在 MEMORY.md，注入到 system prompt
