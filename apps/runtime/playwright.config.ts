@@ -2,6 +2,11 @@ import { defineConfig, devices } from "@playwright/test";
 
 const port = Number(process.env.PLAYWRIGHT_PORT || 4174);
 const baseUrl = `http://127.0.0.1:${port}`;
+const configuredWorkers = process.env.PLAYWRIGHT_WORKERS
+  ? Number(process.env.PLAYWRIGHT_WORKERS)
+  : process.env.CI
+    ? 1
+    : 2;
 
 export default defineConfig({
   testDir: "./e2e",
@@ -11,7 +16,7 @@ export default defineConfig({
   },
   fullyParallel: false,
   retries: process.env.CI ? 2 : 0,
-  workers: process.env.CI ? 1 : undefined,
+  workers: Number.isFinite(configuredWorkers) && configuredWorkers > 0 ? configuredWorkers : 1,
   reporter: process.env.CI
     ? [["github"], ["html", { open: "never" }]]
     : [["list"]],
@@ -30,7 +35,7 @@ export default defineConfig({
   webServer: {
     command: `pnpm exec vite --config e2e/vite.e2e.config.ts --host 127.0.0.1 --port ${port} --strictPort`,
     url: baseUrl,
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer: false,
     timeout: 120_000,
   },
 });
