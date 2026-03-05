@@ -6,6 +6,7 @@ import {
   ModelConfig,
   ProviderConfig,
   ProviderHealthInfo,
+  RuntimePreferences,
   RouteAttemptLog,
   RouteAttemptStat,
 } from "../types";
@@ -84,6 +85,13 @@ const SHOW_CAPABILITY_ROUTING_SETTINGS = false;
 const SHOW_HEALTH_SETTINGS = false;
 const SHOW_MCP_SETTINGS = true;
 const SHOW_AUTO_ROUTING_SETTINGS = false;
+
+const DEFAULT_RUNTIME_PREFERENCES: RuntimePreferences = {
+  default_work_dir: "",
+  default_language: "zh-CN",
+  immersive_translation_enabled: true,
+  immersive_translation_display: "translated_only",
+};
 
 export function SettingsView({ onClose }: Props) {
   const [models, setModels] = useState<ModelConfig[]>([]);
@@ -167,6 +175,13 @@ export function SettingsView({ onClose }: Props) {
   const [routeStatsLoading, setRouteStatsLoading] = useState(false);
   const [routeStatsCapability, setRouteStatsCapability] = useState("all");
   const [routeStatsHours, setRouteStatsHours] = useState(24);
+  const [runtimePreferences, setRuntimePreferences] = useState<RuntimePreferences>(
+    DEFAULT_RUNTIME_PREFERENCES,
+  );
+  const [runtimePreferencesSaveState, setRuntimePreferencesSaveState] = useState<
+    "idle" | "saving" | "saved" | "error"
+  >("idle");
+  const [runtimePreferencesError, setRuntimePreferencesError] = useState("");
 
   function inferConnectionKey(baseUrl: string, apiFormat: string): string {
     const normalized = (baseUrl || "").toLowerCase();
@@ -214,6 +229,7 @@ export function SettingsView({ onClose }: Props) {
   useEffect(() => {
     loadModels();
     loadSearchConfigs();
+    loadRuntimePreferences();
     if (SHOW_MCP_SETTINGS) {
       loadMcpServers();
     }
@@ -256,6 +272,63 @@ export function SettingsView({ onClose }: Props) {
       setSearchConfigs(list);
     } catch (e) {
       console.error("加载搜索配置失败:", e);
+    }
+  }
+
+  function normalizeRuntimePreferences(raw: unknown): RuntimePreferences {
+    const parsed = (raw ?? {}) as Partial<RuntimePreferences>;
+    const immersiveDisplay =
+      parsed.immersive_translation_display === "bilingual_inline"
+        ? "bilingual_inline"
+        : "translated_only";
+    return {
+      default_work_dir: typeof parsed.default_work_dir === "string" ? parsed.default_work_dir : "",
+      default_language:
+        typeof parsed.default_language === "string" && parsed.default_language
+          ? parsed.default_language
+          : "zh-CN",
+      immersive_translation_enabled:
+        typeof parsed.immersive_translation_enabled === "boolean"
+          ? parsed.immersive_translation_enabled
+          : true,
+      immersive_translation_display: immersiveDisplay,
+    };
+  }
+
+  async function loadRuntimePreferences() {
+    try {
+      const prefs = await invoke<RuntimePreferences>("get_runtime_preferences");
+      setRuntimePreferences(normalizeRuntimePreferences(prefs));
+    } catch (e) {
+      console.warn("加载运行时偏好失败:", e);
+      setRuntimePreferences(DEFAULT_RUNTIME_PREFERENCES);
+    }
+  }
+
+  async function handleSaveRuntimePreferences() {
+    setRuntimePreferencesSaveState("saving");
+    setRuntimePreferencesError("");
+    try {
+      const input: {
+        default_work_dir?: string;
+        default_language: string;
+        immersive_translation_enabled: boolean;
+        immersive_translation_display: string;
+      } = {
+        default_language: runtimePreferences.default_language,
+        immersive_translation_enabled: runtimePreferences.immersive_translation_enabled,
+        immersive_translation_display: runtimePreferences.immersive_translation_display,
+      };
+      if (runtimePreferences.default_work_dir.trim()) {
+        input.default_work_dir = runtimePreferences.default_work_dir;
+      }
+      const saved = await invoke<RuntimePreferences>("set_runtime_preferences", { input });
+      setRuntimePreferences(normalizeRuntimePreferences(saved));
+      setRuntimePreferencesSaveState("saved");
+      setTimeout(() => setRuntimePreferencesSaveState("idle"), 1200);
+    } catch (e) {
+      setRuntimePreferencesSaveState("error");
+      setRuntimePreferencesError("保存语言与翻译设置失败: " + String(e));
     }
   }
 
@@ -1041,6 +1114,70 @@ export function SettingsView({ onClose }: Props) {
         <div className="text-xs text-gray-400">
           保存后会自动同步到默认路由和健康检查，无需重复配置。
         </div>
+      </div>
+      <div className="bg-white rounded-lg p-4 space-y-3 mt-4">
+        <div className="text-xs font-medium text-gray-500">语言与沉浸式翻译</div>
+        <div>
+          <label className={labelCls}>默认语言</label>
+          <select
+            aria-label="默认语言"
+            className={inputCls}
+            value={runtimePreferences.default_language}
+            onChange={(e) =>
+              setRuntimePreferences((prev) => ({ ...prev, default_language: e.target.value }))
+            }
+          >
+            <option value="zh-CN">简体中文 (zh-CN)</option>
+            <option value="en-US">English (en-US)</option>
+          </select>
+        </div>
+        <label className="flex items-center gap-2 text-xs text-gray-600">
+          <input
+            aria-label="启用沉浸式翻译"
+            type="checkbox"
+            checked={runtimePreferences.immersive_translation_enabled}
+            onChange={(e) =>
+              setRuntimePreferences((prev) => ({
+                ...prev,
+                immersive_translation_enabled: e.target.checked,
+              }))
+            }
+          />
+          启用沉浸式翻译
+        </label>
+        <div>
+          <label className={labelCls}>显示模式</label>
+          <select
+            aria-label="翻译显示模式"
+            className={inputCls}
+            value={runtimePreferences.immersive_translation_display}
+            onChange={(e) =>
+              setRuntimePreferences((prev) => ({
+                ...prev,
+                immersive_translation_display:
+                  e.target.value === "bilingual_inline" ? "bilingual_inline" : "translated_only",
+              }))
+            }
+          >
+            <option value="translated_only">仅译文</option>
+            <option value="bilingual_inline">双语对照</option>
+          </select>
+        </div>
+        {runtimePreferencesError && (
+          <div className="bg-red-50 text-red-600 text-xs px-2 py-1 rounded">
+            {runtimePreferencesError}
+          </div>
+        )}
+        {runtimePreferencesSaveState === "saved" && (
+          <div className="bg-green-50 text-green-600 text-xs px-2 py-1 rounded">已保存</div>
+        )}
+        <button
+          onClick={handleSaveRuntimePreferences}
+          disabled={runtimePreferencesSaveState === "saving"}
+          className="w-full bg-blue-500 hover:bg-blue-600 disabled:opacity-50 text-white text-sm py-1.5 rounded-lg transition-all active:scale-[0.97]"
+        >
+          {runtimePreferencesSaveState === "saving" ? "保存中..." : "保存语言与翻译设置"}
+        </button>
       </div>
       </>)}
 
