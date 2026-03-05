@@ -760,6 +760,21 @@ export function ChatView({
   const latestCompletedDelegation = [...delegationCards]
     .reverse()
     .find((card) => card.status === "completed");
+  const groupPhaseLabel = mainSummaryDelivered
+    ? "汇报"
+    : delegationCards.length > 0
+    ? "执行"
+    : mainRoleName
+    ? "计划"
+    : null;
+  const groupRound = delegationCards.length > 0 ? Math.max(1, Math.ceil(delegationCards.length / 3)) : 0;
+  const groupMemberStates = (() => {
+    const byRole = new Map<string, "running" | "completed" | "failed">();
+    for (const card of delegationCards) {
+      byRole.set(card.toRole, card.status);
+    }
+    return Array.from(byRole.entries()).map(([role, status]) => ({ role, status }));
+  })();
   const collaborationStatusText =
     mainSummaryDelivered
       ? `${mainRoleName || "主员工"} 已输出最终汇总`
@@ -1148,6 +1163,24 @@ export function ChatView({
                 {completedDelegationCount > 0 && <span>已完成 {completedDelegationCount} 次协作</span>}
                 {completedDelegationCount > 0 && failedDelegationCount > 0 && <span> · </span>}
                 {failedDelegationCount > 0 && <span>待处理失败 {failedDelegationCount} 次</span>}
+              </div>
+            )}
+          </div>
+        )}
+        {(groupPhaseLabel || groupMemberStates.length > 0) && (
+          <div
+            data-testid="group-orchestration-board"
+            className="sticky top-0 z-10 max-w-[80%] rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2 text-xs text-indigo-900"
+          >
+            <div className="font-medium">{`阶段：${groupPhaseLabel || "计划"}`}</div>
+            <div className="mt-1">{`轮次：第 ${groupRound || 1} 轮`}</div>
+            {groupMemberStates.length > 0 && (
+              <div className="mt-2 space-y-1">
+                {groupMemberStates.map((member) => (
+                  <div key={member.role} className="text-[11px] text-indigo-800">
+                    {member.role} · {member.status}
+                  </div>
+                ))}
               </div>
             )}
           </div>
