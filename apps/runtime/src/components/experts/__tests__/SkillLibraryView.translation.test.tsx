@@ -23,7 +23,7 @@ describe("SkillLibraryView immersive translation", () => {
   });
 
   test("translates library texts after clicking translate action", async () => {
-    let resolvePrefs: ((value: any) => void) | null = null;
+    let resolvePrefs!: (value: any) => void;
     const prefsPromise = new Promise((resolve) => {
       resolvePrefs = resolve;
     });
@@ -68,7 +68,7 @@ describe("SkillLibraryView immersive translation", () => {
       invokeMock.mock.calls.filter(([command]) => command === "translate_texts_with_preferences"),
     ).toHaveLength(0);
 
-    resolvePrefs?.({
+    resolvePrefs({
       default_work_dir: "E:\\workspace",
       default_language: "zh-CN",
       immersive_translation_enabled: true,
@@ -391,7 +391,7 @@ describe("SkillLibraryView immersive translation", () => {
   });
 
   test("auto-translates newly lazy-loaded cards in auto mode", async () => {
-    let intersectionCallback: IntersectionObserverCallback | null = null;
+    let intersectionCallback!: IntersectionObserverCallback;
     class TriggerableIntersectionObserver {
       constructor(cb: IntersectionObserverCallback) {
         intersectionCallback = cb;
@@ -465,7 +465,7 @@ describe("SkillLibraryView immersive translation", () => {
       expect(screen.getByText("ZH:Generate short videos")).toBeInTheDocument();
     });
 
-    intersectionCallback?.(
+    intersectionCallback(
       [{ isIntersecting: true } as unknown as IntersectionObserverEntry],
       {} as IntersectionObserver,
     );
