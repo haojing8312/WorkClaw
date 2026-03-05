@@ -2,8 +2,10 @@
 
 [简体中文](README.md) | [English](README.en.md)
 
+> 中文产品名（暂定）：打工虾
+
 <p align="center">
-  <img src="apps/runtime/src/assets/branding/workclaw-logo.png" alt="WorkClaw Logo" width="140" />
+  <img src="docs/workclaw_logo_w.png" alt="WorkClaw Logo" width="140" />
 </p>
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
