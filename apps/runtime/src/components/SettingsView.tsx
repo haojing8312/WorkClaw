@@ -69,6 +69,18 @@ interface RoutingSettings {
   retry_count: number;
 }
 
+interface DesktopLifecyclePaths {
+  app_data_dir: string;
+  cache_dir: string;
+  log_dir: string;
+  default_work_dir: string;
+}
+
+interface DesktopCleanupResult {
+  removed_files: number;
+  removed_dirs: number;
+}
+
 const ROUTING_CAPABILITIES = [
   { label: "对话 Chat", value: "chat" },
   { label: "视觉 Vision", value: "vision" },
@@ -206,6 +218,15 @@ export function SettingsView({
     "idle" | "saving" | "saved" | "error"
   >("idle");
   const [updaterPreferencesError, setUpdaterPreferencesError] = useState("");
+  const [desktopLifecyclePaths, setDesktopLifecyclePaths] = useState<DesktopLifecyclePaths | null>(
+    null,
+  );
+  const [desktopLifecycleLoading, setDesktopLifecycleLoading] = useState(false);
+  const [desktopLifecycleActionState, setDesktopLifecycleActionState] = useState<
+    "idle" | "opening" | "clearing" | "exporting"
+  >("idle");
+  const [desktopLifecycleError, setDesktopLifecycleError] = useState("");
+  const [desktopLifecycleMessage, setDesktopLifecycleMessage] = useState("");
   const selectedModelProvider = getModelProviderCatalogItem(selectedModelProviderId);
 
   async function persistRuntimePreferencesInput(input: Record<string, unknown>) {
@@ -306,6 +327,7 @@ export function SettingsView({
     loadModels();
     loadSearchConfigs();
     loadRuntimePreferences();
+    loadDesktopLifecyclePaths();
     if (SHOW_MCP_SETTINGS) {
       loadMcpServers();
     }
@@ -451,6 +473,65 @@ export function SettingsView({
     } catch (e) {
       setUpdaterPreferencesSaveState("error");
       setUpdaterPreferencesError("保存更新设置失败: " + String(e));
+    }
+  }
+
+  async function loadDesktopLifecyclePaths() {
+    setDesktopLifecycleLoading(true);
+    setDesktopLifecycleError("");
+    try {
+      const paths = await invoke<DesktopLifecyclePaths>("get_desktop_lifecycle_paths");
+      setDesktopLifecyclePaths(paths);
+    } catch (e) {
+      setDesktopLifecycleError("加载数据目录失败: " + String(e));
+    } finally {
+      setDesktopLifecycleLoading(false);
+    }
+  }
+
+  async function handleOpenDesktopPath(path: string) {
+    if (!path.trim()) return;
+    setDesktopLifecycleActionState("opening");
+    setDesktopLifecycleError("");
+    setDesktopLifecycleMessage("");
+    try {
+      await invoke("open_desktop_path", { path });
+    } catch (e) {
+      setDesktopLifecycleError("打开目录失败: " + String(e));
+    } finally {
+      setDesktopLifecycleActionState("idle");
+    }
+  }
+
+  async function handleClearDesktopCacheAndLogs() {
+    setDesktopLifecycleActionState("clearing");
+    setDesktopLifecycleError("");
+    setDesktopLifecycleMessage("");
+    try {
+      const result = await invoke<DesktopCleanupResult>("clear_desktop_cache_and_logs");
+      setDesktopLifecycleMessage(
+        `已清理 ${result.removed_files} 个文件，删除 ${result.removed_dirs} 个目录`,
+      );
+      await loadDesktopLifecyclePaths();
+    } catch (e) {
+      setDesktopLifecycleError("清理缓存与日志失败: " + String(e));
+    } finally {
+      setDesktopLifecycleActionState("idle");
+    }
+  }
+
+  async function handleExportDesktopEnvironmentSummary() {
+    setDesktopLifecycleActionState("exporting");
+    setDesktopLifecycleError("");
+    setDesktopLifecycleMessage("");
+    try {
+      const summary = await invoke<string>("export_desktop_environment_summary");
+      await navigator?.clipboard?.writeText?.(summary);
+      setDesktopLifecycleMessage("环境摘要已复制到剪贴板");
+    } catch (e) {
+      setDesktopLifecycleError("导出环境摘要失败: " + String(e));
+    } finally {
+      setDesktopLifecycleActionState("idle");
     }
   }
 
@@ -1591,6 +1672,114 @@ export function SettingsView({
             >
               清除错误状态
             </button>
+          </div>
+        )}
+      </div>
+
+      <div className="bg-white rounded-lg p-4 space-y-3 mt-4">
+        <div className="text-xs font-medium text-gray-500">数据与卸载</div>
+        {desktopLifecycleLoading && (
+          <div className="bg-gray-50 text-gray-500 text-xs px-2 py-1 rounded">正在读取本地目录</div>
+        )}
+        {desktopLifecyclePaths && (
+          <div className="space-y-3">
+            <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-3">
+              <div className="text-xs font-medium text-gray-500">应用数据目录</div>
+              <div className="mt-1 break-all text-xs text-gray-700">
+                {desktopLifecyclePaths.app_data_dir}
+              </div>
+              <button
+                type="button"
+                onClick={() => void handleOpenDesktopPath(desktopLifecyclePaths.app_data_dir)}
+                disabled={desktopLifecycleActionState === "opening"}
+                className="mt-2 bg-white hover:bg-gray-100 border border-gray-200 text-gray-700 text-xs px-3 py-1.5 rounded-lg transition-all active:scale-[0.97]"
+              >
+                打开应用数据目录
+              </button>
+            </div>
+            <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-3">
+              <div className="text-xs font-medium text-gray-500">缓存目录</div>
+              <div className="mt-1 break-all text-xs text-gray-700">
+                {desktopLifecyclePaths.cache_dir}
+              </div>
+              <button
+                type="button"
+                onClick={() => void handleOpenDesktopPath(desktopLifecyclePaths.cache_dir)}
+                disabled={desktopLifecycleActionState === "opening"}
+                className="mt-2 bg-white hover:bg-gray-100 border border-gray-200 text-gray-700 text-xs px-3 py-1.5 rounded-lg transition-all active:scale-[0.97]"
+              >
+                打开缓存目录
+              </button>
+            </div>
+            <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-3">
+              <div className="text-xs font-medium text-gray-500">日志目录</div>
+              <div className="mt-1 break-all text-xs text-gray-700">
+                {desktopLifecyclePaths.log_dir}
+              </div>
+              <button
+                type="button"
+                onClick={() => void handleOpenDesktopPath(desktopLifecyclePaths.log_dir)}
+                disabled={desktopLifecycleActionState === "opening"}
+                className="mt-2 bg-white hover:bg-gray-100 border border-gray-200 text-gray-700 text-xs px-3 py-1.5 rounded-lg transition-all active:scale-[0.97]"
+              >
+                打开日志目录
+              </button>
+            </div>
+            <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-3">
+              <div className="text-xs font-medium text-gray-500">默认工作目录</div>
+              <div className="mt-1 break-all text-xs text-gray-700">
+                {desktopLifecyclePaths.default_work_dir || runtimePreferences.default_work_dir || "未设置"}
+              </div>
+              <button
+                type="button"
+                onClick={() =>
+                  void handleOpenDesktopPath(
+                    desktopLifecyclePaths.default_work_dir || runtimePreferences.default_work_dir,
+                  )
+                }
+                disabled={
+                  desktopLifecycleActionState === "opening" ||
+                  !(
+                    desktopLifecyclePaths.default_work_dir || runtimePreferences.default_work_dir
+                  ).trim()
+                }
+                className="mt-2 bg-white hover:bg-gray-100 border border-gray-200 text-gray-700 text-xs px-3 py-1.5 rounded-lg transition-all active:scale-[0.97] disabled:opacity-50"
+              >
+                打开工作目录
+              </button>
+            </div>
+          </div>
+        )}
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => void handleClearDesktopCacheAndLogs()}
+            disabled={desktopLifecycleActionState === "clearing"}
+            className="flex-1 bg-gray-100 hover:bg-gray-200 disabled:opacity-50 text-sm py-1.5 rounded-lg transition-all active:scale-[0.97]"
+          >
+            {desktopLifecycleActionState === "clearing" ? "清理中..." : "清理缓存与日志"}
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleExportDesktopEnvironmentSummary()}
+            disabled={desktopLifecycleActionState === "exporting"}
+            className="flex-1 bg-gray-100 hover:bg-gray-200 disabled:opacity-50 text-sm py-1.5 rounded-lg transition-all active:scale-[0.97]"
+          >
+            {desktopLifecycleActionState === "exporting" ? "导出中..." : "导出环境摘要"}
+          </button>
+        </div>
+        <div className="rounded-lg border border-amber-100 bg-amber-50 px-3 py-3 text-xs text-amber-700 space-y-1">
+          <div>卸载程序不会删除你的工作目录</div>
+          <div>如需彻底清理，请先清理缓存与日志，再手动删除应用数据目录。</div>
+        </div>
+        {desktopLifecycleError && (
+          <div className="bg-red-50 text-red-600 text-xs px-2 py-1 rounded">
+            {desktopLifecycleError}
+          </div>
+        )}
+        {desktopLifecycleMessage && (
+          <div className="bg-green-50 text-green-600 text-xs px-2 py-1 rounded">
+            {desktopLifecycleMessage}
           </div>
         )}
       </div>
