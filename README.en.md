@@ -79,25 +79,15 @@ WorkClaw is delivered as a single integrated desktop application:
 
 ### Business Architecture
 
-![Business Architecture](docs/diagrams/business-architecture.svg)
+[View business architecture diagram (SVG)](docs/diagrams/business-architecture.svg)
 
-The business architecture showcases the complete value stream from creator to user, organized in 4 layers:
-- **Creator Value Chain**: Skill development → package/encrypt → publish
-- **Core Platform**: Agent engine, security, tool capabilities, model integration
-- **User Value Chain**: Personal (browse → install → run) + Enterprise (team/RBAC → unified config/SSO → Agent employees)
-- **Ecosystem Integration**: EvoMap evolution, WorkClaw marketplace + ClawHub compatibility, IM remote calling
+The business architecture covers the end-to-end value stream from creator to user across 4 layers: creator value chain, core platform, user value chain, and ecosystem integration.
 
 ### Technical Architecture
 
-![Technical Architecture](docs/diagrams/technical-architecture.svg)
+[View technical architecture diagram (SVG)](docs/diagrams/technical-architecture.svg)
 
-The technical stack is organized in 6 layers:
-- **Layer 1 - User Interface**: React 18 + TypeScript, shadcn/ui + Tailwind, Tauri 2.0 WebView
-- **Layer 2 - Application Services**: Rust Backend, Node.js Sidecar (localhost:8765)
-- **Layer 3 - Agent Runtime**: ReAct engine, Sub-Agent isolation, Context management, skillpack-rs encryption
-- **Layer 4 - Tool Capabilities**: Native Tools (Read/Write/Glob/Grep), Bash/PowerShell, Browser automation, MCP protocol
-- **Layer 5 - Model Integration**: Anthropic API, OpenAI Compatible, Chinese models (MiniMax, DeepSeek, GLM, Qwen, Moonshot)
-- **Layer 6 - Data Persistence**: SQLite, .skillpack files, Secure workspace folders
+The technical architecture is organized into 6 layers: user interface, application services, Agent runtime, tool capabilities, model integration, and data persistence.
 
 ### WorkClaw Application
 The integrated environment where users can package, install, and run encrypted Skills:
