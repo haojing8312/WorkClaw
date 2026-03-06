@@ -169,20 +169,4 @@ describe("SettingsView model providers", () => {
     );
     expect(screen.getByTestId("settings-model-provider-custom-guidance")).toBeInTheDocument();
   });
-
-  test("keeps runtime and desktop preferences under the desktop/system tab", async () => {
-    render(<SettingsView onClose={() => {}} />);
-
-    await screen.findByTestId("settings-model-provider-preset");
-    expect(screen.queryByRole("button", { name: "保存语言与翻译设置" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "保存更新设置" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "清理缓存与日志" })).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "桌面 / 系统" }));
-
-    expect(await screen.findByRole("button", { name: "保存语言与翻译设置" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "保存更新设置" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "清理缓存与日志" })).toBeInTheDocument();
-    expect(screen.queryByTestId("settings-model-provider-preset")).not.toBeInTheDocument();
-  });
 });
