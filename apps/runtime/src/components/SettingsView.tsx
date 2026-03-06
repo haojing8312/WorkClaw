@@ -90,6 +90,10 @@ const DEFAULT_RUNTIME_PREFERENCES: RuntimePreferences = {
   immersive_translation_trigger: "auto",
   translation_engine: "model_then_free",
   translation_model_id: "",
+  auto_update_enabled: true,
+  update_channel: "stable",
+  dismissed_update_version: "",
+  last_update_check_at: "",
 };
 
 const DEFAULT_MODEL_PROVIDER = getModelProviderCatalogItem(DEFAULT_MODEL_PROVIDER_ID);
@@ -324,6 +328,10 @@ export function SettingsView({
         : "model_then_free";
     const translationModelId =
       typeof parsed.translation_model_id === "string" ? parsed.translation_model_id : "";
+    const updateChannel =
+      typeof parsed.update_channel === "string" && parsed.update_channel === "stable"
+        ? parsed.update_channel
+        : "stable";
     return {
       default_work_dir: typeof parsed.default_work_dir === "string" ? parsed.default_work_dir : "",
       default_language:
@@ -338,6 +346,15 @@ export function SettingsView({
       immersive_translation_trigger: triggerMode,
       translation_engine: translationEngine,
       translation_model_id: translationModelId,
+      auto_update_enabled:
+        typeof parsed.auto_update_enabled === "boolean" ? parsed.auto_update_enabled : true,
+      update_channel: updateChannel,
+      dismissed_update_version:
+        typeof parsed.dismissed_update_version === "string"
+          ? parsed.dismissed_update_version
+          : "",
+      last_update_check_at:
+        typeof parsed.last_update_check_at === "string" ? parsed.last_update_check_at : "",
     };
   }
 

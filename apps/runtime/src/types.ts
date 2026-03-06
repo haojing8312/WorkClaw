@@ -529,6 +529,10 @@ export interface RuntimePreferences {
   immersive_translation_trigger: "auto" | "manual" | string;
   translation_engine: "model_then_free" | "model_only" | "free_only" | string;
   translation_model_id: string;
+  auto_update_enabled: boolean;
+  update_channel: "stable" | string;
+  dismissed_update_version: string;
+  last_update_check_at: string;
 }
 
 /// 文件附件（用于 File Upload 功能）

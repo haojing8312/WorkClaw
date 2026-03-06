@@ -10,12 +10,18 @@ const KEY_RUNTIME_IMMERSIVE_TRANSLATION_DISPLAY: &str = "runtime_immersive_trans
 const KEY_RUNTIME_IMMERSIVE_TRANSLATION_TRIGGER: &str = "runtime_immersive_translation_trigger";
 const KEY_RUNTIME_TRANSLATION_ENGINE: &str = "runtime_translation_engine";
 const KEY_RUNTIME_TRANSLATION_MODEL_ID: &str = "runtime_translation_model_id";
+const KEY_RUNTIME_AUTO_UPDATE_ENABLED: &str = "runtime_auto_update_enabled";
+const KEY_RUNTIME_UPDATE_CHANNEL: &str = "runtime_update_channel";
+const KEY_RUNTIME_DISMISSED_UPDATE_VERSION: &str = "runtime_dismissed_update_version";
+const KEY_RUNTIME_LAST_UPDATE_CHECK_AT: &str = "runtime_last_update_check_at";
 
 const DEFAULT_LANGUAGE: &str = "zh-CN";
 const DEFAULT_IMMERSIVE_TRANSLATION_ENABLED: bool = true;
 const DEFAULT_IMMERSIVE_TRANSLATION_DISPLAY: &str = "translated_only";
 const DEFAULT_IMMERSIVE_TRANSLATION_TRIGGER: &str = "auto";
 const DEFAULT_TRANSLATION_ENGINE: &str = "model_then_free";
+const DEFAULT_AUTO_UPDATE_ENABLED: bool = true;
+const DEFAULT_UPDATE_CHANNEL: &str = "stable";
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct RuntimePreferences {
@@ -26,6 +32,10 @@ pub struct RuntimePreferences {
     pub immersive_translation_trigger: String,
     pub translation_engine: String,
     pub translation_model_id: String,
+    pub auto_update_enabled: bool,
+    pub update_channel: String,
+    pub dismissed_update_version: String,
+    pub last_update_check_at: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -37,6 +47,10 @@ pub struct RuntimePreferencesInput {
     pub immersive_translation_trigger: Option<String>,
     pub translation_engine: Option<String>,
     pub translation_model_id: Option<String>,
+    pub auto_update_enabled: Option<bool>,
+    pub update_channel: Option<String>,
+    pub dismissed_update_version: Option<String>,
+    pub last_update_check_at: Option<String>,
 }
 
 fn home_dir_from_env() -> Option<PathBuf> {
@@ -108,6 +122,17 @@ fn normalize_translation_model_id(raw: &str) -> String {
     raw.trim().to_string()
 }
 
+fn normalize_update_channel(raw: &str) -> String {
+    match raw.trim() {
+        "stable" => "stable".to_string(),
+        _ => DEFAULT_UPDATE_CHANNEL.to_string(),
+    }
+}
+
+fn normalize_optional_text(raw: &str) -> String {
+    raw.trim().to_string()
+}
+
 async fn get_app_setting(pool: &SqlitePool, key: &str) -> Result<Option<String>, String> {
     let row =
         sqlx::query_as::<_, (String,)>("SELECT value FROM app_settings WHERE key = ? LIMIT 1")
@@ -165,6 +190,22 @@ pub async fn get_runtime_preferences_with_pool(
         .await?
         .map(|v| normalize_translation_model_id(&v))
         .unwrap_or_default();
+    let auto_update_enabled = parse_bool_setting(
+        get_app_setting(pool, KEY_RUNTIME_AUTO_UPDATE_ENABLED).await?,
+        DEFAULT_AUTO_UPDATE_ENABLED,
+    );
+    let update_channel = get_app_setting(pool, KEY_RUNTIME_UPDATE_CHANNEL)
+        .await?
+        .map(|v| normalize_update_channel(&v))
+        .unwrap_or_else(|| DEFAULT_UPDATE_CHANNEL.to_string());
+    let dismissed_update_version = get_app_setting(pool, KEY_RUNTIME_DISMISSED_UPDATE_VERSION)
+        .await?
+        .map(|v| normalize_optional_text(&v))
+        .unwrap_or_default();
+    let last_update_check_at = get_app_setting(pool, KEY_RUNTIME_LAST_UPDATE_CHECK_AT)
+        .await?
+        .map(|v| normalize_optional_text(&v))
+        .unwrap_or_default();
     Ok(RuntimePreferences {
         default_work_dir: dir,
         default_language,
@@ -173,6 +214,10 @@ pub async fn get_runtime_preferences_with_pool(
         immersive_translation_trigger,
         translation_engine,
         translation_model_id,
+        auto_update_enabled,
+        update_channel,
+        dismissed_update_version,
+        last_update_check_at,
     })
 }
 
@@ -214,6 +259,21 @@ pub async fn set_runtime_preferences_with_pool(
         .translation_model_id
         .map(|v| normalize_translation_model_id(&v))
         .unwrap_or(current.translation_model_id);
+    let auto_update_enabled = input
+        .auto_update_enabled
+        .unwrap_or(current.auto_update_enabled);
+    let update_channel = input
+        .update_channel
+        .map(|v| normalize_update_channel(&v))
+        .unwrap_or(current.update_channel);
+    let dismissed_update_version = input
+        .dismissed_update_version
+        .map(|v| normalize_optional_text(&v))
+        .unwrap_or(current.dismissed_update_version);
+    let last_update_check_at = input
+        .last_update_check_at
+        .map(|v| normalize_optional_text(&v))
+        .unwrap_or(current.last_update_check_at);
 
     set_app_setting(pool, KEY_RUNTIME_DEFAULT_WORK_DIR, &default_work_dir).await?;
     set_app_setting(pool, KEY_RUNTIME_DEFAULT_LANGUAGE, &default_language).await?;
@@ -246,6 +306,25 @@ pub async fn set_runtime_preferences_with_pool(
         &translation_model_id,
     )
     .await?;
+    set_app_setting(
+        pool,
+        KEY_RUNTIME_AUTO_UPDATE_ENABLED,
+        if auto_update_enabled { "true" } else { "false" },
+    )
+    .await?;
+    set_app_setting(pool, KEY_RUNTIME_UPDATE_CHANNEL, &update_channel).await?;
+    set_app_setting(
+        pool,
+        KEY_RUNTIME_DISMISSED_UPDATE_VERSION,
+        &dismissed_update_version,
+    )
+    .await?;
+    set_app_setting(
+        pool,
+        KEY_RUNTIME_LAST_UPDATE_CHECK_AT,
+        &last_update_check_at,
+    )
+    .await?;
     Ok(RuntimePreferences {
         default_work_dir,
         default_language,
@@ -254,6 +333,10 @@ pub async fn set_runtime_preferences_with_pool(
         immersive_translation_trigger,
         translation_engine,
         translation_model_id,
+        auto_update_enabled,
+        update_channel,
+        dismissed_update_version,
+        last_update_check_at,
     })
 }
 
@@ -283,4 +366,78 @@ pub async fn set_runtime_preferences(
 #[tauri::command]
 pub async fn resolve_default_work_dir(db: State<'_, DbState>) -> Result<String, String> {
     resolve_default_work_dir_with_pool(&db.0).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    async fn setup_memory_pool() -> SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("create sqlite memory pool");
+
+        sqlx::query(
+            "CREATE TABLE app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create app_settings table");
+
+        pool
+    }
+
+    #[tokio::test]
+    async fn runtime_preferences_defaults_include_updater_settings() {
+        let pool = setup_memory_pool().await;
+
+        let prefs = get_runtime_preferences_with_pool(&pool)
+            .await
+            .expect("load runtime preferences");
+        let prefs_json = serde_json::to_value(&prefs).expect("serialize runtime preferences");
+
+        assert_eq!(prefs_json["default_language"], json!("zh-CN"));
+        assert_eq!(prefs_json["auto_update_enabled"], json!(true));
+        assert_eq!(prefs_json["update_channel"], json!("stable"));
+        assert_eq!(prefs_json["dismissed_update_version"], json!(""));
+        assert_eq!(prefs_json["last_update_check_at"], json!(""));
+    }
+
+    #[tokio::test]
+    async fn runtime_preferences_round_trip_updater_settings() {
+        let pool = setup_memory_pool().await;
+        let input: RuntimePreferencesInput = serde_json::from_value(json!({
+            "default_work_dir": "E:\\workspace",
+            "auto_update_enabled": false,
+            "update_channel": "stable",
+            "dismissed_update_version": "0.2.4",
+            "last_update_check_at": "2026-03-06T10:00:00Z"
+        }))
+        .expect("deserialize runtime preferences input");
+
+        set_runtime_preferences_with_pool(&pool, input)
+            .await
+            .expect("save runtime preferences");
+
+        let prefs = get_runtime_preferences_with_pool(&pool)
+            .await
+            .expect("reload runtime preferences");
+        let prefs_json = serde_json::to_value(&prefs).expect("serialize runtime preferences");
+
+        assert_eq!(prefs_json["default_work_dir"], json!("E:\\workspace"));
+        assert_eq!(prefs_json["auto_update_enabled"], json!(false));
+        assert_eq!(prefs_json["update_channel"], json!("stable"));
+        assert_eq!(prefs_json["dismissed_update_version"], json!("0.2.4"));
+        assert_eq!(
+            prefs_json["last_update_check_at"],
+            json!("2026-03-06T10:00:00Z")
+        );
+    }
 }
