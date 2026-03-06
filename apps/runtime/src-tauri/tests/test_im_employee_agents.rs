@@ -710,4 +710,3 @@ async fn cancel_and_retry_failed_group_run_steps_work() {
     .expect("count failed after retry");
     assert_eq!(failed_count_after_retry.0, 0);
 }
-
