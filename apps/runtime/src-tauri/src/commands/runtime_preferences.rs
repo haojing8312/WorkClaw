@@ -1,7 +1,15 @@
 use crate::commands::skills::DbState;
 use sqlx::SqlitePool;
+use std::env;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use std::fmt::Write as FmtWrite;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use std::fs::{self, File};
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use std::io::ErrorKind;
 use std::path::PathBuf;
-use tauri::State;
+use std::process::Command;
+use tauri::{AppHandle, State};
 
 const KEY_RUNTIME_DEFAULT_WORK_DIR: &str = "runtime_default_work_dir";
 const KEY_RUNTIME_DEFAULT_LANGUAGE: &str = "runtime_default_language";
@@ -14,6 +22,9 @@ const KEY_RUNTIME_AUTO_UPDATE_ENABLED: &str = "runtime_auto_update_enabled";
 const KEY_RUNTIME_UPDATE_CHANNEL: &str = "runtime_update_channel";
 const KEY_RUNTIME_DISMISSED_UPDATE_VERSION: &str = "runtime_dismissed_update_version";
 const KEY_RUNTIME_LAST_UPDATE_CHECK_AT: &str = "runtime_last_update_check_at";
+const KEY_RUNTIME_LAUNCH_AT_LOGIN: &str = "runtime_launch_at_login";
+const KEY_RUNTIME_LAUNCH_MINIMIZED: &str = "runtime_launch_minimized";
+const KEY_RUNTIME_CLOSE_TO_TRAY: &str = "runtime_close_to_tray";
 
 const DEFAULT_LANGUAGE: &str = "zh-CN";
 const DEFAULT_IMMERSIVE_TRANSLATION_ENABLED: bool = true;
@@ -22,6 +33,24 @@ const DEFAULT_IMMERSIVE_TRANSLATION_TRIGGER: &str = "auto";
 const DEFAULT_TRANSLATION_ENGINE: &str = "model_then_free";
 const DEFAULT_AUTO_UPDATE_ENABLED: bool = true;
 const DEFAULT_UPDATE_CHANNEL: &str = "stable";
+const DEFAULT_LAUNCH_AT_LOGIN: bool = false;
+const DEFAULT_LAUNCH_MINIMIZED: bool = false;
+const DEFAULT_CLOSE_TO_TRAY: bool = true;
+const AUTOSTART_NAME: &str = "dev.workclaw.runtime";
+
+#[cfg(target_os = "windows")]
+fn format_windows_command_failure(action: &str, output: &std::process::Output) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let details = if !stderr.is_empty() {
+        stderr
+    } else if !stdout.is_empty() {
+        stdout
+    } else {
+        format!("退出码 {:?}", output.status.code())
+    };
+    format!("{action}失败: {details}")
+}
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct RuntimePreferences {
@@ -36,6 +65,160 @@ pub struct RuntimePreferences {
     pub update_channel: String,
     pub dismissed_update_version: String,
     pub last_update_check_at: String,
+    pub launch_at_login: bool,
+    pub launch_minimized: bool,
+    pub close_to_tray: bool,
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn resolve_home_dir() -> Result<PathBuf, String> {
+    if let Some(home) = env::var_os("HOME") {
+        return Ok(PathBuf::from(home));
+    }
+
+    env::var_os("USERPROFILE")
+        .map(PathBuf::from)
+        .ok_or_else(|| "无法解析用户主目录".to_string())
+}
+
+pub fn sync_launch_at_login(_app: &AppHandle, enabled: bool) -> Result<(), String> {
+    let exe_path = env::current_exe().map_err(|e| format!("读取当前可执行文件路径失败: {e}"))?;
+
+    if exe_path.to_string_lossy().is_empty() {
+        return Err("可执行文件路径为空，无法设置开机启动".to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let quoted = format!("\"{}\"", exe_path.to_string_lossy());
+        if enabled {
+            let output = Command::new("reg")
+                .args([
+                    "add",
+                    "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                    "/v",
+                    AUTOSTART_NAME,
+                    "/t",
+                    "REG_SZ",
+                    "/d",
+                    quoted.as_str(),
+                    "/f",
+                ])
+                .output()
+                .map_err(|e| format!("设置 Windows 开机启动失败: {e}"))?;
+            if !output.status.success() {
+                return Err(format_windows_command_failure("设置 Windows 开机启动", &output));
+            }
+        } else {
+            let query_output = Command::new("reg")
+                .args([
+                    "query",
+                    "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                    "/v",
+                    AUTOSTART_NAME,
+                ])
+                .output()
+                .map_err(|e| format!("查询 Windows 开机启动状态失败: {e}"))?;
+
+            if query_output.status.success() {
+                let delete_output = Command::new("reg")
+                    .args([
+                        "delete",
+                        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                        "/v",
+                        AUTOSTART_NAME,
+                        "/f",
+                    ])
+                    .output()
+                    .map_err(|e| format!("移除 Windows 开机启动失败: {e}"))?;
+                if !delete_output.status.success() {
+                    return Err(format_windows_command_failure(
+                        "移除 Windows 开机启动",
+                        &delete_output,
+                    ));
+                }
+            }
+        }
+        return Ok(());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let home = resolve_home_dir()?;
+        let launch_dir = home
+            .join("Library")
+            .join("LaunchAgents");
+        fs::create_dir_all(&launch_dir)
+            .map_err(|e| format!("创建 LaunchAgents 目录失败: {e}"))?;
+
+        let plist_path = launch_dir.join(format!("{AUTOSTART_NAME}.plist"));
+        if !enabled {
+            match fs::remove_file(&plist_path) {
+                Ok(()) => Ok(()),
+                Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
+                Err(e) => Err(format!("移除 LaunchAgent 文件失败: {e}")),
+            }?
+            ;
+            return Ok(());
+        }
+
+        let exe_path_s = exe_path.to_string_lossy();
+        let mut plist = String::new();
+        plist.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+        plist.push_str("<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n");
+        plist.push_str("<plist version=\"1.0\">\n<dict>\n");
+        plist.push_str("  <key>Label</key>\n");
+        let _ = writeln!(plist, "  <string>{}</string>", AUTOSTART_NAME);
+        plist.push_str("  <key>ProgramArguments</key>\n  <array>\n");
+        let _ = writeln!(plist, "    <string>{}</string>", exe_path_s);
+        plist.push_str("  </array>\n");
+        plist.push_str("  <key>RunAtLoad</key>\n  <true/>\n");
+        plist.push_str("  <key>KeepAlive</key>\n  <false/>\n");
+        plist.push_str("</dict>\n</plist>\n");
+
+        let mut file = File::create(&plist_path)
+            .map_err(|e| format!("写入 LaunchAgent 文件失败: {e}"))?;
+        use std::io::Write;
+        file.write_all(plist.as_bytes())
+            .map_err(|e| format!("写入 LaunchAgent 文件失败: {e}"))?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let home = resolve_home_dir()?;
+        let base = env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".config"));
+        let autostart_dir = base.join("autostart");
+        fs::create_dir_all(&autostart_dir)
+            .map_err(|e| format!("创建 autostart 目录失败: {e}"))?;
+
+        let desktop_path = autostart_dir.join(format!("{AUTOSTART_NAME}.desktop"));
+        if !enabled {
+            match fs::remove_file(&desktop_path) {
+                Ok(()) => Ok(()),
+                Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
+                Err(e) => Err(format!("移除自启动配置失败: {e}")),
+            }?
+            ;
+            return Ok(());
+        }
+
+        let exe_path_s = exe_path.to_string_lossy();
+        let mut desktop = String::new();
+        desktop.push_str("[Desktop Entry]\n");
+        desktop.push_str("Type=Application\n");
+        desktop.push_str("Name=WorkClaw\n");
+        let _ = writeln!(desktop, "Exec={}", exe_path_s);
+        desktop.push_str("X-GNOME-Autostart-enabled=true\n");
+        fs::write(&desktop_path, desktop)
+            .map_err(|e| format!("写入 Desktop 文件失败: {e}"))?;
+        return Ok(());
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    Ok(())
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -51,6 +234,9 @@ pub struct RuntimePreferencesInput {
     pub update_channel: Option<String>,
     pub dismissed_update_version: Option<String>,
     pub last_update_check_at: Option<String>,
+    pub launch_at_login: Option<bool>,
+    pub launch_minimized: Option<bool>,
+    pub close_to_tray: Option<bool>,
 }
 
 fn home_dir_from_env() -> Option<PathBuf> {
@@ -206,6 +392,18 @@ pub async fn get_runtime_preferences_with_pool(
         .await?
         .map(|v| normalize_optional_text(&v))
         .unwrap_or_default();
+    let launch_at_login = parse_bool_setting(
+        get_app_setting(pool, KEY_RUNTIME_LAUNCH_AT_LOGIN).await?,
+        DEFAULT_LAUNCH_AT_LOGIN,
+    );
+    let launch_minimized = parse_bool_setting(
+        get_app_setting(pool, KEY_RUNTIME_LAUNCH_MINIMIZED).await?,
+        DEFAULT_LAUNCH_MINIMIZED,
+    );
+    let close_to_tray = parse_bool_setting(
+        get_app_setting(pool, KEY_RUNTIME_CLOSE_TO_TRAY).await?,
+        DEFAULT_CLOSE_TO_TRAY,
+    );
     Ok(RuntimePreferences {
         default_work_dir: dir,
         default_language,
@@ -218,6 +416,9 @@ pub async fn get_runtime_preferences_with_pool(
         update_channel,
         dismissed_update_version,
         last_update_check_at,
+        launch_at_login,
+        launch_minimized,
+        close_to_tray,
     })
 }
 
@@ -274,6 +475,9 @@ pub async fn set_runtime_preferences_with_pool(
         .last_update_check_at
         .map(|v| normalize_optional_text(&v))
         .unwrap_or(current.last_update_check_at);
+    let launch_at_login = input.launch_at_login.unwrap_or(current.launch_at_login);
+    let launch_minimized = input.launch_minimized.unwrap_or(current.launch_minimized);
+    let close_to_tray = input.close_to_tray.unwrap_or(current.close_to_tray);
 
     set_app_setting(pool, KEY_RUNTIME_DEFAULT_WORK_DIR, &default_work_dir).await?;
     set_app_setting(pool, KEY_RUNTIME_DEFAULT_LANGUAGE, &default_language).await?;
@@ -325,6 +529,24 @@ pub async fn set_runtime_preferences_with_pool(
         &last_update_check_at,
     )
     .await?;
+    set_app_setting(
+        pool,
+        KEY_RUNTIME_LAUNCH_AT_LOGIN,
+        if launch_at_login { "true" } else { "false" },
+    )
+    .await?;
+    set_app_setting(
+        pool,
+        KEY_RUNTIME_LAUNCH_MINIMIZED,
+        if launch_minimized { "true" } else { "false" },
+    )
+    .await?;
+    set_app_setting(
+        pool,
+        KEY_RUNTIME_CLOSE_TO_TRAY,
+        if close_to_tray { "true" } else { "false" },
+    )
+    .await?;
     Ok(RuntimePreferences {
         default_work_dir,
         default_language,
@@ -337,6 +559,9 @@ pub async fn set_runtime_preferences_with_pool(
         update_channel,
         dismissed_update_version,
         last_update_check_at,
+        launch_at_login,
+        launch_minimized,
+        close_to_tray,
     })
 }
 
@@ -359,8 +584,11 @@ pub async fn get_runtime_preferences(db: State<'_, DbState>) -> Result<RuntimePr
 pub async fn set_runtime_preferences(
     input: RuntimePreferencesInput,
     db: State<'_, DbState>,
+    app: AppHandle,
 ) -> Result<RuntimePreferences, String> {
-    set_runtime_preferences_with_pool(&db.0, input).await
+    let prefs = set_runtime_preferences_with_pool(&db.0, input).await?;
+    sync_launch_at_login(&app, prefs.launch_at_login)?;
+    Ok(prefs)
 }
 
 #[tauri::command]
@@ -408,6 +636,9 @@ mod tests {
         assert_eq!(prefs_json["update_channel"], json!("stable"));
         assert_eq!(prefs_json["dismissed_update_version"], json!(""));
         assert_eq!(prefs_json["last_update_check_at"], json!(""));
+        assert_eq!(prefs_json["launch_at_login"], json!(false));
+        assert_eq!(prefs_json["launch_minimized"], json!(false));
+        assert_eq!(prefs_json["close_to_tray"], json!(true));
     }
 
     #[tokio::test]
@@ -418,7 +649,10 @@ mod tests {
             "auto_update_enabled": false,
             "update_channel": "stable",
             "dismissed_update_version": "0.2.4",
-            "last_update_check_at": "2026-03-06T10:00:00Z"
+            "last_update_check_at": "2026-03-06T10:00:00Z",
+            "launch_at_login": true,
+            "launch_minimized": true,
+            "close_to_tray": false
         }))
         .expect("deserialize runtime preferences input");
 
@@ -438,6 +672,27 @@ mod tests {
         assert_eq!(
             prefs_json["last_update_check_at"],
             json!("2026-03-06T10:00:00Z")
+        );
+        assert_eq!(prefs_json["launch_at_login"], json!(true));
+        assert_eq!(prefs_json["launch_minimized"], json!(true));
+        assert_eq!(prefs_json["close_to_tray"], json!(false));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_autostart_failure_message_prefers_stderr() {
+        use std::os::windows::process::ExitStatusExt;
+
+        let output = std::process::Output {
+            status: std::process::ExitStatus::from_raw(1),
+            stdout: Vec::new(),
+            stderr: b"The system was unable to find the specified registry key or value.".to_vec(),
+        };
+
+        let message = format_windows_command_failure("移除 Windows 开机启动", &output);
+        assert_eq!(
+            message,
+            "移除 Windows 开机启动失败: The system was unable to find the specified registry key or value."
         );
     }
 }

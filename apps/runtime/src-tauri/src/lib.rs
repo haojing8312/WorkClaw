@@ -22,6 +22,22 @@ use tauri::Manager;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .on_window_event(|app, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let close_to_tray = tauri::async_runtime::block_on(
+                    commands::runtime_preferences::get_runtime_preferences_with_pool(&app.state::<DbState>().0),
+                )
+                .map(|prefs| prefs.close_to_tray)
+                .unwrap_or(false);
+
+                if close_to_tray {
+                    api.prevent_close();
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.hide();
+                    }
+                }
+            }
+        })
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.unminimize();
@@ -64,6 +80,19 @@ pub fn run() {
             app.manage(sidecar_manager.clone());
             let feishu_relay_state = commands::feishu_gateway::FeishuEventRelayState::default();
             app.manage(feishu_relay_state.clone());
+
+            let startup_prefs = tauri::async_runtime::block_on(
+                commands::runtime_preferences::get_runtime_preferences_with_pool(&pool),
+            )
+            .ok();
+            if let Some(prefs) = startup_prefs {
+                let _ = commands::runtime_preferences::sync_launch_at_login(app.handle(), prefs.launch_at_login);
+                if prefs.launch_minimized {
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.minimize();
+                    }
+                }
+            }
 
             // 启动 Sidecar（重试），确保后续 Feishu/MCP 调用有可用网关。
             let sidecar_for_boot = sidecar_manager.clone();
@@ -269,10 +298,6 @@ pub fn run() {
             commands::runtime_preferences::get_runtime_preferences,
             commands::runtime_preferences::set_runtime_preferences,
             commands::runtime_preferences::resolve_default_work_dir,
-            commands::desktop_lifecycle::get_desktop_lifecycle_paths,
-            commands::desktop_lifecycle::open_desktop_path,
-            commands::desktop_lifecycle::clear_desktop_cache_and_logs,
-            commands::desktop_lifecycle::export_desktop_environment_summary,
             commands::chat::create_session,
             commands::chat::send_message,
             commands::chat::get_messages,

@@ -108,6 +108,9 @@ const DEFAULT_RUNTIME_PREFERENCES: RuntimePreferences = {
   update_channel: "stable",
   dismissed_update_version: "",
   last_update_check_at: "",
+  launch_at_login: false,
+  launch_minimized: false,
+  close_to_tray: true,
 };
 
 const DEFAULT_MODEL_PROVIDER = getModelProviderCatalogItem(DEFAULT_MODEL_PROVIDER_ID);
@@ -215,6 +218,10 @@ export function SettingsView({
     "idle" | "saving" | "saved" | "error"
   >("idle");
   const [runtimePreferencesError, setRuntimePreferencesError] = useState("");
+  const [desktopPreferencesSaveState, setDesktopPreferencesSaveState] = useState<
+    "idle" | "saving" | "saved" | "error"
+  >("idle");
+  const [desktopPreferencesError, setDesktopPreferencesError] = useState("");
   const [updaterPreferencesSaveState, setUpdaterPreferencesSaveState] = useState<
     "idle" | "saving" | "saved" | "error"
   >("idle");
@@ -414,6 +421,11 @@ export function SettingsView({
           : "",
       last_update_check_at:
         typeof parsed.last_update_check_at === "string" ? parsed.last_update_check_at : "",
+      launch_at_login:
+        typeof parsed.launch_at_login === "boolean" ? parsed.launch_at_login : false,
+      launch_minimized:
+        typeof parsed.launch_minimized === "boolean" ? parsed.launch_minimized : false,
+      close_to_tray: typeof parsed.close_to_tray === "boolean" ? parsed.close_to_tray : true,
     };
   }
 
@@ -432,7 +444,6 @@ export function SettingsView({
     setRuntimePreferencesError("");
     try {
       const input: {
-        default_work_dir?: string;
         default_language: string;
         immersive_translation_enabled: boolean;
         immersive_translation_display: string;
@@ -447,15 +458,29 @@ export function SettingsView({
         translation_engine: runtimePreferences.translation_engine,
         translation_model_id: runtimePreferences.translation_model_id,
       };
-      if (runtimePreferences.default_work_dir.trim()) {
-        input.default_work_dir = runtimePreferences.default_work_dir;
-      }
       await persistRuntimePreferencesInput(input);
       setRuntimePreferencesSaveState("saved");
       setTimeout(() => setRuntimePreferencesSaveState("idle"), 1200);
     } catch (e) {
       setRuntimePreferencesSaveState("error");
       setRuntimePreferencesError("保存语言与翻译设置失败: " + String(e));
+    }
+  }
+
+  async function handleSaveDesktopPreferences() {
+    setDesktopPreferencesSaveState("saving");
+    setDesktopPreferencesError("");
+    try {
+      await persistRuntimePreferencesInput({
+        launch_at_login: runtimePreferences.launch_at_login,
+        launch_minimized: runtimePreferences.launch_minimized,
+        close_to_tray: runtimePreferences.close_to_tray,
+      });
+      setDesktopPreferencesSaveState("saved");
+      setTimeout(() => setDesktopPreferencesSaveState("idle"), 1200);
+    } catch (e) {
+      setDesktopPreferencesSaveState("error");
+      setDesktopPreferencesError("保存桌面设置失败: " + String(e));
     }
   }
 
@@ -1696,116 +1721,6 @@ export function SettingsView({
       </>
       )}
 
-      {activeTab === "desktop" && (
-      <div className="bg-white rounded-lg p-4 space-y-3 mt-4">
-        <div className="text-xs font-medium text-gray-500">数据与卸载</div>
-        {desktopLifecycleLoading && (
-          <div className="bg-gray-50 text-gray-500 text-xs px-2 py-1 rounded">正在读取本地目录</div>
-        )}
-        {desktopLifecyclePaths && (
-          <div className="space-y-3">
-            <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-3">
-              <div className="text-xs font-medium text-gray-500">应用数据目录</div>
-              <div className="mt-1 break-all text-xs text-gray-700">
-                {desktopLifecyclePaths.app_data_dir}
-              </div>
-              <button
-                type="button"
-                onClick={() => void handleOpenDesktopPath(desktopLifecyclePaths.app_data_dir)}
-                disabled={desktopLifecycleActionState === "opening"}
-                className="mt-2 bg-white hover:bg-gray-100 border border-gray-200 text-gray-700 text-xs px-3 py-1.5 rounded-lg transition-all active:scale-[0.97]"
-              >
-                打开应用数据目录
-              </button>
-            </div>
-            <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-3">
-              <div className="text-xs font-medium text-gray-500">缓存目录</div>
-              <div className="mt-1 break-all text-xs text-gray-700">
-                {desktopLifecyclePaths.cache_dir}
-              </div>
-              <button
-                type="button"
-                onClick={() => void handleOpenDesktopPath(desktopLifecyclePaths.cache_dir)}
-                disabled={desktopLifecycleActionState === "opening"}
-                className="mt-2 bg-white hover:bg-gray-100 border border-gray-200 text-gray-700 text-xs px-3 py-1.5 rounded-lg transition-all active:scale-[0.97]"
-              >
-                打开缓存目录
-              </button>
-            </div>
-            <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-3">
-              <div className="text-xs font-medium text-gray-500">日志目录</div>
-              <div className="mt-1 break-all text-xs text-gray-700">
-                {desktopLifecyclePaths.log_dir}
-              </div>
-              <button
-                type="button"
-                onClick={() => void handleOpenDesktopPath(desktopLifecyclePaths.log_dir)}
-                disabled={desktopLifecycleActionState === "opening"}
-                className="mt-2 bg-white hover:bg-gray-100 border border-gray-200 text-gray-700 text-xs px-3 py-1.5 rounded-lg transition-all active:scale-[0.97]"
-              >
-                打开日志目录
-              </button>
-            </div>
-            <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-3">
-              <div className="text-xs font-medium text-gray-500">默认工作目录</div>
-              <div className="mt-1 break-all text-xs text-gray-700">
-                {desktopLifecyclePaths.default_work_dir || runtimePreferences.default_work_dir || "未设置"}
-              </div>
-              <button
-                type="button"
-                onClick={() =>
-                  void handleOpenDesktopPath(
-                    desktopLifecyclePaths.default_work_dir || runtimePreferences.default_work_dir,
-                  )
-                }
-                disabled={
-                  desktopLifecycleActionState === "opening" ||
-                  !(
-                    desktopLifecyclePaths.default_work_dir || runtimePreferences.default_work_dir
-                  ).trim()
-                }
-                className="mt-2 bg-white hover:bg-gray-100 border border-gray-200 text-gray-700 text-xs px-3 py-1.5 rounded-lg transition-all active:scale-[0.97] disabled:opacity-50"
-              >
-                打开工作目录
-              </button>
-            </div>
-          </div>
-        )}
-        <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={() => void handleClearDesktopCacheAndLogs()}
-            disabled={desktopLifecycleActionState === "clearing"}
-            className="flex-1 bg-gray-100 hover:bg-gray-200 disabled:opacity-50 text-sm py-1.5 rounded-lg transition-all active:scale-[0.97]"
-          >
-            {desktopLifecycleActionState === "clearing" ? "清理中..." : "清理缓存与日志"}
-          </button>
-          <button
-            type="button"
-            onClick={() => void handleExportDesktopEnvironmentSummary()}
-            disabled={desktopLifecycleActionState === "exporting"}
-            className="flex-1 bg-gray-100 hover:bg-gray-200 disabled:opacity-50 text-sm py-1.5 rounded-lg transition-all active:scale-[0.97]"
-          >
-            {desktopLifecycleActionState === "exporting" ? "导出中..." : "导出环境摘要"}
-          </button>
-        </div>
-        <div className="rounded-lg border border-amber-100 bg-amber-50 px-3 py-3 text-xs text-amber-700 space-y-1">
-          <div>卸载程序不会删除你的工作目录</div>
-          <div>如需彻底清理，请先清理缓存与日志，再手动删除应用数据目录。</div>
-        </div>
-        {desktopLifecycleError && (
-          <div className="bg-red-50 text-red-600 text-xs px-2 py-1 rounded">
-            {desktopLifecycleError}
-          </div>
-        )}
-        {desktopLifecycleMessage && (
-          <div className="bg-green-50 text-green-600 text-xs px-2 py-1 rounded">
-            {desktopLifecycleMessage}
-          </div>
-        )}
-      </div>
-      )}
-
       {activeTab === "models" && showDevModelSetupTools && (
         <div
           data-testid="model-setup-dev-tools"
@@ -1837,6 +1752,198 @@ export function SettingsView({
         </div>
       )}
       </>)}
+
+      {activeTab === "desktop" && (
+        <>
+          <div className="bg-white rounded-lg p-4 space-y-3">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="text-xs font-medium text-gray-500">桌面运行</div>
+                <div className="mt-1 text-xs text-gray-400">
+                  控制应用的开机、自启动窗口状态和关闭行为。
+                </div>
+              </div>
+            </div>
+            <label className="flex items-center gap-2 text-xs text-gray-600">
+              <input
+                aria-label="开机启动"
+                type="checkbox"
+                checked={runtimePreferences.launch_at_login}
+                onChange={(e) =>
+                  setRuntimePreferences((prev) => ({
+                    ...prev,
+                    launch_at_login: e.target.checked,
+                  }))
+                }
+              />
+              开机启动
+            </label>
+            <label className="flex items-center gap-2 text-xs text-gray-600">
+              <input
+                aria-label="启动时最小化"
+                type="checkbox"
+                checked={runtimePreferences.launch_minimized}
+                onChange={(e) =>
+                  setRuntimePreferences((prev) => ({
+                    ...prev,
+                    launch_minimized: e.target.checked,
+                  }))
+                }
+              />
+              启动时最小化
+            </label>
+            <label className="flex items-center gap-2 text-xs text-gray-600">
+              <input
+                aria-label="关闭时最小化到托盘"
+                type="checkbox"
+                checked={runtimePreferences.close_to_tray}
+                onChange={(e) =>
+                  setRuntimePreferences((prev) => ({
+                    ...prev,
+                    close_to_tray: e.target.checked,
+                  }))
+                }
+              />
+              关闭时最小化到托盘
+            </label>
+            <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-3 text-xs text-gray-600 space-y-1">
+              <div>建议保持“关闭时最小化到托盘”开启，避免误关后中断后台任务。</div>
+              <div>如果启用“开机启动”，通常建议按需再开启“启动时最小化”。</div>
+            </div>
+            {desktopPreferencesError && (
+              <div className="bg-red-50 text-red-600 text-xs px-2 py-1 rounded">
+                {desktopPreferencesError}
+              </div>
+            )}
+            {desktopPreferencesSaveState === "saved" && (
+              <div className="bg-green-50 text-green-600 text-xs px-2 py-1 rounded">
+                桌面设置已保存
+              </div>
+            )}
+            <button
+              onClick={handleSaveDesktopPreferences}
+              disabled={desktopPreferencesSaveState === "saving"}
+              className="w-full bg-blue-500 hover:bg-blue-600 disabled:opacity-50 text-white text-sm py-1.5 rounded-lg transition-all active:scale-[0.97]"
+            >
+              {desktopPreferencesSaveState === "saving" ? "保存中..." : "保存桌面设置"}
+            </button>
+          </div>
+
+          <div className="bg-white rounded-lg p-4 space-y-3 mt-4">
+            <div className="text-xs font-medium text-gray-500">本机目录与清理</div>
+            {desktopLifecycleLoading && (
+              <div className="bg-gray-50 text-gray-500 text-xs px-2 py-1 rounded">
+                正在读取本地目录
+              </div>
+            )}
+            {desktopLifecyclePaths && (
+              <div className="space-y-3">
+                <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-3">
+                  <div className="text-xs font-medium text-gray-500">应用数据目录</div>
+                  <div className="mt-1 break-all text-xs text-gray-700">
+                    {desktopLifecyclePaths.app_data_dir}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void handleOpenDesktopPath(desktopLifecyclePaths.app_data_dir)}
+                    disabled={desktopLifecycleActionState === "opening"}
+                    className="mt-2 bg-white hover:bg-gray-100 border border-gray-200 text-gray-700 text-xs px-3 py-1.5 rounded-lg transition-all active:scale-[0.97]"
+                  >
+                    打开应用数据目录
+                  </button>
+                </div>
+                <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-3">
+                  <div className="text-xs font-medium text-gray-500">缓存目录</div>
+                  <div className="mt-1 break-all text-xs text-gray-700">
+                    {desktopLifecyclePaths.cache_dir}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void handleOpenDesktopPath(desktopLifecyclePaths.cache_dir)}
+                    disabled={desktopLifecycleActionState === "opening"}
+                    className="mt-2 bg-white hover:bg-gray-100 border border-gray-200 text-gray-700 text-xs px-3 py-1.5 rounded-lg transition-all active:scale-[0.97]"
+                  >
+                    打开缓存目录
+                  </button>
+                </div>
+                <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-3">
+                  <div className="text-xs font-medium text-gray-500">日志目录</div>
+                  <div className="mt-1 break-all text-xs text-gray-700">
+                    {desktopLifecyclePaths.log_dir}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void handleOpenDesktopPath(desktopLifecyclePaths.log_dir)}
+                    disabled={desktopLifecycleActionState === "opening"}
+                    className="mt-2 bg-white hover:bg-gray-100 border border-gray-200 text-gray-700 text-xs px-3 py-1.5 rounded-lg transition-all active:scale-[0.97]"
+                  >
+                    打开日志目录
+                  </button>
+                </div>
+                <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-3">
+                  <div className="text-xs font-medium text-gray-500">默认工作目录</div>
+                  <div className="mt-1 break-all text-xs text-gray-700">
+                    {desktopLifecyclePaths.default_work_dir ||
+                      runtimePreferences.default_work_dir ||
+                      "未设置"}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void handleOpenDesktopPath(
+                        desktopLifecyclePaths.default_work_dir ||
+                          runtimePreferences.default_work_dir,
+                      )
+                    }
+                    disabled={
+                      desktopLifecycleActionState === "opening" ||
+                      !(
+                        desktopLifecyclePaths.default_work_dir ||
+                        runtimePreferences.default_work_dir
+                      ).trim()
+                    }
+                    className="mt-2 bg-white hover:bg-gray-100 border border-gray-200 text-gray-700 text-xs px-3 py-1.5 rounded-lg transition-all active:scale-[0.97] disabled:opacity-50"
+                  >
+                    打开工作目录
+                  </button>
+                </div>
+              </div>
+            )}
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => void handleClearDesktopCacheAndLogs()}
+                disabled={desktopLifecycleActionState === "clearing"}
+                className="flex-1 bg-gray-100 hover:bg-gray-200 disabled:opacity-50 text-sm py-1.5 rounded-lg transition-all active:scale-[0.97]"
+              >
+                {desktopLifecycleActionState === "clearing" ? "清理中..." : "清理缓存与日志"}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleExportDesktopEnvironmentSummary()}
+                disabled={desktopLifecycleActionState === "exporting"}
+                className="flex-1 bg-gray-100 hover:bg-gray-200 disabled:opacity-50 text-sm py-1.5 rounded-lg transition-all active:scale-[0.97]"
+              >
+                {desktopLifecycleActionState === "exporting" ? "导出中..." : "导出环境摘要"}
+              </button>
+            </div>
+            <div className="rounded-lg border border-amber-100 bg-amber-50 px-3 py-3 text-xs text-amber-700 space-y-1">
+              <div>卸载程序不会删除你的工作目录。</div>
+              <div>如需彻底清理，请先清理缓存与日志，再手动删除应用数据目录。</div>
+            </div>
+            {desktopLifecycleError && (
+              <div className="bg-red-50 text-red-600 text-xs px-2 py-1 rounded">
+                {desktopLifecycleError}
+              </div>
+            )}
+            {desktopLifecycleMessage && (
+              <div className="bg-green-50 text-green-600 text-xs px-2 py-1 rounded">
+                {desktopLifecycleMessage}
+              </div>
+            )}
+          </div>
+        </>
+      )}
 
       {SHOW_CAPABILITY_ROUTING_SETTINGS && activeTab === "capabilities" && (
         <div className="bg-white rounded-lg p-4 space-y-3">

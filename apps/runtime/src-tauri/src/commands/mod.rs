@@ -1,6 +1,7 @@
 pub mod agent_profile;
 pub mod chat;
 pub mod clawhub;
+pub mod desktop_lifecycle;
 pub mod dialog;
 pub mod employee_agents;
 pub mod feishu_gateway;

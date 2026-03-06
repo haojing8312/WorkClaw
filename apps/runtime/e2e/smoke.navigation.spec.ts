@@ -199,6 +199,7 @@ test("navigates across start task, settings and experts", async ({ page }) => {
 test("saves default language and translation preference from settings", async ({ page }) => {
   await page.getByRole("button", { name: "设置" }).first().click();
   await expect(page.getByRole("button", { name: "模型连接" })).toBeVisible();
+  await page.getByRole("button", { name: "桌面 / 系统" }).click();
 
   await page.getByLabel("默认语言").selectOption("en-US");
   await page.getByRole("button", { name: "保存语言与翻译设置" }).click();

@@ -40,6 +40,13 @@ async fn runtime_preferences_can_be_saved_and_resolved_with_auto_create() {
             immersive_translation_trigger: Some("manual".to_string()),
             translation_engine: Some("model_only".to_string()),
             translation_model_id: Some("model-1".to_string()),
+            auto_update_enabled: None,
+            update_channel: None,
+            dismissed_update_version: None,
+            last_update_check_at: None,
+            launch_at_login: Some(false),
+            launch_minimized: Some(false),
+            close_to_tray: Some(true),
         },
     )
     .await
@@ -75,6 +82,13 @@ async fn runtime_preferences_partial_update_keeps_existing_translation_settings(
             immersive_translation_trigger: Some("manual".to_string()),
             translation_engine: Some("model_only".to_string()),
             translation_model_id: Some("model-a".to_string()),
+            auto_update_enabled: None,
+            update_channel: None,
+            dismissed_update_version: None,
+            last_update_check_at: None,
+            launch_at_login: Some(true),
+            launch_minimized: Some(false),
+            close_to_tray: Some(false),
         },
     )
     .await
@@ -90,6 +104,13 @@ async fn runtime_preferences_partial_update_keeps_existing_translation_settings(
             immersive_translation_trigger: None,
             translation_engine: None,
             translation_model_id: None,
+            auto_update_enabled: None,
+            update_channel: None,
+            dismissed_update_version: None,
+            last_update_check_at: None,
+            launch_at_login: None,
+            launch_minimized: None,
+            close_to_tray: None,
         },
     )
     .await
