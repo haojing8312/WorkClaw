@@ -166,19 +166,16 @@ describe("App employee list refresh on chat update", () => {
           },
         ]);
       }
-      if (command === "get_sessions") {
-        if (payload?.skillId === "builtin-general") {
-          return Promise.resolve([
-            {
-              id: "session-general",
-              title: "General Session",
-              created_at: new Date().toISOString(),
-              model_id: "model-a",
-              permission_mode: "accept_edits",
-            },
-          ]);
-        }
-        return Promise.resolve([]);
+      if (command === "list_sessions") {
+        return Promise.resolve([
+          {
+            id: "session-general",
+            title: "General Session",
+            created_at: new Date().toISOString(),
+            model_id: "model-a",
+            permission_mode: "accept_edits",
+          },
+        ]);
       }
       return Promise.resolve(null);
     });
@@ -192,7 +189,7 @@ describe("App employee list refresh on chat update", () => {
     render(<App />);
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "select-general-session" })).toBeInTheDocument();
+      expect(screen.getByTestId("new-session-landing")).toBeInTheDocument();
     });
 
     fireEvent.click(screen.getByRole("button", { name: "select-general-session" }));

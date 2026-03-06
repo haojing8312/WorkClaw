@@ -58,6 +58,10 @@ function createUpdaterState(overrides?: Record<string, unknown>) {
 }
 
 describe("SettingsView updater", () => {
+  async function openDesktopTab() {
+    fireEvent.click(await screen.findByRole("button", { name: "桌面 / 系统" }));
+  }
+
   beforeEach(() => {
     invokeMock.mockReset();
     useAppUpdaterMock.mockReset();
@@ -83,6 +87,7 @@ describe("SettingsView updater", () => {
 
     render(<SettingsView onClose={() => {}} />);
 
+    await openDesktopTab();
     expect(await screen.findByText("软件更新")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "检查更新" }));
 
@@ -94,6 +99,7 @@ describe("SettingsView updater", () => {
   test("saves auto update preference separately from translation preferences", async () => {
     render(<SettingsView onClose={() => {}} />);
 
+    await openDesktopTab();
     const autoUpdateToggle = await screen.findByRole("checkbox", { name: "自动检查更新" });
     fireEvent.click(autoUpdateToggle);
     fireEvent.click(screen.getByRole("button", { name: "保存更新设置" }));
@@ -125,6 +131,7 @@ describe("SettingsView updater", () => {
 
     render(<SettingsView onClose={() => {}} />);
 
+    await openDesktopTab();
     expect(await screen.findByText("发现新版本 v0.2.4")).toBeInTheDocument();
     expect(screen.getByText("新增自动更新入口")).toBeInTheDocument();
 
@@ -147,6 +154,7 @@ describe("SettingsView updater", () => {
 
     render(<SettingsView onClose={() => {}} />);
 
+    await openDesktopTab();
     expect(await screen.findByText("正在下载更新")).toBeInTheDocument();
     expect(screen.getByText("已下载 25%")).toBeInTheDocument();
   });
@@ -161,6 +169,7 @@ describe("SettingsView updater", () => {
 
     render(<SettingsView onClose={() => {}} />);
 
+    await openDesktopTab();
     expect(await screen.findByText("更新失败")).toBeInTheDocument();
     expect(screen.getByText("暂时无法连接更新服务")).toBeInTheDocument();
   });

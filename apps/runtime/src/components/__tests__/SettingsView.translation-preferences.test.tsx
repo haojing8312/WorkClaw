@@ -57,6 +57,8 @@ describe("SettingsView translation preferences", () => {
   test("settings can load and save default language + immersive translation", async () => {
     render(<SettingsView onClose={() => {}} />);
 
+    fireEvent.click(await screen.findByRole("button", { name: "桌面 / 系统" }));
+
     const languageSelect = await screen.findByRole("combobox", { name: "默认语言" });
     expect(languageSelect).toHaveValue("zh-CN");
 
@@ -79,7 +81,6 @@ describe("SettingsView translation preferences", () => {
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("set_runtime_preferences", {
         input: expect.objectContaining({
-          default_work_dir: "E:\\workspace",
           default_language: "en-US",
           immersive_translation_enabled: false,
           immersive_translation_display: "bilingual_inline",

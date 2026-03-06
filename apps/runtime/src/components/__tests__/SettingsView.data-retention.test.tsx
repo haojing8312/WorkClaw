@@ -95,11 +95,13 @@ describe("SettingsView data retention", () => {
   test("shows data paths, uninstall guidance and maintenance actions", async () => {
     render(<SettingsView onClose={() => {}} />);
 
-    expect(await screen.findByText("数据与卸载")).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "桌面 / 系统" }));
+
+    expect(await screen.findByText("应用数据目录")).toBeInTheDocument();
     expect(screen.getByText("C:\\Users\\me\\AppData\\Roaming\\WorkClaw")).toBeInTheDocument();
     expect(screen.getByText("C:\\Users\\me\\AppData\\Local\\WorkClaw\\cache")).toBeInTheDocument();
     expect(screen.getByText("E:\\workspace")).toBeInTheDocument();
-    expect(screen.getByText("卸载程序不会删除你的工作目录")).toBeInTheDocument();
+    expect(screen.getByText("卸载程序不会删除你的工作目录。")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "打开应用数据目录" }));
     fireEvent.click(screen.getByRole("button", { name: "清理缓存与日志" }));
