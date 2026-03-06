@@ -86,19 +86,15 @@ describe("App chat landing", () => {
           },
         ]);
       }
-      if (command === "get_sessions") {
-        return Promise.resolve(
-          payload?.skillId
-            ? [
-                {
-                  id: "session-1",
-                  title: "Session 1",
-                  created_at: new Date().toISOString(),
-                  model_id: "model-a",
-                },
-              ]
-            : []
-        );
+      if (command === "list_sessions") {
+        return Promise.resolve([
+          {
+            id: "session-1",
+            title: "Session 1",
+            created_at: new Date().toISOString(),
+            model_id: "model-a",
+          },
+        ]);
       }
       return Promise.resolve(null);
     });
@@ -118,7 +114,7 @@ describe("App chat landing", () => {
     render(<App />);
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "select-first-session" })).toBeInTheDocument();
+      expect(screen.getByTestId("new-session-landing")).toBeInTheDocument();
     });
 
     fireEvent.click(screen.getByRole("button", { name: "select-first-session" }));

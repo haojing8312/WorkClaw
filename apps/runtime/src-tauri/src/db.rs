@@ -427,6 +427,21 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
     let _ = sqlx::query("ALTER TABLE model_configs ADD COLUMN api_key TEXT NOT NULL DEFAULT ''")
         .execute(&pool)
         .await;
+    let _ = sqlx::query(
+        "INSERT OR IGNORE INTO app_settings (key, value) VALUES ('runtime_launch_at_login', 'false')",
+    )
+    .execute(&pool)
+    .await;
+    let _ = sqlx::query(
+        "INSERT OR IGNORE INTO app_settings (key, value) VALUES ('runtime_launch_minimized', 'false')",
+    )
+    .execute(&pool)
+    .await;
+    let _ = sqlx::query(
+        "INSERT OR IGNORE INTO app_settings (key, value) VALUES ('runtime_close_to_tray', 'true')",
+    )
+    .execute(&pool)
+    .await;
 
     // Migration: add permission_mode column to sessions
     let _ = sqlx::query(

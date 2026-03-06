@@ -533,6 +533,9 @@ export interface RuntimePreferences {
   update_channel: "stable" | string;
   dismissed_update_version: string;
   last_update_check_at: string;
+  launch_at_login: boolean;
+  launch_minimized: boolean;
+  close_to_tray: boolean;
 }
 
 /// 文件附件（用于 File Upload 功能）
