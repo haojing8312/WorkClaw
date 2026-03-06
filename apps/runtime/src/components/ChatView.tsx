@@ -5,7 +5,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
-import { SkillManifest, ModelConfig, Message, StreamItem, FileAttachment, SkillRouteEvent, ImRoleTimelineEvent, ImRoleDispatchRequest, ImRouteDecisionEvent } from "../types";
+import { SkillManifest, ModelConfig, Message, StreamItem, FileAttachment, SkillRouteEvent, ImRoleTimelineEvent, ImRoleDispatchRequest, ImRouteDecisionEvent, EmployeeGroupRunSnapshot } from "../types";
 import { motion, AnimatePresence } from "framer-motion";
 import { ToolIsland } from "./ToolIsland";
 import { RiskConfirmDialog } from "./RiskConfirmDialog";
@@ -137,6 +137,7 @@ export function ChatView({
   const [routeEvents, setRouteEvents] = useState<SkillRouteEvent[]>([]);
   const [imRoleEvents, setImRoleEvents] = useState<ImRoleTimelineEvent[]>([]);
   const [imRouteDecisions, setImRouteDecisions] = useState<ImRouteDecisionEvent[]>([]);
+  const [groupRunSnapshot, setGroupRunSnapshot] = useState<EmployeeGroupRunSnapshot | null>(null);
 
   // File Upload: 读取文件为文本
   const readFileAsText = (file: File): Promise<string> => {
@@ -274,6 +275,7 @@ export function ChatView({
     setRouteEvents([]);
     setImRoleEvents([]);
     setImRouteDecisions([]);
+    setGroupRunSnapshot(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
@@ -478,6 +480,30 @@ export function ChatView({
     });
     return () => {
       unlistenPromise.then((fn) => fn());
+    };
+  }, [sessionId]);
+
+  useEffect(() => {
+    let disposed = false;
+    const loadSnapshot = async () => {
+      try {
+        const snapshot = await invoke<EmployeeGroupRunSnapshot | null>("get_employee_group_run_snapshot", { sessionId });
+        if (!disposed && snapshot) {
+          setGroupRunSnapshot(snapshot);
+        }
+      } catch {
+        if (!disposed) {
+          setGroupRunSnapshot(null);
+        }
+      }
+    };
+    void loadSnapshot();
+    const timer = setInterval(() => {
+      void loadSnapshot();
+    }, 3000);
+    return () => {
+      disposed = true;
+      clearInterval(timer);
     };
   }, [sessionId]);
 
@@ -760,6 +786,45 @@ export function ChatView({
   const latestCompletedDelegation = [...delegationCards]
     .reverse()
     .find((card) => card.status === "completed");
+  const groupPhaseFromEvents = mainSummaryDelivered
+    ? "汇报"
+    : delegationCards.length > 0
+    ? "执行"
+    : mainRoleName
+    ? "计划"
+    : null;
+  const groupRoundFromEvents = delegationCards.length > 0 ? Math.max(1, Math.ceil(delegationCards.length / 3)) : 0;
+  const groupMemberStatesFromEvents = (() => {
+    const byRole = new Map<string, "running" | "completed" | "failed">();
+    for (const card of delegationCards) {
+      byRole.set(card.toRole, card.status);
+    }
+    return Array.from(byRole.entries()).map(([role, status]) => ({ role, status }));
+  })();
+  const groupPhaseFromSnapshot = (() => {
+    const state = (groupRunSnapshot?.state || "").trim().toLowerCase();
+    if (!state) return null;
+    if (state === "planning") return "计划";
+    if (state === "executing") return "执行";
+    if (state === "done" || state === "completed") return "汇报";
+    if (state === "failed") return "失败";
+    if (state === "cancelled") return "已取消";
+    return "执行";
+  })();
+  const groupRoundFromSnapshot = groupRunSnapshot?.current_round || 0;
+  const groupMemberStatesFromSnapshot = (() => {
+    const byRole = new Map<string, "running" | "completed" | "failed" | string>();
+    for (const step of groupRunSnapshot?.steps || []) {
+      const role = (step.assignee_employee_id || "").trim();
+      if (!role) continue;
+      byRole.set(role, step.status || "running");
+    }
+    return Array.from(byRole.entries()).map(([role, status]) => ({ role, status }));
+  })();
+  const groupPhaseLabel = groupPhaseFromEvents || groupPhaseFromSnapshot;
+  const groupRound = groupRoundFromEvents || groupRoundFromSnapshot;
+  const groupMemberStates =
+    groupMemberStatesFromEvents.length > 0 ? groupMemberStatesFromEvents : groupMemberStatesFromSnapshot;
   const collaborationStatusText =
     mainSummaryDelivered
       ? `${mainRoleName || "主员工"} 已输出最终汇总`
@@ -1148,6 +1213,24 @@ export function ChatView({
                 {completedDelegationCount > 0 && <span>已完成 {completedDelegationCount} 次协作</span>}
                 {completedDelegationCount > 0 && failedDelegationCount > 0 && <span> · </span>}
                 {failedDelegationCount > 0 && <span>待处理失败 {failedDelegationCount} 次</span>}
+              </div>
+            )}
+          </div>
+        )}
+        {(groupPhaseLabel || groupMemberStates.length > 0) && (
+          <div
+            data-testid="group-orchestration-board"
+            className="sticky top-0 z-10 max-w-[80%] rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2 text-xs text-indigo-900"
+          >
+            <div className="font-medium">{`阶段：${groupPhaseLabel || "计划"}`}</div>
+            <div className="mt-1">{`轮次：第 ${groupRound || 1} 轮`}</div>
+            {groupMemberStates.length > 0 && (
+              <div className="mt-2 space-y-1">
+                {groupMemberStates.map((member) => (
+                  <div key={member.role} className="text-[11px] text-indigo-800">
+                    {member.role} · {member.status}
+                  </div>
+                ))}
               </div>
             )}
           </div>

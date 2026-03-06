@@ -339,6 +339,45 @@ export interface AgentEmployee {
   updated_at: string;
 }
 
+export interface EmployeeGroup {
+  id: string;
+  name: string;
+  coordinator_employee_id: string;
+  member_employee_ids: string[];
+  member_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EmployeeGroupRunStep {
+  id: string;
+  round_no: number;
+  assignee_employee_id: string;
+  status: "running" | "completed" | "failed" | string;
+  output: string;
+}
+
+export interface EmployeeGroupRunResult {
+  run_id: string;
+  group_id: string;
+  session_id: string;
+  session_skill_id: string;
+  state: string;
+  current_round: number;
+  final_report: string;
+  steps: EmployeeGroupRunStep[];
+}
+
+export interface EmployeeGroupRunSnapshot {
+  run_id: string;
+  group_id: string;
+  session_id: string;
+  state: string;
+  current_round: number;
+  final_report: string;
+  steps: EmployeeGroupRunStep[];
+}
+
 export interface EmployeeMemorySkillStats {
   skill_id: string;
   total_files: number;

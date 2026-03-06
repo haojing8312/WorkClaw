@@ -1,5 +1,6 @@
 pub mod compactor;
 pub mod executor;
+pub mod group_orchestrator;
 pub mod permissions;
 pub mod registry;
 pub mod skill_config;

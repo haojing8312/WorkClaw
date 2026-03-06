@@ -315,6 +315,52 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
     .await?;
 
     sqlx::query(
+        "CREATE TABLE IF NOT EXISTS employee_groups (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            coordinator_employee_id TEXT NOT NULL,
+            member_employee_ids_json TEXT NOT NULL DEFAULT '[]',
+            member_count INTEGER NOT NULL DEFAULT 1 CHECK (member_count >= 1 AND member_count <= 10),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )",
+    )
+    .execute(&pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS group_runs (
+            id TEXT PRIMARY KEY,
+            group_id TEXT NOT NULL,
+            session_id TEXT NOT NULL DEFAULT '',
+            user_goal TEXT NOT NULL DEFAULT '',
+            state TEXT NOT NULL DEFAULT 'planning',
+            current_round INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )",
+    )
+    .execute(&pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS group_run_steps (
+            id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            round_no INTEGER NOT NULL DEFAULT 0,
+            assignee_employee_id TEXT NOT NULL DEFAULT '',
+            step_type TEXT NOT NULL DEFAULT 'execute',
+            input TEXT NOT NULL DEFAULT '',
+            output TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'pending',
+            started_at TEXT NOT NULL DEFAULT '',
+            finished_at TEXT NOT NULL DEFAULT ''
+        )",
+    )
+    .execute(&pool)
+    .await?;
+
+    sqlx::query(
         "CREATE TABLE IF NOT EXISTS im_thread_employee_bindings (
             thread_id TEXT NOT NULL,
             employee_id TEXT NOT NULL,
@@ -456,6 +502,27 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
     .await;
     let _ = sqlx::query(
         "CREATE INDEX IF NOT EXISTS idx_im_thread_sessions_route_key ON im_thread_sessions(route_session_key)",
+    )
+    .execute(&pool)
+    .await;
+    let _ = sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_employee_groups_coordinator ON employee_groups(coordinator_employee_id)",
+    )
+    .execute(&pool)
+    .await;
+    let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_group_runs_group_id ON group_runs(group_id)")
+        .execute(&pool)
+        .await;
+    let _ =
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_group_runs_state ON group_runs(state)")
+            .execute(&pool)
+            .await;
+    let _ =
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_group_run_steps_run_id ON group_run_steps(run_id)")
+            .execute(&pool)
+            .await;
+    let _ = sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_group_run_steps_round_no ON group_run_steps(round_no)",
     )
     .execute(&pool)
     .await;

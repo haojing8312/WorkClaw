@@ -680,4 +680,116 @@ describe("ChatView IM routing panel", () => {
       expect(screen.getByTestId("chat-session-source-badge")).toHaveTextContent("飞书同步");
     });
   });
+
+  test("shows group orchestration board with phase, round and member statuses", async () => {
+    render(
+      <ChatView
+        skill={{
+          id: "builtin-general",
+          name: "General",
+          description: "desc",
+          version: "1.0.0",
+          author: "test",
+          recommended_model: "",
+          tags: [],
+          created_at: new Date().toISOString(),
+        }}
+        models={[
+          {
+            id: "m1",
+            name: "model",
+            api_format: "openai",
+            base_url: "https://example.com",
+            model_name: "model",
+            is_default: true,
+          },
+        ]}
+        sessionId="session-group-board"
+      />
+    );
+
+    act(() => {
+      emit("im-role-event", {
+        session_id: "session-group-board",
+        thread_id: "thread-group-board",
+        role_id: "project_manager",
+        role_name: "项目经理",
+        sender_role: "main_agent",
+        status: "running",
+      });
+      emit("im-role-dispatch-request", {
+        session_id: "session-group-board",
+        thread_id: "thread-group-board",
+        role_id: "dev_team",
+        role_name: "开发团队",
+        sender_role: "main_agent",
+        task_id: "task-group-1",
+        prompt: "请产出技术方案",
+        agent_type: "plan",
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("group-orchestration-board")).toHaveTextContent("阶段：执行");
+      expect(screen.getByTestId("group-orchestration-board")).toHaveTextContent("轮次：第 1 轮");
+      expect(screen.getByTestId("group-orchestration-board")).toHaveTextContent("开发团队");
+      expect(screen.getByTestId("group-orchestration-board")).toHaveTextContent("running");
+    });
+  });
+
+  test("shows group orchestration board from backend run snapshot", async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_messages") return Promise.resolve([]);
+      if (command === "list_sessions") return Promise.resolve([]);
+      if (command === "get_sessions") return Promise.resolve([]);
+      if (command === "get_employee_group_run_snapshot") {
+        return Promise.resolve({
+          run_id: "run-snapshot-1",
+          group_id: "group-snapshot-1",
+          session_id: "session-group-snapshot",
+          state: "executing",
+          current_round: 2,
+          final_report: "计划：共 3 步",
+          steps: [
+            { id: "s1", round_no: 1, assignee_employee_id: "开发团队", status: "completed", output: "" },
+            { id: "s2", round_no: 2, assignee_employee_id: "测试团队", status: "running", output: "" },
+          ],
+        });
+      }
+      return Promise.resolve(null);
+    });
+
+    render(
+      <ChatView
+        skill={{
+          id: "builtin-general",
+          name: "General",
+          description: "desc",
+          version: "1.0.0",
+          author: "test",
+          recommended_model: "",
+          tags: [],
+          created_at: new Date().toISOString(),
+        }}
+        models={[
+          {
+            id: "m1",
+            name: "model",
+            api_format: "openai",
+            base_url: "https://example.com",
+            model_name: "model",
+            is_default: true,
+          },
+        ]}
+        sessionId="session-group-snapshot"
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("group-orchestration-board")).toHaveTextContent("阶段：执行");
+      expect(screen.getByTestId("group-orchestration-board")).toHaveTextContent("轮次：第 2 轮");
+      expect(screen.getByTestId("group-orchestration-board")).toHaveTextContent("开发团队");
+      expect(screen.getByTestId("group-orchestration-board")).toHaveTextContent("测试团队");
+    });
+  });
 });

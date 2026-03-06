@@ -1301,6 +1301,14 @@ export default function App() {
     navigate("start-task");
   }
 
+  async function handleOpenGroupRunSession(sessionId: string, skillId: string) {
+    setSelectedSkillId(skillId);
+    setCreateSessionError(null);
+    await loadSessions(skillId);
+    setSelectedSessionId(sessionId);
+    navigate("start-task");
+  }
+
   const selectedSkill = skills.find((s) => s.id === selectedSkillId) ?? null;
   const selectedSession = sessions.find((s) => s.id === selectedSessionId);
   const selectedEmployeeAssistantContext = (() => {
@@ -1670,6 +1678,7 @@ export default function App() {
                 onDeleteEmployee={handleDeleteEmployee}
                 onSetAsMainAndEnter={handleSetAsMainAndEnter}
                 onStartTaskWithEmployee={handleStartTaskWithEmployee}
+                onOpenGroupRunSession={handleOpenGroupRunSession}
                 onOpenEmployeeCreatorSkill={handleOpenEmployeeCreatorSkill}
               />
             </motion.div>

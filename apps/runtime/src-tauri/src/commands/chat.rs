@@ -248,6 +248,14 @@ fn build_employee_collaboration_guidance(
     Some(lines.join("\n"))
 }
 
+#[cfg(test)]
+pub(crate) fn build_group_orchestrator_report_preview(
+    request: crate::agent::group_orchestrator::GroupRunRequest,
+) -> String {
+    let outcome = crate::agent::group_orchestrator::simulate_group_run(request);
+    outcome.final_report
+}
+
 fn extract_skill_prompt_from_decrypted_files(
     files: &std::collections::HashMap<String, Vec<u8>>,
 ) -> Option<String> {
@@ -1389,7 +1397,8 @@ pub async fn get_sessions(
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_model_route_error, extract_skill_prompt_from_decrypted_files,
+        build_group_orchestrator_report_preview, classify_model_route_error,
+        extract_skill_prompt_from_decrypted_files,
         infer_capability_from_user_message, is_supported_protocol,
         normalize_permission_mode_for_storage, parse_fallback_chain_targets, parse_permission_mode,
         permission_mode_label_for_display, retry_backoff_ms, retry_budget_for_error,
@@ -1576,6 +1585,29 @@ mod tests {
         files.insert("skill.md".to_string(), b"# lowercase skill".to_vec());
         let content = extract_skill_prompt_from_decrypted_files(&files);
         assert_eq!(content.as_deref(), Some("# lowercase skill"));
+    }
+
+    #[test]
+    fn group_orchestrator_preview_contains_plan_execute_summary_sections() {
+        let report = build_group_orchestrator_report_preview(
+            crate::agent::group_orchestrator::GroupRunRequest {
+                group_id: "group-1".to_string(),
+                coordinator_employee_id: "project_manager".to_string(),
+                member_employee_ids: vec![
+                    "project_manager".to_string(),
+                    "dev_team".to_string(),
+                    "qa_team".to_string(),
+                ],
+                user_goal: "实现群组协作编排".to_string(),
+                execution_window: 3,
+                timeout_employee_ids: Vec::new(),
+                max_retry_per_step: 1,
+            },
+        );
+
+        assert!(report.contains("计划"));
+        assert!(report.contains("执行"));
+        assert!(report.contains("汇报"));
     }
 }
 
