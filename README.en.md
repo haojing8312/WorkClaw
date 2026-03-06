@@ -218,6 +218,27 @@ workclaw/
 - Node.js 20+
 - pnpm
 
+### Windows Contributor Prerequisites (source builds)
+
+If you only want to use WorkClaw, use the published release installer instead of building from source. The requirements below are for contributors running the desktop app from source on Windows.
+
+- Windows 10 / 11 x64
+- Rust stable with `x86_64-pc-windows-msvc`
+- Visual Studio 2022 Build Tools (stable)
+- `Desktop development with C++`
+- Windows 10/11 SDK
+- WebView2 Runtime
+
+If a local Windows build fails, run:
+
+```bash
+pnpm doctor:windows
+```
+
+See the troubleshooting guide for common Windows-native build failures:
+
+- [docs/troubleshooting/windows-dev-setup.md](docs/troubleshooting/windows-dev-setup.md)
+
 ### Development
 
 ```bash

@@ -1,0 +1,142 @@
+name: Bug report
+description: Report a reproducible bug or source-build/setup failure.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for reproducible bugs and local source-build/setup failures.
+
+        For Windows source-build issues, include:
+        - the exact failing command
+        - the full error excerpt
+        - `rustc -vV`
+        - `rustup show`
+        - `where link`
+        - whether you use Visual Studio stable or Insiders
+        - `pnpm doctor:windows` output
+
+  - type: dropdown
+    id: issue_kind
+    attributes:
+      label: Issue type
+      options:
+        - Windows source-build/setup failure
+        - General source-build/setup failure
+        - App runtime bug
+        - Documentation issue
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: Describe what you expected to happen.
+      placeholder: Running `pnpm app` should start the Tauri window.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Describe what happened instead.
+      placeholder: The build fails during Rust linking with LNK1104.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps
+      description: List the exact steps and commands to reproduce the issue.
+      placeholder: |
+        1. Clone the repo
+        2. Run `pnpm install`
+        3. Run `pnpm app`
+        4. Observe the linker failure
+    validations:
+      required: true
+
+  - type: input
+    id: failing_command
+    attributes:
+      label: Exact failing command
+      placeholder: pnpm app
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows 11
+        - Windows 10
+        - macOS
+        - Linux
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: arch
+    attributes:
+      label: CPU architecture
+      placeholder: x64
+    validations:
+      required: true
+
+  - type: dropdown
+    id: vs_install
+    attributes:
+      label: Visual Studio installation
+      description: Required for Windows source-build issues.
+      options:
+        - Visual Studio 2022 / Build Tools stable
+        - Visual Studio Preview / Insiders
+        - Not installed
+        - Not applicable
+        - Unsure
+    validations:
+      required: true
+
+  - type: textarea
+    id: toolchain
+    attributes:
+      label: Toolchain details
+      description: Paste the outputs below. For non-Windows issues, include the applicable commands.
+      render: shell
+      placeholder: |
+        node -v
+        pnpm -v
+        rustc -vV
+        rustup show
+        where link
+        pnpm doctor:windows
+    validations:
+      required: true
+
+  - type: textarea
+    id: error_output
+    attributes:
+      label: Error output
+      description: Paste the relevant error log. Redact secrets if needed.
+      render: text
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues for duplicates.
+          required: true
+        - label: I included the exact failing command and relevant error output.
+          required: true
+        - label: For Windows source-build issues, I included `rustc -vV`, `rustup show`, `where link`, and `pnpm doctor:windows`.
+          required: true

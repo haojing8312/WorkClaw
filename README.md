@@ -215,6 +215,27 @@ workclaw/
 - Node.js 20+
 - pnpm
 
+### Windows 贡献者前置要求（源码运行）
+
+如果你只是想使用 WorkClaw，请优先下载 Release 安装包。下面这些要求是给 **从源码运行桌面应用** 的贡献者准备的。
+
+- Windows 10 / 11 x64
+- Rust stable + `x86_64-pc-windows-msvc`
+- Visual Studio 2022 Build Tools（稳定版）
+- `Desktop development with C++`
+- Windows 10/11 SDK
+- WebView2 Runtime
+
+如果本地构建失败，先运行：
+
+```bash
+pnpm doctor:windows
+```
+
+常见 Windows 本地构建问题请看：
+
+- [docs/troubleshooting/windows-dev-setup.md](docs/troubleshooting/windows-dev-setup.md)
+
 ### 开发
 
 ```bash
@@ -237,6 +258,9 @@ cargo test
 ```bash
 # 1) 仅首次或依赖变更后执行
 pnpm install
+
+# Windows 源码构建失败时，先做本机环境诊断
+pnpm doctor:windows
 
 # 2) 若报错 "Port 5174 is already in use"，先定位并结束占用进程
 netstat -ano | findstr LISTENING | findstr :5174

@@ -15,6 +15,20 @@ pnpm install
 pnpm app
 ```
 
+For Windows source builds, the supported local baseline is:
+
+- Windows 10 / 11 x64
+- Rust stable with `x86_64-pc-windows-msvc`
+- Visual Studio 2022 Build Tools (stable)
+- `Desktop development with C++`
+- Windows 10/11 SDK
+
+If a Windows source build fails, run `pnpm doctor:windows` before opening an issue and attach the output together with `rustc -vV`, `rustup show`, and `where link`.
+
+Troubleshooting guide:
+
+- [docs/troubleshooting/windows-dev-setup.md](docs/troubleshooting/windows-dev-setup.md)
+
 For backend tests:
 
 ```bash

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Support and troubleshooting guide
+    url: https://github.com/haojing8312/WorkClaw/blob/main/SUPPORT.md
+    about: Read the support policy and issue quality checklist before filing.
+  - name: Security disclosure
+    url: https://github.com/haojing8312/WorkClaw/blob/main/SECURITY.md
+    about: Report vulnerabilities privately instead of filing a public bug.
