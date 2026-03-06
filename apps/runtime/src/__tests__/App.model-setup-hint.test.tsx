@@ -301,16 +301,48 @@ describe("App model setup hint", () => {
       expect(screen.getByTestId("quick-model-setup-dialog")).toBeInTheDocument();
     });
 
-    expect(screen.getByRole("link", { name: "获取 API Key" })).toBeInTheDocument();
+    const officialConsoleButton = screen.getByRole("button", { name: "获取 API Key" });
+    expect(officialConsoleButton).toBeInTheDocument();
+
+    fireEvent.click(officialConsoleButton);
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("open_external_url", {
+        url: "https://open.bigmodel.cn/usercenter/proj-mgmt/apikeys",
+      });
+    });
 
     fireEvent.change(screen.getByTestId("quick-model-setup-preset"), {
       target: { value: "custom-openai" },
     });
 
-    expect(screen.queryByRole("link", { name: "获取 API Key" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "获取 API Key" })).not.toBeInTheDocument();
     expect(screen.getByTestId("quick-model-setup-custom-guidance")).toHaveTextContent(
       "请向你的中转或代理服务商申请 API Key。",
     );
+  });
+
+  test("opens provider docs from quick setup with explicit desktop command", async () => {
+    window.localStorage.setItem(INITIAL_MODEL_SETUP_COMPLETED_KEY, "1");
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("model-setup-hint")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId("model-setup-hint-open-quick-setup"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("quick-model-setup-dialog")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "查看文档" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("open_external_url", {
+        url: "https://open.bigmodel.cn/dev/api",
+      });
+    });
   });
 
   test("switches quick setup to custom anthropic and saves anthropic config", async () => {

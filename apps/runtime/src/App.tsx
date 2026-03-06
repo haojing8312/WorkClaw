@@ -31,6 +31,7 @@ import {
   buildModelFormFromCatalogItem,
   getModelProviderCatalogItem,
 } from "./model-provider-catalog";
+import { openExternalUrl } from "./utils/openExternalUrl";
 import {
   ExpertCreatePayload,
   ExpertCreateView,
@@ -1701,23 +1702,37 @@ export default function App() {
                       </div>
                       {selectedQuickModelProvider.officialConsoleUrl ? (
                         <div className="flex flex-wrap gap-2">
-                          <a
-                            href={selectedQuickModelProvider.officialConsoleUrl}
-                            target="_blank"
-                            rel="noreferrer"
+                          <button
+                            type="button"
+                            onClick={() =>
+                              openExternalUrl(selectedQuickModelProvider.officialConsoleUrl ?? "").catch(
+                                (error) => {
+                                  setQuickModelError(
+                                    extractErrorMessage(error, "打开外部链接失败，请稍后重试"),
+                                  );
+                                },
+                              )
+                            }
                             className="sm-btn sm-btn-secondary min-h-10 rounded-xl px-4 text-sm"
                           >
                             {selectedQuickModelProvider.officialConsoleLabel ?? "获取 API Key"}
-                          </a>
+                          </button>
                           {selectedQuickModelProvider.officialDocsUrl ? (
-                            <a
-                              href={selectedQuickModelProvider.officialDocsUrl}
-                              target="_blank"
-                              rel="noreferrer"
+                            <button
+                              type="button"
+                              onClick={() =>
+                                openExternalUrl(selectedQuickModelProvider.officialDocsUrl ?? "").catch(
+                                  (error) => {
+                                    setQuickModelError(
+                                      extractErrorMessage(error, "打开外部链接失败，请稍后重试"),
+                                    );
+                                  },
+                                )
+                              }
                               className="sm-btn sm-btn-ghost min-h-10 rounded-xl px-4 text-sm"
                             >
                               {selectedQuickModelProvider.officialDocsLabel ?? "查看文档"}
-                            </a>
+                            </button>
                           ) : null}
                         </div>
                       ) : null}

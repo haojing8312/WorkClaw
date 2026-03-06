@@ -8,6 +8,7 @@ import {
   getModelProviderCatalogItem,
   resolveCatalogItemForConfig,
 } from "../model-provider-catalog";
+import { openExternalUrl } from "../utils/openExternalUrl";
 import {
   CapabilityRouteTemplateInfo,
   CapabilityRoutingPolicy,
@@ -150,7 +151,7 @@ export function SettingsView({
   const [mcpError, setMcpError] = useState("");
   const [showMcpEnvJson, setShowMcpEnvJson] = useState(false);
   const [activeTab, setActiveTab] = useState<
-    "models" | "capabilities" | "health" | "mcp" | "search" | "routing"
+    "models" | "desktop" | "capabilities" | "health" | "mcp" | "search" | "routing"
   >("models");
 
   // 搜索引擎配置
@@ -1133,6 +1134,13 @@ export function SettingsView({
           >
             模型连接
           </button>
+          <button
+            onClick={() => setActiveTab("desktop")}
+              className={"sm-btn h-8 px-2 rounded-none border-b-2 text-sm font-medium transition-colors " +
+              (activeTab === "desktop" ? "text-[var(--sm-primary-strong)] border-[var(--sm-primary)]" : "sm-text-muted border-transparent hover:text-[var(--sm-text)]")}
+          >
+            桌面 / 系统
+          </button>
           {SHOW_CAPABILITY_ROUTING_SETTINGS && (
             <button
               onClick={() => setActiveTab("capabilities")}
@@ -1182,8 +1190,8 @@ export function SettingsView({
         </button>
       </div>
 
-      {activeTab === "models" && (<>
-      {models.length > 0 && (
+      {(activeTab === "models" || activeTab === "desktop") && (<>
+      {activeTab === "models" && models.length > 0 && (
         <div className="mb-6 space-y-2">
           <div className="text-xs text-gray-500 mb-2">已配置模型</div>
           {models.map((m) => (
@@ -1224,6 +1232,7 @@ export function SettingsView({
         </div>
       )}
 
+      {activeTab === "models" && (
       <div className="bg-white rounded-lg p-4 space-y-3">
         <div className="flex items-center justify-between mb-2">
           <div className="text-xs font-medium text-gray-500">
@@ -1312,23 +1321,29 @@ export function SettingsView({
             </div>
             {selectedModelProvider.officialConsoleUrl ? (
               <div className="flex flex-wrap gap-2">
-                <a
-                  href={selectedModelProvider.officialConsoleUrl}
-                  target="_blank"
-                  rel="noreferrer"
+                <button
+                  type="button"
+                  onClick={() =>
+                    openExternalUrl(selectedModelProvider.officialConsoleUrl ?? "").catch((e) => {
+                      setError("打开外部链接失败: " + String(e));
+                    })
+                  }
                   className="sm-btn rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
                 >
                   {selectedModelProvider.officialConsoleLabel ?? "获取 API Key"}
-                </a>
+                </button>
                 {selectedModelProvider.officialDocsUrl ? (
-                  <a
-                    href={selectedModelProvider.officialDocsUrl}
-                    target="_blank"
-                    rel="noreferrer"
+                  <button
+                    type="button"
+                    onClick={() =>
+                      openExternalUrl(selectedModelProvider.officialDocsUrl ?? "").catch((e) => {
+                        setError("打开外部链接失败: " + String(e));
+                      })
+                    }
                     className="sm-btn rounded-xl border border-transparent px-4 py-2 text-sm text-gray-500 hover:bg-white hover:text-gray-700"
                   >
                     {selectedModelProvider.officialDocsLabel ?? "查看文档"}
-                  </a>
+                  </button>
                 ) : null}
               </div>
             ) : null}
@@ -1395,7 +1410,10 @@ export function SettingsView({
           保存后会自动同步到默认路由和健康检查，无需重复配置。
         </div>
       </div>
-      <div className="bg-white rounded-lg p-4 space-y-3 mt-4">
+      )}
+      {activeTab === "desktop" && (
+      <>
+      <div className="bg-white rounded-lg p-4 space-y-3">
         <div className="text-xs font-medium text-gray-500">语言与沉浸式翻译</div>
         <div>
           <label className={labelCls}>默认语言</label>
@@ -1675,7 +1693,10 @@ export function SettingsView({
           </div>
         )}
       </div>
+      </>
+      )}
 
+      {activeTab === "desktop" && (
       <div className="bg-white rounded-lg p-4 space-y-3 mt-4">
         <div className="text-xs font-medium text-gray-500">数据与卸载</div>
         {desktopLifecycleLoading && (
@@ -1783,8 +1804,9 @@ export function SettingsView({
           </div>
         )}
       </div>
+      )}
 
-      {showDevModelSetupTools && (
+      {activeTab === "models" && showDevModelSetupTools && (
         <div
           data-testid="model-setup-dev-tools"
           className="mt-4 rounded-2xl border border-amber-200 bg-amber-50/80 p-4"
