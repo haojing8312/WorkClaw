@@ -11,6 +11,8 @@
     "release:check-version": "node scripts/check-release-version.mjs",
     "test:release": "node --test scripts/check-release-version.test.mjs",
     "test:installer": "node --test scripts/check-installer-branding.test.mjs",
+    "test:updater": "node --test scripts/check-updater-config.test.mjs",
+    "test:release-docs": "node --test scripts/check-release-docs.test.mjs",
     "sync:openclaw-core": "node scripts/sync-openclaw-core.mjs",
     "sync:codex-skills": "node scripts/sync-codex-skills.mjs",
     "test:sidecar": "pnpm --dir apps/runtime/sidecar test",

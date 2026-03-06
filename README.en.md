@@ -269,6 +269,14 @@ git push origin v0.1.0
 
 Before publishing, CI validates that `tag(vX.Y.Z)` matches `tauri.conf.json` `version`.
 
+Recommended release assets:
+
+- `*-setup.exe`: recommended for most users and supports future in-app auto-update.
+- `*.msi`: intended for enterprise IT rollout and manual upgrades.
+- Auto-update path: desktop installs created from `setup.exe` consume `latest.json` and `.sig` from GitHub Releases.
+
+If you only want to install and use WorkClaw, choose the `.exe` installer first.
+
 ### Installing a Skill
 
 1. Open Runtime application

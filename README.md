@@ -305,6 +305,14 @@ git push origin v0.1.0
 
 发布前会执行版本一致性校验：`tag(vX.Y.Z)` 必须与 `tauri.conf.json` 的 `version` 相同。
 
+发布产物使用建议：
+
+- `*-setup.exe`：推荐普通用户下载，支持后续桌面端自动更新。
+- `*.msi`：适合企业 IT、批量部署和手动升级，不参与应用内自动更新。
+- 自动更新链路：已安装 `setup.exe` 版本的桌面端会消费 GitHub Release 中的 `latest.json` 和 `.sig`。
+
+如果你只是想安装并直接使用 WorkClaw，请优先选择 `.exe` 安装包。
+
 ### 安装技能
 
 1. 打开 WorkClaw 应用

@@ -18,6 +18,7 @@ const cargoTomlPath = path.join(
   "src-tauri",
   "Cargo.toml",
 );
+const releaseWorkflowPath = path.join(projectRoot, ".github", "workflows", "release-windows.yml");
 
 function readJson(filePath) {
   return JSON.parse(readFileSync(filePath, "utf8"));
@@ -44,9 +45,49 @@ test("tauri updater is configured for desktop releases", () => {
     Array.isArray(updater.endpoints) && updater.endpoints.length > 0,
     "Expected plugins.updater.endpoints to be configured",
   );
+  assert.equal(
+    config?.bundle?.createUpdaterArtifacts,
+    true,
+    "Expected bundle.createUpdaterArtifacts to be enabled for latest.json generation",
+  );
   assert.match(
     cargoToml,
     /tauri-plugin-updater\s*=/,
     "Expected tauri-plugin-updater dependency in Cargo.toml",
+  );
+});
+
+test("release workflow publishes signed updater artifacts", () => {
+  const workflow = readText(releaseWorkflowPath);
+
+  assert.match(
+    workflow,
+    /tauri-apps\/tauri-action@v1/,
+    "Expected release workflow to use tauri-action@v1",
+  );
+  assert.match(
+    workflow,
+    /uploadUpdaterJson:\s*true/,
+    "Expected release workflow to upload latest.json",
+  );
+  assert.match(
+    workflow,
+    /updaterJsonPreferNsis:\s*true/,
+    "Expected release workflow to prefer NSIS updater metadata on Windows",
+  );
+  assert.match(
+    workflow,
+    /TAURI_SIGNING_PRIVATE_KEY:\s*\$\{\{\s*secrets\.TAURI_SIGNING_PRIVATE_KEY\s*\}\}/,
+    "Expected release workflow to provide updater signing private key",
+  );
+  assert.match(
+    workflow,
+    /TAURI_SIGNING_PRIVATE_KEY_PASSWORD:\s*\$\{\{\s*secrets\.TAURI_SIGNING_PRIVATE_KEY_PASSWORD\s*\}\}/,
+    "Expected release workflow to provide updater signing key password",
+  );
+  assert.match(
+    workflow,
+    /\.github\/release-windows-notes\.md/,
+    "Expected release workflow to load release notes from a tracked template file",
   );
 });
