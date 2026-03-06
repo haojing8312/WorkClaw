@@ -129,6 +129,19 @@ pub struct EmployeeGroupRunStep {
 pub struct EmployeeGroupRunResult {
     pub run_id: String,
     pub group_id: String,
+    pub session_id: String,
+    pub session_skill_id: String,
+    pub state: String,
+    pub current_round: i64,
+    pub final_report: String,
+    pub steps: Vec<EmployeeGroupRunStep>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct EmployeeGroupRunSnapshot {
+    pub run_id: String,
+    pub group_id: String,
+    pub session_id: String,
     pub state: String,
     pub current_round: i64,
     pub final_report: String,
@@ -760,7 +773,7 @@ pub async fn start_employee_group_run_with_pool(
     }
 
     let row = sqlx::query(
-        "SELECT coordinator_employee_id, member_employee_ids_json
+        "SELECT name, coordinator_employee_id, member_employee_ids_json
          FROM employee_groups WHERE id = ?",
     )
     .bind(&group_id)
@@ -769,6 +782,7 @@ pub async fn start_employee_group_run_with_pool(
     .map_err(|e| e.to_string())?
     .ok_or_else(|| "employee group not found".to_string())?;
 
+    let group_name: String = row.try_get("name").map_err(|e| e.to_string())?;
     let coordinator_employee_id: String = row
         .try_get("coordinator_employee_id")
         .map_err(|e| e.to_string())?;
@@ -798,6 +812,13 @@ pub async fn start_employee_group_run_with_pool(
     let current_round = outcome.execution.iter().map(|step| step.round_no).max().unwrap_or(0);
     let now = chrono::Utc::now().to_rfc3339();
     let run_id = Uuid::new_v4().to_string();
+    let (session_id, session_skill_id) = ensure_group_run_session_with_pool(
+        pool,
+        &coordinator_employee_id,
+        &group_name,
+        &now,
+    )
+    .await?;
 
     let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
     sqlx::query(
@@ -807,11 +828,23 @@ pub async fn start_employee_group_run_with_pool(
     )
     .bind(&run_id)
     .bind(&group_id)
-    .bind("")
+    .bind(&session_id)
     .bind(&user_goal)
     .bind(&state)
     .bind(current_round)
     .bind(&now)
+    .bind(&now)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let user_msg_id = Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO messages (id, session_id, role, content, created_at) VALUES (?, ?, 'user', ?, ?)",
+    )
+    .bind(&user_msg_id)
+    .bind(&session_id)
+    .bind(&user_goal)
     .bind(&now)
     .execute(&mut *tx)
     .await
@@ -849,14 +882,229 @@ pub async fn start_employee_group_run_with_pool(
 
     tx.commit().await.map_err(|e| e.to_string())?;
 
+    let assistant_msg_id = Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO messages (id, session_id, role, content, created_at) VALUES (?, ?, 'assistant', ?, ?)",
+    )
+    .bind(&assistant_msg_id)
+    .bind(&session_id)
+    .bind(&outcome.final_report)
+    .bind(&now)
+    .execute(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
     Ok(EmployeeGroupRunResult {
         run_id,
         group_id,
+        session_id,
+        session_skill_id,
         state,
         current_round,
         final_report: outcome.final_report,
         steps,
     })
+}
+
+async fn ensure_group_run_session_with_pool(
+    pool: &SqlitePool,
+    coordinator_employee_id: &str,
+    group_name: &str,
+    now: &str,
+) -> Result<(String, String), String> {
+    let employee_row = sqlx::query(
+        "SELECT primary_skill_id, default_work_dir
+         FROM agent_employees
+         WHERE lower(employee_id) = lower(?) OR lower(role_id) = lower(?)
+         ORDER BY is_default DESC, updated_at DESC
+         LIMIT 1",
+    )
+    .bind(coordinator_employee_id)
+    .bind(coordinator_employee_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| e.to_string())?
+    .ok_or_else(|| "coordinator employee not found".to_string())?;
+
+    let skill_id_raw: String = employee_row
+        .try_get("primary_skill_id")
+        .map_err(|e| e.to_string())?;
+    let default_work_dir: String = employee_row
+        .try_get("default_work_dir")
+        .map_err(|e| e.to_string())?;
+    let session_skill_id = if skill_id_raw.trim().is_empty() {
+        "builtin-general".to_string()
+    } else {
+        skill_id_raw.trim().to_string()
+    };
+
+    let model_row =
+        sqlx::query("SELECT id FROM model_configs WHERE is_default = 1 ORDER BY rowid ASC LIMIT 1")
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| e.to_string())?;
+    let model_id = if let Some(row) = model_row {
+        row.try_get::<String, _>("id").map_err(|e| e.to_string())?
+    } else {
+        sqlx::query("SELECT id FROM model_configs ORDER BY rowid ASC LIMIT 1")
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| e.to_string())?
+            .and_then(|row| row.try_get::<String, _>("id").ok())
+            .ok_or_else(|| "model config not found".to_string())?
+    };
+
+    let session_id = Uuid::new_v4().to_string();
+    let title = format!("群组协作：{}", group_name.trim());
+    sqlx::query(
+        "INSERT INTO sessions (id, skill_id, title, created_at, model_id, permission_mode, work_dir, employee_id)
+         VALUES (?, ?, ?, ?, ?, 'accept_edits', ?, ?)",
+    )
+    .bind(&session_id)
+    .bind(&session_skill_id)
+    .bind(title)
+    .bind(now)
+    .bind(model_id)
+    .bind(default_work_dir)
+    .bind(coordinator_employee_id)
+    .execute(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok((session_id, session_skill_id))
+}
+
+pub async fn get_employee_group_run_snapshot_with_pool(
+    pool: &SqlitePool,
+    session_id: &str,
+) -> Result<Option<EmployeeGroupRunSnapshot>, String> {
+    let run_row = sqlx::query(
+        "SELECT id, group_id, session_id, state, current_round, user_goal
+         FROM group_runs
+         WHERE session_id = ?
+         ORDER BY created_at DESC
+         LIMIT 1",
+    )
+    .bind(session_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let Some(run_row) = run_row else {
+        return Ok(None);
+    };
+    let run_id: String = run_row.try_get("id").map_err(|e| e.to_string())?;
+    let group_id: String = run_row.try_get("group_id").map_err(|e| e.to_string())?;
+    let run_session_id: String = run_row.try_get("session_id").map_err(|e| e.to_string())?;
+    let state: String = run_row.try_get("state").map_err(|e| e.to_string())?;
+    let current_round: i64 = run_row.try_get("current_round").map_err(|e| e.to_string())?;
+    let user_goal: String = run_row.try_get("user_goal").map_err(|e| e.to_string())?;
+
+    let step_rows = sqlx::query(
+        "SELECT id, round_no, assignee_employee_id, status, output
+         FROM group_run_steps
+         WHERE run_id = ?
+         ORDER BY round_no ASC, started_at ASC, id ASC",
+    )
+    .bind(&run_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    let mut steps = Vec::with_capacity(step_rows.len());
+    for row in step_rows {
+        steps.push(EmployeeGroupRunStep {
+            id: row.try_get("id").map_err(|e| e.to_string())?,
+            round_no: row.try_get("round_no").map_err(|e| e.to_string())?,
+            assignee_employee_id: row
+                .try_get("assignee_employee_id")
+                .map_err(|e| e.to_string())?,
+            status: row.try_get("status").map_err(|e| e.to_string())?,
+            output: row.try_get("output").map_err(|e| e.to_string())?,
+        });
+    }
+    let completed = steps.iter().filter(|s| s.status == "completed").count();
+    let final_report = format!(
+        "计划：围绕“{}”共 {} 步。\n执行：已完成 {} 步。\n汇报：当前状态={}",
+        user_goal,
+        steps.len(),
+        completed,
+        state
+    );
+    Ok(Some(EmployeeGroupRunSnapshot {
+        run_id,
+        group_id,
+        session_id: run_session_id,
+        state,
+        current_round,
+        final_report,
+        steps,
+    }))
+}
+
+pub async fn cancel_employee_group_run_with_pool(pool: &SqlitePool, run_id: &str) -> Result<(), String> {
+    let now = chrono::Utc::now().to_rfc3339();
+    sqlx::query(
+        "UPDATE group_runs
+         SET state = 'cancelled', updated_at = ?
+         WHERE id = ? AND state NOT IN ('done', 'failed', 'cancelled')",
+    )
+    .bind(&now)
+    .bind(run_id)
+    .execute(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub async fn retry_employee_group_run_failed_steps_with_pool(
+    pool: &SqlitePool,
+    run_id: &str,
+) -> Result<(), String> {
+    let failed_rows = sqlx::query(
+        "SELECT id, output FROM group_run_steps WHERE run_id = ? AND status = 'failed'",
+    )
+    .bind(run_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    if failed_rows.is_empty() {
+        return Err("no failed steps to retry".to_string());
+    }
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
+    for row in failed_rows {
+        let step_id: String = row.try_get("id").map_err(|e| e.to_string())?;
+        let old_output: String = row.try_get("output").map_err(|e| e.to_string())?;
+        let retried_output = if old_output.trim().is_empty() {
+            "重试后完成".to_string()
+        } else {
+            format!("{old_output}\n重试后完成")
+        };
+        sqlx::query(
+            "UPDATE group_run_steps
+             SET status = 'completed', output = ?, finished_at = ?
+             WHERE id = ?",
+        )
+        .bind(retried_output)
+        .bind(&now)
+        .bind(step_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    }
+    sqlx::query(
+        "UPDATE group_runs
+         SET state = 'done', current_round = current_round + 1, updated_at = ?
+         WHERE id = ?",
+    )
+    .bind(&now)
+    .bind(run_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?;
+    tx.commit().await.map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 pub async fn resolve_target_employees_for_event(
@@ -1227,6 +1475,27 @@ pub async fn start_employee_group_run(
     db: State<'_, DbState>,
 ) -> Result<EmployeeGroupRunResult, String> {
     start_employee_group_run_with_pool(&db.0, input).await
+}
+
+#[tauri::command]
+pub async fn get_employee_group_run_snapshot(
+    session_id: String,
+    db: State<'_, DbState>,
+) -> Result<Option<EmployeeGroupRunSnapshot>, String> {
+    get_employee_group_run_snapshot_with_pool(&db.0, session_id.trim()).await
+}
+
+#[tauri::command]
+pub async fn cancel_employee_group_run(run_id: String, db: State<'_, DbState>) -> Result<(), String> {
+    cancel_employee_group_run_with_pool(&db.0, run_id.trim()).await
+}
+
+#[tauri::command]
+pub async fn retry_employee_group_run_failed_steps(
+    run_id: String,
+    db: State<'_, DbState>,
+) -> Result<(), String> {
+    retry_employee_group_run_failed_steps_with_pool(&db.0, run_id.trim()).await
 }
 
 #[tauri::command]
