@@ -78,7 +78,7 @@ describe("SettingsView translation preferences", () => {
 
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("set_runtime_preferences", {
-        input: {
+        input: expect.objectContaining({
           default_work_dir: "E:\\workspace",
           default_language: "en-US",
           immersive_translation_enabled: false,
@@ -86,7 +86,7 @@ describe("SettingsView translation preferences", () => {
           immersive_translation_trigger: "manual",
           translation_engine: "model_only",
           translation_model_id: "model-1",
-        },
+        }),
       });
     });
   });

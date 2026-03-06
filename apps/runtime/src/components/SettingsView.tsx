@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { useAppUpdater } from "../hooks/useAppUpdater";
 import {
   DEFAULT_MODEL_PROVIDER_ID,
   MODEL_PROVIDER_CATALOG,
@@ -98,6 +99,17 @@ const DEFAULT_RUNTIME_PREFERENCES: RuntimePreferences = {
 
 const DEFAULT_MODEL_PROVIDER = getModelProviderCatalogItem(DEFAULT_MODEL_PROVIDER_ID);
 
+function formatRuntimeTimestamp(value: string): string {
+  if (!value.trim()) {
+    return "尚未检查";
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+  return parsed.toLocaleString("zh-CN", { hour12: false });
+}
+
 export function SettingsView({
   onClose,
   showDevModelSetupTools = false,
@@ -190,7 +202,31 @@ export function SettingsView({
     "idle" | "saving" | "saved" | "error"
   >("idle");
   const [runtimePreferencesError, setRuntimePreferencesError] = useState("");
+  const [updaterPreferencesSaveState, setUpdaterPreferencesSaveState] = useState<
+    "idle" | "saving" | "saved" | "error"
+  >("idle");
+  const [updaterPreferencesError, setUpdaterPreferencesError] = useState("");
   const selectedModelProvider = getModelProviderCatalogItem(selectedModelProviderId);
+
+  async function persistRuntimePreferencesInput(input: Record<string, unknown>) {
+    const saved = await invoke<RuntimePreferences>("set_runtime_preferences", { input });
+    const normalized = normalizeRuntimePreferences(saved);
+    setRuntimePreferences(normalized);
+    return normalized;
+  }
+
+  const appUpdater = useAppUpdater({
+    autoCheck: runtimePreferences.auto_update_enabled,
+    dismissedVersion: runtimePreferences.dismissed_update_version,
+    lastCheckedAt: runtimePreferences.last_update_check_at,
+    onPreferencesChange: async (patch) => {
+      try {
+        await persistRuntimePreferencesInput(patch);
+      } catch (error) {
+        console.warn("保存更新状态失败:", error);
+      }
+    },
+  });
 
   function resetModelForm(providerId = DEFAULT_MODEL_PROVIDER_ID) {
     const provider = getModelProviderCatalogItem(providerId);
@@ -391,13 +427,30 @@ export function SettingsView({
       if (runtimePreferences.default_work_dir.trim()) {
         input.default_work_dir = runtimePreferences.default_work_dir;
       }
-      const saved = await invoke<RuntimePreferences>("set_runtime_preferences", { input });
-      setRuntimePreferences(normalizeRuntimePreferences(saved));
+      await persistRuntimePreferencesInput(input);
       setRuntimePreferencesSaveState("saved");
       setTimeout(() => setRuntimePreferencesSaveState("idle"), 1200);
     } catch (e) {
       setRuntimePreferencesSaveState("error");
       setRuntimePreferencesError("保存语言与翻译设置失败: " + String(e));
+    }
+  }
+
+  async function handleSaveUpdaterPreferences() {
+    setUpdaterPreferencesSaveState("saving");
+    setUpdaterPreferencesError("");
+    try {
+      await persistRuntimePreferencesInput({
+        auto_update_enabled: runtimePreferences.auto_update_enabled,
+        update_channel: runtimePreferences.update_channel,
+        dismissed_update_version: runtimePreferences.dismissed_update_version,
+        last_update_check_at: runtimePreferences.last_update_check_at,
+      });
+      setUpdaterPreferencesSaveState("saved");
+      setTimeout(() => setUpdaterPreferencesSaveState("idle"), 1200);
+    } catch (e) {
+      setUpdaterPreferencesSaveState("error");
+      setUpdaterPreferencesError("保存更新设置失败: " + String(e));
     }
   }
 
@@ -1401,6 +1454,145 @@ export function SettingsView({
         >
           {runtimePreferencesSaveState === "saving" ? "保存中..." : "保存语言与翻译设置"}
         </button>
+      </div>
+
+      <div className="bg-white rounded-lg p-4 space-y-3 mt-4">
+        <div className="text-xs font-medium text-gray-500">软件更新</div>
+        <label className="flex items-center gap-2 text-xs text-gray-600">
+          <input
+            aria-label="自动检查更新"
+            type="checkbox"
+            checked={runtimePreferences.auto_update_enabled}
+            onChange={(e) =>
+              setRuntimePreferences((prev) => ({
+                ...prev,
+                auto_update_enabled: e.target.checked,
+              }))
+            }
+          />
+          自动检查更新
+        </label>
+        <div className="text-[11px] text-gray-400">
+          当前仅支持 stable 渠道，推荐通过 Windows `.exe` 安装包使用应用内更新。
+        </div>
+        <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-3 text-xs text-gray-600 space-y-1">
+          <div>更新渠道：{runtimePreferences.update_channel}</div>
+          <div>最近检查：{formatRuntimeTimestamp(appUpdater.lastCheckedAt)}</div>
+        </div>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={handleSaveUpdaterPreferences}
+            disabled={updaterPreferencesSaveState === "saving"}
+            className="flex-1 bg-gray-100 hover:bg-gray-200 disabled:opacity-50 text-sm py-1.5 rounded-lg transition-all active:scale-[0.97]"
+          >
+            {updaterPreferencesSaveState === "saving" ? "保存中..." : "保存更新设置"}
+          </button>
+          <button
+            type="button"
+            onClick={() => void appUpdater.checkForUpdates({ manual: true })}
+            disabled={appUpdater.isWorking}
+            className="flex-1 bg-blue-500 hover:bg-blue-600 disabled:opacity-50 text-white text-sm py-1.5 rounded-lg transition-all active:scale-[0.97]"
+          >
+            {appUpdater.status === "checking" ? "检查中..." : "检查更新"}
+          </button>
+        </div>
+        {updaterPreferencesError && (
+          <div className="bg-red-50 text-red-600 text-xs px-2 py-1 rounded">
+            {updaterPreferencesError}
+          </div>
+        )}
+        {updaterPreferencesSaveState === "saved" && (
+          <div className="bg-green-50 text-green-600 text-xs px-2 py-1 rounded">
+            更新设置已保存
+          </div>
+        )}
+        {appUpdater.status === "up_to_date" && (
+          <div className="bg-green-50 text-green-600 text-xs px-2 py-1 rounded">
+            当前已是最新版本
+          </div>
+        )}
+        {appUpdater.status === "checking" && (
+          <div className="bg-blue-50 text-blue-600 text-xs px-2 py-1 rounded">正在检查更新</div>
+        )}
+        {appUpdater.status === "update_available" && appUpdater.availableUpdate && (
+          <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-3 space-y-2">
+            <div className="text-sm font-medium text-blue-700">
+              {`发现新版本 v${appUpdater.availableUpdate.version}`}
+            </div>
+            {appUpdater.availableUpdate.body && (
+              <div className="text-xs text-blue-700 whitespace-pre-wrap">
+                {appUpdater.availableUpdate.body}
+              </div>
+            )}
+            <div className="flex gap-2">
+              {appUpdater.canDismiss && (
+                <button
+                  type="button"
+                  onClick={appUpdater.dismissUpdate}
+                  className="flex-1 bg-white hover:bg-blue-100 text-blue-700 text-sm py-1.5 rounded-lg border border-blue-200 transition-all active:scale-[0.97]"
+                >
+                  稍后提醒我
+                </button>
+              )}
+              {appUpdater.canDownload && (
+                <button
+                  type="button"
+                  onClick={() => void appUpdater.downloadUpdate()}
+                  className="flex-1 bg-blue-500 hover:bg-blue-600 text-white text-sm py-1.5 rounded-lg transition-all active:scale-[0.97]"
+                >
+                  下载更新
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+        {appUpdater.status === "deferred" && appUpdater.availableUpdate && (
+          <div className="bg-amber-50 text-amber-700 text-xs px-2 py-1 rounded">
+            {`已忽略 v${appUpdater.availableUpdate.version}，稍后会再次提醒。`}
+          </div>
+        )}
+        {appUpdater.status === "downloading" && (
+          <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-3 space-y-1">
+            <div className="text-sm font-medium text-blue-700">正在下载更新</div>
+            <div className="text-xs text-blue-700">
+              {`已下载 ${appUpdater.downloadProgress.percent ?? 0}%`}
+            </div>
+          </div>
+        )}
+        {appUpdater.status === "ready_to_install" && appUpdater.availableUpdate && (
+          <div className="rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-3 space-y-2">
+            <div className="text-sm font-medium text-emerald-700">下载完成，准备安装</div>
+            <button
+              type="button"
+              onClick={() => void appUpdater.installUpdate()}
+              className="w-full bg-emerald-500 hover:bg-emerald-600 text-white text-sm py-1.5 rounded-lg transition-all active:scale-[0.97]"
+            >
+              立即安装更新
+            </button>
+          </div>
+        )}
+        {appUpdater.status === "installing" && (
+          <div className="bg-blue-50 text-blue-600 text-xs px-2 py-1 rounded">正在安装更新</div>
+        )}
+        {appUpdater.status === "restart_required" && (
+          <div className="bg-green-50 text-green-600 text-xs px-2 py-1 rounded">
+            更新安装已完成，重启应用后生效。
+          </div>
+        )}
+        {appUpdater.status === "failed" && (
+          <div className="rounded-lg border border-red-100 bg-red-50 px-3 py-3 space-y-2">
+            <div className="text-sm font-medium text-red-700">更新失败</div>
+            <div className="text-xs text-red-700">{appUpdater.error || "请稍后重试"}</div>
+            <button
+              type="button"
+              onClick={appUpdater.resetFailure}
+              className="w-full bg-white hover:bg-red-100 text-red-700 text-sm py-1.5 rounded-lg border border-red-200 transition-all active:scale-[0.97]"
+            >
+              清除错误状态
+            </button>
+          </div>
+        )}
       </div>
 
       {showDevModelSetupTools && (
