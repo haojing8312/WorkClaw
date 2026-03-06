@@ -76,25 +76,15 @@ WorkClaw 以单一集成桌面应用交付：
 
 ### 业务架构
 
-![业务架构](docs/diagrams/business-architecture.svg)
+[查看业务架构图（SVG）](docs/diagrams/business-architecture.svg)
 
-业务架构展示了从创作者到用户的完整价值流，分为 4 层：
-- **创作者价值链**：技能开发 → 打包/加密 → 发布
-- **核心平台**：Agent 引擎、安全系统、工具能力、模型集成
-- **用户价值链**：个人用户（浏览 → 安装 → 运行）+ 企业用户（团队/RBAC → 统一配置/SSO → Agent 员工）
-- **生态集成**：EvoMap 进化、WorkClaw 市场 + ClawHub 兼容、IM 远程调用
+业务架构展示从创作者到用户的完整价值流，涵盖创作者价值链、核心平台、用户价值链和生态集成 4 层。
 
 ### 技术架构
 
-![技术架构](docs/diagrams/technical-architecture.svg)
+[查看技术架构图（SVG）](docs/diagrams/technical-architecture.svg)
 
-技术栈分为 6 层：
-- **第 1 层 - 用户界面**：React 18 + TypeScript, shadcn/ui + Tailwind, Tauri 2.0 WebView
-- **第 2 层 - 应用服务**：Rust 后端, Node.js Sidecar (localhost:8765)
-- **第 3 层 - Agent 运行时**：ReAct 引擎、子 Agent 隔离、上下文管理、skillpack-rs 加密
-- **第 4 层 - 工具能力**：原生工具（Read/Write/Glob/Grep）、Bash/PowerShell、浏览器自动化、MCP 协议
-- **第 5 层 - 模型集成**：Anthropic API、OpenAI 兼容、国产模型（MiniMax、DeepSeek、GLM、Qwen、Moonshot）
-- **第 6 层 - 数据持久化**：SQLite、.skillpack 文件、安全工作区文件夹
+技术架构分为 6 层：用户界面、应用服务、Agent 运行时、工具能力、模型集成和数据持久化，对应 WorkClaw 的桌面端整体实现。
 
 ### WorkClaw 应用
 统一的 Agent 执行环境，用户可在同一应用内打包、安装和运行加密技能：
