@@ -25,6 +25,7 @@ function buildEmployee(id: string) {
     default_work_dir: "",
     openclaw_agent_id: id,
     enabled_scopes: ["feishu"],
+    routing_priority: 100,
     enabled: true,
     is_default: id === "pm",
     skill_ids: [],

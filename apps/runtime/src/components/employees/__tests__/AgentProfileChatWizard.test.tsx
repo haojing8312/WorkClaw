@@ -48,6 +48,7 @@ describe("AgentProfileChatWizard", () => {
           primary_skill_id: "builtin-general",
           default_work_dir: "E:/workspace",
           openclaw_agent_id: "project_manager",
+          routing_priority: 100,
           enabled_scopes: ["feishu"],
           enabled: true,
           is_default: false,
