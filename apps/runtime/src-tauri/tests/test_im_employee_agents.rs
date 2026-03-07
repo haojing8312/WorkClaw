@@ -2112,6 +2112,16 @@ async fn reassign_group_step_rejects_targets_not_allowed_by_execute_rules() {
     .execute(&pool)
     .await
     .expect("insert execute rule");
+    sqlx::query(
+        "INSERT INTO employee_group_rules (
+            id, group_id, from_employee_id, to_employee_id, relation_type, phase_scope, required, priority, created_at
+         ) VALUES (?, ?, 'menxia', 'hubu', 'delegate', 'execute', 0, 20, datetime('now'))",
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(&group_id)
+    .execute(&pool)
+    .await
+    .expect("insert non-coordinator execute rule");
 
     let outcome = start_employee_group_run_with_pool(
         &pool,

@@ -139,6 +139,7 @@ export function ChatView({
   const [imRouteDecisions, setImRouteDecisions] = useState<ImRouteDecisionEvent[]>([]);
   const [groupRunSnapshot, setGroupRunSnapshot] = useState<EmployeeGroupRunSnapshot | null>(null);
   const [groupRunMemberEmployeeIds, setGroupRunMemberEmployeeIds] = useState<string[]>([]);
+  const [groupRunCoordinatorEmployeeId, setGroupRunCoordinatorEmployeeId] = useState("");
   const [groupRunRules, setGroupRunRules] = useState<EmployeeGroupRule[]>([]);
   const [groupRunActionLoading, setGroupRunActionLoading] = useState<
     "approve" | "reject" | "pause" | "resume" | "retry" | "reassign" | null
@@ -248,6 +249,7 @@ export function ChatView({
     setImRouteDecisions([]);
     setGroupRunSnapshot(null);
     setGroupRunMemberEmployeeIds([]);
+    setGroupRunCoordinatorEmployeeId("");
     setGroupRunRules([]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
@@ -485,6 +487,7 @@ export function ChatView({
     const groupId = (groupRunSnapshot?.group_id || "").trim();
     if (!groupId) {
       setGroupRunMemberEmployeeIds([]);
+      setGroupRunCoordinatorEmployeeId("");
       setGroupRunRules([]);
       return () => {
         disposed = true;
@@ -504,10 +507,12 @@ export function ChatView({
           .map((value) => (value || "").trim())
           .filter((value) => value.length > 0);
         setGroupRunMemberEmployeeIds(memberIds);
+        setGroupRunCoordinatorEmployeeId((matchedGroup?.coordinator_employee_id || "").trim());
         setGroupRunRules(Array.isArray(rules) ? rules : []);
       } catch {
         if (!disposed) {
           setGroupRunMemberEmployeeIds([]);
+          setGroupRunCoordinatorEmployeeId("");
           setGroupRunRules([]);
         }
       }
@@ -972,31 +977,35 @@ export function ChatView({
     ),
   );
   const groupRunExecuteRuleTargets = (() => {
+    const coordinatorEmployeeId = groupRunCoordinatorEmployeeId.trim().toLowerCase();
     const memberSet = new Set(
       groupRunMemberEmployeeIds
         .map((value) => value.trim().toLowerCase())
         .filter((value) => value.length > 0),
     );
-    const targets = new Map<string, string>();
-    let hasExecuteRules = false;
+    const exactTargets = new Map<string, string>();
+    const fallbackTargets = new Map<string, string>();
     for (const rule of groupRunRules) {
       const relationType = (rule.relation_type || "").trim().toLowerCase();
       const phaseScope = (rule.phase_scope || "").trim().toLowerCase();
       if (!["delegate", "handoff"].includes(relationType)) continue;
       if (phaseScope.length > 0 && !["execute", "all", "*"].includes(phaseScope)) continue;
-      hasExecuteRules = true;
       const targetEmployeeId = (rule.to_employee_id || "").trim();
       const normalizedTargetEmployeeId = targetEmployeeId.toLowerCase();
       if (!targetEmployeeId || (memberSet.size > 0 && !memberSet.has(normalizedTargetEmployeeId))) {
         continue;
       }
-      if (!targets.has(normalizedTargetEmployeeId)) {
-        targets.set(normalizedTargetEmployeeId, targetEmployeeId);
+      if (!fallbackTargets.has(normalizedTargetEmployeeId)) {
+        fallbackTargets.set(normalizedTargetEmployeeId, targetEmployeeId);
+      }
+      const fromEmployeeId = (rule.from_employee_id || "").trim().toLowerCase();
+      if (coordinatorEmployeeId && fromEmployeeId === coordinatorEmployeeId && !exactTargets.has(normalizedTargetEmployeeId)) {
+        exactTargets.set(normalizedTargetEmployeeId, targetEmployeeId);
       }
     }
     return {
-      hasExecuteRules,
-      ids: Array.from(targets.values()),
+      hasExecuteRules: fallbackTargets.size > 0,
+      ids: Array.from((exactTargets.size > 0 ? exactTargets : fallbackTargets).values()),
     };
   })();
   const groupRunCandidateEmployeeIds = Array.from(

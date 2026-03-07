@@ -1794,6 +1794,17 @@ describe("ChatView IM routing panel", () => {
             priority: 20,
             created_at: "2026-03-07T00:00:00Z",
           },
+          {
+            id: "rule-execute-libu-other-source",
+            group_id: "group-reassign-members-1",
+            from_employee_id: "门下",
+            to_employee_id: "礼部",
+            relation_type: "delegate",
+            phase_scope: "execute",
+            required: false,
+            priority: 30,
+            created_at: "2026-03-07T00:00:00Z",
+          },
         ]);
       }
       if (command === "get_employee_group_run_snapshot") {

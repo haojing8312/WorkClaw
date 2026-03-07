@@ -90,7 +90,10 @@ async fn load_execute_reassignment_targets_with_pool(
     run_id: &str,
 ) -> Result<(Vec<String>, bool), String> {
     let row = sqlx::query(
-        "SELECT g.id, COALESCE(g.member_employee_ids_json, '[]')
+        "SELECT g.id,
+                COALESCE(g.member_employee_ids_json, '[]'),
+                COALESCE(r.main_employee_id, ''),
+                COALESCE(g.coordinator_employee_id, '')
          FROM group_runs r
          INNER JOIN employee_groups g ON g.id = r.group_id
          WHERE r.id = ?",
@@ -103,13 +106,21 @@ async fn load_execute_reassignment_targets_with_pool(
 
     let group_id: String = row.try_get(0).map_err(|e| e.to_string())?;
     let member_employee_ids_json: String = row.try_get(1).map_err(|e| e.to_string())?;
+    let main_employee_id: String = row.try_get(2).map_err(|e| e.to_string())?;
+    let coordinator_employee_id: String = row.try_get(3).map_err(|e| e.to_string())?;
     let member_employee_ids = serde_json::from_str::<Vec<String>>(&member_employee_ids_json)
         .unwrap_or_default();
     let normalized_member_ids = normalize_member_employee_ids(&member_employee_ids);
     let member_set = normalized_member_ids.iter().cloned().collect::<std::collections::HashSet<_>>();
+    let dispatch_source_employee_id = if main_employee_id.trim().is_empty() {
+        coordinator_employee_id.trim().to_lowercase()
+    } else {
+        main_employee_id.trim().to_lowercase()
+    };
 
     let rules = list_employee_group_rules_with_pool(pool, &group_id).await?;
-    let mut eligible_targets = Vec::new();
+    let mut exact_targets = Vec::new();
+    let mut fallback_targets = Vec::new();
     let mut has_execute_rules = false;
     for rule in rules {
         if !group_rule_allows_execute_reassignment(&rule) {
@@ -123,7 +134,12 @@ async fn load_execute_reassignment_targets_with_pool(
         if !member_set.is_empty() && !member_set.contains(&normalized_target) {
             continue;
         }
-        eligible_targets.push(normalized_target);
+        fallback_targets.push(normalized_target.clone());
+        if !dispatch_source_employee_id.is_empty()
+            && rule.from_employee_id.trim().eq_ignore_ascii_case(&dispatch_source_employee_id)
+        {
+            exact_targets.push(normalized_target);
+        }
     }
 
     if !has_execute_rules {
@@ -132,7 +148,11 @@ async fn load_execute_reassignment_targets_with_pool(
 
     let mut seen = std::collections::HashSet::new();
     Ok((
-        eligible_targets
+        (if exact_targets.is_empty() {
+            fallback_targets
+        } else {
+            exact_targets
+        })
             .into_iter()
             .filter(|employee_id| seen.insert(employee_id.clone()))
             .collect(),
