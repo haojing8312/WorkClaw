@@ -240,11 +240,12 @@ export default function App() {
     sourceStepId: string;
     sourceEmployeeId?: string;
     assigneeEmployeeId?: string;
-    sourceStepTimeline?: Array<{ label: string; createdAt?: string }>;
+    sourceStepTimeline?: Array<{ eventId?: string; label: string; createdAt?: string }>;
   } | null>(null);
   const [pendingGroupRunStepFocusRequest, setPendingGroupRunStepFocusRequest] = useState<{
     sessionId: string;
     stepId: string;
+    eventId?: string;
     nonce: number;
   } | null>(null);
   const [employeeAssistantSessionContexts, setEmployeeAssistantSessionContexts] = useState<
@@ -2098,6 +2099,7 @@ export default function App() {
                 onOpenSession={(nextSessionId, options) => {
                   const focusHint = (options?.focusHint || "").trim();
                   const groupRunStepFocusId = (options?.groupRunStepFocusId || "").trim();
+                  const groupRunEventFocusId = (options?.groupRunEventFocusId || "").trim();
                   setPendingSessionFocusRequest(
                     focusHint
                       ? {
@@ -2112,6 +2114,7 @@ export default function App() {
                       ? {
                           sessionId: nextSessionId,
                           stepId: groupRunStepFocusId,
+                          eventId: groupRunEventFocusId || undefined,
                           nonce: Date.now(),
                         }
                       : null,
@@ -2120,6 +2123,7 @@ export default function App() {
                   const sourceStepId = (options?.sourceStepId || "").trim();
                   const sourceStepTimeline = (options?.sourceStepTimeline || [])
                     .map((item) => ({
+                      eventId: (item?.eventId || "").trim() || undefined,
                       label: (item?.label || "").trim(),
                       createdAt: (item?.createdAt || "").trim() || undefined,
                     }))
@@ -2153,6 +2157,7 @@ export default function App() {
                     ? {
                         nonce: pendingGroupRunStepFocusRequest.nonce,
                         stepId: pendingGroupRunStepFocusRequest.stepId,
+                        eventId: pendingGroupRunStepFocusRequest.eventId,
                       }
                     : undefined
                 }

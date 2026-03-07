@@ -40,6 +40,11 @@ vi.mock("../components/ChatView", () => ({
             {props.groupRunStepFocusRequest.stepId}
           </div>
         ) : null}
+        {props.groupRunStepFocusRequest?.eventId ? (
+          <div data-testid="chat-view-group-run-event-focus">
+            {props.groupRunStepFocusRequest.eventId}
+          </div>
+        ) : null}
         {props.sessionExecutionContext ? (
           <div data-testid="chat-view-session-execution-context">
             {props.sessionExecutionContext.sourceSessionId}
@@ -65,10 +70,12 @@ vi.mock("../components/ChatView", () => ({
               assigneeEmployeeId: "工部",
               sourceStepTimeline: [
                 {
+                  eventId: "evt-open-session-1",
                   label: "step_created · 尚书 -> 工部",
                   createdAt: "2026-03-07T00:59:00Z",
                 },
                 {
+                  eventId: "evt-open-session-2",
                   label: "step_dispatched · 尚书 -> 工部",
                   createdAt: "2026-03-07T01:00:00Z",
                 },
@@ -91,6 +98,16 @@ vi.mock("../components/ChatView", () => ({
           }
         >
           open-source-step-focus
+        </button>
+        <button
+          onClick={() =>
+            props.onOpenSession?.("session-run-open-step", {
+              groupRunStepFocusId: "step-open-session-1",
+              groupRunEventFocusId: "evt-open-session-2",
+            })
+          }
+        >
+          open-source-step-event-focus
         </button>
       </div>
     );
@@ -278,6 +295,32 @@ describe("App chat landing", () => {
       expect(screen.getByTestId("chat-view-session-id")).toHaveTextContent("session-run-open-step");
       expect(screen.getByTestId("chat-view-group-run-step-focus")).toHaveTextContent(
         "step-open-session-1",
+      );
+    });
+  });
+
+  test("passes group run event focus request when reopening the source session", async () => {
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("new-session-landing")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "select-first-session" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("chat-view-session-id")).toHaveTextContent("session-1");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "open-source-step-event-focus" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("chat-view-session-id")).toHaveTextContent("session-run-open-step");
+      expect(screen.getByTestId("chat-view-group-run-step-focus")).toHaveTextContent(
+        "step-open-session-1",
+      );
+      expect(screen.getByTestId("chat-view-group-run-event-focus")).toHaveTextContent(
+        "evt-open-session-2",
       );
     });
   });

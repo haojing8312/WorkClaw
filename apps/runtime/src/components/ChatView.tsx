@@ -21,6 +21,7 @@ type ClawhubInstallCandidate = {
 };
 
 type ChatSessionTimelineItem = {
+  eventId?: string;
   label: string;
   createdAt?: string;
 };
@@ -28,6 +29,7 @@ type ChatSessionTimelineItem = {
 type ChatSessionOpenOptions = {
   focusHint?: string;
   groupRunStepFocusId?: string;
+  groupRunEventFocusId?: string;
   sourceSessionId?: string;
   sourceStepId?: string;
   sourceEmployeeId?: string;
@@ -50,7 +52,7 @@ interface Props {
   workDir?: string;
   onOpenSession?: (sessionId: string, options?: ChatSessionOpenOptions) => Promise<void> | void;
   sessionFocusRequest?: { nonce: number; snippet: string };
-  groupRunStepFocusRequest?: { nonce: number; stepId: string };
+  groupRunStepFocusRequest?: { nonce: number; stepId: string; eventId?: string };
   sessionExecutionContext?: ChatSessionExecutionContext;
   onReturnToSourceSession?: (sessionId: string) => Promise<void> | void;
   onSessionUpdate?: () => void;
@@ -146,6 +148,7 @@ export function ChatView({
   const [mainSummaryDelivered, setMainSummaryDelivered] = useState(false);
   const [highlightedMessageIndex, setHighlightedMessageIndex] = useState<number | null>(null);
   const [highlightedGroupRunStepId, setHighlightedGroupRunStepId] = useState<string | null>(null);
+  const [highlightedGroupRunStepEventId, setHighlightedGroupRunStepEventId] = useState<string | null>(null);
   const [showDelegationHistory, setShowDelegationHistory] = useState(false);
   const [delegationCards, setDelegationCards] = useState<
     Array<{
@@ -164,6 +167,7 @@ export function ChatView({
   const messageElementRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const lastHandledGroupRunStepFocusNonceRef = useRef<number | null>(null);
   const groupRunStepElementRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const groupRunStepEventElementRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   // File Upload: 附件状态
   const [attachedFiles, setAttachedFiles] = useState<FileAttachment[]>([]);
@@ -294,6 +298,7 @@ export function ChatView({
     setExpandedGroupRunStepIds([]);
     setHighlightedMessageIndex(null);
     setHighlightedGroupRunStepId(null);
+    setHighlightedGroupRunStepEventId(null);
     lastHandledGroupRunStepFocusNonceRef.current = null;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
@@ -363,15 +368,25 @@ export function ChatView({
     if (!matchedStep) {
       return;
     }
+    const targetEventId = (groupRunStepFocusRequest?.eventId || "").trim();
+    if (targetEventId && !expandedGroupRunStepIds.includes(targetStepId)) {
+      setExpandedGroupRunStepIds((prev) => (prev.includes(targetStepId) ? prev : [...prev, targetStepId]));
+      return;
+    }
 
     lastHandledGroupRunStepFocusNonceRef.current = groupRunStepFocusRequest?.nonce ?? null;
     setHighlightedGroupRunStepId(targetStepId);
-    groupRunStepElementRefs.current[targetStepId]?.scrollIntoView({ behavior: "smooth", block: "center" });
+    setHighlightedGroupRunStepEventId(targetEventId || null);
+    const targetElement =
+      (targetEventId ? groupRunStepEventElementRefs.current[targetEventId] : null) ||
+      groupRunStepElementRefs.current[targetStepId];
+    targetElement?.scrollIntoView({ behavior: "smooth", block: "center" });
     const timer = setTimeout(() => {
       setHighlightedGroupRunStepId((current) => (current === targetStepId ? null : current));
+      setHighlightedGroupRunStepEventId((current) => (current === targetEventId ? null : current));
     }, 2400);
     return () => clearTimeout(timer);
-  }, [groupRunSnapshot, groupRunStepFocusRequest, sessionId]);
+  }, [expandedGroupRunStepIds, groupRunSnapshot, groupRunStepFocusRequest, sessionId]);
 
   // stream-token 事件监听
   useEffect(() => {
@@ -1158,6 +1173,7 @@ export function ChatView({
       if (!label) continue;
       const list = byStepId.get(event.step_id) || [];
       list.push({
+        eventId: String(event.id || "").trim() || undefined,
         label,
         createdAt: String(event.created_at || "").trim() || undefined,
       });
@@ -1688,6 +1704,7 @@ export function ChatView({
                       onClick={() =>
                         void onOpenSession(sessionExecutionContext.sourceSessionId, {
                           groupRunStepFocusId: sessionExecutionContext.sourceStepId,
+                          groupRunEventFocusId: item.eventId,
                         })
                       }
                       className="block text-left underline underline-offset-2 hover:text-sky-900"
@@ -1958,6 +1975,36 @@ export function ChatView({
                             <div>{`session_id：${detailSessionId || "暂无"}`}</div>
                             <div>{`输出摘要：${detailOutputSummary || "暂无"}`}</div>
                             <div>{`最近事件时间：${latestEventCreatedAt || "暂无"}`}</div>
+                            {sourceStepTimeline.length > 0 && (
+                              <div className="space-y-1">
+                                <div className="font-medium text-indigo-800">步骤事件</div>
+                                {sourceStepTimeline.map((item, index) => {
+                                  const eventId = (item.eventId || "").trim();
+                                  const isGroupRunEventFocusTarget =
+                                    eventId.length > 0 && highlightedGroupRunStepEventId === eventId;
+                                  return (
+                                    <div
+                                      key={`${eventId || item.label}-${item.createdAt || index}`}
+                                      ref={(node) => {
+                                        if (eventId) {
+                                          groupRunStepEventElementRefs.current[eventId] = node;
+                                        }
+                                      }}
+                                      data-testid={`group-run-step-card-${step.id}-event-${eventId || index}`}
+                                      data-group-run-step-event-highlighted={
+                                        isGroupRunEventFocusTarget ? "true" : "false"
+                                      }
+                                      className={
+                                        "rounded px-1.5 py-1 transition-all " +
+                                        (isGroupRunEventFocusTarget ? "bg-amber-100 ring-1 ring-amber-300 " : "")
+                                      }
+                                    >
+                                      {item.createdAt ? `${item.label} · ${item.createdAt}` : item.label}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
                             {onOpenSession && detailSessionId && (
                               <button
                                 type="button"
