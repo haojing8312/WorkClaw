@@ -5,7 +5,7 @@ use runtime_lib::commands::employee_agents::{
 };
 
 #[tokio::test]
-async fn upsert_employee_mirrors_employee_id_to_legacy_ids() {
+async fn upsert_employee_keeps_employee_id_canonical_and_preserves_explicit_openclaw_mapping() {
     let (pool, _tmp) = helpers::setup_test_db().await;
 
     let id = upsert_agent_employee_with_pool(
@@ -42,7 +42,7 @@ async fn upsert_employee_mirrors_employee_id_to_legacy_ids() {
 
     assert_eq!(row.0, "project_manager");
     assert_eq!(row.1, "project_manager");
-    assert_eq!(row.2, "project_manager");
+    assert_eq!(row.2, "legacy_agent_should_be_ignored");
 }
 
 #[tokio::test]

@@ -32,3 +32,4 @@ apps/runtime/test-results/
 /0
 /x.l.includes('employees')
 apps/runtime/src-tauri/target-tests/
+apps/runtime/src-tauri/target-verify/

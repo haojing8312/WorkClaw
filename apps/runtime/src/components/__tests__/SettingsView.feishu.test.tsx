@@ -7,7 +7,7 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
 }));
 
-describe("SettingsView feishu console", () => {
+describe("SettingsView feishu routing tab", () => {
   beforeEach(() => {
     invokeMock.mockReset();
     invokeMock.mockImplementation((command: string) => {
@@ -26,13 +26,13 @@ describe("SettingsView feishu console", () => {
     });
   });
 
-  test("does not expose feishu collaboration tab for regular users", async () => {
+  test("shows feishu collaboration tab but keeps routing data lazy-loaded", async () => {
     render(<SettingsView onClose={() => {}} />);
 
     await waitFor(() => {
-      expect(screen.queryByRole("button", { name: "飞书协作" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "飞书协作" })).toBeInTheDocument();
     });
 
-    expect(invokeMock).not.toHaveBeenCalledWith("get_feishu_gateway_settings");
+    expect(invokeMock).not.toHaveBeenCalledWith("list_im_routing_bindings");
   });
 });
