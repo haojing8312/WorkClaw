@@ -27,6 +27,7 @@ type ChatSessionTimelineItem = {
 
 type ChatSessionOpenOptions = {
   focusHint?: string;
+  groupRunStepFocusId?: string;
   sourceSessionId?: string;
   sourceStepId?: string;
   sourceEmployeeId?: string;
@@ -49,6 +50,7 @@ interface Props {
   workDir?: string;
   onOpenSession?: (sessionId: string, options?: ChatSessionOpenOptions) => Promise<void> | void;
   sessionFocusRequest?: { nonce: number; snippet: string };
+  groupRunStepFocusRequest?: { nonce: number; stepId: string };
   sessionExecutionContext?: ChatSessionExecutionContext;
   onReturnToSourceSession?: (sessionId: string) => Promise<void> | void;
   onSessionUpdate?: () => void;
@@ -74,6 +76,7 @@ export function ChatView({
   workDir,
   onOpenSession,
   sessionFocusRequest,
+  groupRunStepFocusRequest,
   sessionExecutionContext,
   onReturnToSourceSession,
   onSessionUpdate,
@@ -142,6 +145,7 @@ export function ChatView({
   const [mainRoleName, setMainRoleName] = useState("");
   const [mainSummaryDelivered, setMainSummaryDelivered] = useState(false);
   const [highlightedMessageIndex, setHighlightedMessageIndex] = useState<number | null>(null);
+  const [highlightedGroupRunStepId, setHighlightedGroupRunStepId] = useState<string | null>(null);
   const [showDelegationHistory, setShowDelegationHistory] = useState(false);
   const [delegationCards, setDelegationCards] = useState<
     Array<{
@@ -158,6 +162,8 @@ export function ChatView({
   const mainRoleNameRef = useRef("");
   const lastHandledSessionFocusNonceRef = useRef<number | null>(null);
   const messageElementRefs = useRef<Record<number, HTMLDivElement | null>>({});
+  const lastHandledGroupRunStepFocusNonceRef = useRef<number | null>(null);
+  const groupRunStepElementRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   // File Upload: 附件状态
   const [attachedFiles, setAttachedFiles] = useState<FileAttachment[]>([]);
@@ -287,6 +293,8 @@ export function ChatView({
     setGroupRunRules([]);
     setExpandedGroupRunStepIds([]);
     setHighlightedMessageIndex(null);
+    setHighlightedGroupRunStepId(null);
+    lastHandledGroupRunStepFocusNonceRef.current = null;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
@@ -342,6 +350,28 @@ export function ChatView({
     }, 2400);
     return () => clearTimeout(timer);
   }, [messages, sessionFocusRequest, sessionId]);
+
+  useEffect(() => {
+    const targetStepId = (groupRunStepFocusRequest?.stepId || "").trim();
+    if (!targetStepId || !groupRunSnapshot) {
+      return;
+    }
+    if (lastHandledGroupRunStepFocusNonceRef.current === groupRunStepFocusRequest?.nonce) {
+      return;
+    }
+    const matchedStep = (groupRunSnapshot.steps || []).find((step) => (step.id || "").trim() === targetStepId);
+    if (!matchedStep) {
+      return;
+    }
+
+    lastHandledGroupRunStepFocusNonceRef.current = groupRunStepFocusRequest?.nonce ?? null;
+    setHighlightedGroupRunStepId(targetStepId);
+    groupRunStepElementRefs.current[targetStepId]?.scrollIntoView({ behavior: "smooth", block: "center" });
+    const timer = setTimeout(() => {
+      setHighlightedGroupRunStepId((current) => (current === targetStepId ? null : current));
+    }, 2400);
+    return () => clearTimeout(timer);
+  }, [groupRunSnapshot, groupRunStepFocusRequest, sessionId]);
 
   // stream-token 事件监听
   useEffect(() => {
@@ -1648,14 +1678,31 @@ export function ChatView({
                 data-testid="chat-session-execution-context-timeline"
                 className="space-y-1 text-[10px] text-sky-800/90"
               >
-                {(sessionExecutionContext.sourceStepTimeline || []).map((item, index) => (
-                  <div
-                    key={`${item.label}-${item.createdAt || index}`}
-                    data-testid={`chat-session-execution-context-timeline-item-${index}`}
-                  >
-                    {item.createdAt ? `${item.label} · ${item.createdAt}` : item.label}
-                  </div>
-                ))}
+                {(sessionExecutionContext.sourceStepTimeline || []).map((item, index) => {
+                  const label = item.createdAt ? `${item.label} · ${item.createdAt}` : item.label;
+                  return onOpenSession ? (
+                    <button
+                      key={`${item.label}-${item.createdAt || index}`}
+                      type="button"
+                      data-testid={`chat-session-execution-context-timeline-item-${index}`}
+                      onClick={() =>
+                        void onOpenSession(sessionExecutionContext.sourceSessionId, {
+                          groupRunStepFocusId: sessionExecutionContext.sourceStepId,
+                        })
+                      }
+                      className="block text-left underline underline-offset-2 hover:text-sky-900"
+                    >
+                      {label}
+                    </button>
+                  ) : (
+                    <div
+                      key={`${item.label}-${item.createdAt || index}`}
+                      data-testid={`chat-session-execution-context-timeline-item-${index}`}
+                    >
+                      {label}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -1851,11 +1898,20 @@ export function ChatView({
                       detailOutputSummary,
                       latestEventCreatedAt,
                       sourceStepTimeline,
-                    }) => (
+                    }) => {
+                      const isGroupRunStepFocusTarget = highlightedGroupRunStepId === step.id;
+                      return (
                       <div
                         key={step.id}
+                        ref={(node) => {
+                          groupRunStepElementRefs.current[step.id] = node;
+                        }}
                         data-testid={`group-run-step-card-${step.id}`}
-                        className="rounded border border-indigo-200 bg-white/70 px-2.5 py-2"
+                        data-group-run-step-highlighted={isGroupRunStepFocusTarget ? "true" : "false"}
+                        className={
+                          "rounded border border-indigo-200 bg-white/70 px-2.5 py-2 transition-all " +
+                          (isGroupRunStepFocusTarget ? "ring-2 ring-amber-300 bg-amber-50/80 " : "")
+                        }
                       >
                         <div className="text-[11px] font-medium text-indigo-800">
                           {step.assignee_employee_id || step.id}
@@ -1925,7 +1981,8 @@ export function ChatView({
                           </div>
                         )}
                       </div>
-                    ),
+                    );
+                    },
                   )}
                 </div>
               </div>

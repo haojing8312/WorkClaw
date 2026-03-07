@@ -242,6 +242,11 @@ export default function App() {
     assigneeEmployeeId?: string;
     sourceStepTimeline?: Array<{ label: string; createdAt?: string }>;
   } | null>(null);
+  const [pendingGroupRunStepFocusRequest, setPendingGroupRunStepFocusRequest] = useState<{
+    sessionId: string;
+    stepId: string;
+    nonce: number;
+  } | null>(null);
   const [employeeAssistantSessionContexts, setEmployeeAssistantSessionContexts] = useState<
     Record<string, EmployeeAssistantSessionContext>
   >({});
@@ -2092,11 +2097,21 @@ export default function App() {
                 workDir={selectedSession?.work_dir}
                 onOpenSession={(nextSessionId, options) => {
                   const focusHint = (options?.focusHint || "").trim();
+                  const groupRunStepFocusId = (options?.groupRunStepFocusId || "").trim();
                   setPendingSessionFocusRequest(
                     focusHint
                       ? {
                           sessionId: nextSessionId,
                           snippet: focusHint,
+                          nonce: Date.now(),
+                        }
+                      : null,
+                  );
+                  setPendingGroupRunStepFocusRequest(
+                    groupRunStepFocusId
+                      ? {
+                          sessionId: nextSessionId,
+                          stepId: groupRunStepFocusId,
                           nonce: Date.now(),
                         }
                       : null,
@@ -2132,6 +2147,15 @@ export default function App() {
                       }
                     : undefined
                 }
+                groupRunStepFocusRequest={
+                  pendingGroupRunStepFocusRequest &&
+                  pendingGroupRunStepFocusRequest.sessionId === selectedSessionId
+                    ? {
+                        nonce: pendingGroupRunStepFocusRequest.nonce,
+                        stepId: pendingGroupRunStepFocusRequest.stepId,
+                      }
+                    : undefined
+                }
                 sessionExecutionContext={
                   pendingSessionExecutionContext &&
                   pendingSessionExecutionContext.targetSessionId === selectedSessionId
@@ -2145,6 +2169,7 @@ export default function App() {
                     : undefined
                 }
                 onReturnToSourceSession={(sourceSessionId) => {
+                  setPendingGroupRunStepFocusRequest(null);
                   setPendingSessionExecutionContext(null);
                   return handleOpenGroupRunSession(sourceSessionId, selectedSkill.id);
                 }}

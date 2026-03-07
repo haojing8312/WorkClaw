@@ -35,6 +35,11 @@ vi.mock("../components/ChatView", () => ({
     return (
       <div data-testid="chat-view">
         <div data-testid="chat-view-session-id">{props.sessionId}</div>
+        {props.groupRunStepFocusRequest ? (
+          <div data-testid="chat-view-group-run-step-focus">
+            {props.groupRunStepFocusRequest.stepId}
+          </div>
+        ) : null}
         {props.sessionExecutionContext ? (
           <div data-testid="chat-view-session-execution-context">
             {props.sessionExecutionContext.sourceSessionId}
@@ -77,6 +82,15 @@ vi.mock("../components/ChatView", () => ({
           onClick={() => props.onReturnToSourceSession?.("session-run-open-step")}
         >
           return-to-source-session
+        </button>
+        <button
+          onClick={() =>
+            props.onOpenSession?.("session-run-open-step", {
+              groupRunStepFocusId: "step-open-session-1",
+            })
+          }
+        >
+          open-source-step-focus
         </button>
       </div>
     );
@@ -242,6 +256,29 @@ describe("App chat landing", () => {
 
     await waitFor(() => {
       expect(screen.getByTestId("chat-view-session-id")).toHaveTextContent("session-run-open-step");
+    });
+  });
+
+  test("passes group run step focus request when reopening the source session", async () => {
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("new-session-landing")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "select-first-session" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("chat-view-session-id")).toHaveTextContent("session-1");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "open-source-step-focus" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("chat-view-session-id")).toHaveTextContent("session-run-open-step");
+      expect(screen.getByTestId("chat-view-group-run-step-focus")).toHaveTextContent(
+        "step-open-session-1",
+      );
     });
   });
 });
