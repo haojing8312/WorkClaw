@@ -2517,11 +2517,131 @@ describe("ChatView IM routing panel", () => {
       sourceStepTimeline: [
         {
           eventId: "evt-open-session-1",
+          linkedSessionId: "session-step-gongbu-1",
           label: "step_created · 尚书 -> 工部",
           createdAt: "2026-03-07T00:59:00Z",
         },
         {
           eventId: "evt-open-session-2",
+          linkedSessionId: "session-step-gongbu-1",
+          label: "step_dispatched · 尚书 -> 工部",
+          createdAt: "2026-03-07T01:00:00Z",
+        },
+      ],
+    });
+  });
+
+  test("opens the linked execution session from a step event item when available", async () => {
+    const handleOpenSession = vi.fn();
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_messages") return Promise.resolve([]);
+      if (command === "list_sessions") return Promise.resolve([]);
+      if (command === "get_sessions") return Promise.resolve([]);
+      if (command === "get_employee_group_run_snapshot") {
+        return Promise.resolve({
+          run_id: "run-open-step-event-session-1",
+          group_id: "group-open-step-event-session-1",
+          session_id: "session-run-open-step",
+          state: "executing",
+          current_round: 1,
+          current_phase: "execute",
+          review_round: 0,
+          status_reason: "",
+          waiting_for_employee_id: "工部",
+          waiting_for_user: false,
+          final_report: "计划：共 2 步",
+          steps: [
+            {
+              id: "step-open-session-1",
+              round_no: 1,
+              step_type: "execute",
+              assignee_employee_id: "工部",
+              dispatch_source_employee_id: "尚书",
+              status: "running",
+              output: "正在整理交付清单",
+              session_id: "session-step-gongbu-1",
+            },
+          ],
+          events: [
+            {
+              id: "evt-open-session-1",
+              step_id: "step-open-session-1",
+              event_type: "step_created",
+              payload_json:
+                "{\"assignee_employee_id\":\"工部\",\"dispatch_source_employee_id\":\"尚书\",\"session_id\":\"session-step-gongbu-1\"}",
+              created_at: "2026-03-07T00:59:00Z",
+            },
+            {
+              id: "evt-open-session-2",
+              step_id: "step-open-session-1",
+              event_type: "step_dispatched",
+              payload_json:
+                "{\"assignee_employee_id\":\"工部\",\"dispatch_source_employee_id\":\"尚书\",\"session_id\":\"session-step-gongbu-1\"}",
+              created_at: "2026-03-07T01:00:00Z",
+            },
+          ],
+        });
+      }
+      if (command === "get_model_configs") return Promise.resolve([]);
+      if (command === "get_session_runtime_bindings") return Promise.resolve(null);
+      return Promise.resolve(null);
+    });
+
+    render(
+      <ChatView
+        skill={{
+          id: "builtin-general",
+          name: "General",
+          description: "desc",
+          version: "1.0.0",
+          author: "test",
+          recommended_model: "",
+          tags: [],
+          created_at: new Date().toISOString(),
+        }}
+        models={[
+          {
+            id: "m1",
+            name: "model",
+            api_format: "openai",
+            base_url: "https://example.com",
+            model_name: "model",
+            is_default: true,
+          },
+        ]}
+        sessionId="session-run-open-step"
+        onOpenSession={handleOpenSession}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("group-run-step-card-step-open-session-1")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId("group-run-step-card-step-open-session-1-toggle"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("group-run-step-card-step-open-session-1-event-evt-open-session-2")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId("group-run-step-card-step-open-session-1-event-evt-open-session-2"));
+
+    expect(handleOpenSession).toHaveBeenCalledWith("session-step-gongbu-1", {
+      focusHint: "正在整理交付清单",
+      sourceSessionId: "session-run-open-step",
+      sourceStepId: "step-open-session-1",
+      sourceEmployeeId: "尚书",
+      assigneeEmployeeId: "工部",
+      sourceStepTimeline: [
+        {
+          eventId: "evt-open-session-1",
+          linkedSessionId: "session-step-gongbu-1",
+          label: "step_created · 尚书 -> 工部",
+          createdAt: "2026-03-07T00:59:00Z",
+        },
+        {
+          eventId: "evt-open-session-2",
+          linkedSessionId: "session-step-gongbu-1",
           label: "step_dispatched · 尚书 -> 工部",
           createdAt: "2026-03-07T01:00:00Z",
         },

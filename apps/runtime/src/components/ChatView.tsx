@@ -22,6 +22,7 @@ type ClawhubInstallCandidate = {
 
 type ChatSessionTimelineItem = {
   eventId?: string;
+  linkedSessionId?: string;
   label: string;
   createdAt?: string;
 };
@@ -1171,9 +1172,12 @@ export function ChatView({
       if (!event.step_id) continue;
       const label = formatGroupRunEventLabel(event).trim();
       if (!label) continue;
+      const payload = parseGroupRunEventPayload(event);
+      const relatedStep = groupRunStepMap.get(event.step_id);
       const list = byStepId.get(event.step_id) || [];
       list.push({
         eventId: String(event.id || "").trim() || undefined,
+        linkedSessionId: String(payload.session_id || relatedStep?.session_id || "").trim() || undefined,
         label,
         createdAt: String(event.created_at || "").trim() || undefined,
       });
@@ -1980,27 +1984,47 @@ export function ChatView({
                                 <div className="font-medium text-indigo-800">步骤事件</div>
                                 {sourceStepTimeline.map((item, index) => {
                                   const eventId = (item.eventId || "").trim();
+                                  const linkedSessionId = (item.linkedSessionId || "").trim();
                                   const isGroupRunEventFocusTarget =
                                     eventId.length > 0 && highlightedGroupRunStepEventId === eventId;
-                                  return (
-                                    <div
-                                      key={`${eventId || item.label}-${item.createdAt || index}`}
-                                      ref={(node) => {
-                                        if (eventId) {
-                                          groupRunStepEventElementRefs.current[eventId] = node;
-                                        }
-                                      }}
-                                      data-testid={`group-run-step-card-${step.id}-event-${eventId || index}`}
-                                      data-group-run-step-event-highlighted={
-                                        isGroupRunEventFocusTarget ? "true" : "false"
+                                  const eventLabel = item.createdAt ? `${item.label} · ${item.createdAt}` : item.label;
+                                  const eventKey = `${eventId || item.label}-${item.createdAt || index}`;
+                                  const commonProps = {
+                                    ref: (node: HTMLDivElement | HTMLButtonElement | null) => {
+                                      if (eventId) {
+                                        groupRunStepEventElementRefs.current[eventId] = node as HTMLDivElement | null;
                                       }
-                                      className={
-                                        "rounded px-1.5 py-1 transition-all " +
-                                        (isGroupRunEventFocusTarget ? "bg-amber-100 ring-1 ring-amber-300 " : "")
+                                    },
+                                    "data-testid": `group-run-step-card-${step.id}-event-${eventId || index}`,
+                                    "data-group-run-step-event-highlighted": isGroupRunEventFocusTarget ? "true" : "false",
+                                    className:
+                                      "rounded px-1.5 py-1 transition-all " +
+                                      (isGroupRunEventFocusTarget ? "bg-amber-100 ring-1 ring-amber-300 " : "") +
+                                      (linkedSessionId && onOpenSession
+                                        ? " w-full text-left underline underline-offset-2 hover:text-indigo-900"
+                                        : ""),
+                                  } as const;
+                                  return linkedSessionId && onOpenSession ? (
+                                    <button
+                                      key={eventKey}
+                                      {...commonProps}
+                                      type="button"
+                                      onClick={() =>
+                                        void onOpenSession(linkedSessionId, {
+                                          focusHint: detailOutputSummary || item.label || undefined,
+                                          sourceSessionId: sessionId,
+                                          sourceStepId: step.id,
+                                          sourceEmployeeId: dispatchSourceEmployeeId || undefined,
+                                          assigneeEmployeeId: currentAssigneeEmployeeId || undefined,
+                                          sourceStepTimeline:
+                                            sourceStepTimeline.length > 0 ? sourceStepTimeline : undefined,
+                                        })
                                       }
                                     >
-                                      {item.createdAt ? `${item.label} · ${item.createdAt}` : item.label}
-                                    </div>
+                                      {eventLabel}
+                                    </button>
+                                  ) : (
+                                    <div key={eventKey} {...commonProps}>{eventLabel}</div>
                                   );
                                 })}
                               </div>
