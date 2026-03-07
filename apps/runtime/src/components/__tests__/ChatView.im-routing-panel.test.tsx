@@ -2440,6 +2440,7 @@ describe("ChatView IM routing panel", () => {
               round_no: 1,
               step_type: "execute",
               assignee_employee_id: "工部",
+              dispatch_source_employee_id: "尚书",
               status: "running",
               output: "正在整理交付清单",
               session_id: "session-step-gongbu-1",
@@ -2450,7 +2451,7 @@ describe("ChatView IM routing panel", () => {
               id: "evt-open-session-1",
               step_id: "step-open-session-1",
               event_type: "step_dispatched",
-              payload_json: "{\"assignee_employee_id\":\"工部\"}",
+              payload_json: "{\"assignee_employee_id\":\"工部\",\"dispatch_source_employee_id\":\"尚书\"}",
               created_at: "2026-03-07T01:00:00Z",
             },
           ],
@@ -2502,6 +2503,10 @@ describe("ChatView IM routing panel", () => {
 
     expect(handleOpenSession).toHaveBeenCalledWith("session-step-gongbu-1", {
       focusHint: "正在整理交付清单",
+      sourceSessionId: "session-run-open-step",
+      sourceStepId: "step-open-session-1",
+      sourceEmployeeId: "尚书",
+      assigneeEmployeeId: "工部",
     });
   });
 
@@ -2564,5 +2569,62 @@ describe("ChatView IM routing panel", () => {
     await waitFor(() => {
       expect(screen.getByTestId("chat-message-1")).toHaveAttribute("data-session-focus-highlighted", "true");
     });
+  });
+
+  test("shows execution session context bar and returns to the source session", async () => {
+    const handleReturnToSourceSession = vi.fn();
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_messages") return Promise.resolve([]);
+      if (command === "list_sessions") return Promise.resolve([]);
+      if (command === "get_sessions") return Promise.resolve([]);
+      if (command === "get_employee_group_run_snapshot") return Promise.resolve(null);
+      if (command === "get_model_configs") return Promise.resolve([]);
+      if (command === "get_session_runtime_bindings") return Promise.resolve(null);
+      return Promise.resolve(null);
+    });
+
+    render(
+      <ChatView
+        skill={{
+          id: "builtin-general",
+          name: "General",
+          description: "desc",
+          version: "1.0.0",
+          author: "test",
+          recommended_model: "",
+          tags: [],
+          created_at: new Date().toISOString(),
+        }}
+        models={[
+          {
+            id: "m1",
+            name: "model",
+            api_format: "openai",
+            base_url: "https://example.com",
+            model_name: "model",
+            is_default: true,
+          },
+        ]}
+        sessionId="session-step-gongbu-1"
+        sessionExecutionContext={{
+          sourceSessionId: "session-run-open-step",
+          sourceStepId: "step-open-session-1",
+          sourceEmployeeId: "尚书",
+          assigneeEmployeeId: "工部",
+        }}
+        onReturnToSourceSession={handleReturnToSourceSession}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("chat-session-execution-context-bar")).toHaveTextContent("来源 step：step-open-session-1");
+      expect(screen.getByTestId("chat-session-execution-context-bar")).toHaveTextContent("来源员工：尚书");
+      expect(screen.getByTestId("chat-session-execution-context-bar")).toHaveTextContent("当前负责人：工部");
+      expect(screen.getByRole("button", { name: "返回协作看板" })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "返回协作看板" }));
+
+    expect(handleReturnToSourceSession).toHaveBeenCalledWith("session-run-open-step");
   });
 });

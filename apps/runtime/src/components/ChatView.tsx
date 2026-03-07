@@ -20,13 +20,30 @@ type ClawhubInstallCandidate = {
   sourceUrl?: string | null;
 };
 
+type ChatSessionOpenOptions = {
+  focusHint?: string;
+  sourceSessionId?: string;
+  sourceStepId?: string;
+  sourceEmployeeId?: string;
+  assigneeEmployeeId?: string;
+};
+
+type ChatSessionExecutionContext = {
+  sourceSessionId: string;
+  sourceStepId: string;
+  sourceEmployeeId?: string;
+  assigneeEmployeeId?: string;
+};
+
 interface Props {
   skill: SkillManifest;
   models: ModelConfig[];
   sessionId: string;
   workDir?: string;
-  onOpenSession?: (sessionId: string, options?: { focusHint?: string }) => Promise<void> | void;
+  onOpenSession?: (sessionId: string, options?: ChatSessionOpenOptions) => Promise<void> | void;
   sessionFocusRequest?: { nonce: number; snippet: string };
+  sessionExecutionContext?: ChatSessionExecutionContext;
+  onReturnToSourceSession?: (sessionId: string) => Promise<void> | void;
   onSessionUpdate?: () => void;
   initialMessage?: string;
   onInitialMessageConsumed?: () => void;
@@ -50,6 +67,8 @@ export function ChatView({
   workDir,
   onOpenSession,
   sessionFocusRequest,
+  sessionExecutionContext,
+  onReturnToSourceSession,
   onSessionUpdate,
   initialMessage,
   onInitialMessageConsumed,
@@ -1582,6 +1601,30 @@ export function ChatView({
           )}
         </div>
       </div>
+      {sessionExecutionContext && (
+        <div
+          data-testid="chat-session-execution-context-bar"
+          className="flex flex-wrap items-center justify-between gap-2 border-b border-sky-100 bg-sky-50/80 px-6 py-2 text-[11px] text-sky-900"
+        >
+          <div className="flex flex-wrap items-center gap-3">
+            <span>{`来源 step：${sessionExecutionContext.sourceStepId}`}</span>
+            {sessionExecutionContext.sourceEmployeeId && (
+              <span>{`来源员工：${sessionExecutionContext.sourceEmployeeId}`}</span>
+            )}
+            {sessionExecutionContext.assigneeEmployeeId && (
+              <span>{`当前负责人：${sessionExecutionContext.assigneeEmployeeId}`}</span>
+            )}
+          </div>
+          <button
+            type="button"
+            data-testid="chat-session-execution-context-back"
+            onClick={() => void onReturnToSourceSession?.(sessionExecutionContext.sourceSessionId)}
+            className="text-[11px] font-medium text-sky-700 underline underline-offset-2 hover:text-sky-800"
+          >
+            返回协作看板
+          </button>
+        </div>
+      )}
 
       {/* 主内容区：消息列表 + 右侧面板 */}
       <div className="flex-1 flex overflow-hidden">
@@ -1817,14 +1860,18 @@ export function ChatView({
                             {onOpenSession && detailSessionId && (
                               <button
                                 type="button"
-                                data-testid={`group-run-step-card-${step.id}-open-session`}
-                                onClick={() =>
-                                  void onOpenSession(detailSessionId, {
-                                    focusHint: detailOutputSummary || undefined,
-                                  })
-                                }
-                                className="text-[10px] text-indigo-700 underline underline-offset-2 hover:text-indigo-800"
-                              >
+                            data-testid={`group-run-step-card-${step.id}-open-session`}
+                            onClick={() =>
+                              void onOpenSession(detailSessionId, {
+                                focusHint: detailOutputSummary || undefined,
+                                sourceSessionId: sessionId,
+                                sourceStepId: step.id,
+                                sourceEmployeeId: dispatchSourceEmployeeId || undefined,
+                                assigneeEmployeeId: currentAssigneeEmployeeId || undefined,
+                              })
+                            }
+                            className="text-[10px] text-indigo-700 underline underline-offset-2 hover:text-indigo-800"
+                          >
                                 查看执行会话
                               </button>
                             )}

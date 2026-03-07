@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import App from "../App";
 
 const invokeMock = vi.fn();
+const chatViewPropsSpy = vi.fn();
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
@@ -29,7 +30,43 @@ vi.mock("../components/Sidebar", () => ({
 }));
 
 vi.mock("../components/ChatView", () => ({
-  ChatView: () => <div data-testid="chat-view">chat-view</div>,
+  ChatView: (props: any) => {
+    chatViewPropsSpy(props);
+    return (
+      <div data-testid="chat-view">
+        <div data-testid="chat-view-session-id">{props.sessionId}</div>
+        {props.sessionExecutionContext ? (
+          <div data-testid="chat-view-session-execution-context">
+            {props.sessionExecutionContext.sourceSessionId}
+            {"|"}
+            {props.sessionExecutionContext.sourceStepId}
+            {"|"}
+            {props.sessionExecutionContext.sourceEmployeeId || ""}
+            {"|"}
+            {props.sessionExecutionContext.assigneeEmployeeId || ""}
+          </div>
+        ) : null}
+        <button
+          onClick={() =>
+            props.onOpenSession?.("session-step-gongbu-1", {
+              focusHint: "正在整理交付清单",
+              sourceSessionId: "session-run-open-step",
+              sourceStepId: "step-open-session-1",
+              sourceEmployeeId: "尚书",
+              assigneeEmployeeId: "工部",
+            })
+          }
+        >
+          open-execution-session
+        </button>
+        <button
+          onClick={() => props.onReturnToSourceSession?.("session-run-open-step")}
+        >
+          return-to-source-session
+        </button>
+      </div>
+    );
+  },
 }));
 
 vi.mock("../components/packaging/PackagingView", () => ({
@@ -59,6 +96,7 @@ vi.mock("../components/NewSessionLanding", () => ({
 describe("App chat landing", () => {
   beforeEach(() => {
     invokeMock.mockReset();
+    chatViewPropsSpy.mockClear();
     invokeMock.mockImplementation((command: string, payload?: any) => {
       if (command === "list_skills") {
         return Promise.resolve([
@@ -91,6 +129,18 @@ describe("App chat landing", () => {
           {
             id: "session-1",
             title: "Session 1",
+            created_at: new Date().toISOString(),
+            model_id: "model-a",
+          },
+          {
+            id: "session-run-open-step",
+            title: "Group Run Session",
+            created_at: new Date().toISOString(),
+            model_id: "model-a",
+          },
+          {
+            id: "session-step-gongbu-1",
+            title: "工部执行会话",
             created_at: new Date().toISOString(),
             model_id: "model-a",
           },
@@ -148,6 +198,36 @@ describe("App chat landing", () => {
     render(<App />);
     await waitFor(() => {
       expect(screen.getByTestId("new-session-landing")).toBeInTheDocument();
+    });
+  });
+
+  test("passes execution session context to chat view and returns to the source session", async () => {
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("new-session-landing")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "select-first-session" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("chat-view")).toBeInTheDocument();
+      expect(screen.getByTestId("chat-view-session-id")).toHaveTextContent("session-1");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "open-execution-session" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("chat-view-session-id")).toHaveTextContent("session-step-gongbu-1");
+      expect(screen.getByTestId("chat-view-session-execution-context")).toHaveTextContent(
+        "session-run-open-step|step-open-session-1|尚书|工部",
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "return-to-source-session" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("chat-view-session-id")).toHaveTextContent("session-run-open-step");
     });
   });
 });

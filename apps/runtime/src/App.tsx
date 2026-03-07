@@ -234,6 +234,13 @@ export default function App() {
     snippet: string;
     nonce: number;
   } | null>(null);
+  const [pendingSessionExecutionContext, setPendingSessionExecutionContext] = useState<{
+    targetSessionId: string;
+    sourceSessionId: string;
+    sourceStepId: string;
+    sourceEmployeeId?: string;
+    assigneeEmployeeId?: string;
+  } | null>(null);
   const [employeeAssistantSessionContexts, setEmployeeAssistantSessionContexts] = useState<
     Record<string, EmployeeAssistantSessionContext>
   >({});
@@ -2093,6 +2100,19 @@ export default function App() {
                         }
                       : null,
                   );
+                  const sourceSessionId = (options?.sourceSessionId || "").trim();
+                  const sourceStepId = (options?.sourceStepId || "").trim();
+                  setPendingSessionExecutionContext(
+                    sourceSessionId && sourceStepId
+                      ? {
+                          targetSessionId: nextSessionId,
+                          sourceSessionId,
+                          sourceStepId,
+                          sourceEmployeeId: (options?.sourceEmployeeId || "").trim() || undefined,
+                          assigneeEmployeeId: (options?.assigneeEmployeeId || "").trim() || undefined,
+                        }
+                      : null,
+                  );
                   return handleOpenGroupRunSession(nextSessionId, selectedSkill.id);
                 }}
                 sessionFocusRequest={
@@ -2104,6 +2124,21 @@ export default function App() {
                       }
                     : undefined
                 }
+                sessionExecutionContext={
+                  pendingSessionExecutionContext &&
+                  pendingSessionExecutionContext.targetSessionId === selectedSessionId
+                    ? {
+                        sourceSessionId: pendingSessionExecutionContext.sourceSessionId,
+                        sourceStepId: pendingSessionExecutionContext.sourceStepId,
+                        sourceEmployeeId: pendingSessionExecutionContext.sourceEmployeeId,
+                        assigneeEmployeeId: pendingSessionExecutionContext.assigneeEmployeeId,
+                      }
+                    : undefined
+                }
+                onReturnToSourceSession={(sourceSessionId) => {
+                  setPendingSessionExecutionContext(null);
+                  return handleOpenGroupRunSession(sourceSessionId, selectedSkill.id);
+                }}
                 sessionSourceChannel={selectedSession?.source_channel}
                 sessionSourceLabel={selectedSession?.source_label}
                 onSessionUpdate={handleSessionRefresh}
