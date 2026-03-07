@@ -922,7 +922,6 @@ export function ChatView({
       ((step.status || "").trim().toLowerCase() === "failed") &&
       ((step.step_type || "").trim().toLowerCase() === "execute"),
   );
-  const primaryFailedGroupRunStep = failedGroupRunSteps[0] || null;
   const groupRunAssignees = Array.from(
     new Set(
       (groupRunSnapshot?.steps || [])
@@ -930,21 +929,21 @@ export function ChatView({
         .filter((value) => value.length > 0),
     ),
   );
-  const reassignCandidateEmployeeIds =
-    primaryFailedGroupRunStep === null
-      ? []
-      : groupRunAssignees.filter(
-          (employeeId) =>
-            employeeId.trim().toLowerCase() !==
-            (primaryFailedGroupRunStep.assignee_employee_id || "").trim().toLowerCase(),
-        );
+  const failedGroupRunReassignOptions = failedGroupRunSteps
+    .map((step) => ({
+      step,
+      candidateEmployeeIds: groupRunAssignees.filter(
+        (employeeId) =>
+          employeeId.trim().toLowerCase() !== (step.assignee_employee_id || "").trim().toLowerCase(),
+      ),
+    }))
+    .filter((entry) => entry.candidateEmployeeIds.length > 0);
   const canPauseGroupRun =
     !!groupRunSnapshot &&
     !["paused", "done", "completed", "cancelled", "failed"].includes(groupRunState);
   const canResumeGroupRun = !!groupRunSnapshot && groupRunState === "paused";
   const canRetryFailedGroupRunSteps = failedGroupRunSteps.length > 0;
-  const canReassignFailedGroupRunStep =
-    !!primaryFailedGroupRunStep && reassignCandidateEmployeeIds.length > 0;
+  const canReassignFailedGroupRunStep = failedGroupRunReassignOptions.length > 0;
   const groupMemberStatesFromSnapshot = (() => {
     const byRole = new Map<string, { status: string; stepType: string }>();
     for (const step of groupRunSnapshot?.steps || []) {
@@ -1424,23 +1423,37 @@ export function ChatView({
                     {groupRunActionLoading === "retry" ? "重试中..." : "重试失败步骤"}
                   </button>
                 )}
-                {canReassignFailedGroupRunStep && primaryFailedGroupRunStep && (
-                  <>
-                    {reassignCandidateEmployeeIds.map((employeeId) => (
-                      <button
-                        key={employeeId}
-                        type="button"
-                        data-testid={`group-run-reassign-failed-${employeeId}`}
-                        onClick={() =>
-                          void handleReassignFailedGroupRunStep(primaryFailedGroupRunStep.id, employeeId)
-                        }
-                        disabled={groupRunActionLoading !== null}
-                        className="rounded bg-fuchsia-600 px-2.5 py-1 text-[11px] text-white hover:bg-fuchsia-700 disabled:bg-fuchsia-300"
+                {canReassignFailedGroupRunStep && (
+                  <div className="w-full space-y-1.5">
+                    {failedGroupRunReassignOptions.map(({ step, candidateEmployeeIds }) => (
+                      <div
+                        key={step.id}
+                        data-testid={`group-run-reassign-row-${step.id}`}
+                        className="rounded border border-indigo-200 bg-white/70 px-2.5 py-2"
                       >
-                        {groupRunActionLoading === "reassign" ? "改派中..." : `改派给${employeeId}`}
-                      </button>
+                        <div className="text-[11px] font-medium text-indigo-800">
+                          {`失败步骤：${step.assignee_employee_id || step.id}`}
+                        </div>
+                        {(step.output || "").trim().length > 0 && (
+                          <div className="mt-1 text-[10px] text-indigo-700/80">{step.output}</div>
+                        )}
+                        <div className="mt-1.5 flex flex-wrap gap-2">
+                          {candidateEmployeeIds.map((employeeId) => (
+                            <button
+                              key={`${step.id}-${employeeId}`}
+                              type="button"
+                              data-testid={`group-run-reassign-${step.id}-${employeeId}`}
+                              onClick={() => void handleReassignFailedGroupRunStep(step.id, employeeId)}
+                              disabled={groupRunActionLoading !== null}
+                              className="rounded bg-fuchsia-600 px-2.5 py-1 text-[11px] text-white hover:bg-fuchsia-700 disabled:bg-fuchsia-300"
+                            >
+                              {groupRunActionLoading === "reassign" ? "改派中..." : `改派给${employeeId}`}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
                     ))}
-                  </>
+                  </div>
                 )}
               </div>
             )}
