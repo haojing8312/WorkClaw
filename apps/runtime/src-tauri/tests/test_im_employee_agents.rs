@@ -1883,3 +1883,167 @@ async fn reassign_failed_group_step_updates_assignee_and_resets_status() {
     assert_eq!(session_id, "");
     assert_eq!(output, "");
 }
+
+#[tokio::test]
+async fn reassign_specific_failed_step_keeps_other_failed_steps_blocking_run() {
+    let (pool, _tmp) = helpers::setup_test_db().await;
+    sqlx::query(
+        "INSERT INTO model_configs (id, name, api_format, base_url, model_name, is_default, api_key)
+         VALUES ('m1', 'default', 'openai', 'https://example.com', 'gpt-4o-mini', 1, 'k')",
+    )
+    .execute(&pool)
+    .await
+    .expect("seed model config");
+
+    for employee_id in ["shangshu", "bingbu", "libu", "gongbu"] {
+        upsert_agent_employee_with_pool(
+            &pool,
+            UpsertAgentEmployeeInput {
+                id: None,
+                employee_id: employee_id.to_string(),
+                name: employee_id.to_string(),
+                role_id: employee_id.to_string(),
+                persona: "".to_string(),
+                feishu_open_id: "".to_string(),
+                feishu_app_id: "".to_string(),
+                feishu_app_secret: "".to_string(),
+                primary_skill_id: "builtin-general".to_string(),
+                default_work_dir: format!("E:/workspace/{employee_id}"),
+                openclaw_agent_id: employee_id.to_string(),
+                routing_priority: 100,
+                enabled_scopes: vec!["app".to_string()],
+                enabled: true,
+                is_default: employee_id == "shangshu",
+                skill_ids: vec!["builtin-general".to_string()],
+            },
+        )
+        .await
+        .expect("seed employee");
+    }
+
+    let group_id = create_employee_group_with_pool(
+        &pool,
+        CreateEmployeeGroupInput {
+            name: "多失败改派团队".to_string(),
+            coordinator_employee_id: "shangshu".to_string(),
+            member_employee_ids: vec![
+                "shangshu".to_string(),
+                "bingbu".to_string(),
+                "libu".to_string(),
+                "gongbu".to_string(),
+            ],
+        },
+    )
+    .await
+    .expect("create group");
+
+    let outcome = start_employee_group_run_with_pool(
+        &pool,
+        StartEmployeeGroupRunInput {
+            group_id,
+            user_goal: "推进执行".to_string(),
+            execution_window: 3,
+            max_retry_per_step: 1,
+            timeout_employee_ids: vec![],
+        },
+    )
+    .await
+    .expect("start run");
+
+    let step_rows = sqlx::query_as::<_, (String, String)>(
+        "SELECT id, assignee_employee_id
+         FROM group_run_steps
+         WHERE run_id = ? AND step_type = 'execute'",
+    )
+    .bind(&outcome.run_id)
+    .fetch_all(&pool)
+    .await
+    .expect("load execute steps");
+    let bingbu_step_id = step_rows
+        .iter()
+        .find(|(_, assignee)| assignee == "bingbu")
+        .map(|(id, _)| id.clone())
+        .expect("bingbu step");
+    let libu_step_id = step_rows
+        .iter()
+        .find(|(_, assignee)| assignee == "libu")
+        .map(|(id, _)| id.clone())
+        .expect("libu step");
+
+    sqlx::query(
+        "UPDATE group_run_steps
+         SET status = 'failed', output = CASE id
+            WHEN ? THEN '兵部失败'
+            WHEN ? THEN '礼部失败'
+            ELSE output
+         END
+         WHERE id IN (?, ?)",
+    )
+    .bind(&bingbu_step_id)
+    .bind(&libu_step_id)
+    .bind(&bingbu_step_id)
+    .bind(&libu_step_id)
+    .execute(&pool)
+    .await
+    .expect("mark failed steps");
+
+    sqlx::query(
+        "UPDATE group_runs
+         SET state = 'failed', current_phase = 'execute', waiting_for_employee_id = 'bingbu'
+         WHERE id = ?",
+    )
+    .bind(&outcome.run_id)
+    .execute(&pool)
+    .await
+    .expect("mark run failed");
+
+    reassign_group_run_step_with_pool(&pool, &libu_step_id, "gongbu")
+        .await
+        .expect("reassign specific failed step");
+
+    let (bingbu_status,): (String,) = sqlx::query_as(
+        "SELECT status FROM group_run_steps WHERE id = ?",
+    )
+    .bind(&bingbu_step_id)
+    .fetch_one(&pool)
+    .await
+    .expect("reload bingbu step");
+    assert_eq!(bingbu_status, "failed");
+
+    let (libu_assignee, libu_status, libu_output): (String, String, String) = sqlx::query_as(
+        "SELECT assignee_employee_id, status, output
+         FROM group_run_steps WHERE id = ?",
+    )
+    .bind(&libu_step_id)
+    .fetch_one(&pool)
+    .await
+    .expect("reload libu step");
+    assert_eq!(libu_assignee, "gongbu");
+    assert_eq!(libu_status, "pending");
+    assert_eq!(libu_output, "");
+
+    let (run_state, waiting_for_employee_id): (String, String) = sqlx::query_as(
+        "SELECT state, waiting_for_employee_id
+         FROM group_runs WHERE id = ?",
+    )
+    .bind(&outcome.run_id)
+    .fetch_one(&pool)
+    .await
+    .expect("reload run");
+    assert_eq!(run_state, "failed");
+    assert_eq!(waiting_for_employee_id, "bingbu");
+
+    let (event_step_id, payload_json): (String, String) = sqlx::query_as(
+        "SELECT step_id, payload_json
+         FROM group_run_events
+         WHERE run_id = ? AND event_type = 'step_reassigned'
+         ORDER BY created_at DESC, id DESC
+         LIMIT 1",
+    )
+    .bind(&outcome.run_id)
+    .fetch_one(&pool)
+    .await
+    .expect("load reassign event");
+    assert_eq!(event_step_id, libu_step_id);
+    assert!(payload_json.contains("\"assignee_employee_id\":\"gongbu\""));
+}

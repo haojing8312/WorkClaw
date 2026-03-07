@@ -2653,20 +2653,59 @@ pub async fn reassign_group_run_step_with_pool(
     .execute(&mut *tx)
     .await
     .map_err(|e| e.to_string())?;
-    sqlx::query(
-        "UPDATE group_runs
-         SET state = 'executing',
-             current_phase = 'execute',
-             waiting_for_employee_id = ?,
-             updated_at = ?
-         WHERE id = ?",
+    let remaining_failed_assignees = sqlx::query_as::<_, (String,)>(
+        "SELECT assignee_employee_id
+         FROM group_run_steps
+         WHERE run_id = ? AND step_type = 'execute' AND status = 'failed'
+         ORDER BY round_no ASC, id ASC",
     )
-    .bind(&new_assignee)
-    .bind(&now)
     .bind(&run_id)
-    .execute(&mut *tx)
+    .fetch_all(&mut *tx)
     .await
     .map_err(|e| e.to_string())?;
+    if remaining_failed_assignees.is_empty() {
+        sqlx::query(
+            "UPDATE group_runs
+             SET state = 'executing',
+                 current_phase = 'execute',
+                 waiting_for_employee_id = ?,
+                 status_reason = '',
+                 updated_at = ?
+             WHERE id = ?",
+        )
+        .bind(&new_assignee)
+        .bind(&now)
+        .bind(&run_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    } else {
+        let waiting_for_employee_id = remaining_failed_assignees[0].0.clone();
+        let status_reason = format!(
+            "{}执行失败",
+            remaining_failed_assignees
+                .iter()
+                .map(|(assignee,)| assignee.as_str())
+                .collect::<Vec<_>>()
+                .join("、")
+        );
+        sqlx::query(
+            "UPDATE group_runs
+             SET state = 'failed',
+                 current_phase = 'execute',
+                 waiting_for_employee_id = ?,
+                 status_reason = ?,
+                 updated_at = ?
+             WHERE id = ?",
+        )
+        .bind(&waiting_for_employee_id)
+        .bind(&status_reason)
+        .bind(&now)
+        .bind(&run_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    }
     sqlx::query(
         "INSERT INTO group_run_events (id, run_id, step_id, event_type, payload_json, created_at)
          VALUES (?, ?, ?, 'step_reassigned', ?, ?)",
