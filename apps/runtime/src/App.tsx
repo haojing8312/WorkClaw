@@ -2077,6 +2077,7 @@ export default function App() {
                 models={models}
                 sessionId={selectedSessionId}
                 workDir={selectedSession?.work_dir}
+                onOpenSession={(nextSessionId) => handleOpenGroupRunSession(nextSessionId, selectedSkill.id)}
                 sessionSourceChannel={selectedSession?.source_channel}
                 sessionSourceLabel={selectedSession?.source_label}
                 onSessionUpdate={handleSessionRefresh}

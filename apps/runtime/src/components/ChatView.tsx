@@ -25,6 +25,7 @@ interface Props {
   models: ModelConfig[];
   sessionId: string;
   workDir?: string;
+  onOpenSession?: (sessionId: string) => Promise<void> | void;
   onSessionUpdate?: () => void;
   initialMessage?: string;
   onInitialMessageConsumed?: () => void;
@@ -46,6 +47,7 @@ export function ChatView({
   models,
   sessionId,
   workDir,
+  onOpenSession,
   onSessionUpdate,
   initialMessage,
   onInitialMessageConsumed,
@@ -1757,6 +1759,16 @@ export function ChatView({
                             <div>{`session_id：${detailSessionId || "暂无"}`}</div>
                             <div>{`输出摘要：${detailOutputSummary || "暂无"}`}</div>
                             <div>{`最近事件时间：${latestEventCreatedAt || "暂无"}`}</div>
+                            {onOpenSession && detailSessionId && (
+                              <button
+                                type="button"
+                                data-testid={`group-run-step-card-${step.id}-open-session`}
+                                onClick={() => void onOpenSession(detailSessionId)}
+                                className="text-[10px] text-indigo-700 underline underline-offset-2 hover:text-indigo-800"
+                              >
+                                查看执行会话
+                              </button>
+                            )}
                           </div>
                         )}
                       </div>
