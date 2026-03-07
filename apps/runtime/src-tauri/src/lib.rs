@@ -347,6 +347,7 @@ pub fn run() {
             commands::employee_agents::list_employee_group_rules,
             commands::employee_agents::delete_employee_group,
             commands::employee_agents::start_employee_group_run,
+            commands::employee_agents::continue_employee_group_run,
             commands::employee_agents::run_group_step,
             commands::employee_agents::get_employee_group_run_snapshot,
             commands::employee_agents::cancel_employee_group_run,

@@ -1744,6 +1744,331 @@ async fn maybe_finalize_group_run_with_pool(pool: &SqlitePool, run_id: &str) -> 
     Ok(())
 }
 
+async fn get_group_run_session_id_with_pool(
+    pool: &SqlitePool,
+    run_id: &str,
+) -> Result<String, String> {
+    sqlx::query_as::<_, (String,)>("SELECT session_id FROM group_runs WHERE id = ?")
+        .bind(run_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| e.to_string())?
+        .map(|(session_id,)| session_id)
+        .ok_or_else(|| "group run not found".to_string())
+}
+
+async fn get_employee_group_run_snapshot_by_run_id_with_pool(
+    pool: &SqlitePool,
+    run_id: &str,
+) -> Result<EmployeeGroupRunSnapshot, String> {
+    let session_id = get_group_run_session_id_with_pool(pool, run_id).await?;
+    get_employee_group_run_snapshot_with_pool(pool, &session_id)
+        .await?
+        .ok_or_else(|| "group run snapshot not found".to_string())
+}
+
+async fn get_group_run_reviewer_employee_id_with_pool(
+    pool: &SqlitePool,
+    run_id: &str,
+) -> Result<Option<String>, String> {
+    let run_row = sqlx::query(
+        "SELECT r.group_id, COALESCE(g.review_mode, 'none')
+         FROM group_runs r
+         INNER JOIN employee_groups g ON g.id = r.group_id
+         WHERE r.id = ?",
+    )
+    .bind(run_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| e.to_string())?
+    .ok_or_else(|| "group run not found".to_string())?;
+    let group_id: String = run_row.try_get(0).map_err(|e| e.to_string())?;
+    let review_mode: String = run_row.try_get(1).map_err(|e| e.to_string())?;
+    if review_mode.eq_ignore_ascii_case("none") {
+        return Ok(None);
+    }
+
+    let reviewer = sqlx::query_as::<_, (String,)>(
+        "SELECT to_employee_id
+         FROM employee_group_rules
+         WHERE group_id = ? AND relation_type = 'review'
+         ORDER BY priority DESC, created_at ASC
+         LIMIT 1",
+    )
+    .bind(&group_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| e.to_string())?
+    .map(|(employee_id,)| employee_id.trim().to_string())
+    .filter(|employee_id| !employee_id.is_empty());
+
+    Ok(reviewer)
+}
+
+async fn advance_pending_plan_revision_with_pool(
+    pool: &SqlitePool,
+    run_id: &str,
+) -> Result<bool, String> {
+    let pending_plan_row = sqlx::query(
+        "SELECT id, assignee_employee_id, COALESCE(input, ''), COALESCE(input_summary, '')
+         FROM group_run_steps
+         WHERE run_id = ? AND step_type = 'plan' AND status = 'pending'
+         ORDER BY round_no DESC, id DESC
+         LIMIT 1",
+    )
+    .bind(run_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    let Some(pending_plan_row) = pending_plan_row else {
+        return Ok(false);
+    };
+
+    let step_id: String = pending_plan_row.try_get(0).map_err(|e| e.to_string())?;
+    let assignee_employee_id: String = pending_plan_row.try_get(1).map_err(|e| e.to_string())?;
+    let step_input: String = pending_plan_row.try_get(2).map_err(|e| e.to_string())?;
+    let revision_comment: String = pending_plan_row.try_get(3).map_err(|e| e.to_string())?;
+    let reviewer_employee_id = get_group_run_reviewer_employee_id_with_pool(pool, run_id).await?;
+    let now = chrono::Utc::now().to_rfc3339();
+    let revision_output = if revision_comment.trim().is_empty() {
+        "已重新整理计划，等待下一阶段推进".to_string()
+    } else {
+        format!("已根据审议意见修订计划：{}", revision_comment.trim())
+    };
+
+    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
+    sqlx::query(
+        "UPDATE group_run_steps
+         SET status = 'completed',
+             output = ?,
+             output_summary = ?,
+             review_status = ?,
+             started_at = CASE
+               WHEN TRIM(started_at) = '' THEN ?
+               ELSE started_at
+             END,
+             finished_at = ?
+         WHERE id = ?",
+    )
+    .bind(&revision_output)
+    .bind(&revision_output)
+    .bind(if reviewer_employee_id.is_some() {
+        "pending"
+    } else {
+        "not_required"
+    })
+    .bind(&now)
+    .bind(&now)
+    .bind(&step_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?;
+    sqlx::query(
+        "INSERT INTO group_run_events (id, run_id, step_id, event_type, payload_json, created_at)
+         VALUES (?, ?, ?, 'step_completed', ?, ?)",
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(run_id)
+    .bind(&step_id)
+    .bind(
+        serde_json::json!({
+            "phase": "plan",
+            "step_type": "plan",
+            "assignee_employee_id": assignee_employee_id,
+            "status": "completed",
+            "revision_comment": revision_comment,
+        })
+        .to_string(),
+    )
+    .bind(&now)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    if let Some(reviewer_employee_id) = reviewer_employee_id {
+        let review_step_id = Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO group_run_steps (
+                id, run_id, round_no, parent_step_id, assignee_employee_id, phase, step_type, step_kind,
+                input, input_summary, output, output_summary, status, requires_review, review_status,
+                attempt_no, session_id, visibility, started_at, finished_at
+             ) VALUES (?, ?, ?, ?, ?, 'review', 'review', 'review', ?, ?, '等待审核计划', '', 'pending', 0, 'pending', 0, '', 'internal', '', '')",
+        )
+        .bind(&review_step_id)
+        .bind(run_id)
+        .bind(0_i64)
+        .bind(&step_id)
+        .bind(&reviewer_employee_id)
+        .bind(&step_input)
+        .bind(&revision_output)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+        sqlx::query(
+            "INSERT INTO group_run_events (id, run_id, step_id, event_type, payload_json, created_at)
+             VALUES (?, ?, ?, 'step_created', ?, ?)",
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(run_id)
+        .bind(&review_step_id)
+        .bind(
+            serde_json::json!({
+                "phase": "review",
+                "step_type": "review",
+                "assignee_employee_id": reviewer_employee_id,
+                "status": "pending",
+            })
+            .to_string(),
+        )
+        .bind(&now)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    }
+
+    sqlx::query(
+        "UPDATE group_runs
+         SET state = 'planning',
+             current_phase = 'plan',
+             waiting_for_employee_id = '',
+             status_reason = '',
+             updated_at = ?
+         WHERE id = ?",
+    )
+    .bind(&now)
+    .bind(run_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?;
+    tx.commit().await.map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
+pub async fn continue_employee_group_run_with_pool(
+    pool: &SqlitePool,
+    run_id: &str,
+) -> Result<EmployeeGroupRunSnapshot, String> {
+    let normalized_run_id = run_id.trim();
+    if normalized_run_id.is_empty() {
+        return Err("run_id is required".to_string());
+    }
+
+    let run_row = sqlx::query(
+        "SELECT state, COALESCE(current_phase, 'plan')
+         FROM group_runs
+         WHERE id = ?",
+    )
+    .bind(normalized_run_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| e.to_string())?
+    .ok_or_else(|| "group run not found".to_string())?;
+    let state: String = run_row.try_get(0).map_err(|e| e.to_string())?;
+    let current_phase: String = run_row.try_get(1).map_err(|e| e.to_string())?;
+
+    if state == "paused" {
+        return Err("group run is paused".to_string());
+    }
+    if state == "cancelled" || state == "done" {
+        return get_employee_group_run_snapshot_by_run_id_with_pool(pool, normalized_run_id).await;
+    }
+
+    let _ = advance_pending_plan_revision_with_pool(pool, normalized_run_id).await?;
+
+    if let Some(review_row) = sqlx::query(
+        "SELECT id, assignee_employee_id
+         FROM group_run_steps
+         WHERE run_id = ? AND step_type = 'review' AND status IN ('pending', 'running', 'blocked')
+         ORDER BY round_no DESC, id DESC
+         LIMIT 1",
+    )
+    .bind(normalized_run_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| e.to_string())?
+    {
+        let review_step_id: String = review_row.try_get(0).map_err(|e| e.to_string())?;
+        let reviewer_employee_id: String = review_row.try_get(1).map_err(|e| e.to_string())?;
+        let default_reason = format!("等待{}审议", reviewer_employee_id.trim());
+        let review_requested_exists = sqlx::query_as::<_, (i64,)>(
+            "SELECT COUNT(*)
+             FROM group_run_events
+             WHERE run_id = ? AND step_id = ? AND event_type = 'review_requested'",
+        )
+        .bind(normalized_run_id)
+        .bind(&review_step_id)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| e.to_string())?
+        .0;
+
+        let now = chrono::Utc::now().to_rfc3339();
+        let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
+        sqlx::query(
+            "UPDATE group_runs
+             SET state = 'waiting_review',
+                 current_phase = 'review',
+                 waiting_for_employee_id = ?,
+                 status_reason = CASE
+                   WHEN TRIM(status_reason) = '' THEN ?
+                   ELSE status_reason
+                 END,
+                 updated_at = ?
+             WHERE id = ?",
+        )
+        .bind(&reviewer_employee_id)
+        .bind(&default_reason)
+        .bind(&now)
+        .bind(normalized_run_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+        if review_requested_exists == 0 {
+            sqlx::query(
+                "INSERT INTO group_run_events (id, run_id, step_id, event_type, payload_json, created_at)
+                 VALUES (?, ?, ?, 'review_requested', ?, ?)",
+            )
+            .bind(Uuid::new_v4().to_string())
+            .bind(normalized_run_id)
+            .bind(&review_step_id)
+            .bind(
+                serde_json::json!({
+                    "assignee_employee_id": reviewer_employee_id,
+                    "phase": "review",
+                })
+                .to_string(),
+            )
+            .bind(&now)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        }
+        tx.commit().await.map_err(|e| e.to_string())?;
+        return get_employee_group_run_snapshot_by_run_id_with_pool(pool, normalized_run_id).await;
+    }
+
+    let pending_execute_steps = sqlx::query_as::<_, (String,)>(
+        "SELECT id
+         FROM group_run_steps
+         WHERE run_id = ? AND step_type = 'execute' AND status = 'pending'
+         ORDER BY round_no ASC, id ASC",
+    )
+    .bind(normalized_run_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    if pending_execute_steps.is_empty() && current_phase == "review" {
+        return get_employee_group_run_snapshot_by_run_id_with_pool(pool, normalized_run_id).await;
+    }
+
+    for (step_id,) in pending_execute_steps {
+        run_group_step_with_pool(pool, &step_id).await?;
+    }
+    maybe_finalize_group_run_with_pool(pool, normalized_run_id).await?;
+    get_employee_group_run_snapshot_by_run_id_with_pool(pool, normalized_run_id).await
+}
+
 pub async fn run_group_step_with_pool(
     pool: &SqlitePool,
     step_id: &str,
@@ -2443,13 +2768,28 @@ pub async fn get_employee_group_run_snapshot_with_pool(
         });
     }
     let completed = steps.iter().filter(|s| s.status == "completed").count();
-    let final_report = format!(
-        "计划：围绕“{}”共 {} 步。\n执行：已完成 {} 步。\n汇报：当前状态={}",
-        user_goal,
-        steps.len(),
-        completed,
-        state
-    );
+    let final_report = sqlx::query_as::<_, (String,)>(
+        "SELECT content
+         FROM messages
+         WHERE session_id = ? AND role = 'assistant'
+         ORDER BY created_at DESC, id DESC
+         LIMIT 1",
+    )
+    .bind(&run_session_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| e.to_string())?
+    .map(|(content,)| content)
+    .filter(|content| !content.trim().is_empty())
+    .unwrap_or_else(|| {
+        format!(
+            "计划：围绕“{}”共 {} 步。\n执行：已完成 {} 步。\n汇报：当前状态={}",
+            user_goal,
+            steps.len(),
+            completed,
+            state
+        )
+    });
     Ok(Some(EmployeeGroupRunSnapshot {
         run_id,
         group_id,
@@ -2965,6 +3305,14 @@ pub async fn start_employee_group_run(
     db: State<'_, DbState>,
 ) -> Result<EmployeeGroupRunResult, String> {
     start_employee_group_run_with_pool(&db.0, input).await
+}
+
+#[tauri::command]
+pub async fn continue_employee_group_run(
+    run_id: String,
+    db: State<'_, DbState>,
+) -> Result<EmployeeGroupRunSnapshot, String> {
+    continue_employee_group_run_with_pool(&db.0, run_id.trim()).await
 }
 
 #[tauri::command]

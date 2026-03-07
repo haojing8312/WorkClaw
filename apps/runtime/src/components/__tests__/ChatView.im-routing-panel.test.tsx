@@ -888,4 +888,367 @@ describe("ChatView IM routing panel", () => {
       expect(screen.getByTestId("group-orchestration-board")).toHaveTextContent("step_completed");
     });
   });
+
+  test("approves pending review and continues group run from orchestration board", async () => {
+    let snapshotState = "waiting_review";
+    invokeMock.mockImplementation((command: string, payload?: any) => {
+      if (command === "get_messages") return Promise.resolve([]);
+      if (command === "list_sessions") return Promise.resolve([]);
+      if (command === "get_sessions") return Promise.resolve([]);
+      if (command === "get_employee_group_run_snapshot") {
+        if (snapshotState === "done") {
+          return Promise.resolve({
+            run_id: "run-review-approve",
+            group_id: "group-review-approve",
+            session_id: "session-review-approve",
+            state: "done",
+            current_round: 1,
+            current_phase: "finalize",
+            review_round: 1,
+            status_reason: "",
+            waiting_for_employee_id: "",
+            waiting_for_user: false,
+            final_report: "计划：共 3 步\n执行：已完成 3 步。\n汇报：团队协作已完成。",
+            steps: [
+              {
+                id: "step-plan",
+                round_no: 1,
+                step_type: "plan",
+                assignee_employee_id: "中书省",
+                status: "completed",
+                output: "",
+              },
+              {
+                id: "step-execute",
+                round_no: 1,
+                step_type: "execute",
+                assignee_employee_id: "兵部",
+                status: "completed",
+                output: "MOCK_RESPONSE",
+              },
+            ],
+            events: [
+              {
+                id: "evt-approve",
+                step_id: "step-review",
+                event_type: "review_passed",
+                payload_json: "{\"comment\":\"方案通过\"}",
+                created_at: "2026-03-07T00:02:00Z",
+              },
+            ],
+          });
+        }
+        return Promise.resolve({
+          run_id: "run-review-approve",
+          group_id: "group-review-approve",
+          session_id: "session-review-approve",
+          state: "waiting_review",
+          current_round: 1,
+          current_phase: "review",
+          review_round: 1,
+          status_reason: "等待门下省审议",
+          waiting_for_employee_id: "门下省",
+          waiting_for_user: false,
+          final_report: "计划：共 3 步",
+          steps: [
+            {
+              id: "step-plan",
+              round_no: 1,
+              step_type: "plan",
+              assignee_employee_id: "中书省",
+              status: "completed",
+              output: "",
+            },
+            {
+              id: "step-review",
+              round_no: 1,
+              step_type: "review",
+              assignee_employee_id: "门下省",
+              status: "pending",
+              output: "",
+            },
+          ],
+          events: [],
+        });
+      }
+      if (command === "review_group_run_step") {
+        expect(payload).toEqual({
+          runId: "run-review-approve",
+          action: "approve",
+          comment: "前端确认通过",
+        });
+        return Promise.resolve(null);
+      }
+      if (command === "continue_employee_group_run") {
+        expect(payload).toEqual({ runId: "run-review-approve" });
+        snapshotState = "done";
+        return Promise.resolve({
+          run_id: "run-review-approve",
+          group_id: "group-review-approve",
+          session_id: "session-review-approve",
+          state: "done",
+          current_round: 1,
+          current_phase: "finalize",
+          review_round: 1,
+          status_reason: "",
+          waiting_for_employee_id: "",
+          waiting_for_user: false,
+          final_report: "计划：共 3 步\n执行：已完成 3 步。\n汇报：团队协作已完成。",
+          steps: [
+            {
+              id: "step-plan",
+              round_no: 1,
+              step_type: "plan",
+              assignee_employee_id: "中书省",
+              status: "completed",
+              output: "",
+            },
+            {
+              id: "step-execute",
+              round_no: 1,
+              step_type: "execute",
+              assignee_employee_id: "兵部",
+              status: "completed",
+              output: "MOCK_RESPONSE",
+            },
+          ],
+          events: [],
+        });
+      }
+      return Promise.resolve(null);
+    });
+
+    render(
+      <ChatView
+        skill={{
+          id: "builtin-general",
+          name: "General",
+          description: "desc",
+          version: "1.0.0",
+          author: "test",
+          recommended_model: "",
+          tags: [],
+          created_at: new Date().toISOString(),
+        }}
+        models={[
+          {
+            id: "m1",
+            name: "model",
+            api_format: "openai",
+            base_url: "https://example.com",
+            model_name: "model",
+            is_default: true,
+          },
+        ]}
+        sessionId="session-review-approve"
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("group-orchestration-board")).toHaveTextContent("阶段：审核");
+      expect(screen.getByTestId("group-run-review-approve")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId("group-run-review-approve"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("group-orchestration-board")).toHaveTextContent("阶段：汇报");
+      expect(screen.getByTestId("group-orchestration-board")).toHaveTextContent("兵部");
+      expect(invokeMock).toHaveBeenCalledWith("review_group_run_step", {
+        runId: "run-review-approve",
+        action: "approve",
+        comment: "前端确认通过",
+      });
+      expect(invokeMock).toHaveBeenCalledWith("continue_employee_group_run", {
+        runId: "run-review-approve",
+      });
+    });
+  });
+
+  test("rejects pending review and restarts review cycle from orchestration board", async () => {
+    let snapshotState = "waiting_review";
+    invokeMock.mockImplementation((command: string, payload?: any) => {
+      if (command === "get_messages") return Promise.resolve([]);
+      if (command === "list_sessions") return Promise.resolve([]);
+      if (command === "get_sessions") return Promise.resolve([]);
+      if (command === "get_employee_group_run_snapshot") {
+        if (snapshotState === "re_review") {
+          return Promise.resolve({
+            run_id: "run-review-reject",
+            group_id: "group-review-reject",
+            session_id: "session-review-reject",
+            state: "waiting_review",
+            current_round: 1,
+            current_phase: "review",
+            review_round: 2,
+            status_reason: "等待门下省复审",
+            waiting_for_employee_id: "门下省",
+            waiting_for_user: false,
+            final_report: "计划：已按意见补充回滚方案",
+            steps: [
+              {
+                id: "step-plan-1",
+                round_no: 1,
+                step_type: "plan",
+                assignee_employee_id: "中书省",
+                status: "completed",
+                output: "已按缺少回滚方案补充计划",
+              },
+              {
+                id: "step-review-2",
+                round_no: 1,
+                step_type: "review",
+                assignee_employee_id: "门下省",
+                status: "pending",
+                output: "",
+              },
+            ],
+            events: [
+              {
+                id: "evt-review-rejected",
+                step_id: "step-review-1",
+                event_type: "review_rejected",
+                payload_json: "{\"reason\":\"缺少回滚方案\",\"review_round\":2}",
+                created_at: "2026-03-07T00:03:00Z",
+              },
+            ],
+          });
+        }
+        return Promise.resolve({
+          run_id: "run-review-reject",
+          group_id: "group-review-reject",
+          session_id: "session-review-reject",
+          state: "waiting_review",
+          current_round: 1,
+          current_phase: "review",
+          review_round: 1,
+          status_reason: "等待门下省审议",
+          waiting_for_employee_id: "门下省",
+          waiting_for_user: false,
+          final_report: "计划：共 3 步",
+          steps: [
+            {
+              id: "step-plan-1",
+              round_no: 1,
+              step_type: "plan",
+              assignee_employee_id: "中书省",
+              status: "completed",
+              output: "",
+            },
+            {
+              id: "step-review-1",
+              round_no: 1,
+              step_type: "review",
+              assignee_employee_id: "门下省",
+              status: "pending",
+              output: "",
+            },
+          ],
+          events: [],
+        });
+      }
+      if (command === "review_group_run_step") {
+        expect(payload).toEqual({
+          runId: "run-review-reject",
+          action: "reject",
+          comment: "前端要求补充方案",
+        });
+        return Promise.resolve(null);
+      }
+      if (command === "continue_employee_group_run") {
+        expect(payload).toEqual({ runId: "run-review-reject" });
+        snapshotState = "re_review";
+        return Promise.resolve({
+          run_id: "run-review-reject",
+          group_id: "group-review-reject",
+          session_id: "session-review-reject",
+          state: "waiting_review",
+          current_round: 1,
+          current_phase: "review",
+          review_round: 2,
+          status_reason: "等待门下省复审",
+          waiting_for_employee_id: "门下省",
+          waiting_for_user: false,
+          final_report: "计划：已按意见补充回滚方案",
+          steps: [
+            {
+              id: "step-plan-1",
+              round_no: 1,
+              step_type: "plan",
+              assignee_employee_id: "中书省",
+              status: "completed",
+              output: "已按缺少回滚方案补充计划",
+            },
+            {
+              id: "step-review-2",
+              round_no: 1,
+              step_type: "review",
+              assignee_employee_id: "门下省",
+              status: "pending",
+              output: "",
+            },
+          ],
+          events: [
+            {
+              id: "evt-review-rejected",
+              step_id: "step-review-1",
+              event_type: "review_rejected",
+              payload_json: "{\"reason\":\"缺少回滚方案\",\"review_round\":2}",
+              created_at: "2026-03-07T00:03:00Z",
+            },
+          ],
+        });
+      }
+      if (command === "get_model_configs") return Promise.resolve([]);
+      if (command === "get_session_runtime_bindings") return Promise.resolve(null);
+      return Promise.resolve(null);
+    });
+
+    render(
+      <ChatView
+        skill={{
+          id: "builtin-general",
+          name: "General",
+          description: "desc",
+          version: "1.0.0",
+          author: "test",
+          recommended_model: "",
+          tags: [],
+          created_at: new Date().toISOString(),
+        }}
+        models={[
+          {
+            id: "m1",
+            name: "model",
+            api_format: "openai",
+            base_url: "https://example.com",
+            model_name: "model",
+            is_default: true,
+          },
+        ]}
+        sessionId="session-review-reject"
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("group-orchestration-board")).toHaveTextContent("阶段：审核");
+      expect(screen.getByTestId("group-run-review-reject")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId("group-run-review-reject"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("group-orchestration-board")).toHaveTextContent("阶段：审核");
+      expect(screen.getByTestId("group-orchestration-board")).toHaveTextContent("审议轮次：2");
+      expect(screen.getByTestId("group-orchestration-board")).toHaveTextContent("等待门下省复审");
+      expect(invokeMock).toHaveBeenCalledWith("review_group_run_step", {
+        runId: "run-review-reject",
+        action: "reject",
+        comment: "前端要求补充方案",
+      });
+      expect(invokeMock).toHaveBeenCalledWith("continue_employee_group_run", {
+        runId: "run-review-reject",
+      });
+    });
+  });
 });

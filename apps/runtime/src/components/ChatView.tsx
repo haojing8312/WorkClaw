@@ -138,6 +138,7 @@ export function ChatView({
   const [imRoleEvents, setImRoleEvents] = useState<ImRoleTimelineEvent[]>([]);
   const [imRouteDecisions, setImRouteDecisions] = useState<ImRouteDecisionEvent[]>([]);
   const [groupRunSnapshot, setGroupRunSnapshot] = useState<EmployeeGroupRunSnapshot | null>(null);
+  const [groupRunActionLoading, setGroupRunActionLoading] = useState<"approve" | "reject" | null>(null);
 
   // File Upload: 读取文件为文本
   const readFileAsText = (file: File): Promise<string> => {
@@ -723,6 +724,46 @@ export function ChatView({
     setToolConfirm(null);
   }
 
+  async function handleApproveGroupRunReview() {
+    if (!groupRunSnapshot?.run_id || groupRunActionLoading) return;
+    setGroupRunActionLoading("approve");
+    try {
+      await invoke("review_group_run_step", {
+        runId: groupRunSnapshot.run_id,
+        action: "approve",
+        comment: "前端确认通过",
+      });
+      const snapshot = await invoke<EmployeeGroupRunSnapshot>("continue_employee_group_run", {
+        runId: groupRunSnapshot.run_id,
+      });
+      setGroupRunSnapshot(snapshot);
+    } catch (e) {
+      console.error("审核通过失败:", e);
+    } finally {
+      setGroupRunActionLoading(null);
+    }
+  }
+
+  async function handleRejectGroupRunReview() {
+    if (!groupRunSnapshot?.run_id || groupRunActionLoading) return;
+    setGroupRunActionLoading("reject");
+    try {
+      await invoke("review_group_run_step", {
+        runId: groupRunSnapshot.run_id,
+        action: "reject",
+        comment: "前端要求补充方案",
+      });
+      const snapshot = await invoke<EmployeeGroupRunSnapshot>("continue_employee_group_run", {
+        runId: groupRunSnapshot.run_id,
+      });
+      setGroupRunSnapshot(snapshot);
+    } catch (e) {
+      console.error("审核打回失败:", e);
+    } finally {
+      setGroupRunActionLoading(null);
+    }
+  }
+
   // 从 models 查找当前会话的模型名称
   const currentModel = models[0];
   const installedSkillSet = new Set(installedSkillIds);
@@ -1213,6 +1254,28 @@ export function ChatView({
             {groupReviewRound > 0 && <div className="mt-1">{`审议轮次：${groupReviewRound}`}</div>}
             {groupWaitingLabel && <div className="mt-1">{`等待：${groupWaitingLabel}`}</div>}
             {groupStatusReason && <div className="mt-1 text-amber-700">{groupStatusReason}</div>}
+            {groupRunSnapshot && (groupRunSnapshot.state || "").trim().toLowerCase() === "waiting_review" && (
+              <div className="mt-2 flex items-center gap-2">
+                <button
+                  type="button"
+                  data-testid="group-run-review-reject"
+                  onClick={() => void handleRejectGroupRunReview()}
+                  disabled={groupRunActionLoading !== null}
+                  className="rounded bg-rose-600 px-2.5 py-1 text-[11px] text-white hover:bg-rose-700 disabled:bg-rose-300"
+                >
+                  {groupRunActionLoading === "reject" ? "打回中..." : "打回重审"}
+                </button>
+                <button
+                  type="button"
+                  data-testid="group-run-review-approve"
+                  onClick={() => void handleApproveGroupRunReview()}
+                  disabled={groupRunActionLoading !== null}
+                  className="rounded bg-emerald-600 px-2.5 py-1 text-[11px] text-white hover:bg-emerald-700 disabled:bg-emerald-300"
+                >
+                  {groupRunActionLoading === "approve" ? "通过中..." : "通过审议"}
+                </button>
+              </div>
+            )}
             {groupMemberStates.length > 0 && (
               <div className="mt-2 space-y-1">
                 {groupMemberStates.map((member) => (

@@ -6,6 +6,7 @@ import {
   EmployeeGroup,
   EmployeeGroupRule,
   EmployeeGroupRunResult,
+  EmployeeGroupRunSnapshot,
   AgentProfileFilesView,
   EmployeeMemoryExport,
   EmployeeMemoryStats,
@@ -541,11 +542,23 @@ export function EmployeeHubView({
           timeout_employee_ids: [],
         },
       });
-      setGroupRunReportById((prev) => ({ ...prev, [groupId]: result.final_report || "" }));
+      const continued = await invoke<EmployeeGroupRunSnapshot>("continue_employee_group_run", {
+        runId: result.run_id,
+      });
+      setGroupRunReportById((prev) => ({
+        ...prev,
+        [groupId]: continued.final_report || result.final_report || "",
+      }));
       if (result.session_id && result.session_skill_id) {
         await onOpenGroupRunSession?.(result.session_id, result.session_skill_id);
       }
-      setMessage(`协作任务已完成（第 ${result.current_round || 1} 轮）`);
+      if ((continued.state || "").trim().toLowerCase() === "waiting_review") {
+        setMessage("协作任务已启动，等待审核");
+      } else if ((continued.state || "").trim().toLowerCase() === "done") {
+        setMessage(`协作任务已完成（第 ${continued.current_round || result.current_round || 1} 轮）`);
+      } else {
+        setMessage(`协作任务已启动，当前阶段：${continued.current_phase || continued.state || "执行"}`);
+      }
     } catch (e) {
       setMessage(`发起协作失败: ${String(e)}`);
     } finally {

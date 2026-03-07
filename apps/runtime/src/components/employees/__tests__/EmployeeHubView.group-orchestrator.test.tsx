@@ -131,7 +131,7 @@ describe("EmployeeHubView group orchestrator panel", () => {
     expect(screen.getByText("群组成员最多 10 人")).toBeInTheDocument();
   });
 
-  test("starts group run with instruction and shows report", async () => {
+  test("starts group run, continues orchestration, and shows latest report", async () => {
     const openSessionMock = vi.fn();
     invokeMock.mockReset();
     invokeMock.mockImplementation((command: string) => {
@@ -157,10 +157,27 @@ describe("EmployeeHubView group orchestrator panel", () => {
           group_id: "group-1",
           session_id: "session-group-1",
           session_skill_id: "builtin-general",
+          state: "planning",
+          current_round: 1,
+          final_report: "计划：已生成 3 个阶段步骤。",
+          steps: [],
+        });
+      }
+      if (command === "continue_employee_group_run") {
+        return Promise.resolve({
+          run_id: "run-1",
+          group_id: "group-1",
+          session_id: "session-group-1",
           state: "done",
           current_round: 1,
-          final_report: "计划：共 3 步\n执行：已完成 3 步。\n汇报：已完成。",
+          current_phase: "finalize",
+          review_round: 0,
+          status_reason: "",
+          waiting_for_employee_id: "",
+          waiting_for_user: false,
+          final_report: "计划：共 3 步\n执行：已完成 3 步。\n汇报：团队协作已完成。",
           steps: [],
+          events: [],
         });
       }
       if (command === "get_feishu_employee_connection_statuses") {
@@ -206,6 +223,9 @@ describe("EmployeeHubView group orchestrator panel", () => {
           max_retry_per_step: 1,
           timeout_employee_ids: [],
         },
+      });
+      expect(invokeMock).toHaveBeenCalledWith("continue_employee_group_run", {
+        runId: "run-1",
       });
       expect(screen.getByTestId("employee-group-run-report-group-1")).toHaveTextContent("计划：共 3 步");
       expect(openSessionMock).toHaveBeenCalledWith("session-group-1", "builtin-general");
