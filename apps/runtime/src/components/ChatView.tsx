@@ -5,7 +5,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
-import { SkillManifest, ModelConfig, Message, StreamItem, FileAttachment, SkillRouteEvent, ImRoleTimelineEvent, ImRoleDispatchRequest, ImRouteDecisionEvent, EmployeeGroupRunSnapshot, EmployeeGroup } from "../types";
+import { SkillManifest, ModelConfig, Message, StreamItem, FileAttachment, SkillRouteEvent, ImRoleTimelineEvent, ImRoleDispatchRequest, ImRouteDecisionEvent, EmployeeGroupRunSnapshot, EmployeeGroup, EmployeeGroupRule } from "../types";
 import { motion, AnimatePresence } from "framer-motion";
 import { ToolIsland } from "./ToolIsland";
 import { RiskConfirmDialog } from "./RiskConfirmDialog";
@@ -139,6 +139,7 @@ export function ChatView({
   const [imRouteDecisions, setImRouteDecisions] = useState<ImRouteDecisionEvent[]>([]);
   const [groupRunSnapshot, setGroupRunSnapshot] = useState<EmployeeGroupRunSnapshot | null>(null);
   const [groupRunMemberEmployeeIds, setGroupRunMemberEmployeeIds] = useState<string[]>([]);
+  const [groupRunRules, setGroupRunRules] = useState<EmployeeGroupRule[]>([]);
   const [groupRunActionLoading, setGroupRunActionLoading] = useState<
     "approve" | "reject" | "pause" | "resume" | "retry" | "reassign" | null
   >(null);
@@ -247,6 +248,7 @@ export function ChatView({
     setImRouteDecisions([]);
     setGroupRunSnapshot(null);
     setGroupRunMemberEmployeeIds([]);
+    setGroupRunRules([]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
@@ -483,13 +485,17 @@ export function ChatView({
     const groupId = (groupRunSnapshot?.group_id || "").trim();
     if (!groupId) {
       setGroupRunMemberEmployeeIds([]);
+      setGroupRunRules([]);
       return () => {
         disposed = true;
       };
     }
     const loadGroupMembers = async () => {
       try {
-        const groups = await invoke<EmployeeGroup[] | null>("list_employee_groups");
+        const [groups, rules] = await Promise.all([
+          invoke<EmployeeGroup[] | null>("list_employee_groups"),
+          invoke<EmployeeGroupRule[] | null>("list_employee_group_rules", { groupId }),
+        ]);
         if (disposed) return;
         const matchedGroup = Array.isArray(groups)
           ? groups.find((group) => (group.id || "").trim() === groupId)
@@ -498,9 +504,11 @@ export function ChatView({
           .map((value) => (value || "").trim())
           .filter((value) => value.length > 0);
         setGroupRunMemberEmployeeIds(memberIds);
+        setGroupRunRules(Array.isArray(rules) ? rules : []);
       } catch {
         if (!disposed) {
           setGroupRunMemberEmployeeIds([]);
+          setGroupRunRules([]);
         }
       }
     };
@@ -963,9 +971,40 @@ export function ChatView({
         .filter((value) => value.length > 0),
     ),
   );
+  const groupRunExecuteRuleTargets = (() => {
+    const memberSet = new Set(
+      groupRunMemberEmployeeIds
+        .map((value) => value.trim().toLowerCase())
+        .filter((value) => value.length > 0),
+    );
+    const targets = new Map<string, string>();
+    let hasExecuteRules = false;
+    for (const rule of groupRunRules) {
+      const relationType = (rule.relation_type || "").trim().toLowerCase();
+      const phaseScope = (rule.phase_scope || "").trim().toLowerCase();
+      if (!["delegate", "handoff"].includes(relationType)) continue;
+      if (phaseScope.length > 0 && !["execute", "all", "*"].includes(phaseScope)) continue;
+      hasExecuteRules = true;
+      const targetEmployeeId = (rule.to_employee_id || "").trim();
+      const normalizedTargetEmployeeId = targetEmployeeId.toLowerCase();
+      if (!targetEmployeeId || (memberSet.size > 0 && !memberSet.has(normalizedTargetEmployeeId))) {
+        continue;
+      }
+      if (!targets.has(normalizedTargetEmployeeId)) {
+        targets.set(normalizedTargetEmployeeId, targetEmployeeId);
+      }
+    }
+    return {
+      hasExecuteRules,
+      ids: Array.from(targets.values()),
+    };
+  })();
   const groupRunCandidateEmployeeIds = Array.from(
     new Set(
-      [...groupRunMemberEmployeeIds, ...groupRunAssignees]
+      (groupRunExecuteRuleTargets.hasExecuteRules
+        ? groupRunExecuteRuleTargets.ids
+        : [...groupRunMemberEmployeeIds, ...groupRunAssignees]
+      )
         .map((value) => value.trim())
         .filter((value) => value.length > 0),
     ),

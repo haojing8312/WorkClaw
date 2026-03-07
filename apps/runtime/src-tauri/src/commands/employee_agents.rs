@@ -76,6 +76,70 @@ fn normalize_member_employee_ids(raw: &[String]) -> Vec<String> {
     out
 }
 
+fn group_rule_allows_execute_reassignment(rule: &EmployeeGroupRule) -> bool {
+    let relation_type = rule.relation_type.trim().to_lowercase();
+    let phase_scope = rule.phase_scope.trim().to_lowercase();
+    let relation_allowed = relation_type == "delegate" || relation_type == "handoff";
+    let phase_allowed =
+        phase_scope.is_empty() || phase_scope == "execute" || phase_scope == "all" || phase_scope == "*";
+    relation_allowed && phase_allowed
+}
+
+async fn load_execute_reassignment_targets_with_pool(
+    pool: &SqlitePool,
+    run_id: &str,
+) -> Result<(Vec<String>, bool), String> {
+    let row = sqlx::query(
+        "SELECT g.id, COALESCE(g.member_employee_ids_json, '[]')
+         FROM group_runs r
+         INNER JOIN employee_groups g ON g.id = r.group_id
+         WHERE r.id = ?",
+    )
+    .bind(run_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| e.to_string())?
+    .ok_or_else(|| "group run not found".to_string())?;
+
+    let group_id: String = row.try_get(0).map_err(|e| e.to_string())?;
+    let member_employee_ids_json: String = row.try_get(1).map_err(|e| e.to_string())?;
+    let member_employee_ids = serde_json::from_str::<Vec<String>>(&member_employee_ids_json)
+        .unwrap_or_default();
+    let normalized_member_ids = normalize_member_employee_ids(&member_employee_ids);
+    let member_set = normalized_member_ids.iter().cloned().collect::<std::collections::HashSet<_>>();
+
+    let rules = list_employee_group_rules_with_pool(pool, &group_id).await?;
+    let mut eligible_targets = Vec::new();
+    let mut has_execute_rules = false;
+    for rule in rules {
+        if !group_rule_allows_execute_reassignment(&rule) {
+            continue;
+        }
+        has_execute_rules = true;
+        let normalized_target = rule.to_employee_id.trim().to_lowercase();
+        if normalized_target.is_empty() {
+            continue;
+        }
+        if !member_set.is_empty() && !member_set.contains(&normalized_target) {
+            continue;
+        }
+        eligible_targets.push(normalized_target);
+    }
+
+    if !has_execute_rules {
+        return Ok((normalized_member_ids, false));
+    }
+
+    let mut seen = std::collections::HashSet::new();
+    Ok((
+        eligible_targets
+            .into_iter()
+            .filter(|employee_id| seen.insert(employee_id.clone()))
+            .collect(),
+        true,
+    ))
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct EnsuredEmployeeSession {
     pub employee_id: String,
@@ -2632,6 +2696,11 @@ pub async fn reassign_group_run_step_with_pool(
     .map_err(|e| e.to_string())?;
     if employee_exists.is_none() {
         return Err("target employee not found".to_string());
+    }
+    let (eligible_targets, has_execute_rules) =
+        load_execute_reassignment_targets_with_pool(pool, &run_id).await?;
+    if has_execute_rules && !eligible_targets.iter().any(|candidate| candidate == &new_assignee) {
+        return Err("target employee is not eligible for execute reassignment".to_string());
     }
 
     let now = chrono::Utc::now().to_rfc3339();

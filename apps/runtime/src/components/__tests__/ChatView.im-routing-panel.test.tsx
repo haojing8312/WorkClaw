@@ -1743,7 +1743,7 @@ describe("ChatView IM routing panel", () => {
     });
   });
 
-  test("includes team members outside current steps as reassign candidates", async () => {
+  test("filters reassign candidates to execute-eligible group members", async () => {
     let snapshotState = "failed";
     invokeMock.mockImplementation((command: string, payload?: any) => {
       if (command === "get_messages") return Promise.resolve([]);
@@ -1766,6 +1766,33 @@ describe("ChatView IM routing panel", () => {
             config_json: "{}",
             created_at: "2026-03-07T00:00:00Z",
             updated_at: "2026-03-07T00:00:00Z",
+          },
+        ]);
+      }
+      if (command === "list_employee_group_rules") {
+        expect(payload).toEqual({ groupId: "group-reassign-members-1" });
+        return Promise.resolve([
+          {
+            id: "rule-execute-gongbu",
+            group_id: "group-reassign-members-1",
+            from_employee_id: "尚书",
+            to_employee_id: "工部",
+            relation_type: "delegate",
+            phase_scope: "execute",
+            required: false,
+            priority: 10,
+            created_at: "2026-03-07T00:00:00Z",
+          },
+          {
+            id: "rule-execute-hubu",
+            group_id: "group-reassign-members-1",
+            from_employee_id: "尚书",
+            to_employee_id: "户部",
+            relation_type: "delegate",
+            phase_scope: "execute",
+            required: false,
+            priority: 20,
+            created_at: "2026-03-07T00:00:00Z",
           },
         ]);
       }
@@ -1929,6 +1956,8 @@ describe("ChatView IM routing panel", () => {
 
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "改派给户部" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "改派给礼部" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "改派给尚书" })).not.toBeInTheDocument();
     });
 
     fireEvent.click(screen.getByRole("button", { name: "改派给户部" }));

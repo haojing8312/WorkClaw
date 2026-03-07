@@ -14,6 +14,7 @@ use runtime_lib::commands::employee_agents::{
     UpsertAgentEmployeeInput,
 };
 use runtime_lib::im::types::{ImEvent, ImEventType};
+use uuid::Uuid;
 
 #[tokio::test]
 async fn employee_config_and_im_session_mapping_work() {
@@ -2046,4 +2047,122 @@ async fn reassign_specific_failed_step_keeps_other_failed_steps_blocking_run() {
     .expect("load reassign event");
     assert_eq!(event_step_id, libu_step_id);
     assert!(payload_json.contains("\"assignee_employee_id\":\"gongbu\""));
+}
+
+#[tokio::test]
+async fn reassign_group_step_rejects_targets_not_allowed_by_execute_rules() {
+    let (pool, _tmp) = helpers::setup_test_db().await;
+    sqlx::query(
+        "INSERT INTO model_configs (id, name, api_format, base_url, model_name, is_default, api_key)
+         VALUES ('m1', 'default', 'openai', 'https://example.com', 'gpt-4o-mini', 1, 'k')",
+    )
+    .execute(&pool)
+    .await
+    .expect("seed model config");
+
+    for employee_id in ["shangshu", "bingbu", "gongbu", "hubu"] {
+        upsert_agent_employee_with_pool(
+            &pool,
+            UpsertAgentEmployeeInput {
+                id: None,
+                employee_id: employee_id.to_string(),
+                name: employee_id.to_string(),
+                role_id: employee_id.to_string(),
+                persona: "".to_string(),
+                feishu_open_id: "".to_string(),
+                feishu_app_id: "".to_string(),
+                feishu_app_secret: "".to_string(),
+                primary_skill_id: "builtin-general".to_string(),
+                default_work_dir: format!("E:/workspace/{employee_id}"),
+                openclaw_agent_id: employee_id.to_string(),
+                routing_priority: 100,
+                enabled_scopes: vec!["app".to_string()],
+                enabled: true,
+                is_default: employee_id == "shangshu",
+                skill_ids: vec!["builtin-general".to_string()],
+            },
+        )
+        .await
+        .expect("seed employee");
+    }
+
+    let group_id = create_employee_group_with_pool(
+        &pool,
+        CreateEmployeeGroupInput {
+            name: "规则改派团队".to_string(),
+            coordinator_employee_id: "shangshu".to_string(),
+            member_employee_ids: vec![
+                "shangshu".to_string(),
+                "bingbu".to_string(),
+                "gongbu".to_string(),
+                "hubu".to_string(),
+            ],
+        },
+    )
+    .await
+    .expect("create group");
+
+    sqlx::query(
+        "INSERT INTO employee_group_rules (
+            id, group_id, from_employee_id, to_employee_id, relation_type, phase_scope, required, priority, created_at
+         ) VALUES (?, ?, 'shangshu', 'gongbu', 'delegate', 'execute', 0, 10, datetime('now'))",
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(&group_id)
+    .execute(&pool)
+    .await
+    .expect("insert execute rule");
+
+    let outcome = start_employee_group_run_with_pool(
+        &pool,
+        StartEmployeeGroupRunInput {
+            group_id,
+            user_goal: "推进执行".to_string(),
+            execution_window: 3,
+            max_retry_per_step: 1,
+            timeout_employee_ids: vec![],
+        },
+    )
+    .await
+    .expect("start run");
+
+    let step_id = sqlx::query_as::<_, (String,)>(
+        "SELECT id
+         FROM group_run_steps
+         WHERE run_id = ? AND step_type = 'execute' AND assignee_employee_id = 'bingbu'
+         LIMIT 1",
+    )
+    .bind(&outcome.run_id)
+    .fetch_one(&pool)
+    .await
+    .expect("load bingbu step")
+    .0;
+
+    sqlx::query(
+        "UPDATE group_run_steps
+         SET status = 'failed', output = '兵部失败'
+         WHERE id = ?",
+    )
+    .bind(&step_id)
+    .execute(&pool)
+    .await
+    .expect("mark step failed");
+
+    sqlx::query(
+        "UPDATE group_runs
+         SET state = 'failed', current_phase = 'execute', waiting_for_employee_id = 'bingbu'
+         WHERE id = ?",
+    )
+    .bind(&outcome.run_id)
+    .execute(&pool)
+    .await
+    .expect("mark run failed");
+
+    let err = reassign_group_run_step_with_pool(&pool, &step_id, "hubu")
+        .await
+        .expect_err("reject disallowed execute target");
+    assert!(
+        err.contains("not eligible for execute reassignment"),
+        "unexpected error: {err}"
+    );
 }
