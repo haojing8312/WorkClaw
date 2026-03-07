@@ -1131,6 +1131,20 @@ async fn execute_group_step_completes_group_run_and_appends_summary_when_last_st
         .expect("assistant summary exists");
     assert!(last_assistant.1.contains("团队协作已完成"));
     assert!(last_assistant.1.contains("MOCK_RESPONSE"));
+
+    let snapshot = get_employee_group_run_snapshot_with_pool(&pool, &outcome.session_id)
+        .await
+        .expect("load run snapshot")
+        .expect("snapshot exists");
+    let completed_execute_step = snapshot
+        .steps
+        .iter()
+        .find(|step| step.step_type == "execute" && step.status == "completed")
+        .expect("completed execute step");
+    assert!(
+        !completed_execute_step.session_id.trim().is_empty(),
+        "completed execute step should expose session_id in snapshot"
+    );
 }
 
 #[tokio::test]

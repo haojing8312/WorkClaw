@@ -263,6 +263,7 @@ pub struct EmployeeGroupRunStep {
     pub step_type: String,
     pub assignee_employee_id: String,
     pub dispatch_source_employee_id: String,
+    pub session_id: String,
     pub attempt_no: i64,
     pub status: String,
     pub output_summary: String,
@@ -1294,6 +1295,7 @@ pub async fn start_employee_group_run_with_pool(
             step_type: step.step_type,
             assignee_employee_id: step.assignee_employee_id,
             dispatch_source_employee_id,
+            session_id: String::new(),
             attempt_no: 1,
             status: step.status,
             output_summary: step.output.chars().take(120).collect::<String>(),
@@ -2914,8 +2916,8 @@ pub async fn get_employee_group_run_snapshot_with_pool(
 
     let step_rows = sqlx::query(
         "SELECT id, round_no, step_type, assignee_employee_id,
-                COALESCE(dispatch_source_employee_id, ''), COALESCE(attempt_no, 1), status,
-                COALESCE(output_summary, ''), output
+                COALESCE(dispatch_source_employee_id, ''), COALESCE(session_id, ''),
+                COALESCE(attempt_no, 1), status, COALESCE(output_summary, ''), output
          FROM group_run_steps
          WHERE run_id = ?
          ORDER BY round_no ASC, started_at ASC, id ASC",
@@ -2934,10 +2936,11 @@ pub async fn get_employee_group_run_snapshot_with_pool(
                 .try_get("assignee_employee_id")
                 .map_err(|e| e.to_string())?,
             dispatch_source_employee_id: row.try_get(4).map_err(|e| e.to_string())?,
-            attempt_no: row.try_get(5).map_err(|e| e.to_string())?,
-            status: row.try_get(6).map_err(|e| e.to_string())?,
-            output_summary: row.try_get(7).map_err(|e| e.to_string())?,
-            output: row.try_get(8).map_err(|e| e.to_string())?,
+            session_id: row.try_get(5).map_err(|e| e.to_string())?,
+            attempt_no: row.try_get(6).map_err(|e| e.to_string())?,
+            status: row.try_get(7).map_err(|e| e.to_string())?,
+            output_summary: row.try_get(8).map_err(|e| e.to_string())?,
+            output: row.try_get(9).map_err(|e| e.to_string())?,
         });
     }
     let event_rows = sqlx::query(

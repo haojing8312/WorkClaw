@@ -141,6 +141,7 @@ export function ChatView({
   const [groupRunMemberEmployeeIds, setGroupRunMemberEmployeeIds] = useState<string[]>([]);
   const [groupRunCoordinatorEmployeeId, setGroupRunCoordinatorEmployeeId] = useState("");
   const [groupRunRules, setGroupRunRules] = useState<EmployeeGroupRule[]>([]);
+  const [expandedGroupRunStepIds, setExpandedGroupRunStepIds] = useState<string[]>([]);
   const [groupRunActionLoading, setGroupRunActionLoading] = useState<
     "approve" | "reject" | "pause" | "resume" | "retry" | "reassign" | null
   >(null);
@@ -251,6 +252,7 @@ export function ChatView({
     setGroupRunMemberEmployeeIds([]);
     setGroupRunCoordinatorEmployeeId("");
     setGroupRunRules([]);
+    setExpandedGroupRunStepIds([]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
@@ -994,6 +996,14 @@ export function ChatView({
     }
     return byStepId;
   })();
+  const latestGroupEventByStepId = (() => {
+    const byStepId = new Map<string, EmployeeGroupRunSnapshot["events"][number]>();
+    for (const event of groupRunSnapshot?.events || []) {
+      if (!event.step_id) continue;
+      byStepId.set(event.step_id, event);
+    }
+    return byStepId;
+  })();
   const formatGroupRunEventLabel = (event: EmployeeGroupRunSnapshot["events"][number]) => {
     const payload = parseGroupRunEventPayload(event);
     const relatedStep = groupRunStepMap.get(event.step_id);
@@ -1031,6 +1041,8 @@ export function ChatView({
     .filter((step) => (step.step_type || "").trim().toLowerCase() === "execute")
     .map((step) => {
       const reassignPayload = latestStepReassignPayloadByStepId.get(step.id) || {};
+      const latestEvent = latestGroupEventByStepId.get(step.id) || null;
+      const latestEventPayload = latestEvent ? parseGroupRunEventPayload(latestEvent) : {};
       const currentAssigneeEmployeeId = String(
         reassignPayload.assignee_employee_id || step.assignee_employee_id || "",
       ).trim();
@@ -1050,6 +1062,11 @@ export function ChatView({
         typeof step.attempt_no === "number" && Number.isFinite(step.attempt_no) && step.attempt_no > 0
           ? step.attempt_no
           : 1;
+      const detailSessionId = String(step.session_id || latestEventPayload.session_id || "").trim();
+      const detailOutputSummary = String(
+        step.output_summary || latestEventPayload.output_summary || step.output || "",
+      ).trim();
+      const latestEventCreatedAt = String(latestEvent?.created_at || "").trim();
       return {
         step,
         currentAssigneeEmployeeId,
@@ -1057,8 +1074,16 @@ export function ChatView({
         previousAssigneeEmployeeId,
         latestFailureSummary,
         attemptNo,
+        detailSessionId,
+        detailOutputSummary,
+        latestEventCreatedAt,
       };
     });
+  const toggleGroupRunStepDetails = (stepId: string) => {
+    setExpandedGroupRunStepIds((prev) =>
+      prev.includes(stepId) ? prev.filter((id) => id !== stepId) : [...prev, stepId],
+    );
+  };
   const groupRunExecuteRuleTargets = (dispatchSourceEmployeeId?: string) => {
     const coordinatorEmployeeId = groupRunCoordinatorEmployeeId.trim().toLowerCase();
     const normalizedDispatchSourceEmployeeId = (dispatchSourceEmployeeId || "").trim().toLowerCase();
@@ -1678,6 +1703,9 @@ export function ChatView({
                       previousAssigneeEmployeeId,
                       latestFailureSummary,
                       attemptNo,
+                      detailSessionId,
+                      detailOutputSummary,
+                      latestEventCreatedAt,
                     }) => (
                       <div
                         key={step.id}
@@ -1711,6 +1739,24 @@ export function ChatView({
                         {latestFailureSummary && (
                           <div className="mt-1 text-[10px] text-amber-700/90">
                             {`最近失败：${latestFailureSummary}`}
+                          </div>
+                        )}
+                        <button
+                          type="button"
+                          data-testid={`group-run-step-card-${step.id}-toggle`}
+                          onClick={() => toggleGroupRunStepDetails(step.id)}
+                          className="mt-2 text-[10px] text-indigo-700 underline underline-offset-2 hover:text-indigo-800"
+                        >
+                          {expandedGroupRunStepIds.includes(step.id) ? "收起详情" : "查看详情"}
+                        </button>
+                        {expandedGroupRunStepIds.includes(step.id) && (
+                          <div
+                            data-testid={`group-run-step-card-${step.id}-details`}
+                            className="mt-2 space-y-1 rounded border border-indigo-100 bg-indigo-50/60 px-2 py-1.5 text-[10px] text-indigo-800"
+                          >
+                            <div>{`session_id：${detailSessionId || "暂无"}`}</div>
+                            <div>{`输出摘要：${detailOutputSummary || "暂无"}`}</div>
+                            <div>{`最近事件时间：${latestEventCreatedAt || "暂无"}`}</div>
                           </div>
                         )}
                       </div>

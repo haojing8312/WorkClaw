@@ -1561,8 +1561,10 @@ describe("ChatView IM routing panel", () => {
                 round_no: 1,
                 step_type: "execute",
                 assignee_employee_id: "工部",
+                session_id: "session-step-gongbu",
                 attempt_no: 2,
                 status: "completed",
+                output_summary: "已输出改派后的执行结果",
                 output: "MOCK_RESPONSE",
               },
               {
@@ -1590,6 +1592,14 @@ describe("ChatView IM routing panel", () => {
                 payload_json:
                   "{\"assignee_employee_id\":\"工部\",\"dispatch_source_employee_id\":\"门下\",\"previous_assignee_employee_id\":\"兵部\",\"previous_output_summary\":\"超时\"}",
                 created_at: "2026-03-07T00:07:00Z",
+              },
+              {
+                id: "evt-step-completed",
+                step_id: "step-failed-reassign",
+                event_type: "step_completed",
+                payload_json:
+                  "{\"assignee_employee_id\":\"工部\",\"dispatch_source_employee_id\":\"门下\",\"session_id\":\"session-step-gongbu\",\"output_summary\":\"已输出改派后的执行结果\"}",
+                created_at: "2026-03-07T00:08:00Z",
               },
             ],
           });
@@ -1665,8 +1675,10 @@ describe("ChatView IM routing panel", () => {
                 round_no: 1,
                 step_type: "execute",
                 assignee_employee_id: "工部",
+                session_id: "session-step-gongbu",
                 attempt_no: 2,
                 status: "completed",
+                output_summary: "已输出改派后的执行结果",
                 output: "MOCK_RESPONSE",
               },
             {
@@ -1694,6 +1706,14 @@ describe("ChatView IM routing panel", () => {
                 payload_json:
                   "{\"assignee_employee_id\":\"工部\",\"dispatch_source_employee_id\":\"门下\",\"previous_assignee_employee_id\":\"兵部\",\"previous_output_summary\":\"超时\"}",
                 created_at: "2026-03-07T00:07:00Z",
+              },
+              {
+                id: "evt-step-completed",
+                step_id: "step-failed-reassign",
+                event_type: "step_completed",
+                payload_json:
+                  "{\"assignee_employee_id\":\"工部\",\"dispatch_source_employee_id\":\"门下\",\"session_id\":\"session-step-gongbu\",\"output_summary\":\"已输出改派后的执行结果\"}",
+                created_at: "2026-03-07T00:08:00Z",
               },
             ],
         });
@@ -1776,6 +1796,24 @@ describe("ChatView IM routing panel", () => {
       expect(invokeMock).toHaveBeenCalledWith("continue_employee_group_run", {
         runId: "run-reassign-1",
       });
+    });
+
+    expect(
+      screen.queryByTestId("group-run-step-card-step-failed-reassign-details"),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("group-run-step-card-step-failed-reassign-toggle"));
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("group-run-step-card-step-failed-reassign-details"),
+      ).toHaveTextContent("session_id：session-step-gongbu");
+      expect(
+        screen.getByTestId("group-run-step-card-step-failed-reassign-details"),
+      ).toHaveTextContent("输出摘要：已输出改派后的执行结果");
+      expect(
+        screen.getByTestId("group-run-step-card-step-failed-reassign-details"),
+      ).toHaveTextContent("最近事件时间：2026-03-07T00:08:00Z");
     });
   });
 
