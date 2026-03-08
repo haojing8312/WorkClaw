@@ -68,6 +68,8 @@ interface Props {
     employeeName?: string;
     employeeCode?: string;
   };
+  sessionTitle?: string;
+  sessionMode?: "general" | "employee_direct" | "team_entry" | string;
   sessionSourceChannel?: string;
   sessionSourceLabel?: string;
 }
@@ -90,6 +92,8 @@ export function ChatView({
   suppressAskUserPrompt = false,
   quickPrompts = [],
   employeeAssistantContext,
+  sessionTitle,
+  sessionMode,
   sessionSourceChannel,
   sessionSourceLabel,
 }: Props) {
@@ -1029,6 +1033,11 @@ export function ChatView({
   const routeCompleted = routeEvents.filter((e) => e.status === "completed").length;
   const routeFailed = routeEvents.filter((e) => e.status === "failed").length;
   const routeTotalDuration = routeEvents.reduce((sum, e) => sum + (e.duration_ms || 0), 0);
+  const normalizedSessionMode = (sessionMode || "").trim().toLowerCase();
+  const isTeamEntrySession = normalizedSessionMode === "team_entry";
+  const normalizedSessionTitle = (sessionTitle || "").trim();
+  const sessionDisplayTitle = isTeamEntrySession ? "团队协作" : skill.name;
+  const sessionDisplaySubtitle = isTeamEntrySession ? normalizedSessionTitle || "团队已连接" : "";
   const isFeishuSource = (sessionSourceChannel || "").trim().toLowerCase() === "feishu";
   const sessionSourceBadgeText = (sessionSourceLabel || "").trim() || "飞书同步";
   const activeDelegationCard = [...delegationCards]
@@ -1315,6 +1324,14 @@ export function ChatView({
   const canResumeGroupRun = !!groupRunSnapshot && groupRunState === "paused";
   const canRetryFailedGroupRunSteps = failedGroupRunSteps.length > 0;
   const canReassignFailedGroupRunStep = failedGroupRunReassignOptions.length > 0;
+  const shouldShowTeamEntryEmptyState =
+    isTeamEntrySession &&
+    !initialMessage?.trim() &&
+    messages.length === 0 &&
+    streamItems.length === 0 &&
+    !subAgentBuffer.trim() &&
+    !streaming &&
+    !groupRunSnapshot;
   const groupMemberStatesFromSnapshot = (() => {
     const byRole = new Map<string, { status: string; stepType: string }>();
     for (const step of groupRunSnapshot?.steps || []) {
@@ -1624,7 +1641,22 @@ export function ChatView({
       {/* 头部 */}
       <div className="flex items-center justify-between px-6 py-3 border-b border-gray-200 bg-white/70 backdrop-blur-sm">
         <div className="flex items-center gap-3 min-w-0">
-          <span className="font-semibold text-gray-900 flex-shrink-0">{skill.name}</span>
+          <div className="min-w-0">
+            <div
+              data-testid="chat-session-display-title"
+              className="font-semibold text-gray-900 flex-shrink-0"
+            >
+              {sessionDisplayTitle}
+            </div>
+            {sessionDisplaySubtitle && (
+              <div
+                data-testid="chat-session-display-subtitle"
+                className="mt-0.5 text-[11px] text-gray-500 truncate"
+              >
+                {sessionDisplaySubtitle}
+              </div>
+            )}
+          </div>
           {isFeishuSource && (
             <span
               data-testid="chat-session-source-badge"
@@ -2080,6 +2112,20 @@ export function ChatView({
                 </div>
               </div>
             )}
+          </div>
+        )}
+        {shouldShowTeamEntryEmptyState && (
+          <div
+            data-testid="team-entry-empty-state"
+            className="max-w-[80%] rounded-2xl border border-sky-200 bg-sky-50 px-5 py-4 text-sm text-sky-950 shadow-sm"
+          >
+            <div className="text-sm font-semibold">团队已就绪</div>
+            <div className="mt-1 text-xs text-sky-800">
+              {sessionDisplaySubtitle || "当前团队"} 已进入协作模式，等待你下达第一条任务。
+            </div>
+            <div className="mt-3 rounded-xl border border-sky-100 bg-white/80 px-3 py-2 text-[11px] text-sky-900">
+              适合提交需要拆分、审核、执行和汇总的复杂任务。直接在下方输入目标即可开始团队协作。
+            </div>
           </div>
         )}
         {primaryDelegationCard && (

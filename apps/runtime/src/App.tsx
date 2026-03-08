@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
@@ -38,11 +38,12 @@ import {
   ExpertPreviewPayload,
   ExpertPreviewResult,
 } from "./components/experts/ExpertCreateView";
-import { SkillManifest, ModelConfig, SessionInfo, ImRoleDispatchRequest, Message, AgentEmployee, UpsertAgentEmployeeInput } from "./types";
+import { SkillManifest, ModelConfig, SessionInfo, ImRoleDispatchRequest, Message, AgentEmployee, EmployeeGroup, UpsertAgentEmployeeInput } from "./types";
 
 type MainView = "start-task" | "experts" | "experts-new" | "packaging" | "employees";
 type SkillAction = "refresh" | "delete" | "check-update" | "update";
 type EmployeeAssistantMode = "create" | "update";
+type SessionLaunchMode = "general" | "employee_direct" | "team_entry";
 type EmployeeAssistantLaunchOptions = {
   mode?: EmployeeAssistantMode;
   employeeId?: string;
@@ -188,6 +189,7 @@ export default function App() {
   const [skillActionState, setSkillActionState] = useState<{ skillId: string; action: SkillAction } | null>(null);
   const [clawhubUpdateStatus, setClawhubUpdateStatus] = useState<Record<string, { hasUpdate: boolean; message: string }>>({});
   const [employees, setEmployees] = useState<AgentEmployee[]>([]);
+  const [employeeGroups, setEmployeeGroups] = useState<EmployeeGroup[]>([]);
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string | null>(null);
   const [employeeCreatorHighlight, setEmployeeCreatorHighlight] = useState<{
     employeeId: string;
@@ -265,10 +267,32 @@ export default function App() {
     }
   }
 
+  async function createRuntimeSession(input: {
+    skillId: string;
+    modelId: string;
+    workDir?: string;
+    employeeId?: string;
+    title?: string;
+    sessionMode: SessionLaunchMode;
+    teamId?: string;
+  }) {
+    return invoke<string>("create_session", {
+      skillId: input.skillId,
+      modelId: input.modelId,
+      workDir: input.workDir || "",
+      employeeId: input.employeeId || "",
+      title: input.title,
+      permissionMode: newSessionPermissionMode,
+      sessionMode: input.sessionMode,
+      teamId: input.sessionMode === "team_entry" ? input.teamId || "" : "",
+    });
+  }
+
   useEffect(() => {
     loadSkills();
     loadModels();
     loadEmployees();
+    loadEmployeeGroups();
     if (typeof window !== "undefined" && window.location.hash) {
       const raw = window.location.hash.replace(/^#\//, "");
       if (raw === "experts" || raw === "experts-new" || raw === "packaging" || raw === "start-task" || raw === "employees") {
@@ -305,7 +329,7 @@ export default function App() {
     }
 
     const focusTimer = window.setTimeout(() => {
-      quickModelApiKeyInputRef.current?.focus();
+      quickModelApiKeyInputRef.current?.focus({ preventScroll: true });
     }, 0);
 
     return () => {
@@ -664,6 +688,18 @@ export default function App() {
     }
   }
 
+  async function loadEmployeeGroups(): Promise<EmployeeGroup[]> {
+    try {
+      const raw = await invoke<EmployeeGroup[] | null>("list_employee_groups");
+      const list = Array.isArray(raw) ? raw : [];
+      setEmployeeGroups(list);
+      return list;
+    } catch {
+      setEmployeeGroups([]);
+      return [];
+    }
+  }
+
   async function loadSessions(_skillId: string) {
     try {
       const list = await invoke<SessionInfo[]>("list_sessions");
@@ -675,23 +711,22 @@ export default function App() {
   }
 
   async function handleCreateSession(initialMessage = "") {
+    const skillId = getDefaultSkillId(skills);
     const modelId = models[0]?.id;
-    if (!selectedSkillId || !modelId || creatingSession) return;
+    if (!skillId || !modelId || creatingSession) return;
 
     setCreatingSession(true);
     setCreateSessionError(null);
     try {
-      const selectedEmployee = employees.find((e) => e.id === selectedEmployeeId);
-      const chosenSkill = selectedSkillId || selectedEmployee?.primary_skill_id || BUILTIN_GENERAL_SKILL_ID;
-      const id = await invoke<string>("create_session", {
-        skillId: chosenSkill,
+      setSelectedEmployeeId(null);
+      setSelectedSkillId(skillId);
+      const id = await createRuntimeSession({
+        skillId,
         modelId,
-        workDir: selectedEmployee?.default_work_dir || "",
-        employeeId: selectedEmployee?.employee_id || selectedEmployee?.role_id || "",
-        permissionMode: newSessionPermissionMode,
+        sessionMode: "general",
       });
       const firstMessage = initialMessage.trim();
-      if (selectedSkillId) await loadSessions(selectedSkillId);
+      await loadSessions(skillId);
       setSelectedSessionId(id);
 
       if (firstMessage) {
@@ -701,6 +736,53 @@ export default function App() {
     } catch (e) {
       console.error("创建会话失败:", e);
       setCreateSessionError("创建会话失败，请稍后重试");
+    } finally {
+      setCreatingSession(false);
+    }
+  }
+
+  async function handleCreateTeamEntrySession(input: { teamId: string; initialMessage?: string }) {
+    const teamId = (input.teamId || "").trim();
+    const initialMessage = (input.initialMessage || "").trim();
+    const modelId = models[0]?.id;
+    if (!teamId || !modelId || creatingSession) return;
+
+    const group = employeeGroups.find((item) => item.id === teamId);
+    if (!group) {
+      setCreateSessionError("未找到可用的协作团队");
+      return;
+    }
+
+    const entryEmployeeCode = (group.entry_employee_id || group.coordinator_employee_id || "").trim();
+    const entryEmployee = employees.find((item) => {
+      const code = (item.employee_id || item.role_id || "").trim();
+      return code === entryEmployeeCode;
+    });
+    const skillId = entryEmployee?.primary_skill_id || getDefaultSkillId(skills);
+    if (!skillId) return;
+
+    setCreatingSession(true);
+    setCreateSessionError(null);
+    try {
+      setSelectedEmployeeId(entryEmployee?.id || null);
+      setSelectedSkillId(skillId);
+      const sessionId = await createRuntimeSession({
+        skillId,
+        modelId,
+        workDir: entryEmployee?.default_work_dir || "",
+        employeeId: entryEmployee?.employee_id || entryEmployee?.role_id || "",
+        title: group.name || "团队协作",
+        sessionMode: "team_entry",
+        teamId,
+      });
+      await loadSessions(skillId);
+      setSelectedSessionId(sessionId);
+      if (initialMessage) {
+        setPendingInitialMessage({ sessionId, message: initialMessage });
+      }
+    } catch (e) {
+      console.error("创建团队会话失败:", e);
+      setCreateSessionError("创建团队会话失败，请稍后重试");
     } finally {
       setCreatingSession(false);
     }
@@ -775,12 +857,10 @@ export default function App() {
     const modelId = models[0]?.id;
     if (modelId) {
       try {
-        const sessionId = await invoke<string>("create_session", {
+        const sessionId = await createRuntimeSession({
           skillId,
           modelId,
-          workDir: "",
-          employeeId: "",
-          permissionMode: newSessionPermissionMode,
+          sessionMode: "general",
         });
         await loadSessions(skillId);
         setSelectedSessionId(sessionId);
@@ -1104,6 +1184,24 @@ export default function App() {
     navigate("start-task");
   }
 
+  const landingTeams = useMemo(() => {
+    return employeeGroups.map((group) => {
+      const entryCode = (group.entry_employee_id || group.coordinator_employee_id || "").trim();
+      const entryEmployee = employees.find((item) => (item.employee_id || item.role_id || "").trim() === entryCode);
+      const coordinatorEmployee = employees.find(
+        (item) => (item.employee_id || item.role_id || "").trim() === (group.coordinator_employee_id || "").trim()
+      );
+      return {
+        id: group.id,
+        name: group.name,
+        description: `入口：${entryEmployee?.name || entryCode || "未设置"} · 协调：${
+          coordinatorEmployee?.name || group.coordinator_employee_id || "未设置"
+        }`,
+        memberCount: group.member_count || group.member_employee_ids?.length || 0,
+      };
+    });
+  }, [employeeGroups, employees]);
+
   function dismissModelSetupHint() {
     setDismissedModelSetupHint(true);
     if (typeof window === "undefined") {
@@ -1279,12 +1377,12 @@ export default function App() {
 
     setCreatingSession(true);
     try {
-      const sessionId = await invoke<string>("create_session", {
+      const sessionId = await createRuntimeSession({
         skillId,
         modelId,
         workDir: employee.default_work_dir || "",
         employeeId: employee.employee_id || employee.role_id || "",
-        permissionMode: newSessionPermissionMode,
+        sessionMode: "employee_direct",
       });
       await loadSessions(skillId);
       setSelectedSessionId(sessionId);
@@ -1348,7 +1446,7 @@ export default function App() {
         launchMode === "update" && targetEmployee
           ? `调整员工：${targetEmployee.name}`
           : "创建员工：新员工";
-      const sessionId = await invoke<string>("create_session", {
+      const sessionId = await createRuntimeSession({
         skillId,
         modelId,
         workDir:
@@ -1357,7 +1455,7 @@ export default function App() {
             : "",
         employeeId: employeeCode,
         title: sessionTitle,
-        permissionMode: newSessionPermissionMode,
+        sessionMode: employeeCode ? "employee_direct" : "general",
       });
       await loadSessions(skillId);
       setSelectedSessionId(sessionId);
@@ -1538,7 +1636,7 @@ export default function App() {
         {showQuickModelSetup && (
           <div
             data-testid="quick-model-setup-dialog"
-            className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/30 px-4 py-6 backdrop-blur-sm"
+            className="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-slate-950/30 px-4 py-4 backdrop-blur-sm sm:py-6"
             onMouseDown={(event) => {
               if (event.target === event.currentTarget) {
                 closeQuickModelSetup();
@@ -1546,14 +1644,15 @@ export default function App() {
             }}
           >
             <div
+              data-testid="quick-model-setup-panel"
               role="dialog"
               aria-modal="true"
               aria-labelledby="quick-model-setup-title"
-              className="w-full max-w-[1120px] overflow-hidden rounded-[28px] border border-white/80 bg-white shadow-[0_36px_120px_rgba(15,23,42,0.24)]"
+              className="h-[calc(100vh-2rem)] w-full max-w-[1120px] max-h-[960px] overflow-hidden rounded-[28px] border border-white/80 bg-white shadow-[0_36px_120px_rgba(15,23,42,0.24)]"
               onMouseDown={(event) => event.stopPropagation()}
             >
-              <div className="grid lg:grid-cols-[0.9fr_1.1fr]">
-                <div className="relative overflow-hidden bg-[linear-gradient(180deg,#eff6ff_0%,#f8fafc_100%)] p-6 sm:p-7 lg:p-6">
+              <div className="flex h-full min-h-0 flex-col lg:grid lg:grid-cols-[0.9fr_1.1fr]">
+                <div className="relative overflow-hidden bg-[linear-gradient(180deg,#eff6ff_0%,#f8fafc_100%)] p-6 sm:p-7 lg:overflow-y-auto lg:p-6">
                   <div className="absolute inset-x-0 top-0 h-28 bg-[radial-gradient(circle_at_top,_rgba(37,99,235,0.18),_transparent_72%)]" />
                   <div className="relative">
                     <div className="inline-flex items-center gap-2 rounded-full bg-white/80 px-3 py-1 text-[11px] font-semibold text-[var(--sm-primary-strong)] shadow-[var(--sm-shadow-sm)]">
@@ -1593,7 +1692,7 @@ export default function App() {
                     </div>
                   </div>
                 </div>
-                <div className="p-6 sm:p-7 lg:p-8">
+                <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden p-6 sm:p-7 lg:p-8">
                   <div className="flex items-start justify-between gap-4">
                     <div>
                       <div id="quick-model-setup-title" className="text-xl font-semibold text-[var(--sm-text)]">
@@ -1615,6 +1714,10 @@ export default function App() {
                     </button>
                   </div>
 
+                  <div
+                    data-testid="quick-model-setup-scroll-region"
+                    className="min-h-0 flex-1 overflow-y-auto pr-1"
+                  >
                   <div className="mt-6">
                     <div className="flex items-center justify-between gap-3">
                       <div className="sm-field-label mb-0">推荐模板</div>
@@ -1829,13 +1932,15 @@ export default function App() {
                     </div>
                   )}
 
+                  </div>
+
                   <div className="mt-6 border-t border-[var(--sm-border)] pt-4">
                     <div className="text-xs leading-5 text-[var(--sm-text-muted)]">
                       {isBlockingInitialModelSetup
                         ? "首次使用至少完成一次模型接入后，才能关闭这个向导。"
                         : "按 Esc 或点击遮罩可以关闭此弹窗。"}
                     </div>
-                    <div className="mt-3 grid grid-cols-2 gap-2">
+                    <div data-testid="quick-model-setup-actions" className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
                       <button
                         type="button"
                         data-testid="quick-model-setup-cancel"
@@ -2079,6 +2184,7 @@ export default function App() {
                 onSetAsMainAndEnter={handleSetAsMainAndEnter}
                 onStartTaskWithEmployee={handleStartTaskWithEmployee}
                 onOpenGroupRunSession={handleOpenGroupRunSession}
+                onEmployeeGroupsChanged={loadEmployeeGroups}
                 onOpenEmployeeCreatorSkill={handleOpenEmployeeCreatorSkill}
               />
             </motion.div>
@@ -2180,6 +2286,8 @@ export default function App() {
                 }}
                 sessionSourceChannel={selectedSession?.source_channel}
                 sessionSourceLabel={selectedSession?.source_label}
+                sessionTitle={selectedSession?.title}
+                sessionMode={selectedSession?.session_mode}
                 onSessionUpdate={handleSessionRefresh}
                 installedSkillIds={skills.map((s) => s.id)}
                 onSkillInstalled={handleSkillInstalledFromChat}
@@ -2215,10 +2323,12 @@ export default function App() {
             >
               <NewSessionLanding
                 sessions={sessions}
+                teams={landingTeams}
                 creating={creatingSession}
                 error={createSessionError}
                 onSelectSession={setSelectedSessionId}
                 onCreateSessionWithInitialMessage={handleCreateSession}
+                onCreateTeamEntrySession={handleCreateTeamEntrySession}
               />
             </motion.div>
           ) : selectedSkill && models.length === 0 ? (

@@ -493,6 +493,32 @@ describe("App model setup hint", () => {
     expect(screen.getByTestId("model-setup-gate")).toBeInTheDocument();
   });
 
+  test("keeps quick setup content scrollable within the viewport on first launch", async () => {
+    const focusSpy = vi.spyOn(HTMLInputElement.prototype, "focus");
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("model-setup-gate")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId("model-setup-gate-open-quick-setup"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("quick-model-setup-dialog")).toBeInTheDocument();
+    });
+
+    expect(screen.getByTestId("quick-model-setup-dialog").className).not.toContain("sm:items-center");
+    expect(screen.getByTestId("quick-model-setup-panel")).toHaveClass("h-[calc(100vh-2rem)]");
+    expect(screen.getByTestId("quick-model-setup-panel")).toHaveClass("max-h-[960px]");
+    expect(screen.getByTestId("quick-model-setup-scroll-region")).toHaveClass("overflow-y-auto");
+    expect(screen.getByTestId("quick-model-setup-scroll-region")).toHaveClass("flex-1");
+    expect(screen.getByTestId("quick-model-setup-actions")).toBeInTheDocument();
+    expect(screen.getByTestId("quick-model-setup-save")).toBeInTheDocument();
+    expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true });
+
+    focusSpy.mockRestore();
+  });
+
   test("shows non-blocking hint instead of gate after first model setup has been completed once", async () => {
     window.localStorage.setItem(INITIAL_MODEL_SETUP_COMPLETED_KEY, "1");
     render(<App />);

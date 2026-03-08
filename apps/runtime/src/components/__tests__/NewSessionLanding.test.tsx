@@ -16,6 +16,7 @@ describe("NewSessionLanding", () => {
     render(
       <NewSessionLanding
         sessions={[]}
+        teams={[]}
         creating={false}
         onSelectSession={() => {}}
         onCreateSessionWithInitialMessage={() => {}}
@@ -40,6 +41,7 @@ describe("NewSessionLanding", () => {
     render(
       <NewSessionLanding
         sessions={[]}
+        teams={[]}
         creating={false}
         onSelectSession={() => {}}
         onCreateSessionWithInitialMessage={onCreate}
@@ -59,6 +61,7 @@ describe("NewSessionLanding", () => {
     render(
       <NewSessionLanding
         sessions={[]}
+        teams={[]}
         creating={false}
         onSelectSession={() => {}}
         onCreateSessionWithInitialMessage={onCreate}
@@ -79,6 +82,7 @@ describe("NewSessionLanding", () => {
     render(
       <NewSessionLanding
         sessions={[]}
+        teams={[]}
         creating={false}
         onSelectSession={() => {}}
         onCreateSessionWithInitialMessage={() => {}}
@@ -94,6 +98,7 @@ describe("NewSessionLanding", () => {
     render(
       <NewSessionLanding
         sessions={sessions}
+        teams={[]}
         creating={false}
         onSelectSession={onSelectSession}
         onCreateSessionWithInitialMessage={() => {}}
@@ -120,6 +125,7 @@ describe("NewSessionLanding", () => {
     render(
       <NewSessionLanding
         sessions={sessions}
+        teams={[]}
         creating={false}
         onSelectSession={() => {}}
         onCreateSessionWithInitialMessage={() => {}}
@@ -138,6 +144,7 @@ describe("NewSessionLanding", () => {
     render(
       <NewSessionLanding
         sessions={[]}
+        teams={[]}
         creating={true}
         error="创建失败"
         onSelectSession={() => {}}
@@ -153,6 +160,7 @@ describe("NewSessionLanding", () => {
     render(
       <NewSessionLanding
         sessions={[]}
+        teams={[]}
         creating={false}
         onSelectSession={() => {}}
         onCreateSessionWithInitialMessage={() => {}}
@@ -170,6 +178,7 @@ describe("NewSessionLanding", () => {
     render(
       <NewSessionLanding
         sessions={[]}
+        teams={[]}
         creating={false}
         onSelectSession={() => {}}
         onCreateSessionWithInitialMessage={onCreate}
@@ -194,5 +203,42 @@ describe("NewSessionLanding", () => {
     expect(onCreate).toHaveBeenCalledWith(
       "请帮我整理下载目录，把文件按类型分类到子文件夹，并按近30天和更早文件分开。先告诉我你的整理方案。"
     );
+  });
+
+  test("renders explicit team entry section and dispatches chosen team", () => {
+    const onCreateTeamEntrySession = vi.fn();
+    render(
+      <NewSessionLanding
+        sessions={[]}
+        teams={[
+          {
+            id: "group-1",
+            name: "默认复杂任务团队",
+            description: "入口：太子 · 协调：尚书省",
+            memberCount: 10,
+          },
+        ]}
+        creating={false}
+        onSelectSession={() => {}}
+        onCreateSessionWithInitialMessage={() => {}}
+        onCreateTeamEntrySession={onCreateTeamEntrySession}
+      />
+    );
+
+    fireEvent.change(screen.getByPlaceholderText("先描述你要完成什么任务..."), {
+      target: { value: "请安排一份调研和执行计划" },
+    });
+
+    expect(screen.getByText("团队协作入口")).toBeInTheDocument();
+    expect(screen.getByText("默认复杂任务团队")).toBeInTheDocument();
+    expect(screen.getByText("入口：太子 · 协调：尚书省")).toBeInTheDocument();
+    expect(screen.getByText("10 人团队")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "交给团队处理：默认复杂任务团队" }));
+
+    expect(onCreateTeamEntrySession).toHaveBeenCalledWith({
+      teamId: "group-1",
+      initialMessage: "请安排一份调研和执行计划",
+    });
   });
 });

@@ -3748,7 +3748,7 @@ pub async fn maybe_handle_team_entry_session_message_with_pool(
     }
 
     let session_row = sqlx::query(
-        "SELECT COALESCE(employee_id, '')
+        "SELECT COALESCE(session_mode, 'general'), COALESCE(team_id, '')
          FROM sessions
          WHERE id = ?",
     )
@@ -3759,23 +3759,17 @@ pub async fn maybe_handle_team_entry_session_message_with_pool(
     let Some(session_row) = session_row else {
         return Ok(None);
     };
-    let session_employee_id: String = session_row.try_get(0).map_err(|e| e.to_string())?;
-    if session_employee_id.trim().is_empty() {
+    let session_mode: String = session_row.try_get(0).map_err(|e| e.to_string())?;
+    let team_id: String = session_row.try_get(1).map_err(|e| e.to_string())?;
+    if !session_mode.trim().eq_ignore_ascii_case("team_entry") || team_id.trim().is_empty() {
         return Ok(None);
     }
 
-    let mut candidate_groups = list_employee_groups_with_pool(pool)
+    let Some(group) = list_employee_groups_with_pool(pool)
         .await?
         .into_iter()
-        .filter(|group| group.entry_employee_id.trim().eq_ignore_ascii_case(session_employee_id.trim()))
-        .collect::<Vec<_>>();
-    candidate_groups.sort_by(|left, right| {
-        right
-            .is_bootstrap_seeded
-            .cmp(&left.is_bootstrap_seeded)
-            .then_with(|| right.updated_at.cmp(&left.updated_at))
-    });
-    let Some(group) = candidate_groups.into_iter().next() else {
+        .find(|group| group.id.eq_ignore_ascii_case(team_id.trim()))
+    else {
         return Ok(None);
     };
 

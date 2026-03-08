@@ -27,6 +27,7 @@ interface Props {
   onSetAsMainAndEnter: (employeeId: string) => void;
   onStartTaskWithEmployee: (employeeId: string) => Promise<void> | void;
   onOpenGroupRunSession?: (sessionId: string, skillId: string) => Promise<void> | void;
+  onEmployeeGroupsChanged?: () => Promise<void> | void;
   onOpenEmployeeCreatorSkill?: (options?: { mode?: "create" | "update"; employeeId?: string }) => Promise<void> | void;
   highlightEmployeeId?: string | null;
   highlightMessage?: string | null;
@@ -91,6 +92,7 @@ export function EmployeeHubView({
   onSetAsMainAndEnter,
   onStartTaskWithEmployee,
   onOpenGroupRunSession,
+  onEmployeeGroupsChanged,
   onOpenEmployeeCreatorSkill,
   highlightEmployeeId,
   highlightMessage,
@@ -527,6 +529,7 @@ export function EmployeeHubView({
       setGroupExecutionMode("sequential");
       setGroupVisibilityMode("internal");
       await loadEmployeeGroups();
+      await onEmployeeGroupsChanged?.();
       setMessage("协作团队已创建");
     } catch (e) {
       setMessage(`创建群组失败: ${String(e)}`);
@@ -556,6 +559,7 @@ export function EmployeeHubView({
         return next;
       });
       await loadEmployeeGroups();
+      await onEmployeeGroupsChanged?.();
       setMessage("协作群组已删除");
     } catch (e) {
       setMessage(`删除群组失败: ${String(e)}`);
@@ -617,6 +621,7 @@ export function EmployeeHubView({
         },
       });
       await loadEmployeeGroups();
+      await onEmployeeGroupsChanged?.();
       setMessage(`已复制团队：${cloneName}`);
     } catch (e) {
       setMessage(`复制团队失败: ${String(e)}`);
@@ -961,7 +966,7 @@ export function EmployeeHubView({
                     <input
                       data-testid={`employee-group-run-goal-${group.id}`}
                       className="flex-1 border border-gray-200 rounded px-2 py-1.5 text-xs"
-                      placeholder="给该群组发送协作指令"
+                      placeholder="给该团队发送协作指令"
                       value={groupRunGoalById[group.id] || ""}
                       onChange={(e) =>
                         setGroupRunGoalById((prev) => ({ ...prev, [group.id]: e.target.value }))
@@ -974,7 +979,7 @@ export function EmployeeHubView({
                       disabled={groupRunSubmittingId === group.id}
                       className="h-7 px-2.5 rounded bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white text-xs"
                     >
-                      {groupRunSubmittingId === group.id ? "执行中..." : "发起协作"}
+                      {groupRunSubmittingId === group.id ? "执行中..." : "以团队模式发起任务"}
                     </button>
                   </div>
                   {groupRunReportById[group.id] && (
@@ -1091,7 +1096,7 @@ export function EmployeeHubView({
                 <div className="flex items-center gap-2 pt-1">
                   <button disabled={saving || !selectedEmployeeId} onClick={requestRemoveCurrent} className="h-8 px-3 rounded bg-red-50 hover:bg-red-100 disabled:bg-gray-100 text-red-600 text-xs">删除员工</button>
                   <button disabled={!selectedEmployeeId} onClick={() => selectedEmployeeId && onSetAsMainAndEnter(selectedEmployeeId)} className="h-8 px-3 rounded bg-emerald-50 hover:bg-emerald-100 disabled:bg-gray-100 text-emerald-700 text-xs">设为主员工并进入首页</button>
-                  <button disabled={!selectedEmployeeId || saving} onClick={() => selectedEmployeeId && onStartTaskWithEmployee(selectedEmployeeId)} className="h-8 px-3 rounded bg-indigo-50 hover:bg-indigo-100 disabled:bg-gray-100 text-indigo-700 text-xs">与该员工对话开始任务</button>
+                  <button disabled={!selectedEmployeeId || saving} onClick={() => selectedEmployeeId && onStartTaskWithEmployee(selectedEmployeeId)} className="h-8 px-3 rounded bg-indigo-50 hover:bg-indigo-100 disabled:bg-gray-100 text-indigo-700 text-xs">与该员工开始对话</button>
                 </div>
               </>
             ) : (

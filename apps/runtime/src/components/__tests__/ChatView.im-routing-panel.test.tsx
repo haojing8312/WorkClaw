@@ -44,6 +44,43 @@ describe("ChatView IM routing panel", () => {
     });
   });
 
+  test("shows a team-entry header and waiting state before the first task is sent", async () => {
+    render(
+      <ChatView
+        skill={{
+          id: "builtin-general",
+          name: "通用助手",
+          description: "desc",
+          version: "1.0.0",
+          author: "test",
+          recommended_model: "",
+          tags: [],
+          created_at: new Date().toISOString(),
+        }}
+        models={[
+          {
+            id: "m1",
+            name: "model",
+            api_format: "openai",
+            base_url: "https://example.com",
+            model_name: "model",
+            is_default: true,
+          },
+        ]}
+        sessionId="session-team-entry-empty"
+        sessionMode="team_entry"
+        sessionTitle="默认复杂任务团队"
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("chat-session-display-title")).toHaveTextContent("团队协作");
+      expect(screen.getByTestId("chat-session-display-subtitle")).toHaveTextContent("默认复杂任务团队");
+      expect(screen.getByTestId("team-entry-empty-state")).toHaveTextContent("团队已就绪");
+      expect(screen.getByTestId("team-entry-empty-state")).toHaveTextContent("默认复杂任务团队");
+    });
+  });
+
   test("shows routing timeline events for role collaboration", async () => {
     render(
       <ChatView

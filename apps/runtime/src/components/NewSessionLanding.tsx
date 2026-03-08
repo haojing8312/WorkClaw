@@ -4,10 +4,17 @@ import { SessionInfo } from "../types";
 
 interface Props {
   sessions: SessionInfo[];
+  teams?: Array<{
+    id: string;
+    name: string;
+    description?: string;
+    memberCount?: number;
+  }>;
   creating: boolean;
   error?: string | null;
   onSelectSession: (id: string) => void;
   onCreateSessionWithInitialMessage: (message: string) => void;
+  onCreateTeamEntrySession?: (input: { teamId: string; initialMessage: string }) => void;
 }
 
 const SCENARIO_CARDS = [
@@ -80,10 +87,12 @@ function groupRecentSessions(sessions: SessionInfo[]): SessionGroup[] {
 
 export function NewSessionLanding({
   sessions,
+  teams = [],
   creating,
   error,
   onSelectSession,
   onCreateSessionWithInitialMessage,
+  onCreateTeamEntrySession,
 }: Props) {
   const [input, setInput] = useState("");
   const [selectedScenarioId, setSelectedScenarioId] = useState<string | null>(null);
@@ -105,6 +114,14 @@ export function NewSessionLanding({
       inputContainerRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
     }
     inputRef.current?.focus();
+  };
+
+  const submitTeamEntry = (teamId: string) => {
+    if (creating || !onCreateTeamEntrySession) return;
+    onCreateTeamEntrySession({
+      teamId,
+      initialMessage: input.trim(),
+    });
   };
 
   return (
@@ -180,6 +197,53 @@ export function NewSessionLanding({
             </button>
           </div>
         </motion.div>
+
+        {teams.length > 0 && (
+          <motion.div
+            className="mt-8"
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.28, ease: "easeOut", delay: 0.1 }}
+          >
+            <div className="mb-3">
+              <h2 className="text-sm font-medium text-gray-700">团队协作入口</h2>
+              <p className="text-xs text-gray-500 mt-1">
+                适合需要拆解、审议、分工执行的复杂任务。只有显式点击后才会进入团队协作。
+              </p>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+              {teams.map((team) => (
+                <div
+                  key={team.id}
+                  className="rounded-2xl border border-indigo-100 bg-white/95 px-4 py-4 shadow-[0_10px_24px_-22px_rgba(79,70,229,0.9)]"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-medium text-gray-900">{team.name}</div>
+                      {team.description ? (
+                        <div className="mt-1 text-xs leading-5 text-gray-500">{team.description}</div>
+                      ) : null}
+                    </div>
+                    {team.memberCount ? (
+                      <span className="inline-flex shrink-0 items-center rounded-full border border-indigo-100 bg-indigo-50 px-2.5 py-1 text-[11px] font-medium text-indigo-700">
+                        {team.memberCount} 人团队
+                      </span>
+                    ) : null}
+                  </div>
+                  <button
+                    type="button"
+                    aria-label={`交给团队处理：${team.name}`}
+                    onClick={() => submitTeamEntry(team.id)}
+                    disabled={creating}
+                    className="mt-4 inline-flex min-h-11 w-full items-center justify-center rounded-xl border border-indigo-200 bg-indigo-600 px-4 text-sm font-medium text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-indigo-300"
+                  >
+                    交给团队处理
+                  </button>
+                </div>
+              ))}
+            </div>
+          </motion.div>
+        )}
 
         <motion.div
           className="mt-10"

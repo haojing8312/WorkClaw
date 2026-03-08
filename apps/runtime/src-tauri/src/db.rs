@@ -78,7 +78,9 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
             model_id TEXT NOT NULL,
             permission_mode TEXT NOT NULL DEFAULT 'accept_edits',
             work_dir TEXT NOT NULL DEFAULT '',
-            employee_id TEXT NOT NULL DEFAULT ''
+            employee_id TEXT NOT NULL DEFAULT '',
+            session_mode TEXT NOT NULL DEFAULT 'general',
+            team_id TEXT NOT NULL DEFAULT ''
         )",
     )
     .execute(&pool)
@@ -550,6 +552,14 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
         .execute(&pool)
         .await;
     let _ = sqlx::query("ALTER TABLE sessions ADD COLUMN employee_id TEXT NOT NULL DEFAULT ''")
+        .execute(&pool)
+        .await;
+    let _ = sqlx::query(
+        "ALTER TABLE sessions ADD COLUMN session_mode TEXT NOT NULL DEFAULT 'general'",
+    )
+    .execute(&pool)
+    .await;
+    let _ = sqlx::query("ALTER TABLE sessions ADD COLUMN team_id TEXT NOT NULL DEFAULT ''")
         .execute(&pool)
         .await;
 

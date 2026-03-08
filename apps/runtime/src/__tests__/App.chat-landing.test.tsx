@@ -25,6 +25,13 @@ vi.mock("../components/Sidebar", () => ({
       >
         select-first-session
       </button>
+      <button
+        onClick={() => {
+          props.onSelectSession("session-team-entry-1");
+        }}
+      >
+        select-team-session
+      </button>
     </div>
   ),
 }));
@@ -35,6 +42,8 @@ vi.mock("../components/ChatView", () => ({
     return (
       <div data-testid="chat-view">
         <div data-testid="chat-view-session-id">{props.sessionId}</div>
+        <div data-testid="chat-view-session-mode">{props.sessionMode || ""}</div>
+        <div data-testid="chat-view-session-title">{props.sessionTitle || ""}</div>
         {props.groupRunStepFocusRequest ? (
           <div data-testid="chat-view-group-run-step-focus">
             {props.groupRunStepFocusRequest.stepId}
@@ -135,7 +144,24 @@ vi.mock("../components/InstallDialog", () => ({
 }));
 
 vi.mock("../components/NewSessionLanding", () => ({
-  NewSessionLanding: () => <div data-testid="new-session-landing">new-session-landing</div>,
+  NewSessionLanding: (props: any) => (
+    <div data-testid="new-session-landing">
+      new-session-landing
+      <button onClick={() => props.onCreateSessionWithInitialMessage?.("你好")}>
+        create-general-session
+      </button>
+      <button
+        onClick={() =>
+          props.onCreateTeamEntrySession?.({
+            teamId: props.teams?.[0]?.id || "group-1",
+            initialMessage: "请安排一次多角色协作",
+          })
+        }
+      >
+        create-team-entry-session
+      </button>
+    </div>
+  ),
 }));
 
 describe("App chat landing", () => {
@@ -176,6 +202,16 @@ describe("App chat landing", () => {
             title: "Session 1",
             created_at: new Date().toISOString(),
             model_id: "model-a",
+            session_mode: "general",
+            team_id: "",
+          },
+          {
+            id: "session-team-entry-1",
+            title: "默认复杂任务团队",
+            created_at: new Date().toISOString(),
+            model_id: "model-a",
+            session_mode: "team_entry",
+            team_id: "group-1",
           },
           {
             id: "session-run-open-step",
@@ -190,6 +226,56 @@ describe("App chat landing", () => {
             model_id: "model-a",
           },
         ]);
+      }
+      if (command === "list_agent_employees") {
+        return Promise.resolve([
+          {
+            id: "emp-taizi",
+            employee_id: "taizi",
+            name: "太子",
+            role_id: "taizi",
+            persona: "",
+            feishu_open_id: "",
+            feishu_app_id: "",
+            feishu_app_secret: "",
+            primary_skill_id: "builtin-general",
+            default_work_dir: "E:\\\\workspace\\\\taizi",
+            openclaw_agent_id: "taizi",
+            enabled_scopes: ["app"],
+            routing_priority: 100,
+            enabled: true,
+            is_default: true,
+            skill_ids: [],
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          },
+        ]);
+      }
+      if (command === "list_employee_groups") {
+        return Promise.resolve([
+          {
+            id: "group-1",
+            name: "默认复杂任务团队",
+            coordinator_employee_id: "shangshu",
+            member_employee_ids: ["taizi", "zhongshu", "shangshu"],
+            member_count: 3,
+            entry_employee_id: "taizi",
+            review_mode: "hard",
+            execution_mode: "parallel",
+            visibility_mode: "shared",
+            template_id: "sansheng-liubu",
+            is_bootstrap_seeded: true,
+            config_json: "{}",
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          },
+        ]);
+      }
+      if (command === "create_session") {
+        if (payload?.sessionMode === "team_entry") {
+          return Promise.resolve("session-team-entry-1");
+        }
+        return Promise.resolve("session-created-general");
       }
       return Promise.resolve(null);
     });
@@ -243,6 +329,70 @@ describe("App chat landing", () => {
     render(<App />);
     await waitFor(() => {
       expect(screen.getByTestId("new-session-landing")).toBeInTheDocument();
+    });
+  });
+
+  test("homepage creates a general session instead of reusing employee/team context", async () => {
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "create-general-session" })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "create-general-session" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        "create_session",
+        expect.objectContaining({
+          skillId: "builtin-general",
+          modelId: "model-a",
+          employeeId: "",
+          sessionMode: "general",
+          teamId: "",
+        }),
+      );
+    });
+  });
+
+  test("homepage explicit team shortcut creates a team-entry session", async () => {
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "create-team-entry-session" })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "create-team-entry-session" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        "create_session",
+        expect.objectContaining({
+          skillId: "builtin-general",
+          modelId: "model-a",
+          workDir: "E:\\\\workspace\\\\taizi",
+          employeeId: "taizi",
+          title: "默认复杂任务团队",
+          sessionMode: "team_entry",
+          teamId: "group-1",
+        }),
+      );
+    });
+  });
+
+  test("passes explicit team session metadata into chat view after entering via the team shortcut", async () => {
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "create-team-entry-session" })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "create-team-entry-session" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("chat-view-session-id")).toHaveTextContent("session-team-entry-1");
+      expect(screen.getByTestId("chat-view-session-mode")).toHaveTextContent("team_entry");
+      expect(screen.getByTestId("chat-view-session-title")).toHaveTextContent("默认复杂任务团队");
     });
   });
 

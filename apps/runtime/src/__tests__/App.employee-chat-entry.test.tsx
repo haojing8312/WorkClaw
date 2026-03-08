@@ -154,7 +154,7 @@ describe("App employee chat entry", () => {
     fireEvent.click(screen.getByRole("button", { name: "chat-with-employee" }));
 
     await waitFor(() => {
-        expect(invokeMock).toHaveBeenCalledWith(
+      expect(invokeMock).toHaveBeenCalledWith(
         "create_session",
         expect.objectContaining({
           skillId: "skill-sales",
@@ -162,6 +162,8 @@ describe("App employee chat entry", () => {
           workDir: "D:\\\\workspace\\\\sales",
           employeeId: "sales_lead",
           permissionMode: "accept_edits",
+          sessionMode: "employee_direct",
+          teamId: "",
         }),
       );
     });

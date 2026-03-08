@@ -194,3 +194,72 @@ async fn employee_groups_enforce_member_count_limit() {
         "unexpected sqlite error: {msg}"
     );
 }
+
+#[tokio::test]
+async fn sessions_support_explicit_mode_and_team_columns() {
+    let (pool, _tmp) = helpers::setup_test_db().await;
+
+    let session_columns = table_columns(&pool, "sessions").await;
+    for required in ["session_mode", "team_id"] {
+        assert!(
+            session_columns.iter().any(|column| column == required),
+            "missing sessions column: {required}"
+        );
+    }
+
+    sqlx::query(
+        "INSERT INTO sessions (
+            id, skill_id, title, created_at, model_id, permission_mode, work_dir, employee_id, session_mode, team_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind("session-general")
+    .bind("builtin-general")
+    .bind("General")
+    .bind("2026-03-08T00:00:00Z")
+    .bind("model-1")
+    .bind("accept_edits")
+    .bind("")
+    .bind("")
+    .bind("general")
+    .bind("")
+    .execute(&pool)
+    .await
+    .expect("insert general session");
+
+    sqlx::query(
+        "INSERT INTO sessions (
+            id, skill_id, title, created_at, model_id, permission_mode, work_dir, employee_id, session_mode, team_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind("session-team")
+    .bind("builtin-general")
+    .bind("Team Entry")
+    .bind("2026-03-08T00:00:00Z")
+    .bind("model-1")
+    .bind("accept_edits")
+    .bind("")
+    .bind("taizi")
+    .bind("team_entry")
+    .bind("group-1")
+    .execute(&pool)
+    .await
+    .expect("insert team entry session");
+
+    let general_row: (String, String) = sqlx::query_as(
+        "SELECT session_mode, team_id FROM sessions WHERE id = 'session-general'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("query general session");
+    assert_eq!(general_row.0, "general");
+    assert_eq!(general_row.1, "");
+
+    let team_row: (String, String) = sqlx::query_as(
+        "SELECT session_mode, team_id FROM sessions WHERE id = 'session-team'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("query team session");
+    assert_eq!(team_row.0, "team_entry");
+    assert_eq!(team_row.1, "group-1");
+}

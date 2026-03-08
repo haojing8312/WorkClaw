@@ -179,6 +179,8 @@ export interface SessionInfo {
   work_dir?: string;
   employee_id?: string;
   permission_mode?: "default" | "accept_edits" | "unrestricted";
+  session_mode?: "general" | "employee_direct" | "team_entry";
+  team_id?: string;
   permission_mode_label?: string;
   source_channel?: "local" | "feishu" | string;
   source_label?: string;

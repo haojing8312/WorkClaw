@@ -44,6 +44,23 @@ fn normalize_permission_mode_for_storage(permission_mode: Option<&str>) -> &'sta
     }
 }
 
+fn normalize_session_mode_for_storage(session_mode: Option<&str>) -> &'static str {
+    match session_mode.unwrap_or("").trim() {
+        "employee_direct" => "employee_direct",
+        "team_entry" => "team_entry",
+        "general" => "general",
+        _ => "general",
+    }
+}
+
+fn normalize_team_id_for_storage(session_mode: &str, team_id: Option<&str>) -> String {
+    if session_mode == "team_entry" {
+        team_id.unwrap_or("").trim().to_string()
+    } else {
+        String::new()
+    }
+}
+
 fn parse_permission_mode(permission_mode: &str) -> PermissionMode {
     match permission_mode {
         "default" => PermissionMode::Default,
@@ -346,11 +363,15 @@ pub async fn create_session(
     employee_id: Option<String>,
     title: Option<String>,
     permission_mode: Option<String>,
+    session_mode: Option<String>,
+    team_id: Option<String>,
     db: State<'_, DbState>,
 ) -> Result<String, String> {
     let session_id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
     let permission_mode = normalize_permission_mode_for_storage(permission_mode.as_deref());
+    let session_mode = normalize_session_mode_for_storage(session_mode.as_deref());
+    let team_id = normalize_team_id_for_storage(session_mode, team_id.as_deref());
     let normalized_work_dir = work_dir.unwrap_or_default().trim().to_string();
     let normalized_employee_id = employee_id.unwrap_or_default().trim().to_string();
     let resolved_work_dir = if normalized_work_dir.is_empty() {
@@ -365,7 +386,7 @@ pub async fn create_session(
         normalized_title
     };
     sqlx::query(
-        "INSERT INTO sessions (id, skill_id, title, created_at, model_id, permission_mode, work_dir, employee_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO sessions (id, skill_id, title, created_at, model_id, permission_mode, work_dir, employee_id, session_mode, team_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
     .bind(&session_id)
     .bind(&skill_id)
@@ -375,6 +396,8 @@ pub async fn create_session(
     .bind(permission_mode)
     .bind(&resolved_work_dir)
     .bind(&normalized_employee_id)
+    .bind(session_mode)
+    .bind(&team_id)
     .execute(&db.0)
     .await
     .map_err(|e| e.to_string())?;
@@ -1362,7 +1385,7 @@ pub async fn get_messages(
 
 #[tauri::command]
 pub async fn list_sessions(db: State<'_, DbState>) -> Result<Vec<serde_json::Value>, String> {
-    let rows = sqlx::query_as::<_, (String, String, String, String, String, String, String, String, String)>(
+    let rows = sqlx::query_as::<_, (String, String, String, String, String, String, String, String, String, String, String)>(
         "SELECT
             s.id,
             s.title,
@@ -1371,6 +1394,8 @@ pub async fn list_sessions(db: State<'_, DbState>) -> Result<Vec<serde_json::Val
             COALESCE(s.work_dir, ''),
             COALESCE(s.employee_id, ''),
             COALESCE(s.permission_mode, 'accept_edits'),
+            COALESCE(s.session_mode, 'general'),
+            COALESCE(s.team_id, ''),
             CASE
                 WHEN EXISTS (SELECT 1 FROM im_thread_sessions ts WHERE ts.session_id = s.id) THEN 'feishu'
                 ELSE 'local'
@@ -1397,6 +1422,8 @@ pub async fn list_sessions(db: State<'_, DbState>) -> Result<Vec<serde_json::Val
                 work_dir,
                 employee_id,
                 permission_mode,
+                session_mode,
+                team_id,
                 source_channel,
                 source_label,
             )| {
@@ -1408,6 +1435,8 @@ pub async fn list_sessions(db: State<'_, DbState>) -> Result<Vec<serde_json::Val
                     "work_dir": work_dir,
                     "employee_id": employee_id,
                     "permission_mode": permission_mode,
+                    "session_mode": session_mode,
+                    "team_id": team_id,
                     "permission_mode_label": permission_mode_label_for_display(permission_mode),
                     "source_channel": source_channel,
                     "source_label": source_label,
@@ -1432,9 +1461,11 @@ mod tests {
     use super::{
         build_group_orchestrator_report_preview, classify_model_route_error,
         extract_skill_prompt_from_decrypted_files, infer_capability_from_user_message,
-        is_supported_protocol, normalize_permission_mode_for_storage, parse_fallback_chain_targets,
-        parse_permission_mode, permission_mode_label_for_display, retry_backoff_ms,
-        retry_budget_for_error, should_retry_same_candidate, ModelRouteErrorKind,
+        is_supported_protocol, normalize_permission_mode_for_storage,
+        normalize_session_mode_for_storage, normalize_team_id_for_storage,
+        parse_fallback_chain_targets, parse_permission_mode, permission_mode_label_for_display,
+        retry_backoff_ms, retry_budget_for_error, should_retry_same_candidate,
+        ModelRouteErrorKind,
     };
     use crate::agent::permissions::PermissionMode;
     use std::collections::HashMap;
@@ -1466,6 +1497,42 @@ mod tests {
         assert_eq!(
             normalize_permission_mode_for_storage(Some("unrestricted")),
             "unrestricted"
+        );
+    }
+
+    #[test]
+    fn normalize_session_mode_defaults_to_general() {
+        assert_eq!(normalize_session_mode_for_storage(None), "general");
+        assert_eq!(normalize_session_mode_for_storage(Some("")), "general");
+        assert_eq!(normalize_session_mode_for_storage(Some("invalid")), "general");
+    }
+
+    #[test]
+    fn normalize_session_mode_keeps_supported_values() {
+        assert_eq!(
+            normalize_session_mode_for_storage(Some("general")),
+            "general"
+        );
+        assert_eq!(
+            normalize_session_mode_for_storage(Some("employee_direct")),
+            "employee_direct"
+        );
+        assert_eq!(
+            normalize_session_mode_for_storage(Some("team_entry")),
+            "team_entry"
+        );
+    }
+
+    #[test]
+    fn normalize_team_id_only_keeps_team_entry_values() {
+        assert_eq!(normalize_team_id_for_storage("general", Some("group-1")), "");
+        assert_eq!(
+            normalize_team_id_for_storage("employee_direct", Some("group-1")),
+            ""
+        );
+        assert_eq!(
+            normalize_team_id_for_storage("team_entry", Some(" group-1 ")),
+            "group-1"
         );
     }
 

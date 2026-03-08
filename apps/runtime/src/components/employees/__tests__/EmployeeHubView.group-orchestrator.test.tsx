@@ -229,4 +229,61 @@ describe("EmployeeHubView group orchestrator panel", () => {
       invokeMock.mock.calls.some(([command]) => command === "continue_employee_group_run")
     ).toBe(false);
   });
+
+  test("uses explicit labels for employee direct chat and team collaboration entry", async () => {
+    invokeMock.mockReset();
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_runtime_preferences") {
+        return Promise.resolve({ default_work_dir: "E:\\workspace" });
+      }
+      if (command === "list_employee_groups") {
+        return Promise.resolve([
+          {
+            id: "group-1",
+            name: "交付协作群",
+            coordinator_employee_id: "pm",
+            member_employee_ids: ["pm", "dev", "qa"],
+            member_count: 3,
+            entry_employee_id: "pm",
+            review_mode: "hard",
+            execution_mode: "parallel",
+            visibility_mode: "shared",
+            created_at: "2026-03-05T00:00:00Z",
+            updated_at: "2026-03-05T00:00:00Z",
+          },
+        ]);
+      }
+      if (command === "get_feishu_employee_connection_statuses") {
+        return Promise.resolve({
+          relay: { running: false, generation: 0, interval_ms: 1500, total_accepted: 0 },
+          sidecar: { running: false, queued_events: 0, running_count: 0, items: [] },
+        });
+      }
+      if (command === "set_runtime_preferences") return Promise.resolve(null);
+      if (command === "resolve_default_work_dir") return Promise.resolve("E:\\workspace");
+      return Promise.resolve(null);
+    });
+
+    const onStartTaskWithEmployee = vi.fn();
+    render(
+      <EmployeeHubView
+        employees={[buildEmployee("pm"), buildEmployee("dev"), buildEmployee("qa")]}
+        skills={[]}
+        selectedEmployeeId="emp-pm"
+        onSelectEmployee={() => {}}
+        onSaveEmployee={async () => {}}
+        onDeleteEmployee={async () => {}}
+        onSetAsMainAndEnter={() => {}}
+        onStartTaskWithEmployee={onStartTaskWithEmployee}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("与该员工开始对话")).toBeInTheDocument();
+      expect(screen.getByText("以团队模式发起任务")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText("与该员工开始对话"));
+    expect(onStartTaskWithEmployee).toHaveBeenCalledWith("emp-pm");
+  });
 });
