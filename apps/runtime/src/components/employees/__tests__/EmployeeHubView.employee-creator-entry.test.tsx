@@ -191,6 +191,7 @@ describe("EmployeeHubView employee creator skill entry", () => {
     });
 
     expect(screen.getByTestId("employee-creator-highlight")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "员工" }));
     expect(screen.getByTestId("employee-item-emp-created")).toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId("employee-creator-highlight-dismiss"));
@@ -250,6 +251,7 @@ describe("EmployeeHubView employee creator skill entry", () => {
       expect(invokeMock).toHaveBeenCalledWith("get_runtime_preferences");
     });
 
+    fireEvent.click(screen.getByRole("tab", { name: "员工" }));
     fireEvent.click(screen.getByRole("button", { name: "调整员工" }));
     expect(onOpenEmployeeCreatorSkill).toHaveBeenCalledWith({
       mode: "update",

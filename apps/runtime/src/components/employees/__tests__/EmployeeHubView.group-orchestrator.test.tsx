@@ -88,6 +88,8 @@ describe("EmployeeHubView group orchestrator panel", () => {
       expect(invokeMock).toHaveBeenCalledWith("list_employee_groups");
     });
 
+    fireEvent.click(screen.getByRole("tab", { name: "团队" }));
+
     fireEvent.change(screen.getByTestId("employee-group-name"), { target: { value: "交付协作群" } });
     fireEvent.change(screen.getByTestId("employee-group-coordinator"), { target: { value: "pm" } });
     fireEvent.change(screen.getByTestId("employee-group-entry"), { target: { value: "pm" } });
@@ -137,6 +139,8 @@ describe("EmployeeHubView group orchestrator panel", () => {
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("list_employee_groups");
     });
+
+    fireEvent.click(screen.getByRole("tab", { name: "团队" }));
 
     for (let i = 1; i <= 11; i += 1) {
       fireEvent.click(screen.getByTestId(`employee-group-member-emp-e${i}`));
@@ -201,6 +205,12 @@ describe("EmployeeHubView group orchestrator panel", () => {
         onOpenGroupRunSession={openSessionMock}
       />
     );
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("list_employee_groups");
+    });
+
+    fireEvent.click(screen.getByRole("tab", { name: "团队" }));
 
     await waitFor(() => {
       expect(screen.getByTestId("employee-group-item-group-1")).toBeInTheDocument();
@@ -277,6 +287,12 @@ describe("EmployeeHubView group orchestrator panel", () => {
         onStartTaskWithEmployee={onStartTaskWithEmployee}
       />
     );
+
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: "员工" })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("tab", { name: "员工" }));
 
     await waitFor(() => {
       expect(screen.getByText("与该员工开始对话")).toBeInTheDocument();

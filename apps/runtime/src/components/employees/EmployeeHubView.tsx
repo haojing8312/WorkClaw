@@ -6,6 +6,7 @@ import {
   EmployeeGroup,
   EmployeeGroupRule,
   EmployeeGroupRunResult,
+  EmployeeGroupRunSummary,
   AgentProfileFilesView,
   EmployeeMemoryExport,
   EmployeeMemoryStats,
@@ -16,6 +17,16 @@ import {
   UpsertAgentEmployeeInput,
 } from "../../types";
 import { RiskConfirmDialog } from "../RiskConfirmDialog";
+import {
+  EmployeeHubEmployeeFilter,
+  EmployeeHubRunFilter,
+  EmployeeHubTeamFilter,
+  buildEmployeeHubMetrics,
+  buildEmployeeHubPendingItems,
+  matchesEmployeeHubEmployeeFilter,
+  matchesEmployeeHubRunFilter,
+  matchesEmployeeHubTeamFilter,
+} from "./employeeHubOverview";
 
 interface Props {
   employees: AgentEmployee[];
@@ -43,6 +54,8 @@ type GroupTemplateRole = {
 type GroupTemplateConfig = {
   roles?: GroupTemplateRole[];
 };
+
+type EmployeeHubTab = "overview" | "employees" | "teams" | "runs" | "settings";
 
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
@@ -98,6 +111,7 @@ export function EmployeeHubView({
   highlightMessage,
   onDismissHighlight,
 }: Props) {
+  const [activeTab, setActiveTab] = useState<EmployeeHubTab>(selectedEmployeeId ? "employees" : "overview");
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [feishuStatuses, setFeishuStatuses] = useState<FeishuEmployeeConnectionStatuses | null>(null);
@@ -128,6 +142,10 @@ export function EmployeeHubView({
   const [groupExecutionMode, setGroupExecutionMode] = useState("sequential");
   const [groupVisibilityMode, setGroupVisibilityMode] = useState("internal");
   const [employeeGroups, setEmployeeGroups] = useState<EmployeeGroup[]>([]);
+  const [recentRuns, setRecentRuns] = useState<EmployeeGroupRunSummary[]>([]);
+  const [employeeFilter, setEmployeeFilter] = useState<EmployeeHubEmployeeFilter>("all");
+  const [teamFilter, setTeamFilter] = useState<EmployeeHubTeamFilter>("all");
+  const [runFilter, setRunFilter] = useState<EmployeeHubRunFilter>("all");
   const [groupSubmitting, setGroupSubmitting] = useState(false);
   const [groupDeletingId, setGroupDeletingId] = useState<string | null>(null);
   const [groupRunGoalById, setGroupRunGoalById] = useState<Record<string, string>>({});
@@ -222,8 +240,18 @@ export function EmployeeHubView({
     }
   }
 
+  async function loadRecentRuns() {
+    try {
+      const runs = await invoke<EmployeeGroupRunSummary[]>("list_employee_group_runs", { limit: 10 });
+      setRecentRuns(Array.isArray(runs) ? runs : []);
+    } catch {
+      setRecentRuns([]);
+    }
+  }
+
   useEffect(() => {
     void loadEmployeeGroups();
+    void loadRecentRuns();
   }, []);
 
   useEffect(() => {
@@ -529,6 +557,7 @@ export function EmployeeHubView({
       setGroupExecutionMode("sequential");
       setGroupVisibilityMode("internal");
       await loadEmployeeGroups();
+      await loadRecentRuns();
       await onEmployeeGroupsChanged?.();
       setMessage("协作团队已创建");
     } catch (e) {
@@ -559,6 +588,7 @@ export function EmployeeHubView({
         return next;
       });
       await loadEmployeeGroups();
+      await loadRecentRuns();
       await onEmployeeGroupsChanged?.();
       setMessage("协作群组已删除");
     } catch (e) {
@@ -591,6 +621,7 @@ export function EmployeeHubView({
         ...prev,
         [groupId]: result.final_report || "",
       }));
+      await loadRecentRuns();
       if (result.session_id && result.session_skill_id) {
         await onOpenGroupRunSession?.(result.session_id, result.session_skill_id);
       }
@@ -621,6 +652,7 @@ export function EmployeeHubView({
         },
       });
       await loadEmployeeGroups();
+      await loadRecentRuns();
       await onEmployeeGroupsChanged?.();
       setMessage(`已复制团队：${cloneName}`);
     } catch (e) {
@@ -670,6 +702,38 @@ export function EmployeeHubView({
     }
   }
 
+  function openEmployeesTab(filter: EmployeeHubEmployeeFilter = "all") {
+    setEmployeeFilter(filter);
+    setActiveTab("employees");
+  }
+
+  function openTeamsTab(filter: EmployeeHubTeamFilter = "all") {
+    setTeamFilter(filter);
+    setActiveTab("teams");
+  }
+
+  function openRunsTab(filter: EmployeeHubRunFilter = "all") {
+    setRunFilter(filter);
+    setActiveTab("runs");
+  }
+
+  function openTabFromNav(tab: EmployeeHubTab) {
+    switch (tab) {
+      case "employees":
+        openEmployeesTab("all");
+        break;
+      case "teams":
+        openTeamsTab("all");
+        break;
+      case "runs":
+        openRunsTab("all");
+        break;
+      default:
+        setActiveTab(tab);
+        break;
+    }
+  }
+
   const deleteDialogSummary = pendingDeleteEmployee ? `确定删除员工「${pendingDeleteEmployee.name}」吗？` : "确定删除该员工吗？";
   const deleteDialogImpact = pendingDeleteEmployee ? `员工ID: ${pendingDeleteEmployee.id}` : undefined;
   const clearMemoryScopeLabel = memoryScopeSkillId === "__all__" ? "全部技能" : `技能 ${memoryScopeSkillId}`;
@@ -678,18 +742,103 @@ export function EmployeeHubView({
     : `确定清空${clearMemoryScopeLabel}下的长期记忆吗？`;
   const clearMemoryDialogImpact = selectedEmployeeMemoryId ? `员工编号: ${selectedEmployeeMemoryId}` : undefined;
   const selectedEmployeeFeishuStatus = selectedEmployee ? resolveFeishuStatus(selectedEmployee) : null;
+  const tabs: Array<{ id: EmployeeHubTab; label: string }> = [
+    { id: "overview", label: "总览" },
+    { id: "employees", label: "员工" },
+    { id: "teams", label: "团队" },
+    { id: "runs", label: "运行" },
+    { id: "settings", label: "设置" },
+  ];
+  const overviewMetrics = useMemo(
+    () => buildEmployeeHubMetrics({ employees, groups: employeeGroups, runs: recentRuns }),
+    [employeeGroups, employees, recentRuns],
+  );
+  const pendingItems = useMemo(
+    () => buildEmployeeHubPendingItems({ employees, groups: employeeGroups }),
+    [employeeGroups, employees],
+  );
+  const recentEmployees = employees.slice(0, 5);
+  const recentGroups = employeeGroups.slice(0, 5);
+  const recentRunsForOverview = recentRuns.slice(0, 5);
+  const filteredEmployees = useMemo(
+    () => employees.filter((employee) => matchesEmployeeHubEmployeeFilter(employee, employeeFilter)),
+    [employeeFilter, employees],
+  );
+  const filteredGroups = useMemo(
+    () => employeeGroups.filter((group) => matchesEmployeeHubTeamFilter(group, teamFilter)),
+    [employeeGroups, teamFilter],
+  );
+  const filteredRuns = useMemo(
+    () => recentRuns.filter((run) => matchesEmployeeHubRunFilter(run, runFilter)),
+    [recentRuns, runFilter],
+  );
   const resolveEmployeeDisplayName = (employeeId: string) => {
     const normalized = employeeId.trim().toLowerCase();
     if (!normalized) return "未设置";
     return employeeLabelById.get(normalized) || employeeId.trim();
   };
+  const resolveRunStatusLabel = (status: string) => {
+    switch (status.trim().toLowerCase()) {
+      case "running":
+        return "运行中";
+      case "completed":
+        return "已完成";
+      case "failed":
+        return "失败";
+      case "waiting_review":
+        return "等待审核";
+      case "cancelled":
+        return "已取消";
+      default:
+        return status.trim() || "未知";
+    }
+  };
+  const formatRunTimestamp = (value: string) => {
+    if (!value.trim()) return "刚刚";
+    return value.replace("T", " ").replace("Z", "").slice(0, 16);
+  };
+  const employeeFilterLabel =
+    employeeFilter === "available"
+      ? "可用员工"
+      : employeeFilter === "missing-skills"
+        ? "待补技能"
+        : employeeFilter === "pending-connection"
+          ? "待完善连接"
+          : "全部员工";
+  const teamFilterLabel = teamFilter === "incomplete-team" ? "角色不完整团队" : "全部团队";
+  const runFilterLabel = runFilter === "running" ? "运行中" : "全部运行";
 
   return (
     <div className="h-full overflow-y-auto bg-gray-50">
       <div className="max-w-6xl mx-auto px-8 pt-10 pb-12 space-y-4">
-        <div>
-          <h1 className="text-2xl font-semibold text-gray-900">智能体员工</h1>
-          <p className="text-sm text-gray-600 mt-2">用员工编号统一管理 OpenClaw 与飞书路由。主员工默认进入且拥有全技能权限。</p>
+        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+          <div>
+            <h1 className="text-2xl font-semibold text-gray-900">智能体员工</h1>
+            <p className="text-sm text-gray-600 mt-2">用员工编号统一管理 OpenClaw 与飞书路由。主员工默认进入且拥有全技能权限。</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => onOpenEmployeeCreatorSkill?.({ mode: "create" })}
+              className="h-9 px-4 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm"
+            >
+              新建员工
+            </button>
+            <button
+              type="button"
+              onClick={() => openTeamsTab("all")}
+              className="h-9 px-4 rounded-lg border border-indigo-200 hover:bg-indigo-50 text-indigo-700 text-sm"
+            >
+              新建团队
+            </button>
+            <button
+              type="button"
+              onClick={() => openRunsTab("all")}
+              className="h-9 px-4 rounded-lg border border-gray-200 hover:bg-white text-sm text-gray-700"
+            >
+              查看运行记录
+            </button>
+          </div>
         </div>
         <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
           <div>
@@ -704,6 +853,224 @@ export function EmployeeHubView({
             <button type="button" data-testid="employee-creator-highlight-dismiss" onClick={() => onDismissHighlight?.()} className="h-7 px-2.5 rounded border border-emerald-200 hover:bg-emerald-100 text-emerald-700 text-xs">知道了</button>
           </div>
         )}
+        <div className="rounded-xl border border-gray-200 bg-white p-2">
+          <div role="tablist" aria-label="智能体员工导航" className="flex flex-wrap gap-2">
+            {tabs.map((tab) => {
+              const selected = activeTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  id={`employee-hub-tab-${tab.id}`}
+                  type="button"
+                  role="tab"
+                  aria-selected={selected}
+                  aria-controls={`employee-hub-panel-${tab.id}`}
+                  tabIndex={selected ? 0 : -1}
+                  onClick={() => openTabFromNav(tab.id)}
+                  className={
+                    "h-9 px-4 rounded-lg text-sm transition " +
+                    (selected
+                      ? "bg-blue-600 text-white shadow-sm"
+                      : "border border-gray-200 bg-white text-gray-700 hover:bg-gray-50")
+                  }
+                >
+                  {tab.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        {message && <div className="text-xs text-blue-700 bg-blue-50 border border-blue-100 rounded px-3 py-2">{message}</div>}
+        {activeTab === "overview" && (
+          <div
+            id="employee-hub-panel-overview"
+            role="tabpanel"
+            aria-labelledby="employee-hub-tab-overview"
+            className="space-y-4"
+          >
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-5">
+              <button type="button" aria-label="查看全部员工" onClick={() => openEmployeesTab("all")} className="rounded-xl border border-gray-200 bg-white p-4 text-left hover:bg-gray-50">
+                <div className="text-xs text-gray-500">员工总数</div>
+                <div data-testid="employee-overview-metric-employees" className="mt-2 text-2xl font-semibold text-gray-900">{overviewMetrics.employees}</div>
+              </button>
+              <button type="button" aria-label="查看全部团队" onClick={() => openTeamsTab("all")} className="rounded-xl border border-gray-200 bg-white p-4 text-left hover:bg-gray-50">
+                <div className="text-xs text-gray-500">团队总数</div>
+                <div data-testid="employee-overview-metric-teams" className="mt-2 text-2xl font-semibold text-gray-900">{overviewMetrics.teams}</div>
+              </button>
+              <button type="button" aria-label="查看可用员工" onClick={() => openEmployeesTab("available")} className="rounded-xl border border-gray-200 bg-white p-4 text-left hover:bg-gray-50">
+                <div className="text-xs text-gray-500">可用员工</div>
+                <div data-testid="employee-overview-metric-available-employees" className="mt-2 text-2xl font-semibold text-gray-900">{overviewMetrics.availableEmployees}</div>
+              </button>
+              <button type="button" aria-label="查看运行中团队" onClick={() => openRunsTab("running")} className="rounded-xl border border-gray-200 bg-white p-4 text-left hover:bg-gray-50">
+                <div className="text-xs text-gray-500">运行中团队</div>
+                <div data-testid="employee-overview-metric-running-teams" className="mt-2 text-2xl font-semibold text-gray-900">{overviewMetrics.runningTeams}</div>
+              </button>
+              <button
+                type="button"
+                aria-label="查看待处理事项"
+                onClick={() => {
+                  const first = pendingItems[0];
+                  if (!first) return;
+                  if (first.id === "incomplete-team") {
+                    openTeamsTab("incomplete-team");
+                    return;
+                  }
+                  openEmployeesTab(first.id);
+                }}
+                className="rounded-xl border border-gray-200 bg-white p-4 text-left hover:bg-gray-50"
+              >
+                <div className="text-xs text-gray-500">待处理事项</div>
+                <div data-testid="employee-overview-metric-pending-items" className="mt-2 text-2xl font-semibold text-gray-900">{overviewMetrics.pendingItems}</div>
+              </button>
+            </div>
+            <div className="rounded-xl border border-gray-200 bg-white p-4 space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <div className="text-sm font-medium text-gray-900">待处理事项</div>
+                  <div className="text-xs text-gray-500 mt-1">优先处理影响员工可用性和团队协作的问题。</div>
+                </div>
+                <button type="button" onClick={() => setActiveTab("settings")} className="text-xs text-blue-600 hover:text-blue-700">
+                  去设置
+                </button>
+              </div>
+              {pendingItems.length === 0 ? (
+                <div className="rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
+                  当前配置完整，可直接开始任务。
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {pendingItems.map((item) => (
+                    <div key={item.id} className="flex items-center justify-between gap-3 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                      <span>{item.label}</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (item.id === "incomplete-team") {
+                            openTeamsTab("incomplete-team");
+                            return;
+                          }
+                          openEmployeesTab(item.id);
+                        }}
+                        className="rounded border border-amber-200 bg-white px-2 py-1 text-[11px] text-amber-700 hover:bg-amber-100"
+                      >
+                        去处理
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              <div className="rounded-xl border border-gray-200 bg-white p-4 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-sm font-medium text-gray-900">员工概览</div>
+                  <button type="button" onClick={() => openEmployeesTab("all")} className="text-xs text-blue-600 hover:text-blue-700">查看全部员工</button>
+                </div>
+                <div className="space-y-2">
+                  {recentEmployees.length === 0 ? (
+                    <div className="rounded-lg border border-dashed border-gray-300 px-3 py-4 text-xs text-gray-500 space-y-1">
+                      <div>还没有智能体员工，先创建第一个员工。</div>
+                      <div>已移除手动创建流程，请通过「智能体员工助手」对话式完成创建与配置。</div>
+                    </div>
+                  ) : (
+                    recentEmployees.map((employee) => (
+                      <button
+                        key={employee.id}
+                        type="button"
+                        onClick={() => {
+                          onSelectEmployee(employee.id);
+                          openEmployeesTab("all");
+                        }}
+                        className="flex w-full items-center justify-between rounded-lg border border-gray-200 px-3 py-2 text-left hover:bg-gray-50"
+                      >
+                        <div>
+                          <div className="text-sm text-gray-900">{employee.name}</div>
+                          <div className="text-xs text-gray-500">{employee.employee_id || employee.role_id || "未设置员工编号"}</div>
+                        </div>
+                        <div className="text-xs text-gray-500">{employee.enabled ? "正常" : "停用"}</div>
+                      </button>
+                    ))
+                  )}
+                </div>
+              </div>
+              <div className="rounded-xl border border-gray-200 bg-white p-4 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-sm font-medium text-gray-900">团队概览</div>
+                  <button type="button" onClick={() => openTeamsTab("all")} className="text-xs text-blue-600 hover:text-blue-700">查看全部团队</button>
+                </div>
+                <div className="space-y-2">
+                  {recentGroups.length === 0 ? (
+                    <div className="rounded-lg border border-dashed border-gray-300 px-3 py-4 text-xs text-gray-500">还没有团队，创建团队后可分工协作。</div>
+                  ) : (
+                    recentGroups.map((group) => (
+                      <button
+                        key={group.id}
+                        type="button"
+                        onClick={() => openTeamsTab("all")}
+                        className="flex w-full items-center justify-between rounded-lg border border-gray-200 px-3 py-2 text-left hover:bg-gray-50"
+                      >
+                        <div>
+                          <div className="text-sm text-gray-900">{group.name}</div>
+                          <div className="text-xs text-gray-500">{group.member_count || group.member_employee_ids.length} 人 · {resolveEmployeeDisplayName(group.coordinator_employee_id)}</div>
+                        </div>
+                        <div className="text-xs text-gray-500">查看详情</div>
+                      </button>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+            <div className="rounded-xl border border-gray-200 bg-white p-4 space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <div className="text-sm font-medium text-gray-900">最近运行</div>
+                  <div className="text-xs text-gray-500 mt-1">最近发起的团队任务会集中展示在这里。</div>
+                </div>
+                <button type="button" onClick={() => openRunsTab("all")} className="text-xs text-blue-600 hover:text-blue-700">
+                  查看全部
+                </button>
+              </div>
+              {recentRunsForOverview.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-gray-300 px-3 py-4 text-xs text-gray-500">
+                  还没有运行记录，发起一次团队任务后会显示在这里。
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {recentRunsForOverview.map((run) => (
+                    <div key={run.id} className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2">
+                      <div className="min-w-0">
+                        <div className="text-sm text-gray-900 truncate">{run.goal || "未命名任务"}</div>
+                        <div className="text-xs text-gray-500">
+                          {run.group_name || "未命名团队"} · {resolveRunStatusLabel(run.status)} · {formatRunTimestamp(run.started_at)}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (run.session_id && run.session_skill_id) {
+                            void onOpenGroupRunSession?.(run.session_id, run.session_skill_id);
+                            return;
+                          }
+                          openTeamsTab("all");
+                        }}
+                        className="text-xs text-blue-600 hover:text-blue-700"
+                      >
+                        {run.session_id && run.session_skill_id ? "进入会话" : "去团队查看"}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+        {activeTab === "teams" && (
+          <div
+            id="employee-hub-panel-teams"
+            role="tabpanel"
+            aria-labelledby="employee-hub-tab-teams"
+            className="space-y-4"
+          >
         <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-3">
           <div className="flex items-center justify-between gap-2">
             <div>
@@ -864,10 +1231,16 @@ export function EmployeeHubView({
             </div>
           </div>
           <div className="space-y-1">
-            {employeeGroups.length === 0 ? (
-              <div className="text-xs text-gray-500">暂无协作群组</div>
+            {teamFilter !== "all" && (
+              <div className="mb-2 flex items-center justify-between rounded border border-blue-100 bg-blue-50 px-2 py-1.5 text-[11px] text-blue-700">
+                <span>当前筛选：{teamFilterLabel}</span>
+                <button type="button" onClick={() => setTeamFilter("all")} className="text-blue-700 hover:text-blue-800">清除筛选</button>
+              </div>
+            )}
+            {filteredGroups.length === 0 ? (
+              <div className="text-xs text-gray-500">{teamFilter === "all" ? "暂无协作群组" : "当前筛选下暂无团队"}</div>
             ) : (
-              employeeGroups.map((group) => (
+              filteredGroups.map((group) => (
                 <div key={group.id} data-testid={`employee-group-item-${group.id}`} className="rounded border border-gray-200 px-2 py-1.5 space-y-2">
                   {(() => {
                     const templateId = group.template_id?.trim() || "";
@@ -998,19 +1371,45 @@ export function EmployeeHubView({
             )}
           </div>
         </div>
+          </div>
+        )}
+        {activeTab === "settings" && (
+          <div
+            id="employee-hub-panel-settings"
+            role="tabpanel"
+            aria-labelledby="employee-hub-tab-settings"
+            className="space-y-4"
+          >
         <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-2">
           <div className="text-xs text-gray-500">全局默认工作目录（新建会话默认使用）</div>
           <input className="w-full border border-gray-200 rounded px-2 py-1.5 text-sm" placeholder="例如 D:\\workspace\\workclaw" value={globalDefaultWorkDir} onChange={(e) => setGlobalDefaultWorkDir(e.target.value)} />
           <div className="text-[11px] text-gray-500">默认：C:\Users\&lt;用户名&gt;\WorkClaw\workspace。支持 C/D/E 盘路径，目录不存在会自动创建。</div>
           <button disabled={savingGlobalWorkDir} onClick={saveGlobalDefaultWorkDir} className="h-8 px-3 rounded bg-blue-500 hover:bg-blue-600 disabled:bg-blue-300 text-white text-xs">保存默认目录</button>
         </div>
+          </div>
+        )}
 
+        {activeTab === "employees" && (
+          <div
+            id="employee-hub-panel-employees"
+            role="tabpanel"
+            aria-labelledby="employee-hub-tab-employees"
+            className="space-y-4"
+          >
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="bg-white border border-gray-200 rounded-xl p-3 max-h-[640px] overflow-y-auto">
             <div className="text-xs text-gray-500 mb-2">员工列表</div>
             <div className="mb-2"><button type="button" onClick={() => onOpenEmployeeCreatorSkill?.({ mode: "create" })} className="h-8 w-full rounded bg-blue-600 hover:bg-blue-700 text-white text-xs">新建员工</button></div>
+            {employeeFilter !== "all" && (
+              <div className="mb-2 flex items-center justify-between rounded border border-blue-100 bg-blue-50 px-2 py-1.5 text-[11px] text-blue-700">
+                <span>当前筛选：{employeeFilterLabel}</span>
+                <button type="button" onClick={() => setEmployeeFilter("all")} className="text-blue-700 hover:text-blue-800">清除筛选</button>
+              </div>
+            )}
             <div className="space-y-2">
-              {employees.map((employee) => {
+              {filteredEmployees.length === 0 ? (
+                <div className="rounded border border-dashed border-gray-300 px-3 py-4 text-xs text-gray-500">当前筛选下暂无员工。</div>
+              ) : filteredEmployees.map((employee) => {
                 const status = resolveFeishuStatus(employee);
                 const isSelected = selectedEmployeeId === employee.id;
                 const isHighlighted = highlightEmployeeId === employee.id;
@@ -1097,6 +1496,7 @@ export function EmployeeHubView({
                   <button disabled={saving || !selectedEmployeeId} onClick={requestRemoveCurrent} className="h-8 px-3 rounded bg-red-50 hover:bg-red-100 disabled:bg-gray-100 text-red-600 text-xs">删除员工</button>
                   <button disabled={!selectedEmployeeId} onClick={() => selectedEmployeeId && onSetAsMainAndEnter(selectedEmployeeId)} className="h-8 px-3 rounded bg-emerald-50 hover:bg-emerald-100 disabled:bg-gray-100 text-emerald-700 text-xs">设为主员工并进入首页</button>
                   <button disabled={!selectedEmployeeId || saving} onClick={() => selectedEmployeeId && onStartTaskWithEmployee(selectedEmployeeId)} className="h-8 px-3 rounded bg-indigo-50 hover:bg-indigo-100 disabled:bg-gray-100 text-indigo-700 text-xs">与该员工开始对话</button>
+                  <button type="button" onClick={() => openTeamsTab("all")} className="h-8 px-3 rounded bg-violet-50 hover:bg-violet-100 text-violet-700 text-xs">以团队模式发起任务</button>
                 </div>
               </>
             ) : (
@@ -1106,8 +1506,6 @@ export function EmployeeHubView({
                 <button type="button" onClick={() => onOpenEmployeeCreatorSkill?.({ mode: "create" })} className="h-8 px-3 rounded bg-blue-500 hover:bg-blue-600 text-white text-xs">创建员工</button>
               </div>
             )}
-
-            {message && <div className="text-xs text-blue-700 bg-blue-50 border border-blue-100 rounded px-2 py-1">{message}</div>}
 
             <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-3 space-y-2">
               <div className="flex items-center justify-between gap-2"><div className="text-xs font-medium text-indigo-900">长期记忆管理</div>{memoryLoading && <div className="text-[11px] text-indigo-600">统计刷新中...</div>}</div>
@@ -1127,6 +1525,62 @@ export function EmployeeHubView({
             </div>
           </div>
         </div>
+          </div>
+        )}
+        {activeTab === "runs" && (
+          <div
+            id="employee-hub-panel-runs"
+            role="tabpanel"
+            aria-labelledby="employee-hub-tab-runs"
+            className="space-y-4"
+          >
+            <div className="rounded-xl border border-gray-200 bg-white p-4 space-y-3">
+              <div>
+                <div className="text-sm font-medium text-gray-900">最近运行</div>
+                <div className="text-xs text-gray-500 mt-1">统一查看最近发起的团队任务与执行状态。</div>
+              </div>
+              {runFilter !== "all" && (
+                <div className="flex items-center justify-between rounded border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-700">
+                  <span>当前筛选：{runFilterLabel}</span>
+                  <button type="button" onClick={() => setRunFilter("all")} className="text-blue-700 hover:text-blue-800">
+                    清除筛选
+                  </button>
+                </div>
+              )}
+              {filteredRuns.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-gray-300 px-3 py-4 text-xs text-gray-500">
+                  {runFilter === "all" ? "还没有运行记录，可先到团队页发起一次任务。" : "当前筛选下暂无运行记录。"}
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {filteredRuns.map((run) => (
+                    <div key={run.id} className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2">
+                      <div className="min-w-0">
+                        <div className="text-sm text-gray-900 truncate">{run.goal || "未命名任务"}</div>
+                        <div className="text-xs text-gray-500">
+                          {run.group_name || "未命名团队"} · {resolveRunStatusLabel(run.status)} · {formatRunTimestamp(run.started_at)}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (run.session_id && run.session_skill_id) {
+                            void onOpenGroupRunSession?.(run.session_id, run.session_skill_id);
+                            return;
+                          }
+                          openTeamsTab("all");
+                        }}
+                        className="text-xs text-blue-600 hover:text-blue-700"
+                      >
+                        {run.session_id && run.session_skill_id ? "进入会话" : "去团队查看"}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
       <RiskConfirmDialog open={pendingClearMemory} level="high" title="清空长期记忆" summary={clearMemoryDialogSummary} impact={clearMemoryDialogImpact} irreversible confirmLabel="确认清空" cancelLabel="取消" loading={memoryActionLoading === "clear"} onConfirm={confirmClearEmployeeMemory} onCancel={() => setPendingClearMemory(false)} />
       <RiskConfirmDialog open={Boolean(pendingDeleteEmployee)} level="high" title="删除员工" summary={deleteDialogSummary} impact={deleteDialogImpact} irreversible confirmLabel="确认删除" cancelLabel="取消" loading={saving} onConfirm={confirmRemoveCurrent} onCancel={() => setPendingDeleteEmployee(null)} />

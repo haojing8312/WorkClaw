@@ -146,6 +146,12 @@ describe("EmployeeHubView team template panel", () => {
     );
 
     await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("list_employee_groups");
+    });
+
+    fireEvent.click(screen.getByRole("tab", { name: "团队" }));
+
+    await waitFor(() => {
       expect(screen.getByTestId("employee-group-item-group-sansheng")).toBeInTheDocument();
     });
 
@@ -177,6 +183,12 @@ describe("EmployeeHubView team template panel", () => {
         onStartTaskWithEmployee={() => {}}
       />
     );
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("list_employee_groups");
+    });
+
+    fireEvent.click(screen.getByRole("tab", { name: "团队" }));
 
     await waitFor(() => {
       expect(screen.getByTestId("employee-team-clone-group-sansheng")).toBeInTheDocument();

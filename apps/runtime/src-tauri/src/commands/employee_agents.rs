@@ -445,6 +445,19 @@ pub struct EmployeeGroupRunResult {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct EmployeeGroupRunSummary {
+    pub id: String,
+    pub group_id: String,
+    pub group_name: String,
+    pub goal: String,
+    pub status: String,
+    pub started_at: String,
+    pub finished_at: String,
+    pub session_id: String,
+    pub session_skill_id: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct EmployeeGroupRunSnapshot {
     pub run_id: String,
     pub group_id: String,
@@ -1513,6 +1526,69 @@ pub async fn list_employee_groups_with_pool(
         });
     }
     Ok(out)
+}
+
+fn summarize_group_run_status(state: &str) -> String {
+    match state.trim().to_lowercase().as_str() {
+        "done" => "completed".to_string(),
+        "planning" | "executing" => "running".to_string(),
+        other => other.to_string(),
+    }
+}
+
+pub async fn list_employee_group_runs_with_pool(
+    pool: &SqlitePool,
+    limit: Option<i64>,
+) -> Result<Vec<EmployeeGroupRunSummary>, String> {
+    let normalized_limit = match limit.unwrap_or(10) {
+        value if value > 0 => value.min(50),
+        _ => 10,
+    };
+
+    let rows = sqlx::query(
+        "SELECT r.id,
+                r.group_id,
+                g.name,
+                COALESCE(r.user_goal, ''),
+                COALESCE(r.state, ''),
+                COALESCE(r.created_at, ''),
+                COALESCE(r.updated_at, ''),
+                COALESCE(r.session_id, ''),
+                COALESCE(s.skill_id, '')
+         FROM group_runs r
+         INNER JOIN employee_groups g ON g.id = r.group_id
+         LEFT JOIN sessions s ON s.id = r.session_id
+         ORDER BY r.created_at DESC, r.id DESC
+         LIMIT ?",
+    )
+    .bind(normalized_limit)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let mut runs = Vec::with_capacity(rows.len());
+    for row in rows {
+        let raw_state: String = row.try_get(4).map_err(|e| e.to_string())?;
+        let finished_at = if matches!(raw_state.trim(), "done" | "failed" | "cancelled") {
+            row.try_get::<String, _>(6).map_err(|e| e.to_string())?
+        } else {
+            String::new()
+        };
+
+        runs.push(EmployeeGroupRunSummary {
+            id: row.try_get("id").map_err(|e| e.to_string())?,
+            group_id: row.try_get("group_id").map_err(|e| e.to_string())?,
+            group_name: row.try_get::<String, _>(2).map_err(|e| e.to_string())?,
+            goal: row.try_get::<String, _>(3).map_err(|e| e.to_string())?,
+            status: summarize_group_run_status(&raw_state),
+            started_at: row.try_get::<String, _>(5).map_err(|e| e.to_string())?,
+            finished_at,
+            session_id: row.try_get::<String, _>(7).map_err(|e| e.to_string())?,
+            session_skill_id: row.try_get::<String, _>(8).map_err(|e| e.to_string())?,
+        });
+    }
+
+    Ok(runs)
 }
 
 pub async fn list_employee_group_rules_with_pool(
@@ -4142,6 +4218,14 @@ pub async fn clone_employee_group_template(
 #[tauri::command]
 pub async fn list_employee_groups(db: State<'_, DbState>) -> Result<Vec<EmployeeGroup>, String> {
     list_employee_groups_with_pool(&db.0).await
+}
+
+#[tauri::command]
+pub async fn list_employee_group_runs(
+    limit: Option<i64>,
+    db: State<'_, DbState>,
+) -> Result<Vec<EmployeeGroupRunSummary>, String> {
+    list_employee_group_runs_with_pool(&db.0, limit).await
 }
 
 #[tauri::command]

@@ -1,5 +1,7 @@
 mod helpers;
 
+use runtime_lib::commands::employee_agents::list_employee_group_runs_with_pool;
+
 async fn table_columns(pool: &sqlx::SqlitePool, table_name: &str) -> Vec<String> {
     let pragma_sql = format!("SELECT name FROM pragma_table_info('{table_name}')");
     sqlx::query_as::<_, (String,)>(&pragma_sql)
@@ -262,4 +264,125 @@ async fn sessions_support_explicit_mode_and_team_columns() {
     .expect("query team session");
     assert_eq!(team_row.0, "team_entry");
     assert_eq!(team_row.1, "group-1");
+}
+
+#[tokio::test]
+async fn employee_group_runs_can_be_listed_for_recent_overview_cards() {
+    let (pool, _tmp) = helpers::setup_test_db().await;
+
+    sqlx::query(
+        "INSERT INTO employee_groups (
+            id, name, coordinator_employee_id, member_employee_ids_json, member_count, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind("group-1")
+    .bind("交付协作群")
+    .bind("pm")
+    .bind(r#"["pm","dev"]"#)
+    .bind(2_i64)
+    .bind("2026-03-08T09:00:00Z")
+    .bind("2026-03-08T09:00:00Z")
+    .execute(&pool)
+    .await
+    .expect("insert group 1");
+
+    sqlx::query(
+        "INSERT INTO employee_groups (
+            id, name, coordinator_employee_id, member_employee_ids_json, member_count, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind("group-2")
+    .bind("复盘协作群")
+    .bind("ops")
+    .bind(r#"["ops","qa"]"#)
+    .bind(2_i64)
+    .bind("2026-03-08T08:00:00Z")
+    .bind("2026-03-08T08:00:00Z")
+    .execute(&pool)
+    .await
+    .expect("insert group 2");
+
+    sqlx::query(
+        "INSERT INTO sessions (
+            id, skill_id, title, created_at, model_id, permission_mode, work_dir, employee_id, session_mode, team_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind("session-run-1")
+    .bind("builtin-general")
+    .bind("交付运行")
+    .bind("2026-03-08T10:00:00Z")
+    .bind("model-1")
+    .bind("accept_edits")
+    .bind("")
+    .bind("pm")
+    .bind("team_entry")
+    .bind("group-1")
+    .execute(&pool)
+    .await
+    .expect("insert session 1");
+
+    sqlx::query(
+        "INSERT INTO sessions (
+            id, skill_id, title, created_at, model_id, permission_mode, work_dir, employee_id, session_mode, team_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind("session-run-2")
+    .bind("builtin-general")
+    .bind("复盘运行")
+    .bind("2026-03-08T09:00:00Z")
+    .bind("model-1")
+    .bind("accept_edits")
+    .bind("")
+    .bind("ops")
+    .bind("team_entry")
+    .bind("group-2")
+    .execute(&pool)
+    .await
+    .expect("insert session 2");
+
+    sqlx::query(
+        "INSERT INTO group_runs (
+            id, group_id, session_id, user_goal, state, current_round, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind("run-new")
+    .bind("group-1")
+    .bind("session-run-1")
+    .bind("处理紧急交付")
+    .bind("running")
+    .bind(1_i64)
+    .bind("2026-03-08T10:00:00Z")
+    .bind("2026-03-08T10:10:00Z")
+    .execute(&pool)
+    .await
+    .expect("insert newest run");
+
+    sqlx::query(
+        "INSERT INTO group_runs (
+            id, group_id, session_id, user_goal, state, current_round, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind("run-old")
+    .bind("group-2")
+    .bind("session-run-2")
+    .bind("整理复盘结论")
+    .bind("done")
+    .bind(2_i64)
+    .bind("2026-03-08T09:00:00Z")
+    .bind("2026-03-08T09:30:00Z")
+    .execute(&pool)
+    .await
+    .expect("insert older run");
+
+    let runs = list_employee_group_runs_with_pool(&pool, Some(10))
+        .await
+        .expect("list recent employee group runs");
+
+    assert_eq!(runs.len(), 2);
+    assert_eq!(runs[0].id, "run-new");
+    assert_eq!(runs[0].goal, "处理紧急交付");
+    assert_eq!(runs[0].status, "running");
+    assert_eq!(runs[0].session_skill_id, "builtin-general");
+    assert_eq!(runs[1].id, "run-old");
+    assert_eq!(runs[1].status, "completed");
 }

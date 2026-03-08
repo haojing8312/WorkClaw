@@ -395,6 +395,18 @@ export interface EmployeeGroupRunResult {
   steps: EmployeeGroupRunStep[];
 }
 
+export interface EmployeeGroupRunSummary {
+  id: string;
+  group_id: string;
+  group_name: string;
+  goal: string;
+  status: string;
+  started_at: string;
+  finished_at: string;
+  session_id: string;
+  session_skill_id: string;
+}
+
 export interface EmployeeGroupRunSnapshot {
   run_id: string;
   group_id: string;
