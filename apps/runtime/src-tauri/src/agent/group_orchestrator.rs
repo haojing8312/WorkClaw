@@ -2,8 +2,10 @@
 pub struct GroupRunRequest {
     pub group_id: String,
     pub coordinator_employee_id: String,
+    pub planner_employee_id: Option<String>,
     pub reviewer_employee_id: Option<String>,
     pub member_employee_ids: Vec<String>,
+    pub execute_targets: Vec<GroupRunExecuteTarget>,
     pub user_goal: String,
     pub execution_window: usize,
     pub timeout_employee_ids: Vec<String>,
@@ -60,6 +62,7 @@ pub struct GroupRunOutcome {
 pub struct GroupRunStepDraft {
     pub round_no: i64,
     pub assignee_employee_id: String,
+    pub dispatch_source_employee_id: String,
     pub phase: String,
     pub step_type: String,
     pub status: String,
@@ -67,6 +70,12 @@ pub struct GroupRunStepDraft {
     pub output: String,
     pub requires_review: bool,
     pub review_status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupRunExecuteTarget {
+    pub dispatch_source_employee_id: String,
+    pub assignee_employee_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,16 +95,24 @@ pub struct GroupRunPlan {
 }
 
 pub fn build_group_run_plan(request: GroupRunRequest) -> GroupRunPlan {
-    let members = normalize_members(
+    let execute_targets = normalize_execute_targets(
         request.coordinator_employee_id.as_str(),
         &request.member_employee_ids,
+        &request.execute_targets,
     );
+    let plan_employee_id = request
+        .planner_employee_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|employee_id| !employee_id.is_empty())
+        .map(|employee_id| employee_id.to_lowercase())
+        .unwrap_or_else(|| request.coordinator_employee_id.trim().to_lowercase());
     let review_required = request
         .reviewer_employee_id
         .as_ref()
         .is_some_and(|employee_id| !employee_id.trim().is_empty());
 
-    if members.is_empty() {
+    if execute_targets.is_empty() {
         return GroupRunPlan {
             state: GroupRunState::Failed.as_str().to_string(),
             current_phase: "plan".to_string(),
@@ -117,12 +134,13 @@ pub fn build_group_run_plan(request: GroupRunRequest) -> GroupRunPlan {
     }
 
     let window = request.execution_window.clamp(1, 10);
-    let max_round = ((members.len().saturating_sub(1) / window) as i64) + 1;
-    let mut steps = Vec::with_capacity(members.len() + 2);
+    let max_round = ((execute_targets.len().saturating_sub(1) / window) as i64) + 1;
+    let mut steps = Vec::with_capacity(execute_targets.len() + 2);
 
     steps.push(GroupRunStepDraft {
         round_no: 0,
-        assignee_employee_id: request.coordinator_employee_id.clone(),
+        assignee_employee_id: plan_employee_id,
+        dispatch_source_employee_id: String::new(),
         phase: "plan".to_string(),
         step_type: "plan".to_string(),
         status: "completed".to_string(),
@@ -145,6 +163,7 @@ pub fn build_group_run_plan(request: GroupRunRequest) -> GroupRunPlan {
         steps.push(GroupRunStepDraft {
             round_no: 0,
             assignee_employee_id: reviewer_employee_id.to_string(),
+            dispatch_source_employee_id: String::new(),
             phase: "review".to_string(),
             step_type: "review".to_string(),
             status: "pending".to_string(),
@@ -155,11 +174,12 @@ pub fn build_group_run_plan(request: GroupRunRequest) -> GroupRunPlan {
         });
     }
 
-    for (idx, assignee_employee_id) in members.iter().enumerate() {
+    for (idx, target) in execute_targets.iter().enumerate() {
         let round_no = ((idx / window) as i64) + 1;
         steps.push(GroupRunStepDraft {
             round_no,
-            assignee_employee_id: assignee_employee_id.clone(),
+            assignee_employee_id: target.assignee_employee_id.clone(),
+            dispatch_source_employee_id: target.dispatch_source_employee_id.clone(),
             phase: "execute".to_string(),
             step_type: "execute".to_string(),
             status: "pending".to_string(),
@@ -185,7 +205,7 @@ pub fn build_group_run_plan(request: GroupRunRequest) -> GroupRunPlan {
         "计划：已生成 {} 个阶段步骤，协调员={}。\n执行：待分派 {} 名员工进入执行。\n汇报：当前阶段={}，等待下一步推进。",
         steps.len(),
         request.coordinator_employee_id,
-        members.len(),
+        execute_targets.len(),
         current_phase
     );
     let events = vec![
@@ -219,12 +239,13 @@ pub fn build_group_run_plan(request: GroupRunRequest) -> GroupRunPlan {
 }
 
 pub fn simulate_group_run(request: GroupRunRequest) -> GroupRunOutcome {
-    let members = normalize_members(
+    let execute_targets = normalize_execute_targets(
         request.coordinator_employee_id.as_str(),
         &request.member_employee_ids,
+        &request.execute_targets,
     );
 
-    if members.is_empty() {
+    if execute_targets.is_empty() {
         return GroupRunOutcome {
             states: vec![GroupRunState::Planning, GroupRunState::Failed],
             plan: Vec::new(),
@@ -241,13 +262,14 @@ pub fn simulate_group_run(request: GroupRunRequest) -> GroupRunOutcome {
         GroupRunState::Done,
     ];
 
-    let mut plan = Vec::with_capacity(members.len());
-    let mut execution = Vec::with_capacity(members.len());
+    let mut plan = Vec::with_capacity(execute_targets.len());
+    let mut execution = Vec::with_capacity(execute_targets.len());
     let timeout_targets = normalize_timeouts(&request.timeout_employee_ids);
     let window = request.execution_window.clamp(1, 10);
     let retry_limit = request.max_retry_per_step.min(3);
     let mut failed_members: Vec<String> = Vec::new();
-    for (idx, assignee) in members.iter().enumerate() {
+    for (idx, target) in execute_targets.iter().enumerate() {
+        let assignee = &target.assignee_employee_id;
         let step_id = format!("step-{}", idx + 1);
         let round_no = ((idx / window) as i64) + 1;
         plan.push(GroupPlanItem {
@@ -328,6 +350,58 @@ fn normalize_members(coordinator: &str, members: &[String]) -> Vec<String> {
     out
 }
 
+fn normalize_execute_targets(
+    coordinator: &str,
+    members: &[String],
+    execute_targets: &[GroupRunExecuteTarget],
+) -> Vec<GroupRunExecuteTarget> {
+    use std::collections::HashSet;
+
+    let default_dispatch_source = coordinator.trim().to_lowercase();
+    if execute_targets.is_empty() {
+        return normalize_members(coordinator, members)
+            .into_iter()
+            .map(|assignee_employee_id| GroupRunExecuteTarget {
+                dispatch_source_employee_id: default_dispatch_source.clone(),
+                assignee_employee_id,
+            })
+            .collect();
+    }
+
+    let member_set = members
+        .iter()
+        .map(|item| item.trim().to_lowercase())
+        .filter(|item| !item.is_empty())
+        .collect::<HashSet<_>>();
+    let mut seen_assignees = HashSet::new();
+    let mut out = Vec::new();
+    for target in execute_targets {
+        let assignee_employee_id = target.assignee_employee_id.trim().to_lowercase();
+        if assignee_employee_id.is_empty() {
+            continue;
+        }
+        if !member_set.is_empty() && !member_set.contains(&assignee_employee_id) {
+            continue;
+        }
+        if !seen_assignees.insert(assignee_employee_id.clone()) {
+            continue;
+        }
+        let dispatch_source_employee_id = target.dispatch_source_employee_id.trim().to_lowercase();
+        out.push(GroupRunExecuteTarget {
+            dispatch_source_employee_id: if dispatch_source_employee_id.is_empty() {
+                default_dispatch_source.clone()
+            } else {
+                dispatch_source_employee_id
+            },
+            assignee_employee_id,
+        });
+        if out.len() >= 10 {
+            break;
+        }
+    }
+    out
+}
+
 fn normalize_timeouts(raw: &[String]) -> std::collections::HashSet<String> {
     raw.iter()
         .map(|item| item.trim().to_lowercase())
@@ -344,12 +418,14 @@ mod tests {
         let outcome = simulate_group_run(GroupRunRequest {
             group_id: "g1".to_string(),
             coordinator_employee_id: "project_manager".to_string(),
+            planner_employee_id: None,
             reviewer_employee_id: None,
             member_employee_ids: vec![
                 "project_manager".to_string(),
                 "dev_team".to_string(),
                 "qa_team".to_string(),
             ],
+            execute_targets: Vec::new(),
             user_goal: "发布协作功能".to_string(),
             execution_window: 3,
             timeout_employee_ids: Vec::new(),

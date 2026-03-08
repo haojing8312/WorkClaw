@@ -14,12 +14,14 @@ fn group_orchestrator_transitions_across_required_phases() {
     let outcome = simulate_group_run(GroupRunRequest {
         group_id: "group-1".to_string(),
         coordinator_employee_id: "project_manager".to_string(),
+        planner_employee_id: None,
         reviewer_employee_id: None,
         member_employee_ids: vec![
             "project_manager".to_string(),
             "dev_team".to_string(),
             "qa_team".to_string(),
         ],
+        execute_targets: Vec::new(),
         user_goal: "做一个桌面端拉群协作功能".to_string(),
         execution_window: 3,
         timeout_employee_ids: Vec::new(),
@@ -51,6 +53,7 @@ fn group_orchestrator_uses_round_robin_with_concurrency_window() {
     let outcome = simulate_group_run(GroupRunRequest {
         group_id: "group-window".to_string(),
         coordinator_employee_id: "project_manager".to_string(),
+        planner_employee_id: None,
         reviewer_employee_id: None,
         member_employee_ids: vec![
             "project_manager".to_string(),
@@ -61,6 +64,7 @@ fn group_orchestrator_uses_round_robin_with_concurrency_window() {
             "qa_2".to_string(),
             "ops_1".to_string(),
         ],
+        execute_targets: Vec::new(),
         user_goal: "并发窗口调度验证".to_string(),
         execution_window: 3,
         timeout_employee_ids: Vec::new(),
@@ -87,12 +91,14 @@ fn group_orchestrator_retries_timeout_once_and_degrades_report() {
     let outcome = simulate_group_run(GroupRunRequest {
         group_id: "group-retry".to_string(),
         coordinator_employee_id: "project_manager".to_string(),
+        planner_employee_id: None,
         reviewer_employee_id: None,
         member_employee_ids: vec![
             "project_manager".to_string(),
             "dev_team".to_string(),
             "qa_team".to_string(),
         ],
+        execute_targets: Vec::new(),
         user_goal: "超时重试与降级验证".to_string(),
         execution_window: 3,
         timeout_employee_ids: vec!["qa_team".to_string()],

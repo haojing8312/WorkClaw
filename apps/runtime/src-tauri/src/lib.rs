@@ -342,6 +342,7 @@ pub fn run() {
             commands::im_routing::delete_im_routing_binding,
             commands::employee_agents::list_agent_employees,
             commands::employee_agents::create_employee_group,
+            commands::employee_agents::create_employee_team,
             commands::employee_agents::clone_employee_group_template,
             commands::employee_agents::list_employee_groups,
             commands::employee_agents::list_employee_group_rules,
