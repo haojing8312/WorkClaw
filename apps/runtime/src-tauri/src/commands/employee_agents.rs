@@ -1,4 +1,5 @@
 use crate::commands::runtime_preferences::resolve_default_work_dir_with_pool;
+use crate::commands::im_routing::list_im_routing_bindings_with_pool;
 use crate::agent::permissions::PermissionMode;
 use crate::agent::skill_config::SkillConfig;
 use crate::agent::tools::{EmployeeManageTool, MemoryTool};
@@ -85,6 +86,163 @@ fn group_rule_allows_execute_reassignment(rule: &EmployeeGroupRule) -> bool {
     relation_allowed && phase_allowed
 }
 
+fn group_rule_matches_phase_scope(rule: &EmployeeGroupRule, phase_scope: &str) -> bool {
+    let normalized_phase_scope = rule.phase_scope.trim().to_lowercase();
+    normalized_phase_scope.is_empty()
+        || normalized_phase_scope == phase_scope
+        || normalized_phase_scope == "all"
+        || normalized_phase_scope == "*"
+}
+
+fn group_rule_matches_relation_types(rule: &EmployeeGroupRule, relation_types: &[&str]) -> bool {
+    let normalized_relation_type = rule.relation_type.trim().to_lowercase();
+    relation_types
+        .iter()
+        .any(|relation_type| normalized_relation_type == *relation_type)
+}
+
+fn resolve_group_planner_employee_id(
+    entry_employee_id: &str,
+    coordinator_employee_id: &str,
+    rules: &[EmployeeGroupRule],
+) -> String {
+    if let Some(planner_employee_id) = rules
+        .iter()
+        .find(|rule| {
+            group_rule_matches_relation_types(rule, &["review"])
+                && group_rule_matches_phase_scope(rule, "plan")
+                && !rule.from_employee_id.trim().is_empty()
+        })
+        .map(|rule| rule.from_employee_id.trim().to_lowercase())
+    {
+        return planner_employee_id;
+    }
+
+    let normalized_entry_employee_id = entry_employee_id.trim().to_lowercase();
+    if !normalized_entry_employee_id.is_empty() {
+        if let Some(planner_employee_id) = rules
+            .iter()
+            .find(|rule| {
+                group_rule_matches_relation_types(rule, &["delegate", "handoff"])
+                    && group_rule_matches_phase_scope(rule, "intake")
+                    && rule
+                        .from_employee_id
+                        .trim()
+                        .eq_ignore_ascii_case(&normalized_entry_employee_id)
+                    && !rule.to_employee_id.trim().is_empty()
+            })
+            .map(|rule| rule.to_employee_id.trim().to_lowercase())
+        {
+            return planner_employee_id;
+        }
+        return normalized_entry_employee_id;
+    }
+
+    coordinator_employee_id.trim().to_lowercase()
+}
+
+fn resolve_group_reviewer_employee_id(
+    review_mode: &str,
+    planner_employee_id: &str,
+    rules: &[EmployeeGroupRule],
+) -> Option<String> {
+    if review_mode.trim().eq_ignore_ascii_case("none") {
+        return None;
+    }
+
+    let normalized_planner_employee_id = planner_employee_id.trim().to_lowercase();
+    rules.iter()
+        .find(|rule| {
+            group_rule_matches_relation_types(rule, &["review"])
+                && group_rule_matches_phase_scope(rule, "plan")
+                && (!normalized_planner_employee_id.is_empty()
+                    && rule
+                        .from_employee_id
+                        .trim()
+                        .eq_ignore_ascii_case(&normalized_planner_employee_id))
+                && !rule.to_employee_id.trim().is_empty()
+        })
+        .map(|rule| rule.to_employee_id.trim().to_lowercase())
+        .or_else(|| {
+            rules.iter()
+                .find(|rule| {
+                    group_rule_matches_relation_types(rule, &["review"])
+                        && group_rule_matches_phase_scope(rule, "plan")
+                        && !rule.to_employee_id.trim().is_empty()
+                })
+                .map(|rule| rule.to_employee_id.trim().to_lowercase())
+        })
+}
+
+fn select_group_execute_dispatch_targets(
+    rules: &[EmployeeGroupRule],
+    member_employee_ids: &[String],
+    preferred_dispatch_sources: &[String],
+) -> (
+    Vec<crate::agent::group_orchestrator::GroupRunExecuteTarget>,
+    bool,
+) {
+    let member_set = normalize_member_employee_ids(member_employee_ids)
+        .into_iter()
+        .collect::<std::collections::HashSet<_>>();
+    let execute_rules = rules
+        .iter()
+        .filter(|rule| group_rule_allows_execute_reassignment(rule))
+        .filter_map(|rule| {
+            let assignee_employee_id = rule.to_employee_id.trim().to_lowercase();
+            if assignee_employee_id.is_empty() {
+                return None;
+            }
+            if !member_set.is_empty() && !member_set.contains(&assignee_employee_id) {
+                return None;
+            }
+            let dispatch_source_employee_id = rule.from_employee_id.trim().to_lowercase();
+            if dispatch_source_employee_id.is_empty() {
+                return None;
+            }
+            Some(crate::agent::group_orchestrator::GroupRunExecuteTarget {
+                dispatch_source_employee_id,
+                assignee_employee_id,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    if execute_rules.is_empty() {
+        return (Vec::new(), false);
+    }
+
+    let preferred_sources = preferred_dispatch_sources
+        .iter()
+        .map(|employee_id| employee_id.trim().to_lowercase())
+        .filter(|employee_id| !employee_id.is_empty())
+        .collect::<Vec<_>>();
+
+    let selected_rules = preferred_sources
+        .iter()
+        .find_map(|dispatch_source_employee_id| {
+            let matching_rules = execute_rules
+                .iter()
+                .filter(|target| target.dispatch_source_employee_id == *dispatch_source_employee_id)
+                .cloned()
+                .collect::<Vec<_>>();
+            if matching_rules.is_empty() {
+                None
+            } else {
+                Some(matching_rules)
+            }
+        })
+        .unwrap_or_else(|| execute_rules.clone());
+
+    let mut seen_assignees = std::collections::HashSet::new();
+    (
+        selected_rules
+            .into_iter()
+            .filter(|target| seen_assignees.insert(target.assignee_employee_id.clone()))
+            .collect(),
+        true,
+    )
+}
+
 async fn load_execute_reassignment_targets_with_pool(
     pool: &SqlitePool,
     run_id: &str,
@@ -112,7 +270,6 @@ async fn load_execute_reassignment_targets_with_pool(
     let member_employee_ids = serde_json::from_str::<Vec<String>>(&member_employee_ids_json)
         .unwrap_or_default();
     let normalized_member_ids = normalize_member_employee_ids(&member_employee_ids);
-    let member_set = normalized_member_ids.iter().cloned().collect::<std::collections::HashSet<_>>();
     let run_dispatch_source_employee_id = if main_employee_id.trim().is_empty() {
         coordinator_employee_id.trim().to_lowercase()
     } else {
@@ -128,56 +285,18 @@ async fn load_execute_reassignment_targets_with_pool(
     };
 
     let rules = list_employee_group_rules_with_pool(pool, &group_id).await?;
-    let mut exact_targets = Vec::new();
-    let mut run_exact_targets = Vec::new();
-    let mut fallback_targets = Vec::new();
-    let mut has_execute_rules = false;
-    for rule in rules {
-        if !group_rule_allows_execute_reassignment(&rule) {
-            continue;
-        }
-        has_execute_rules = true;
-        let normalized_target = rule.to_employee_id.trim().to_lowercase();
-        if normalized_target.is_empty() {
-            continue;
-        }
-        if !member_set.is_empty() && !member_set.contains(&normalized_target) {
-            continue;
-        }
-        fallback_targets.push(normalized_target.clone());
-        if !dispatch_source_employee_id.is_empty()
-            && rule.from_employee_id.trim().eq_ignore_ascii_case(&dispatch_source_employee_id)
-        {
-            exact_targets.push(normalized_target);
-            continue;
-        }
-        if !run_dispatch_source_employee_id.is_empty()
-            && rule
-                .from_employee_id
-                .trim()
-                .eq_ignore_ascii_case(&run_dispatch_source_employee_id)
-        {
-            run_exact_targets.push(normalized_target.clone());
-        }
-    }
-
+    let (targets, has_execute_rules) = select_group_execute_dispatch_targets(
+        &rules,
+        &member_employee_ids,
+        &[dispatch_source_employee_id, run_dispatch_source_employee_id],
+    );
     if !has_execute_rules {
         return Ok((normalized_member_ids, false));
     }
-
-    let mut seen = std::collections::HashSet::new();
     Ok((
-        (if exact_targets.is_empty() {
-            if run_exact_targets.is_empty() {
-                fallback_targets
-            } else {
-                run_exact_targets
-            }
-        } else {
-            exact_targets
-        })
+        targets
             .into_iter()
-            .filter(|employee_id| seen.insert(employee_id.clone()))
+            .map(|target| target.assignee_employee_id)
             .collect(),
         true,
     ))
@@ -231,6 +350,37 @@ pub struct CreateEmployeeGroupInput {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct CreateEmployeeTeamRuleInput {
+    pub from_employee_id: String,
+    pub to_employee_id: String,
+    pub relation_type: String,
+    pub phase_scope: String,
+    pub required: bool,
+    pub priority: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct CreateEmployeeTeamInput {
+    pub name: String,
+    pub coordinator_employee_id: String,
+    pub member_employee_ids: Vec<String>,
+    #[serde(default)]
+    pub entry_employee_id: String,
+    #[serde(default)]
+    pub planner_employee_id: String,
+    #[serde(default)]
+    pub reviewer_employee_id: String,
+    #[serde(default = "default_team_review_mode")]
+    pub review_mode: String,
+    #[serde(default = "default_team_execution_mode")]
+    pub execution_mode: String,
+    #[serde(default = "default_team_visibility_mode")]
+    pub visibility_mode: String,
+    #[serde(default)]
+    pub rules: Vec<CreateEmployeeTeamRuleInput>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct CloneEmployeeGroupTemplateInput {
     pub source_group_id: String,
     pub name: String,
@@ -242,6 +392,18 @@ fn default_group_execution_window() -> usize {
 
 fn default_group_max_retry() -> usize {
     1
+}
+
+fn default_team_review_mode() -> String {
+    "none".to_string()
+}
+
+fn default_team_execution_mode() -> String {
+    "sequential".to_string()
+}
+
+fn default_team_visibility_mode() -> String {
+    "internal".to_string()
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -878,6 +1040,321 @@ pub async fn create_employee_group_with_pool(
     Ok(id)
 }
 
+fn normalize_team_mode(raw: &str, allowed: &[&str], default_value: &str, field_name: &str) -> Result<String, String> {
+    let normalized = raw.trim().to_lowercase();
+    let value = if normalized.is_empty() {
+        default_value.to_string()
+    } else {
+        normalized
+    };
+    if allowed.iter().any(|candidate| *candidate == value) {
+        Ok(value)
+    } else {
+        Err(format!("invalid {field_name}"))
+    }
+}
+
+fn build_default_employee_team_rules(
+    coordinator_employee_id: &str,
+    entry_employee_id: &str,
+    planner_employee_id: &str,
+    reviewer_employee_id: &str,
+    review_mode: &str,
+    member_employee_ids: &[String],
+) -> Vec<CreateEmployeeTeamRuleInput> {
+    let mut rules = Vec::new();
+    let mut priority = 100_i64;
+
+    if !entry_employee_id.is_empty() && entry_employee_id != planner_employee_id {
+        rules.push(CreateEmployeeTeamRuleInput {
+            from_employee_id: entry_employee_id.to_string(),
+            to_employee_id: planner_employee_id.to_string(),
+            relation_type: "delegate".to_string(),
+            phase_scope: "intake".to_string(),
+            required: true,
+            priority,
+        });
+        priority += 10;
+    }
+
+    if !review_mode.eq_ignore_ascii_case("none")
+        && !planner_employee_id.is_empty()
+        && !reviewer_employee_id.is_empty()
+        && planner_employee_id != reviewer_employee_id
+    {
+        rules.push(CreateEmployeeTeamRuleInput {
+            from_employee_id: planner_employee_id.to_string(),
+            to_employee_id: reviewer_employee_id.to_string(),
+            relation_type: "review".to_string(),
+            phase_scope: "plan".to_string(),
+            required: true,
+            priority,
+        });
+        priority += 10;
+    }
+
+    let management_ids = [entry_employee_id, planner_employee_id, reviewer_employee_id]
+        .iter()
+        .map(|employee_id| employee_id.trim().to_lowercase())
+        .filter(|employee_id| !employee_id.is_empty())
+        .collect::<std::collections::HashSet<_>>();
+    let mut execute_targets = member_employee_ids
+        .iter()
+        .map(|employee_id| employee_id.trim().to_lowercase())
+        .filter(|employee_id| !employee_id.is_empty())
+        .filter(|employee_id| employee_id != coordinator_employee_id)
+        .filter(|employee_id| !management_ids.contains(employee_id))
+        .collect::<Vec<_>>();
+    if execute_targets.is_empty() {
+        execute_targets = member_employee_ids
+            .iter()
+            .map(|employee_id| employee_id.trim().to_lowercase())
+            .filter(|employee_id| !employee_id.is_empty())
+            .filter(|employee_id| employee_id != reviewer_employee_id)
+            .filter(|employee_id| employee_id != entry_employee_id)
+            .collect::<Vec<_>>();
+    }
+    if execute_targets.is_empty() && !coordinator_employee_id.is_empty() {
+        execute_targets.push(coordinator_employee_id.to_string());
+    }
+
+    let mut seen_execute_targets = std::collections::HashSet::new();
+    for execute_target in execute_targets {
+        if !seen_execute_targets.insert(execute_target.clone()) {
+            continue;
+        }
+        rules.push(CreateEmployeeTeamRuleInput {
+            from_employee_id: coordinator_employee_id.to_string(),
+            to_employee_id: execute_target,
+            relation_type: "delegate".to_string(),
+            phase_scope: "execute".to_string(),
+            required: true,
+            priority,
+        });
+        priority += 10;
+    }
+
+    if !entry_employee_id.is_empty() && entry_employee_id != coordinator_employee_id {
+        rules.push(CreateEmployeeTeamRuleInput {
+            from_employee_id: coordinator_employee_id.to_string(),
+            to_employee_id: entry_employee_id.to_string(),
+            relation_type: "report".to_string(),
+            phase_scope: "finalize".to_string(),
+            required: true,
+            priority,
+        });
+    }
+
+    rules
+}
+
+pub async fn create_employee_team_with_pool(
+    pool: &SqlitePool,
+    input: CreateEmployeeTeamInput,
+) -> Result<String, String> {
+    let name = input.name.trim();
+    if name.is_empty() {
+        return Err("team name is required".to_string());
+    }
+
+    let coordinator_employee_id = input.coordinator_employee_id.trim().to_lowercase();
+    if coordinator_employee_id.is_empty() {
+        return Err("coordinator_employee_id is required".to_string());
+    }
+
+    let member_employee_ids = normalize_member_employee_ids(&input.member_employee_ids);
+    if member_employee_ids.is_empty() {
+        return Err("member_employee_ids is required".to_string());
+    }
+    if member_employee_ids.len() > 10 {
+        return Err("member_employee_ids cannot exceed 10".to_string());
+    }
+    if !member_employee_ids.iter().any(|employee_id| employee_id == &coordinator_employee_id) {
+        return Err("coordinator_employee_id must be included in members".to_string());
+    }
+
+    let entry_employee_id = if input.entry_employee_id.trim().is_empty() {
+        coordinator_employee_id.clone()
+    } else {
+        input.entry_employee_id.trim().to_lowercase()
+    };
+    let planner_employee_id = if input.planner_employee_id.trim().is_empty() {
+        entry_employee_id.clone()
+    } else {
+        input.planner_employee_id.trim().to_lowercase()
+    };
+    let reviewer_employee_id = input.reviewer_employee_id.trim().to_lowercase();
+    for (field_name, employee_id) in [
+        ("entry_employee_id", &entry_employee_id),
+        ("planner_employee_id", &planner_employee_id),
+        ("reviewer_employee_id", &reviewer_employee_id),
+    ] {
+        if !employee_id.is_empty() && !member_employee_ids.iter().any(|member_id| member_id == employee_id) {
+            return Err(format!("{field_name} must be included in members"));
+        }
+    }
+
+    let review_mode =
+        normalize_team_mode(&input.review_mode, &["none", "soft", "hard"], "none", "review_mode")?;
+    let execution_mode = normalize_team_mode(
+        &input.execution_mode,
+        &["sequential", "parallel"],
+        "sequential",
+        "execution_mode",
+    )?;
+    let visibility_mode = normalize_team_mode(
+        &input.visibility_mode,
+        &["internal", "shared"],
+        "internal",
+        "visibility_mode",
+    )?;
+
+    if !review_mode.eq_ignore_ascii_case("none") && reviewer_employee_id.is_empty() {
+        return Err("reviewer_employee_id is required when review_mode is enabled".to_string());
+    }
+
+    let rules = if input.rules.is_empty() {
+        build_default_employee_team_rules(
+            &coordinator_employee_id,
+            &entry_employee_id,
+            &planner_employee_id,
+            &reviewer_employee_id,
+            &review_mode,
+            &member_employee_ids,
+        )
+    } else {
+        input.rules
+            .into_iter()
+            .map(|rule| CreateEmployeeTeamRuleInput {
+                from_employee_id: rule.from_employee_id.trim().to_lowercase(),
+                to_employee_id: rule.to_employee_id.trim().to_lowercase(),
+                relation_type: rule.relation_type.trim().to_lowercase(),
+                phase_scope: rule.phase_scope.trim().to_lowercase(),
+                required: rule.required,
+                priority: rule.priority,
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let valid_members = member_employee_ids
+        .iter()
+        .cloned()
+        .collect::<std::collections::HashSet<_>>();
+    for rule in &rules {
+        if rule.from_employee_id.is_empty()
+            || rule.to_employee_id.is_empty()
+            || rule.relation_type.is_empty()
+            || rule.phase_scope.is_empty()
+        {
+            return Err("team rules require from/to/relation_type/phase_scope".to_string());
+        }
+        if !valid_members.contains(&rule.from_employee_id) || !valid_members.contains(&rule.to_employee_id) {
+            return Err("team rules must reference members in the team".to_string());
+        }
+    }
+
+    let executor_employee_ids = rules
+        .iter()
+        .filter(|rule| group_rule_matches_relation_types(
+            &EmployeeGroupRule {
+                id: String::new(),
+                group_id: String::new(),
+                from_employee_id: rule.from_employee_id.clone(),
+                to_employee_id: rule.to_employee_id.clone(),
+                relation_type: rule.relation_type.clone(),
+                phase_scope: rule.phase_scope.clone(),
+                required: rule.required,
+                priority: rule.priority,
+                created_at: String::new(),
+            },
+            &["delegate", "handoff"],
+        ) && (rule.phase_scope == "execute" || rule.phase_scope == "all" || rule.phase_scope == "*"))
+        .map(|rule| rule.to_employee_id.clone())
+        .collect::<std::collections::HashSet<_>>();
+    let mut role_entries = Vec::<Value>::new();
+    let mut seen_role_keys = std::collections::HashSet::<String>::new();
+    for (role_type, employee_id) in [
+        ("entry", entry_employee_id.clone()),
+        ("planner", planner_employee_id.clone()),
+        ("reviewer", reviewer_employee_id.clone()),
+        ("coordinator", coordinator_employee_id.clone()),
+    ] {
+        if employee_id.is_empty() {
+            continue;
+        }
+        let dedupe_key = format!("{role_type}:{employee_id}");
+        if !seen_role_keys.insert(dedupe_key) {
+            continue;
+        }
+        role_entries.push(json!({
+            "role_type": role_type,
+            "employee_id": employee_id,
+        }));
+    }
+    for employee_id in executor_employee_ids {
+        let dedupe_key = format!("executor:{employee_id}");
+        if !seen_role_keys.insert(dedupe_key) {
+            continue;
+        }
+        role_entries.push(json!({
+            "role_type": "executor",
+            "employee_id": employee_id,
+        }));
+    }
+    let config_json = serde_json::to_string(&json!({ "roles": role_entries })).map_err(|e| e.to_string())?;
+    let member_employee_ids_json =
+        serde_json::to_string(&member_employee_ids).map_err(|e| e.to_string())?;
+    let group_id = Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().to_rfc3339();
+
+    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
+    sqlx::query(
+        "INSERT INTO employee_groups (
+            id, name, coordinator_employee_id, member_employee_ids_json, member_count, template_id,
+            entry_employee_id, review_mode, execution_mode, visibility_mode, is_bootstrap_seeded,
+            config_json, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, '', ?, ?, ?, ?, 0, ?, ?, ?)",
+    )
+    .bind(&group_id)
+    .bind(name)
+    .bind(&coordinator_employee_id)
+    .bind(&member_employee_ids_json)
+    .bind(member_employee_ids.len() as i64)
+    .bind(&entry_employee_id)
+    .bind(&review_mode)
+    .bind(&execution_mode)
+    .bind(&visibility_mode)
+    .bind(&config_json)
+    .bind(&now)
+    .bind(&now)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    for rule in rules {
+        sqlx::query(
+            "INSERT INTO employee_group_rules (
+                id, group_id, from_employee_id, to_employee_id, relation_type, phase_scope, required, priority, created_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(&group_id)
+        .bind(&rule.from_employee_id)
+        .bind(&rule.to_employee_id)
+        .bind(&rule.relation_type)
+        .bind(&rule.phase_scope)
+        .bind(if rule.required { 1_i64 } else { 0_i64 })
+        .bind(rule.priority)
+        .bind(&now)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    }
+
+    tx.commit().await.map_err(|e| e.to_string())?;
+    Ok(group_id)
+}
+
 pub async fn clone_employee_group_template_with_pool(
     pool: &SqlitePool,
     input: CloneEmployeeGroupTemplateInput,
@@ -1100,6 +1577,15 @@ pub async fn start_employee_group_run_with_pool(
     pool: &SqlitePool,
     input: StartEmployeeGroupRunInput,
 ) -> Result<EmployeeGroupRunResult, String> {
+    start_employee_group_run_internal_with_pool(pool, input, None, true).await
+}
+
+async fn start_employee_group_run_internal_with_pool(
+    pool: &SqlitePool,
+    input: StartEmployeeGroupRunInput,
+    preferred_session_id: Option<&str>,
+    persist_user_message: bool,
+) -> Result<EmployeeGroupRunResult, String> {
     let group_id = input.group_id.trim().to_string();
     if group_id.is_empty() {
         return Err("group_id is required".to_string());
@@ -1110,7 +1596,11 @@ pub async fn start_employee_group_run_with_pool(
     }
 
     let row = sqlx::query(
-        "SELECT name, coordinator_employee_id, member_employee_ids_json, COALESCE(review_mode, 'none')
+        "SELECT name,
+                coordinator_employee_id,
+                member_employee_ids_json,
+                COALESCE(review_mode, 'none'),
+                COALESCE(entry_employee_id, '')
          FROM employee_groups WHERE id = ?",
     )
     .bind(&group_id)
@@ -1127,44 +1617,51 @@ pub async fn start_employee_group_run_with_pool(
         .try_get("member_employee_ids_json")
         .map_err(|e| e.to_string())?;
     let review_mode: String = row.try_get(3).map_err(|e| e.to_string())?;
+    let entry_employee_id: String = row.try_get(4).map_err(|e| e.to_string())?;
     let member_employee_ids =
         serde_json::from_str::<Vec<String>>(&members_json).unwrap_or_default();
-    let reviewer_employee_id = if review_mode.eq_ignore_ascii_case("none") {
-        None
-    } else {
-        sqlx::query_as::<_, (String,)>(
-            "SELECT to_employee_id
-             FROM employee_group_rules
-             WHERE group_id = ? AND relation_type = 'review'
-             ORDER BY priority DESC, created_at ASC
-             LIMIT 1",
-        )
-        .bind(&group_id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| e.to_string())?
-        .map(|(employee_id,)| employee_id)
-    };
+    let rules = list_employee_group_rules_with_pool(pool, &group_id).await?;
+    let planner_employee_id =
+        resolve_group_planner_employee_id(&entry_employee_id, &coordinator_employee_id, &rules);
+    let reviewer_employee_id =
+        resolve_group_reviewer_employee_id(&review_mode, &planner_employee_id, &rules);
+    let (execute_targets, _) = select_group_execute_dispatch_targets(
+        &rules,
+        &member_employee_ids,
+        &[
+            coordinator_employee_id.clone(),
+            planner_employee_id.clone(),
+            entry_employee_id.clone(),
+        ],
+    );
 
     let plan = crate::agent::group_orchestrator::build_group_run_plan(
         crate::agent::group_orchestrator::GroupRunRequest {
             group_id: group_id.clone(),
             coordinator_employee_id: coordinator_employee_id.clone(),
+            planner_employee_id: Some(planner_employee_id.clone()),
             reviewer_employee_id: reviewer_employee_id.clone(),
             member_employee_ids,
+            execute_targets,
             user_goal: user_goal.clone(),
             execution_window: input.execution_window,
             timeout_employee_ids: input.timeout_employee_ids,
             max_retry_per_step: input.max_retry_per_step,
         },
     );
-    let state = plan.state.clone();
-    let current_round = plan.current_round;
+    let initial_report = plan.final_report.clone();
+    let initial_state = plan.state.clone();
+    let initial_round = plan.current_round;
     let now = chrono::Utc::now().to_rfc3339();
     let run_id = Uuid::new_v4().to_string();
-    let (session_id, session_skill_id) =
-        ensure_group_run_session_with_pool(pool, &coordinator_employee_id, &group_name, &now)
-            .await?;
+    let (session_id, session_skill_id) = ensure_group_run_session_with_pool(
+        pool,
+        &coordinator_employee_id,
+        &group_name,
+        &now,
+        preferred_session_id,
+    )
+    .await?;
 
     let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
     sqlx::query(
@@ -1178,8 +1675,8 @@ pub async fn start_employee_group_run_with_pool(
     .bind(&group_id)
     .bind(&session_id)
     .bind(&user_goal)
-    .bind(&state)
-    .bind(current_round)
+    .bind(&initial_state)
+    .bind(initial_round)
     .bind(&plan.current_phase)
     .bind(&session_id)
     .bind(&coordinator_employee_id)
@@ -1199,17 +1696,19 @@ pub async fn start_employee_group_run_with_pool(
     .await
     .map_err(|e| e.to_string())?;
 
-    let user_msg_id = Uuid::new_v4().to_string();
-    sqlx::query(
-        "INSERT INTO messages (id, session_id, role, content, created_at) VALUES (?, ?, 'user', ?, ?)",
-    )
-    .bind(&user_msg_id)
-    .bind(&session_id)
-    .bind(&user_goal)
-    .bind(&now)
-    .execute(&mut *tx)
-    .await
-    .map_err(|e| e.to_string())?;
+    if persist_user_message {
+        let user_msg_id = Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO messages (id, session_id, role, content, created_at) VALUES (?, ?, 'user', ?, ?)",
+        )
+        .bind(&user_msg_id)
+        .bind(&session_id)
+        .bind(&user_goal)
+        .bind(&now)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    }
 
     for event in &plan.events {
         sqlx::query(
@@ -1226,14 +1725,9 @@ pub async fn start_employee_group_run_with_pool(
         .map_err(|e| e.to_string())?;
     }
 
-    let mut steps = Vec::with_capacity(plan.steps.len());
     for step in plan.steps {
         let step_id = Uuid::new_v4().to_string();
-        let dispatch_source_employee_id = if step.step_type == "execute" {
-            coordinator_employee_id.clone()
-        } else {
-            String::new()
-        };
+        let dispatch_source_employee_id = step.dispatch_source_employee_id.clone();
         sqlx::query(
             "INSERT INTO group_run_steps (
                 id, run_id, round_no, parent_step_id, assignee_employee_id, dispatch_source_employee_id,
@@ -1289,43 +1783,25 @@ pub async fn start_employee_group_run_with_pool(
         .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
-        steps.push(EmployeeGroupRunStep {
-            id: step_id,
-            round_no: step.round_no,
-            step_type: step.step_type,
-            assignee_employee_id: step.assignee_employee_id,
-            dispatch_source_employee_id,
-            session_id: String::new(),
-            attempt_no: 1,
-            status: step.status,
-            output_summary: step.output.chars().take(120).collect::<String>(),
-            output: step.output,
-        });
     }
 
     tx.commit().await.map_err(|e| e.to_string())?;
 
-    let assistant_msg_id = Uuid::new_v4().to_string();
-    sqlx::query(
-        "INSERT INTO messages (id, session_id, role, content, created_at) VALUES (?, ?, 'assistant', ?, ?)",
-    )
-    .bind(&assistant_msg_id)
-    .bind(&session_id)
-    .bind(&plan.final_report)
-    .bind(&now)
-    .execute(pool)
-    .await
-    .map_err(|e| e.to_string())?;
+    let snapshot = continue_employee_group_run_with_pool(pool, &run_id).await?;
+    if snapshot.state != "done" {
+        append_group_run_assistant_message_with_pool(pool, &session_id, &initial_report).await?;
+    }
+    let final_snapshot = get_employee_group_run_snapshot_by_run_id_with_pool(pool, &run_id).await?;
 
     Ok(EmployeeGroupRunResult {
         run_id,
         group_id,
         session_id,
         session_skill_id,
-        state,
-        current_round,
-        final_report: plan.final_report,
-        steps,
+        state: final_snapshot.state,
+        current_round: final_snapshot.current_round,
+        final_report: final_snapshot.final_report,
+        steps: final_snapshot.steps,
     })
 }
 
@@ -1334,6 +1810,7 @@ async fn ensure_group_run_session_with_pool(
     coordinator_employee_id: &str,
     group_name: &str,
     now: &str,
+    preferred_session_id: Option<&str>,
 ) -> Result<(String, String), String> {
     let employee_row = sqlx::query(
         "SELECT primary_skill_id, default_work_dir
@@ -1360,6 +1837,25 @@ async fn ensure_group_run_session_with_pool(
     } else {
         skill_id_raw.trim().to_string()
     };
+
+    if let Some(existing_session_id) = preferred_session_id
+        .map(str::trim)
+        .filter(|session_id| !session_id.is_empty())
+    {
+        let existing_skill_row =
+            sqlx::query_as::<_, (String,)>("SELECT COALESCE(skill_id, '') FROM sessions WHERE id = ?")
+                .bind(existing_session_id)
+                .fetch_optional(pool)
+                .await
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| "preferred group run session not found".to_string())?;
+        let existing_skill_id = if existing_skill_row.0.trim().is_empty() {
+            session_skill_id.clone()
+        } else {
+            existing_skill_row.0.trim().to_string()
+        };
+        return Ok((existing_session_id.to_string(), existing_skill_id));
+    }
 
     let model_row =
         sqlx::query("SELECT id FROM model_configs WHERE is_default = 1 ORDER BY rowid ASC LIMIT 1")
@@ -1395,6 +1891,31 @@ async fn ensure_group_run_session_with_pool(
     .map_err(|e| e.to_string())?;
 
     Ok((session_id, session_skill_id))
+}
+
+async fn append_group_run_assistant_message_with_pool(
+    pool: &SqlitePool,
+    session_id: &str,
+    content: &str,
+) -> Result<(), String> {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return Ok(());
+    }
+
+    let now = chrono::Utc::now().to_rfc3339();
+    sqlx::query(
+        "INSERT INTO messages (id, session_id, role, content, created_at)
+         VALUES (?, ?, 'assistant', ?, ?)",
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(session_id)
+    .bind(trimmed)
+    .bind(&now)
+    .execute(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 async fn ensure_group_step_session_with_pool(
@@ -2495,8 +3016,8 @@ pub async fn review_group_run_step_with_pool(
 
     if normalized_action == "reject" {
         let next_review_round = review_round + 1;
-        let revision_input = sqlx::query_as::<_, (String,)>(
-            "SELECT input
+        let (revision_input, revision_assignee_employee_id) = sqlx::query_as::<_, (String, String)>(
+            "SELECT COALESCE(input, ''), COALESCE(assignee_employee_id, '')
              FROM group_run_steps
              WHERE run_id = ? AND step_type = 'plan'
              ORDER BY round_no DESC, id DESC
@@ -2506,8 +3027,12 @@ pub async fn review_group_run_step_with_pool(
         .fetch_optional(&mut *tx)
         .await
         .map_err(|e| e.to_string())?
-        .map(|(input,)| input)
-        .unwrap_or_default();
+        .unwrap_or_else(|| (String::new(), main_employee_id.clone()));
+        let revision_assignee_employee_id = if revision_assignee_employee_id.trim().is_empty() {
+            main_employee_id.clone()
+        } else {
+            revision_assignee_employee_id.trim().to_lowercase()
+        };
         let revision_step_id = Uuid::new_v4().to_string();
         sqlx::query(
             "INSERT INTO group_run_steps (
@@ -2520,7 +3045,7 @@ pub async fn review_group_run_step_with_pool(
         .bind(run_id)
         .bind(0_i64)
         .bind(&review_step_id)
-        .bind(&main_employee_id)
+        .bind(&revision_assignee_employee_id)
         .bind(&revision_input)
         .bind(comment)
         .bind(next_review_round)
@@ -2539,7 +3064,7 @@ pub async fn review_group_run_step_with_pool(
         )
         .bind(next_review_round)
         .bind(comment)
-        .bind(&main_employee_id)
+        .bind(&revision_assignee_employee_id)
         .bind(&now)
         .bind(run_id)
         .execute(&mut *tx)
@@ -3142,11 +3667,146 @@ pub async fn resolve_target_employees_for_event(
     Ok(all_enabled.iter().take(1).cloned().collect())
 }
 
+fn im_binding_matches_event(binding: &crate::commands::im_routing::ImRoutingBinding, event: &ImEvent) -> bool {
+    if !binding.enabled {
+        return false;
+    }
+    if !binding.channel.trim().is_empty() && !binding.channel.eq_ignore_ascii_case("feishu") {
+        return false;
+    }
+    if !binding.account_id.trim().is_empty() {
+        let tenant_id = event.tenant_id.as_deref().unwrap_or_default().trim();
+        if !binding.account_id.trim().eq_ignore_ascii_case(tenant_id) {
+            return false;
+        }
+    }
+    if !binding.peer_kind.trim().is_empty() && !binding.peer_kind.eq_ignore_ascii_case("group") {
+        return false;
+    }
+    if !binding.peer_id.trim().is_empty() && binding.peer_id.trim() != event.thread_id.trim() {
+        return false;
+    }
+    true
+}
+
+async fn resolve_team_entry_employee_for_event_with_pool(
+    pool: &SqlitePool,
+    event: &ImEvent,
+) -> Result<Option<AgentEmployee>, String> {
+    let bindings = list_im_routing_bindings_with_pool(pool).await?;
+    let matched_binding = bindings
+        .into_iter()
+        .find(|binding| !binding.team_id.trim().is_empty() && im_binding_matches_event(binding, event));
+    let Some(binding) = matched_binding else {
+        return Ok(None);
+    };
+
+    let group_row = sqlx::query(
+        "SELECT COALESCE(entry_employee_id, ''), coordinator_employee_id
+         FROM employee_groups
+         WHERE id = ?",
+    )
+    .bind(binding.team_id.trim())
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    let Some(group_row) = group_row else {
+        return Ok(None);
+    };
+    let preferred_employee_id = {
+        let entry_employee_id: String = group_row.try_get(0).map_err(|e| e.to_string())?;
+        if entry_employee_id.trim().is_empty() {
+            group_row.try_get::<String, _>(1).map_err(|e| e.to_string())?
+        } else {
+            entry_employee_id
+        }
+    };
+
+    Ok(list_agent_employees_with_pool(pool)
+        .await?
+        .into_iter()
+        .find(|employee| {
+            employee.enabled
+                && (employee.employee_id.eq_ignore_ascii_case(preferred_employee_id.trim())
+                    || employee.role_id.eq_ignore_ascii_case(preferred_employee_id.trim())
+                    || employee.id.eq_ignore_ascii_case(preferred_employee_id.trim()))
+        }))
+}
+
+pub async fn maybe_handle_team_entry_session_message_with_pool(
+    pool: &SqlitePool,
+    session_id: &str,
+    user_message: &str,
+) -> Result<Option<EmployeeGroupRunResult>, String> {
+    let normalized_session_id = session_id.trim();
+    if normalized_session_id.is_empty() {
+        return Ok(None);
+    }
+    let normalized_user_message = user_message.trim();
+    if normalized_user_message.is_empty() {
+        return Ok(None);
+    }
+
+    let session_row = sqlx::query(
+        "SELECT COALESCE(employee_id, '')
+         FROM sessions
+         WHERE id = ?",
+    )
+    .bind(normalized_session_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    let Some(session_row) = session_row else {
+        return Ok(None);
+    };
+    let session_employee_id: String = session_row.try_get(0).map_err(|e| e.to_string())?;
+    if session_employee_id.trim().is_empty() {
+        return Ok(None);
+    }
+
+    let mut candidate_groups = list_employee_groups_with_pool(pool)
+        .await?
+        .into_iter()
+        .filter(|group| group.entry_employee_id.trim().eq_ignore_ascii_case(session_employee_id.trim()))
+        .collect::<Vec<_>>();
+    candidate_groups.sort_by(|left, right| {
+        right
+            .is_bootstrap_seeded
+            .cmp(&left.is_bootstrap_seeded)
+            .then_with(|| right.updated_at.cmp(&left.updated_at))
+    });
+    let Some(group) = candidate_groups.into_iter().next() else {
+        return Ok(None);
+    };
+
+    let result = start_employee_group_run_internal_with_pool(
+        pool,
+        StartEmployeeGroupRunInput {
+            group_id: group.id,
+            user_goal: normalized_user_message.to_string(),
+            execution_window: default_group_execution_window(),
+            timeout_employee_ids: Vec::new(),
+            max_retry_per_step: default_group_max_retry(),
+        },
+        Some(normalized_session_id),
+        false,
+    )
+    .await?;
+
+    Ok(Some(result))
+}
+
 pub async fn ensure_employee_sessions_for_event_with_pool(
     pool: &SqlitePool,
     event: &ImEvent,
 ) -> Result<Vec<EnsuredEmployeeSession>, String> {
-    let employees = resolve_target_employees_for_event(pool, event).await?;
+    let employees = if let Some(team_entry_employee) =
+        resolve_team_entry_employee_for_event_with_pool(pool, event).await?
+    {
+        vec![team_entry_employee]
+    } else {
+        resolve_target_employees_for_event(pool, event).await?
+    };
     if employees.is_empty() {
         return Ok(Vec::new());
     }
@@ -3467,6 +4127,14 @@ pub async fn create_employee_group(
     db: State<'_, DbState>,
 ) -> Result<String, String> {
     create_employee_group_with_pool(&db.0, input).await
+}
+
+#[tauri::command]
+pub async fn create_employee_team(
+    input: CreateEmployeeTeamInput,
+    db: State<'_, DbState>,
+) -> Result<String, String> {
+    create_employee_team_with_pool(&db.0, input).await
 }
 
 #[tauri::command]

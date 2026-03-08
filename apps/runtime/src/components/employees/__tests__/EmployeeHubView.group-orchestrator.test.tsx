@@ -43,7 +43,7 @@ describe("EmployeeHubView group orchestrator panel", () => {
       if (command === "list_employee_groups") {
         return Promise.resolve([]);
       }
-      if (command === "create_employee_group") {
+      if (command === "create_employee_team") {
         return Promise.resolve("group-created");
       }
       if (command === "get_feishu_employee_connection_statuses") {
@@ -58,10 +58,10 @@ describe("EmployeeHubView group orchestrator panel", () => {
     });
   });
 
-  test("creates employee group with selected members and coordinator", async () => {
+  test("creates employee team with runtime roles and modes", async () => {
     render(
       <EmployeeHubView
-        employees={[buildEmployee("pm"), buildEmployee("dev"), buildEmployee("qa")]}
+        employees={[buildEmployee("pm"), buildEmployee("dev"), buildEmployee("qa"), buildEmployee("ops")]}
         skills={[
           {
             id: "builtin-general",
@@ -89,17 +89,30 @@ describe("EmployeeHubView group orchestrator panel", () => {
 
     fireEvent.change(screen.getByTestId("employee-group-name"), { target: { value: "交付协作群" } });
     fireEvent.change(screen.getByTestId("employee-group-coordinator"), { target: { value: "pm" } });
+    fireEvent.change(screen.getByTestId("employee-group-entry"), { target: { value: "pm" } });
+    fireEvent.change(screen.getByTestId("employee-group-planner"), { target: { value: "dev" } });
+    fireEvent.change(screen.getByTestId("employee-group-reviewer"), { target: { value: "qa" } });
+    fireEvent.change(screen.getByTestId("employee-group-review-mode"), { target: { value: "hard" } });
+    fireEvent.change(screen.getByTestId("employee-group-execution-mode"), { target: { value: "parallel" } });
+    fireEvent.change(screen.getByTestId("employee-group-visibility-mode"), { target: { value: "shared" } });
     fireEvent.click(screen.getByTestId("employee-group-member-emp-pm"));
     fireEvent.click(screen.getByTestId("employee-group-member-emp-dev"));
     fireEvent.click(screen.getByTestId("employee-group-member-emp-qa"));
+    fireEvent.click(screen.getByTestId("employee-group-member-emp-ops"));
     fireEvent.click(screen.getByTestId("employee-group-create"));
 
     await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith("create_employee_group", {
+      expect(invokeMock).toHaveBeenCalledWith("create_employee_team", {
         input: {
           name: "交付协作群",
           coordinator_employee_id: "pm",
-          member_employee_ids: ["pm", "dev", "qa"],
+          member_employee_ids: ["pm", "dev", "qa", "ops"],
+          entry_employee_id: "pm",
+          planner_employee_id: "dev",
+          reviewer_employee_id: "qa",
+          review_mode: "hard",
+          execution_mode: "parallel",
+          visibility_mode: "shared",
         },
       });
     });
@@ -131,7 +144,7 @@ describe("EmployeeHubView group orchestrator panel", () => {
     expect(screen.getByText("群组成员最多 10 人")).toBeInTheDocument();
   });
 
-  test("starts group run, continues orchestration, and shows latest report", async () => {
+  test("starts group run and shows backend-continued latest report", async () => {
     const openSessionMock = vi.fn();
     invokeMock.mockReset();
     invokeMock.mockImplementation((command: string) => {
@@ -157,27 +170,10 @@ describe("EmployeeHubView group orchestrator panel", () => {
           group_id: "group-1",
           session_id: "session-group-1",
           session_skill_id: "builtin-general",
-          state: "planning",
-          current_round: 1,
-          final_report: "计划：已生成 3 个阶段步骤。",
-          steps: [],
-        });
-      }
-      if (command === "continue_employee_group_run") {
-        return Promise.resolve({
-          run_id: "run-1",
-          group_id: "group-1",
-          session_id: "session-group-1",
           state: "done",
           current_round: 1,
-          current_phase: "finalize",
-          review_round: 0,
-          status_reason: "",
-          waiting_for_employee_id: "",
-          waiting_for_user: false,
           final_report: "计划：共 3 步\n执行：已完成 3 步。\n汇报：团队协作已完成。",
           steps: [],
-          events: [],
         });
       }
       if (command === "get_feishu_employee_connection_statuses") {
@@ -224,11 +220,12 @@ describe("EmployeeHubView group orchestrator panel", () => {
           timeout_employee_ids: [],
         },
       });
-      expect(invokeMock).toHaveBeenCalledWith("continue_employee_group_run", {
-        runId: "run-1",
-      });
       expect(screen.getByTestId("employee-group-run-report-group-1")).toHaveTextContent("计划：共 3 步");
       expect(openSessionMock).toHaveBeenCalledWith("session-group-1", "builtin-general");
     });
+
+    expect(
+      invokeMock.mock.calls.some(([command]) => command === "continue_employee_group_run")
+    ).toBe(false);
   });
 });

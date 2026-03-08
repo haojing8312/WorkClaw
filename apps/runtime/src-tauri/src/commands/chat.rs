@@ -1,4 +1,6 @@
-use super::employee_agents::{list_agent_employees_with_pool, AgentEmployee};
+use super::employee_agents::{
+    list_agent_employees_with_pool, maybe_handle_team_entry_session_message_with_pool, AgentEmployee,
+};
 use super::models::load_routing_settings_from_pool;
 use super::runtime_preferences::resolve_default_work_dir_with_pool;
 use super::skills::DbState;
@@ -424,6 +426,28 @@ pub async fn send_message(
         .execute(&db.0)
         .await
         .map_err(|e| e.to_string())?;
+    }
+
+    if let Some(group_run) = maybe_handle_team_entry_session_message_with_pool(&db.0, &session_id, &user_message).await? {
+        let _ = app.emit(
+            "stream-token",
+            StreamToken {
+                session_id: session_id.clone(),
+                token: group_run.final_report.clone(),
+                done: false,
+                sub_agent: false,
+            },
+        );
+        let _ = app.emit(
+            "stream-token",
+            StreamToken {
+                session_id: session_id.clone(),
+                token: String::new(),
+                done: true,
+                sub_agent: false,
+            },
+        );
+        return Ok(());
     }
 
     // 加载会话信息（含权限模式和工作目录）
@@ -1601,12 +1625,14 @@ mod tests {
             crate::agent::group_orchestrator::GroupRunRequest {
                 group_id: "group-1".to_string(),
                 coordinator_employee_id: "project_manager".to_string(),
+                planner_employee_id: None,
                 reviewer_employee_id: None,
                 member_employee_ids: vec![
                     "project_manager".to_string(),
                     "dev_team".to_string(),
                     "qa_team".to_string(),
                 ],
+                execute_targets: Vec::new(),
                 user_goal: "实现群组协作编排".to_string(),
                 execution_window: 3,
                 timeout_employee_ids: Vec::new(),

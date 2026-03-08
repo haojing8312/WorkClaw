@@ -6,7 +6,6 @@ import {
   EmployeeGroup,
   EmployeeGroupRule,
   EmployeeGroupRunResult,
-  EmployeeGroupRunSnapshot,
   AgentProfileFilesView,
   EmployeeMemoryExport,
   EmployeeMemoryStats,
@@ -37,6 +36,7 @@ interface Props {
 type GroupTemplateRole = {
   role_type?: string;
   employee_key?: string;
+  employee_id?: string;
 };
 
 type GroupTemplateConfig = {
@@ -119,6 +119,12 @@ export function EmployeeHubView({
   const [groupName, setGroupName] = useState("");
   const [groupCoordinatorId, setGroupCoordinatorId] = useState("");
   const [groupMemberIds, setGroupMemberIds] = useState<string[]>([]);
+  const [groupEntryId, setGroupEntryId] = useState("");
+  const [groupPlannerId, setGroupPlannerId] = useState("");
+  const [groupReviewerId, setGroupReviewerId] = useState("");
+  const [groupReviewMode, setGroupReviewMode] = useState("none");
+  const [groupExecutionMode, setGroupExecutionMode] = useState("sequential");
+  const [groupVisibilityMode, setGroupVisibilityMode] = useState("internal");
   const [employeeGroups, setEmployeeGroups] = useState<EmployeeGroup[]>([]);
   const [groupSubmitting, setGroupSubmitting] = useState(false);
   const [groupDeletingId, setGroupDeletingId] = useState<string | null>(null);
@@ -451,6 +457,12 @@ export function EmployeeHubView({
     const name = groupName.trim();
     const coordinator = groupCoordinatorId.trim();
     const members = Array.from(new Set(groupMemberIds.map((item) => item.trim()).filter((item) => item.length > 0)));
+    const entryEmployeeId = (groupEntryId.trim() || coordinator).trim();
+    const plannerEmployeeId = (groupPlannerId.trim() || entryEmployeeId || coordinator).trim();
+    const reviewerEmployeeId = groupReviewerId.trim();
+    const reviewMode = groupReviewMode.trim() || "none";
+    const executionMode = groupExecutionMode.trim() || "sequential";
+    const visibilityMode = groupVisibilityMode.trim() || "internal";
 
     if (!name) {
       setMessage("请填写群组名称");
@@ -472,21 +484,50 @@ export function EmployeeHubView({
       setMessage("协调员必须包含在群组成员中");
       return;
     }
+    if (entryEmployeeId && !members.includes(entryEmployeeId)) {
+      setMessage("入口员工必须包含在团队成员中");
+      return;
+    }
+    if (plannerEmployeeId && !members.includes(plannerEmployeeId)) {
+      setMessage("规划员工必须包含在团队成员中");
+      return;
+    }
+    if (reviewMode !== "none" && !reviewerEmployeeId) {
+      setMessage("开启审核后必须选择审核员工");
+      return;
+    }
+    if (reviewerEmployeeId && !members.includes(reviewerEmployeeId)) {
+      setMessage("审核员工必须包含在团队成员中");
+      return;
+    }
 
     setGroupSubmitting(true);
     setMessage("");
     try {
-      await invoke<string>("create_employee_group", {
+      await invoke<string>("create_employee_team", {
         input: {
           name,
           coordinator_employee_id: coordinator,
           member_employee_ids: members,
+          entry_employee_id: entryEmployeeId,
+          planner_employee_id: plannerEmployeeId,
+          reviewer_employee_id: reviewerEmployeeId,
+          review_mode: reviewMode,
+          execution_mode: executionMode,
+          visibility_mode: visibilityMode,
         },
       });
       setGroupName("");
-      setGroupMemberIds([coordinator]);
+      setGroupCoordinatorId("");
+      setGroupMemberIds([]);
+      setGroupEntryId("");
+      setGroupPlannerId("");
+      setGroupReviewerId("");
+      setGroupReviewMode("none");
+      setGroupExecutionMode("sequential");
+      setGroupVisibilityMode("internal");
       await loadEmployeeGroups();
-      setMessage("协作群组已创建");
+      setMessage("协作团队已创建");
     } catch (e) {
       setMessage(`创建群组失败: ${String(e)}`);
     } finally {
@@ -542,22 +583,19 @@ export function EmployeeHubView({
           timeout_employee_ids: [],
         },
       });
-      const continued = await invoke<EmployeeGroupRunSnapshot>("continue_employee_group_run", {
-        runId: result.run_id,
-      });
       setGroupRunReportById((prev) => ({
         ...prev,
-        [groupId]: continued.final_report || result.final_report || "",
+        [groupId]: result.final_report || "",
       }));
       if (result.session_id && result.session_skill_id) {
         await onOpenGroupRunSession?.(result.session_id, result.session_skill_id);
       }
-      if ((continued.state || "").trim().toLowerCase() === "waiting_review") {
+      if ((result.state || "").trim().toLowerCase() === "waiting_review") {
         setMessage("协作任务已启动，等待审核");
-      } else if ((continued.state || "").trim().toLowerCase() === "done") {
-        setMessage(`协作任务已完成（第 ${continued.current_round || result.current_round || 1} 轮）`);
+      } else if ((result.state || "").trim().toLowerCase() === "done") {
+        setMessage(`协作任务已完成（第 ${result.current_round || 1} 轮）`);
       } else {
-        setMessage(`协作任务已启动，当前阶段：${continued.current_phase || continued.state || "执行"}`);
+        setMessage(`协作任务已启动，当前状态：${result.state || "执行"}`);
       }
     } catch (e) {
       setMessage(`发起协作失败: ${String(e)}`);
@@ -703,6 +741,89 @@ export function EmployeeHubView({
               {groupSubmitting ? "创建中..." : "创建协作群"}
             </button>
           </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+            <select
+              data-testid="employee-group-entry"
+              className="border border-gray-200 rounded px-2 py-1.5 text-sm bg-white"
+              value={groupEntryId}
+              onChange={(e) => setGroupEntryId(e.target.value)}
+            >
+              <option value="">入口员工（默认协调员）</option>
+              {employees.map((item) => {
+                const id = employeeKey(item);
+                if (!id) return null;
+                return (
+                  <option key={`${item.id}-entry`} value={id}>
+                    {item.name}（{id}）
+                  </option>
+                );
+              })}
+            </select>
+            <select
+              data-testid="employee-group-planner"
+              className="border border-gray-200 rounded px-2 py-1.5 text-sm bg-white"
+              value={groupPlannerId}
+              onChange={(e) => setGroupPlannerId(e.target.value)}
+            >
+              <option value="">规划员工（默认入口员工）</option>
+              {employees.map((item) => {
+                const id = employeeKey(item);
+                if (!id) return null;
+                return (
+                  <option key={`${item.id}-planner`} value={id}>
+                    {item.name}（{id}）
+                  </option>
+                );
+              })}
+            </select>
+            <select
+              data-testid="employee-group-reviewer"
+              className="border border-gray-200 rounded px-2 py-1.5 text-sm bg-white"
+              value={groupReviewerId}
+              onChange={(e) => setGroupReviewerId(e.target.value)}
+            >
+              <option value="">审核员工（可选）</option>
+              {employees.map((item) => {
+                const id = employeeKey(item);
+                if (!id) return null;
+                return (
+                  <option key={`${item.id}-reviewer`} value={id}>
+                    {item.name}（{id}）
+                  </option>
+                );
+              })}
+            </select>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+            <select
+              data-testid="employee-group-review-mode"
+              className="border border-gray-200 rounded px-2 py-1.5 text-sm bg-white"
+              value={groupReviewMode}
+              onChange={(e) => setGroupReviewMode(e.target.value)}
+            >
+              <option value="none">无需审核</option>
+              <option value="soft">建议审核</option>
+              <option value="hard">强制审核</option>
+            </select>
+            <select
+              data-testid="employee-group-execution-mode"
+              className="border border-gray-200 rounded px-2 py-1.5 text-sm bg-white"
+              value={groupExecutionMode}
+              onChange={(e) => setGroupExecutionMode(e.target.value)}
+            >
+              <option value="sequential">顺序执行</option>
+              <option value="parallel">并行执行</option>
+            </select>
+            <select
+              data-testid="employee-group-visibility-mode"
+              className="border border-gray-200 rounded px-2 py-1.5 text-sm bg-white"
+              value={groupVisibilityMode}
+              onChange={(e) => setGroupVisibilityMode(e.target.value)}
+            >
+              <option value="internal">内部可见</option>
+              <option value="shared">协作共享</option>
+            </select>
+          </div>
           <div className="rounded border border-gray-200 p-2">
             <div className="text-[11px] text-gray-500 mb-1">选择成员（{groupMemberIds.length}/10）</div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-1.5">
@@ -810,10 +931,11 @@ export function EmployeeHubView({
                       <div className="flex flex-wrap gap-1.5">
                         {(groupConfig.roles || []).map((role, index) => (
                           <span
-                            key={`${group.id}-role-${role.role_type || "role"}-${role.employee_key || index}`}
+                            key={`${group.id}-role-${role.role_type || "role"}-${role.employee_id || role.employee_key || index}`}
                             className="rounded border border-indigo-100 bg-indigo-50 px-2 py-0.5 text-indigo-700"
                           >
-                            {groupRoleLabel(role.role_type || "")}：{resolveEmployeeDisplayName(role.employee_key || "")}
+                            {groupRoleLabel(role.role_type || "")}：
+                            {resolveEmployeeDisplayName(role.employee_id || role.employee_key || "")}
                           </span>
                         ))}
                       </div>
