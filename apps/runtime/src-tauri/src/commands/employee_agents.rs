@@ -1,9 +1,9 @@
-use crate::commands::runtime_preferences::resolve_default_work_dir_with_pool;
-use crate::commands::im_routing::list_im_routing_bindings_with_pool;
 use crate::agent::permissions::PermissionMode;
 use crate::agent::skill_config::SkillConfig;
 use crate::agent::tools::{EmployeeManageTool, MemoryTool};
 use crate::agent::{AgentExecutor, ToolRegistry};
+use crate::commands::im_routing::list_im_routing_bindings_with_pool;
+use crate::commands::runtime_preferences::resolve_default_work_dir_with_pool;
 use crate::commands::skills::DbState;
 use crate::im::types::ImEvent;
 use serde_json::{json, Value};
@@ -81,8 +81,10 @@ fn group_rule_allows_execute_reassignment(rule: &EmployeeGroupRule) -> bool {
     let relation_type = rule.relation_type.trim().to_lowercase();
     let phase_scope = rule.phase_scope.trim().to_lowercase();
     let relation_allowed = relation_type == "delegate" || relation_type == "handoff";
-    let phase_allowed =
-        phase_scope.is_empty() || phase_scope == "execute" || phase_scope == "all" || phase_scope == "*";
+    let phase_allowed = phase_scope.is_empty()
+        || phase_scope == "execute"
+        || phase_scope == "all"
+        || phase_scope == "*";
     relation_allowed && phase_allowed
 }
 
@@ -151,7 +153,8 @@ fn resolve_group_reviewer_employee_id(
     }
 
     let normalized_planner_employee_id = planner_employee_id.trim().to_lowercase();
-    rules.iter()
+    rules
+        .iter()
         .find(|rule| {
             group_rule_matches_relation_types(rule, &["review"])
                 && group_rule_matches_phase_scope(rule, "plan")
@@ -164,7 +167,8 @@ fn resolve_group_reviewer_employee_id(
         })
         .map(|rule| rule.to_employee_id.trim().to_lowercase())
         .or_else(|| {
-            rules.iter()
+            rules
+                .iter()
                 .find(|rule| {
                     group_rule_matches_relation_types(rule, &["review"])
                         && group_rule_matches_phase_scope(rule, "plan")
@@ -267,17 +271,18 @@ async fn load_execute_reassignment_targets_with_pool(
     let member_employee_ids_json: String = row.try_get(1).map_err(|e| e.to_string())?;
     let main_employee_id: String = row.try_get(2).map_err(|e| e.to_string())?;
     let coordinator_employee_id: String = row.try_get(3).map_err(|e| e.to_string())?;
-    let member_employee_ids = serde_json::from_str::<Vec<String>>(&member_employee_ids_json)
-        .unwrap_or_default();
+    let member_employee_ids =
+        serde_json::from_str::<Vec<String>>(&member_employee_ids_json).unwrap_or_default();
     let normalized_member_ids = normalize_member_employee_ids(&member_employee_ids);
     let run_dispatch_source_employee_id = if main_employee_id.trim().is_empty() {
         coordinator_employee_id.trim().to_lowercase()
     } else {
         main_employee_id.trim().to_lowercase()
     };
-    let dispatch_source_employee_id = if let Some(dispatch_source_override) = dispatch_source_override
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
+    let dispatch_source_employee_id = if let Some(dispatch_source_override) =
+        dispatch_source_override
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
     {
         dispatch_source_override.to_lowercase()
     } else {
@@ -1040,7 +1045,12 @@ pub async fn create_employee_group_with_pool(
     Ok(id)
 }
 
-fn normalize_team_mode(raw: &str, allowed: &[&str], default_value: &str, field_name: &str) -> Result<String, String> {
+fn normalize_team_mode(
+    raw: &str,
+    allowed: &[&str],
+    default_value: &str,
+    field_name: &str,
+) -> Result<String, String> {
     let normalized = raw.trim().to_lowercase();
     let value = if normalized.is_empty() {
         default_value.to_string()
@@ -1169,7 +1179,10 @@ pub async fn create_employee_team_with_pool(
     if member_employee_ids.len() > 10 {
         return Err("member_employee_ids cannot exceed 10".to_string());
     }
-    if !member_employee_ids.iter().any(|employee_id| employee_id == &coordinator_employee_id) {
+    if !member_employee_ids
+        .iter()
+        .any(|employee_id| employee_id == &coordinator_employee_id)
+    {
         return Err("coordinator_employee_id must be included in members".to_string());
     }
 
@@ -1189,13 +1202,21 @@ pub async fn create_employee_team_with_pool(
         ("planner_employee_id", &planner_employee_id),
         ("reviewer_employee_id", &reviewer_employee_id),
     ] {
-        if !employee_id.is_empty() && !member_employee_ids.iter().any(|member_id| member_id == employee_id) {
+        if !employee_id.is_empty()
+            && !member_employee_ids
+                .iter()
+                .any(|member_id| member_id == employee_id)
+        {
             return Err(format!("{field_name} must be included in members"));
         }
     }
 
-    let review_mode =
-        normalize_team_mode(&input.review_mode, &["none", "soft", "hard"], "none", "review_mode")?;
+    let review_mode = normalize_team_mode(
+        &input.review_mode,
+        &["none", "soft", "hard"],
+        "none",
+        "review_mode",
+    )?;
     let execution_mode = normalize_team_mode(
         &input.execution_mode,
         &["sequential", "parallel"],
@@ -1223,7 +1244,8 @@ pub async fn create_employee_team_with_pool(
             &member_employee_ids,
         )
     } else {
-        input.rules
+        input
+            .rules
             .into_iter()
             .map(|rule| CreateEmployeeTeamRuleInput {
                 from_employee_id: rule.from_employee_id.trim().to_lowercase(),
@@ -1248,27 +1270,33 @@ pub async fn create_employee_team_with_pool(
         {
             return Err("team rules require from/to/relation_type/phase_scope".to_string());
         }
-        if !valid_members.contains(&rule.from_employee_id) || !valid_members.contains(&rule.to_employee_id) {
+        if !valid_members.contains(&rule.from_employee_id)
+            || !valid_members.contains(&rule.to_employee_id)
+        {
             return Err("team rules must reference members in the team".to_string());
         }
     }
 
     let executor_employee_ids = rules
         .iter()
-        .filter(|rule| group_rule_matches_relation_types(
-            &EmployeeGroupRule {
-                id: String::new(),
-                group_id: String::new(),
-                from_employee_id: rule.from_employee_id.clone(),
-                to_employee_id: rule.to_employee_id.clone(),
-                relation_type: rule.relation_type.clone(),
-                phase_scope: rule.phase_scope.clone(),
-                required: rule.required,
-                priority: rule.priority,
-                created_at: String::new(),
-            },
-            &["delegate", "handoff"],
-        ) && (rule.phase_scope == "execute" || rule.phase_scope == "all" || rule.phase_scope == "*"))
+        .filter(|rule| {
+            group_rule_matches_relation_types(
+                &EmployeeGroupRule {
+                    id: String::new(),
+                    group_id: String::new(),
+                    from_employee_id: rule.from_employee_id.clone(),
+                    to_employee_id: rule.to_employee_id.clone(),
+                    relation_type: rule.relation_type.clone(),
+                    phase_scope: rule.phase_scope.clone(),
+                    required: rule.required,
+                    priority: rule.priority,
+                    created_at: String::new(),
+                },
+                &["delegate", "handoff"],
+            ) && (rule.phase_scope == "execute"
+                || rule.phase_scope == "all"
+                || rule.phase_scope == "*")
+        })
         .map(|rule| rule.to_employee_id.clone())
         .collect::<std::collections::HashSet<_>>();
     let mut role_entries = Vec::<Value>::new();
@@ -1301,7 +1329,8 @@ pub async fn create_employee_team_with_pool(
             "employee_id": employee_id,
         }));
     }
-    let config_json = serde_json::to_string(&json!({ "roles": role_entries })).map_err(|e| e.to_string())?;
+    let config_json =
+        serde_json::to_string(&json!({ "roles": role_entries })).map_err(|e| e.to_string())?;
     let member_employee_ids_json =
         serde_json::to_string(&member_employee_ids).map_err(|e| e.to_string())?;
     let group_id = Uuid::new_v4().to_string();
@@ -1443,11 +1472,14 @@ pub async fn clone_employee_group_template_with_pool(
     .map_err(|e| e.to_string())?;
 
     for row in source_rules {
-        let from_employee_id: String = row.try_get("from_employee_id").map_err(|e| e.to_string())?;
+        let from_employee_id: String =
+            row.try_get("from_employee_id").map_err(|e| e.to_string())?;
         let to_employee_id: String = row.try_get("to_employee_id").map_err(|e| e.to_string())?;
         let relation_type: String = row.try_get("relation_type").map_err(|e| e.to_string())?;
         let phase_scope: String = row.try_get("phase_scope").map_err(|e| e.to_string())?;
-        let required = row.try_get::<i64, _>("required").map_err(|e| e.to_string())?;
+        let required = row
+            .try_get::<i64, _>("required")
+            .map_err(|e| e.to_string())?;
         let priority: i64 = row.try_get("priority").map_err(|e| e.to_string())?;
         sqlx::query(
             "INSERT INTO employee_group_rules (
@@ -1539,7 +1571,10 @@ pub async fn list_employee_group_rules_with_pool(
             to_employee_id: row.try_get("to_employee_id").map_err(|e| e.to_string())?,
             relation_type: row.try_get("relation_type").map_err(|e| e.to_string())?,
             phase_scope: row.try_get("phase_scope").map_err(|e| e.to_string())?,
-            required: row.try_get::<i64, _>("required").map_err(|e| e.to_string())? != 0,
+            required: row
+                .try_get::<i64, _>("required")
+                .map_err(|e| e.to_string())?
+                != 0,
             priority: row.try_get("priority").map_err(|e| e.to_string())?,
             created_at: row.try_get("created_at").map_err(|e| e.to_string())?,
         });
@@ -1842,13 +1877,14 @@ async fn ensure_group_run_session_with_pool(
         .map(str::trim)
         .filter(|session_id| !session_id.is_empty())
     {
-        let existing_skill_row =
-            sqlx::query_as::<_, (String,)>("SELECT COALESCE(skill_id, '') FROM sessions WHERE id = ?")
-                .bind(existing_session_id)
-                .fetch_optional(pool)
-                .await
-                .map_err(|e| e.to_string())?
-                .ok_or_else(|| "preferred group run session not found".to_string())?;
+        let existing_skill_row = sqlx::query_as::<_, (String,)>(
+            "SELECT COALESCE(skill_id, '') FROM sessions WHERE id = ?",
+        )
+        .bind(existing_session_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "preferred group run session not found".to_string())?;
         let existing_skill_id = if existing_skill_row.0.trim().is_empty() {
             session_skill_id.clone()
         } else {
@@ -2023,12 +2059,53 @@ fn load_group_step_profile_markdown(employee: &AgentEmployee) -> String {
     sections.join("\n\n")
 }
 
+fn default_group_step_allowed_tools() -> Vec<String> {
+    vec![
+        "read_file".to_string(),
+        "write_file".to_string(),
+        "glob".to_string(),
+        "grep".to_string(),
+        "edit".to_string(),
+        "list_dir".to_string(),
+        "file_stat".to_string(),
+        "file_copy".to_string(),
+        "bash".to_string(),
+        "web_fetch".to_string(),
+    ]
+}
+
+fn build_group_step_iteration_fallback_output(
+    employee: &AgentEmployee,
+    user_goal: &str,
+    step_input: &str,
+    error: &str,
+) -> String {
+    let focus = if step_input.trim().is_empty() {
+        user_goal.trim()
+    } else {
+        step_input.trim()
+    };
+    let responsibility = if employee.persona.trim().is_empty() {
+        format!("负责围绕“{}”完成分配到本岗位的执行项", focus)
+    } else {
+        employee.persona.trim().to_string()
+    };
+    format!(
+        "{} ({}) 在执行步骤时触发了迭代上限，现切换为保守交付模式。\n- 当前步骤: {}\n- 岗位职责: {}\n- 对用户目标“{}”可立即提供: 基于本岗位职责给出能力范围说明、所需补充信息以及下一步执行建议。\n- 备注: {}",
+        employee.name,
+        employee.employee_id,
+        focus,
+        responsibility,
+        user_goal.trim(),
+        error.trim(),
+    )
+}
+
 fn build_group_step_system_prompt(
     employee: &AgentEmployee,
     session_skill_id: &str,
 ) -> (String, Option<Vec<String>>, usize) {
-    let mut skill_config =
-        SkillConfig::parse(crate::builtin_skills::builtin_general_skill_markdown());
+    let skill_config = SkillConfig::parse(crate::builtin_skills::builtin_general_skill_markdown());
     let base_prompt = if skill_config.system_prompt.trim().is_empty() {
         "你是一名专业、可靠、注重交付结果的 AI 员工。".to_string()
     } else {
@@ -2058,14 +2135,14 @@ fn build_group_step_system_prompt(
         sections.push(format!("- 员工人设: {}", employee.persona.trim()));
     }
     sections.push(
-        "执行要求:\n- 聚焦当前分配步骤\n- 先给结论，再给关键依据或产出\n- 如需进一步拆分，可调用 task 工具\n- 不要输出“模拟结果”或“占位结果”措辞".to_string(),
+        "执行要求:\n- 聚焦当前分配步骤\n- 优先直接用自然语言给出结论，只有在当前步骤明确需要读取文件、编辑文件、执行命令或抓取网页时才使用工具\n- 先给结论，再给关键依据或产出\n- 不要输出“模拟结果”或“占位结果”措辞".to_string(),
     );
     if !profile_markdown.is_empty() {
         sections.push(format!("员工资料:\n{profile_markdown}"));
     }
     (
         sections.join("\n"),
-        skill_config.allowed_tools.take(),
+        Some(default_group_step_allowed_tools()),
         skill_config.max_iterations.unwrap_or(8),
     )
 }
@@ -2221,7 +2298,7 @@ async fn execute_group_step_in_employee_context_with_pool(
     registry.register(Arc::new(EmployeeManageTool::new(pool.clone())));
 
     let executor = AgentExecutor::with_max_iterations(Arc::clone(&registry), max_iterations);
-    let final_messages = executor
+    let final_messages = match executor
         .execute_turn(
             &api_format,
             &base_url,
@@ -2246,7 +2323,35 @@ async fn execute_group_step_in_employee_context_with_pool(
             None,
         )
         .await
-        .map_err(|e| e.to_string())?;
+    {
+        Ok(final_messages) => final_messages,
+        Err(error) => {
+            let error_text = error.to_string();
+            if !error_text.contains("达到最大迭代次数") {
+                return Err(error_text);
+            }
+
+            let fallback_output = build_group_step_iteration_fallback_output(
+                &employee,
+                user_goal,
+                step_input,
+                &error_text,
+            );
+            let finished_at = chrono::Utc::now().to_rfc3339();
+            sqlx::query(
+                "INSERT INTO messages (id, session_id, role, content, created_at)
+                 VALUES (?, ?, 'assistant', ?, ?)",
+            )
+            .bind(Uuid::new_v4().to_string())
+            .bind(session_id)
+            .bind(&fallback_output)
+            .bind(&finished_at)
+            .execute(pool)
+            .await
+            .map_err(|e| e.to_string())?;
+            return Ok(fallback_output);
+        }
+    };
 
     let assistant_output = extract_assistant_text(&final_messages);
     if assistant_output.trim().is_empty() {
@@ -2328,11 +2433,7 @@ async fn maybe_finalize_group_run_with_pool(pool: &SqlitePool, run_id: &str) -> 
     for row in execute_rows {
         let assignee_employee_id: String = row.try_get(0).map_err(|e| e.to_string())?;
         let output: String = row.try_get(1).map_err(|e| e.to_string())?;
-        summary_lines.push(format!(
-            "- {}: {}",
-            assignee_employee_id,
-            output.trim()
-        ));
+        summary_lines.push(format!("- {}: {}", assignee_employee_id, output.trim()));
     }
     summary_lines.push("汇报：团队协作已完成，可继续进入人工复核或直接对外回复。".to_string());
     let final_report = summary_lines.join("\n");
@@ -3016,18 +3117,19 @@ pub async fn review_group_run_step_with_pool(
 
     if normalized_action == "reject" {
         let next_review_round = review_round + 1;
-        let (revision_input, revision_assignee_employee_id) = sqlx::query_as::<_, (String, String)>(
-            "SELECT COALESCE(input, ''), COALESCE(assignee_employee_id, '')
+        let (revision_input, revision_assignee_employee_id) =
+            sqlx::query_as::<_, (String, String)>(
+                "SELECT COALESCE(input, ''), COALESCE(assignee_employee_id, '')
              FROM group_run_steps
              WHERE run_id = ? AND step_type = 'plan'
              ORDER BY round_no DESC, id DESC
              LIMIT 1",
-        )
-        .bind(run_id)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(|e| e.to_string())?
-        .unwrap_or_else(|| (String::new(), main_employee_id.clone()));
+            )
+            .bind(run_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?
+            .unwrap_or_else(|| (String::new(), main_employee_id.clone()));
         let revision_assignee_employee_id = if revision_assignee_employee_id.trim().is_empty() {
             main_employee_id.clone()
         } else {
@@ -3186,7 +3288,10 @@ pub async fn pause_employee_group_run_with_pool(
     Ok(())
 }
 
-pub async fn resume_employee_group_run_with_pool(pool: &SqlitePool, run_id: &str) -> Result<(), String> {
+pub async fn resume_employee_group_run_with_pool(
+    pool: &SqlitePool,
+    run_id: &str,
+) -> Result<(), String> {
     let run_row = sqlx::query(
         "SELECT state, COALESCE(current_phase, 'plan')
          FROM group_runs
@@ -3292,14 +3397,17 @@ pub async fn reassign_group_run_step_with_pool(
     if employee_exists.is_none() {
         return Err("target employee not found".to_string());
     }
-    let (eligible_targets, has_execute_rules) =
-        load_execute_reassignment_targets_with_pool(
-            pool,
-            &run_id,
-            Some(dispatch_source_employee_id.as_str()),
-        )
-        .await?;
-    if has_execute_rules && !eligible_targets.iter().any(|candidate| candidate == &new_assignee) {
+    let (eligible_targets, has_execute_rules) = load_execute_reassignment_targets_with_pool(
+        pool,
+        &run_id,
+        Some(dispatch_source_employee_id.as_str()),
+    )
+    .await?;
+    if has_execute_rules
+        && !eligible_targets
+            .iter()
+            .any(|candidate| candidate == &new_assignee)
+    {
         return Err("target employee is not eligible for execute reassignment".to_string());
     }
 
@@ -3667,7 +3775,10 @@ pub async fn resolve_target_employees_for_event(
     Ok(all_enabled.iter().take(1).cloned().collect())
 }
 
-fn im_binding_matches_event(binding: &crate::commands::im_routing::ImRoutingBinding, event: &ImEvent) -> bool {
+fn im_binding_matches_event(
+    binding: &crate::commands::im_routing::ImRoutingBinding,
+    event: &ImEvent,
+) -> bool {
     if !binding.enabled {
         return false;
     }
@@ -3694,9 +3805,9 @@ async fn resolve_team_entry_employee_for_event_with_pool(
     event: &ImEvent,
 ) -> Result<Option<AgentEmployee>, String> {
     let bindings = list_im_routing_bindings_with_pool(pool).await?;
-    let matched_binding = bindings
-        .into_iter()
-        .find(|binding| !binding.team_id.trim().is_empty() && im_binding_matches_event(binding, event));
+    let matched_binding = bindings.into_iter().find(|binding| {
+        !binding.team_id.trim().is_empty() && im_binding_matches_event(binding, event)
+    });
     let Some(binding) = matched_binding else {
         return Ok(None);
     };
@@ -3716,7 +3827,9 @@ async fn resolve_team_entry_employee_for_event_with_pool(
     let preferred_employee_id = {
         let entry_employee_id: String = group_row.try_get(0).map_err(|e| e.to_string())?;
         if entry_employee_id.trim().is_empty() {
-            group_row.try_get::<String, _>(1).map_err(|e| e.to_string())?
+            group_row
+                .try_get::<String, _>(1)
+                .map_err(|e| e.to_string())?
         } else {
             entry_employee_id
         }
@@ -3727,9 +3840,15 @@ async fn resolve_team_entry_employee_for_event_with_pool(
         .into_iter()
         .find(|employee| {
             employee.enabled
-                && (employee.employee_id.eq_ignore_ascii_case(preferred_employee_id.trim())
-                    || employee.role_id.eq_ignore_ascii_case(preferred_employee_id.trim())
-                    || employee.id.eq_ignore_ascii_case(preferred_employee_id.trim()))
+                && (employee
+                    .employee_id
+                    .eq_ignore_ascii_case(preferred_employee_id.trim())
+                    || employee
+                        .role_id
+                        .eq_ignore_ascii_case(preferred_employee_id.trim())
+                    || employee
+                        .id
+                        .eq_ignore_ascii_case(preferred_employee_id.trim()))
         }))
 }
 

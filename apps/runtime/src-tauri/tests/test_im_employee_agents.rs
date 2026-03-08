@@ -2902,6 +2902,111 @@ async fn maybe_handle_team_entry_message_ignores_non_team_entry_sessions() {
 }
 
 #[tokio::test]
+async fn continue_group_run_completes_even_when_execute_step_hits_max_iterations() {
+    let (pool, _tmp) = helpers::setup_test_db().await;
+    sqlx::query(
+        "INSERT INTO model_configs (id, name, api_format, base_url, model_name, is_default, api_key)
+         VALUES ('m1', 'default', 'openai', 'http://mock-tool-loop', 'gpt-4o-mini', 1, 'k')",
+    )
+    .execute(&pool)
+    .await
+    .expect("seed model config");
+
+    for employee_id in ["taizi", "zhongshu", "menxia", "shangshu", "bingbu"] {
+        upsert_agent_employee_with_pool(
+            &pool,
+            UpsertAgentEmployeeInput {
+                id: None,
+                employee_id: employee_id.to_string(),
+                name: employee_id.to_string(),
+                role_id: employee_id.to_string(),
+                persona: format!("{employee_id} 负责团队交付"),
+                feishu_open_id: "".to_string(),
+                feishu_app_id: "".to_string(),
+                feishu_app_secret: "".to_string(),
+                primary_skill_id: "builtin-general".to_string(),
+                default_work_dir: format!("E:/workspace/{employee_id}"),
+                openclaw_agent_id: employee_id.to_string(),
+                routing_priority: 100,
+                enabled_scopes: vec!["app".to_string()],
+                enabled: true,
+                is_default: employee_id == "taizi",
+                skill_ids: vec!["builtin-general".to_string()],
+            },
+        )
+        .await
+        .expect("seed employee");
+    }
+
+    let group_id = create_employee_team_with_pool(
+        &pool,
+        CreateEmployeeTeamInput {
+            name: "迭代兜底团队".to_string(),
+            coordinator_employee_id: "shangshu".to_string(),
+            member_employee_ids: vec![
+                "taizi".to_string(),
+                "zhongshu".to_string(),
+                "menxia".to_string(),
+                "shangshu".to_string(),
+                "bingbu".to_string(),
+            ],
+            entry_employee_id: "taizi".to_string(),
+            planner_employee_id: "zhongshu".to_string(),
+            reviewer_employee_id: "menxia".to_string(),
+            review_mode: "hard".to_string(),
+            execution_mode: "parallel".to_string(),
+            visibility_mode: "shared".to_string(),
+            rules: vec![],
+        },
+    )
+    .await
+    .expect("create employee team");
+
+    let outcome = start_employee_group_run_with_pool(
+        &pool,
+        StartEmployeeGroupRunInput {
+            group_id,
+            user_goal: "你们能做什么".to_string(),
+            execution_window: 2,
+            max_retry_per_step: 1,
+            timeout_employee_ids: vec![],
+        },
+    )
+    .await
+    .expect("start reviewable run");
+
+    review_group_run_step_with_pool(&pool, &outcome.run_id, "approve", "方案通过")
+        .await
+        .expect("approve review");
+
+    let snapshot = continue_employee_group_run_with_pool(&pool, &outcome.run_id)
+        .await
+        .expect("continue run after approve");
+
+    assert_eq!(snapshot.state, "done");
+    assert_eq!(snapshot.current_phase, "finalize");
+    assert!(
+        snapshot.final_report.contains("团队协作已完成"),
+        "final report should still be produced when an execute step hits max iterations"
+    );
+    assert!(
+        snapshot
+            .steps
+            .iter()
+            .filter(|step| step.step_type == "execute")
+            .all(|step| step.status == "completed"),
+        "execute steps should be downgraded into completed outputs instead of leaving the run failed"
+    );
+    assert!(
+        snapshot
+            .steps
+            .iter()
+            .any(|step| step.assignee_employee_id == "bingbu" && step.output.contains("bingbu")),
+        "the looping step should still contribute a visible fallback output"
+    );
+}
+
+#[tokio::test]
 async fn maybe_handle_team_entry_message_reuses_existing_chat_session_for_group_run() {
     let (pool, _tmp) = helpers::setup_test_db().await;
     sqlx::query(

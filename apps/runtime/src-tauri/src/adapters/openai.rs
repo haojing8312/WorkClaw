@@ -21,6 +21,16 @@ fn mock_response_text(model: &str, messages: &[Value]) -> String {
     format!("MOCK_RESPONSE [{}] {}", model, last_user)
 }
 
+fn is_mock_text_base_url(base_url: &str) -> bool {
+    base_url.trim().eq_ignore_ascii_case("http://mock")
+}
+
+fn is_mock_tool_loop_base_url(base_url: &str) -> bool {
+    base_url
+        .trim()
+        .eq_ignore_ascii_case("http://mock-tool-loop")
+}
+
 /// Strip <think>…</think> spans from a streaming token chunk.
 /// `in_think` carries state across chunk boundaries.
 fn filter_thinking(input: &str, in_think: &mut bool) -> String {
@@ -83,10 +93,13 @@ pub async fn chat_stream_with_tools(
 ) -> Result<crate::agent::types::LLMResponse> {
     use crate::agent::types::{LLMResponse, ToolCall};
 
-    if base_url.trim().eq_ignore_ascii_case("http://mock") {
+    if is_mock_text_base_url(base_url) {
         let mock_text = mock_response_text(model, &messages);
         on_token(mock_text.clone());
         return Ok(LLMResponse::Text(mock_text));
+    }
+    if is_mock_tool_loop_base_url(base_url) {
+        return Err(anyhow!("达到最大迭代次数 8"));
     }
 
     let client = Client::new();
@@ -235,6 +248,9 @@ pub async fn chat_stream_with_tools(
 }
 
 pub async fn test_connection(base_url: &str, api_key: &str, model: &str) -> Result<bool> {
+    if is_mock_text_base_url(base_url) || is_mock_tool_loop_base_url(base_url) {
+        return Ok(true);
+    }
     let client = Client::new();
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
     let body = json!({
