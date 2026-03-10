@@ -65,12 +65,14 @@ async fn employee_config_and_im_session_mapping_work() {
     assert_eq!(employees[0].skill_ids, vec!["builtin-general".to_string()]);
 
     let event = ImEvent {
+        channel: "feishu".to_string(),
         event_type: ImEventType::MessageCreated,
         thread_id: "chat_001".to_string(),
         event_id: Some("evt_001".to_string()),
         message_id: Some("msg_001".to_string()),
         text: Some("请评估这个商机".to_string()),
         role_id: None,
+        account_id: None,
         tenant_id: Some("tenant-a".to_string()),
     };
 
@@ -170,12 +172,14 @@ async fn group_message_without_mention_routes_to_main_employee() {
     let targets = resolve_target_employees_for_event(
         &pool,
         &ImEvent {
+            channel: "feishu".to_string(),
             event_type: ImEventType::MessageCreated,
             thread_id: "chat_group_1".to_string(),
             event_id: Some("evt_001".to_string()),
             message_id: Some("msg_001".to_string()),
             text: Some("大家讨论一下这个商机".to_string()),
             role_id: None,
+            account_id: None,
             tenant_id: None,
         },
     )
@@ -248,12 +252,14 @@ async fn group_message_with_mention_routes_to_target_employee() {
     let targets = resolve_target_employees_for_event(
         &pool,
         &ImEvent {
+            channel: "feishu".to_string(),
             event_type: ImEventType::MessageCreated,
             thread_id: "chat_group_mention".to_string(),
             event_id: Some("evt_mention_001".to_string()),
             message_id: Some("msg_mention_001".to_string()),
             text: Some("@开发团队 请开始处理".to_string()),
             role_id: Some("ou_dev_team".to_string()),
+            account_id: None,
             tenant_id: None,
         },
     )
@@ -326,12 +332,14 @@ async fn group_message_with_text_mention_routes_to_target_employee_when_role_id_
     let targets = resolve_target_employees_for_event(
         &pool,
         &ImEvent {
+            channel: "feishu".to_string(),
             event_type: ImEventType::MessageCreated,
             thread_id: "chat_group_text_mention".to_string(),
             event_id: Some("evt_text_mention_001".to_string()),
             message_id: Some("msg_text_mention_001".to_string()),
             text: Some("@开发团队 请开始处理".to_string()),
             role_id: None,
+            account_id: None,
             tenant_id: None,
         },
     )
@@ -3247,6 +3255,7 @@ async fn ensure_employee_sessions_for_event_prefers_team_entry_employee_when_bin
             guild_id: "".to_string(),
             team_id: group_id,
             role_ids: vec![],
+            connector_meta: serde_json::json!({}),
             priority: 1,
             enabled: true,
         },
@@ -3255,12 +3264,14 @@ async fn ensure_employee_sessions_for_event_prefers_team_entry_employee_when_bin
     .expect("seed routing binding");
 
     let event = ImEvent {
+        channel: "feishu".to_string(),
         event_type: ImEventType::MessageCreated,
         thread_id: "chat_team_001".to_string(),
         event_id: Some("evt_team_001".to_string()),
         message_id: Some("msg_team_001".to_string()),
         text: Some("请团队开始处理".to_string()),
         role_id: None,
+        account_id: None,
         tenant_id: Some("tenant-a".to_string()),
     };
 

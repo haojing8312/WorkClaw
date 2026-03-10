@@ -45,12 +45,14 @@ async fn same_route_session_key_reuses_existing_session() {
     let first = ensure_employee_sessions_for_event_with_pool(
         &pool,
         &ImEvent {
+            channel: "feishu".to_string(),
             event_type: ImEventType::MessageCreated,
             thread_id: "chat-1".to_string(),
             event_id: Some("evt-1".to_string()),
             message_id: Some("msg-1".to_string()),
             text: Some("hello".to_string()),
             role_id: None,
+            account_id: None,
             tenant_id: Some("tenant-a".to_string()),
         },
     )
@@ -62,12 +64,14 @@ async fn same_route_session_key_reuses_existing_session() {
     let second = ensure_employee_sessions_for_event_with_pool(
         &pool,
         &ImEvent {
+            channel: "feishu".to_string(),
             event_type: ImEventType::MessageCreated,
             thread_id: "chat-2".to_string(),
             event_id: Some("evt-2".to_string()),
             message_id: Some("msg-2".to_string()),
             text: Some("hello 2".to_string()),
             role_id: None,
+            account_id: None,
             tenant_id: Some("tenant-a".to_string()),
         },
     )
@@ -149,12 +153,14 @@ async fn same_thread_reuses_session_when_mention_switches_employee() {
     let first = ensure_employee_sessions_for_event_with_pool(
         &pool,
         &ImEvent {
+            channel: "feishu".to_string(),
             event_type: ImEventType::MessageCreated,
             thread_id: "chat-1".to_string(),
             event_id: Some("evt-1".to_string()),
             message_id: Some("msg-1".to_string()),
             text: Some("先给一个初步方案".to_string()),
             role_id: None,
+            account_id: None,
             tenant_id: Some("tenant-a".to_string()),
         },
     )
@@ -166,12 +172,14 @@ async fn same_thread_reuses_session_when_mention_switches_employee() {
     let second = ensure_employee_sessions_for_event_with_pool(
         &pool,
         &ImEvent {
+            channel: "feishu".to_string(),
             event_type: ImEventType::MessageCreated,
             thread_id: "chat-1".to_string(),
             event_id: Some("evt-2".to_string()),
             message_id: Some("msg-2".to_string()),
             text: Some("@开发团队 细化技术方案".to_string()),
             role_id: Some("ou_dev_team".to_string()),
+            account_id: None,
             tenant_id: Some("tenant-a".to_string()),
         },
     )
@@ -237,12 +245,14 @@ async fn recreates_session_when_thread_mapping_points_to_deleted_session() {
     let first = ensure_employee_sessions_for_event_with_pool(
         &pool,
         &ImEvent {
+            channel: "feishu".to_string(),
             event_type: ImEventType::MessageCreated,
             thread_id: "chat-1".to_string(),
             event_id: Some("evt-1".to_string()),
             message_id: Some("msg-1".to_string()),
             text: Some("hello".to_string()),
             role_id: None,
+            account_id: None,
             tenant_id: Some("tenant-a".to_string()),
         },
     )
@@ -261,12 +271,14 @@ async fn recreates_session_when_thread_mapping_points_to_deleted_session() {
     let second = ensure_employee_sessions_for_event_with_pool(
         &pool,
         &ImEvent {
+            channel: "feishu".to_string(),
             event_type: ImEventType::MessageCreated,
             thread_id: "chat-1".to_string(),
             event_id: Some("evt-2".to_string()),
             message_id: Some("msg-2".to_string()),
             text: Some("hello again".to_string()),
             role_id: None,
+            account_id: None,
             tenant_id: Some("tenant-a".to_string()),
         },
     )

@@ -46,7 +46,7 @@ describe("SettingsView semantic theme", () => {
     expect(screen.queryByRole("button", { name: "健康检查" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "MCP 服务器" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "自动路由" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "飞书协作" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "渠道连接器" })).toBeInTheDocument();
 
     const searchTab = screen.getByRole("button", { name: "搜索引擎" });
     expect(searchTab).toHaveClass("sm-btn");

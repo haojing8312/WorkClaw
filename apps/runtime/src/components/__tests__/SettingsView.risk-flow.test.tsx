@@ -29,7 +29,7 @@ describe("SettingsView risk flow", () => {
     render(<SettingsView onClose={() => {}} />);
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "飞书协作" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "渠道连接器" })).toBeInTheDocument();
     });
 
     expect(screen.queryByRole("button", { name: "健康检查" })).not.toBeInTheDocument();

@@ -30,7 +30,7 @@ describe("SettingsView feishu routing tab", () => {
     render(<SettingsView onClose={() => {}} />);
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "飞书协作" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "渠道连接器" })).toBeInTheDocument();
     });
 
     expect(invokeMock).not.toHaveBeenCalledWith("list_im_routing_bindings");

@@ -7,12 +7,14 @@ use runtime_lib::im::types::{ImEvent, ImEventType};
 async fn callback_same_event_id_is_processed_once() {
     let (pool, _tmp) = helpers::setup_test_db().await;
     let event = ImEvent {
+        channel: "feishu".to_string(),
         event_type: ImEventType::MessageCreated,
         thread_id: "thread-a".to_string(),
         event_id: Some("evt-001".to_string()),
         message_id: Some("msg-001".to_string()),
         text: Some("hello".to_string()),
         role_id: None,
+        account_id: None,
         tenant_id: None,
     };
 

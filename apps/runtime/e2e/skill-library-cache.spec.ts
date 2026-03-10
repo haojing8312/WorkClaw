@@ -119,6 +119,10 @@ async function installTauriMocks(page: Page): Promise<void> {
           return [];
         case "list_mcp_servers":
           return [];
+        case "list_im_routing_bindings":
+          return [];
+        case "simulate_im_route":
+          return { agentId: "main", matchedBy: "default" };
         case "get_runtime_preferences":
           return runtimePreferences;
         case "get_sessions":

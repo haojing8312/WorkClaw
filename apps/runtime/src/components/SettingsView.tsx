@@ -1240,7 +1240,7 @@ export function SettingsView({
               className={"sm-btn h-8 px-2 rounded-none border-b-2 text-sm font-medium transition-colors " +
               (activeTab === "feishu" ? "text-[var(--sm-primary-strong)] border-[var(--sm-primary)]" : "sm-text-muted border-transparent hover:text-[var(--sm-text)]")}
           >
-            飞书协作
+            渠道连接器
           </button>
           {SHOW_AUTO_ROUTING_SETTINGS && (
             <button
@@ -2605,12 +2605,18 @@ export function SettingsView({
       </>)}
 
       {activeTab === "feishu" && (
-        <FeishuRoutingWizard
-          bindings={routingBindings}
-          onSaveRule={handleSaveRoutingRule}
-          onDeleteRule={handleDeleteRoutingRule}
-          onSimulate={handleSimulateRoute}
-        />
+        <div className="space-y-3">
+          <div className="bg-white rounded-lg p-4 space-y-1">
+            <div className="text-sm font-medium text-gray-900">渠道连接器</div>
+            <div className="text-xs text-gray-500">当前已接入 Feishu 连接器，后续新增渠道将复用同一配置与路由入口。</div>
+          </div>
+          <FeishuRoutingWizard
+            bindings={routingBindings}
+            onSaveRule={handleSaveRoutingRule}
+            onDeleteRule={handleDeleteRoutingRule}
+            onSimulate={handleSimulateRoute}
+          />
+        </div>
       )}
 
       {SHOW_AUTO_ROUTING_SETTINGS && activeTab === "routing" && (

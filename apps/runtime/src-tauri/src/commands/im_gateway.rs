@@ -49,6 +49,7 @@ pub async fn process_im_event(
             .map_err(|e| e.to_string())?;
 
     if result.rows_affected() > 0 {
+        let source = event.channel.trim();
         sqlx::query(
             "INSERT INTO im_inbox_events (id, event_id, thread_id, message_id, text_preview, source, created_at)
              VALUES (?, ?, ?, ?, ?, ?, ?)"
@@ -58,7 +59,7 @@ pub async fn process_im_event(
         .bind(thread_id)
         .bind(message_id)
         .bind(text_preview)
-        .bind("feishu")
+        .bind(if source.is_empty() { "feishu" } else { source })
         .bind(&now)
         .execute(pool)
         .await

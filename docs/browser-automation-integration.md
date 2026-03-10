@@ -1,6 +1,6 @@
 # 浏览器自动化集成（本地实现）
 
-本文档说明 WorkClaw 当前版本的浏览器自动化能力（纯本地 sidecar + Playwright），不依赖任何外部 OpenClaw 服务。
+本文档说明 WorkClaw 当前版本的浏览器自动化能力（纯本地 sidecar + Playwright），不依赖任何外部 OpenClaw 服务，也不依赖新的 IM 连接器边界。
 
 ## 能力范围
 
@@ -8,6 +8,12 @@
 - `browser_snapshot` 生成页面快照与 `ref -> selector` 映射
 - `browser_act` 基于 `ref` 或 `selector` 执行动作
 - 兼容原有 `browser_*` 工具（navigate/click/type/scroll/...）
+
+浏览器自动化与 IM 连接器解耦：
+
+- 浏览器工具仍由 `apps/runtime/sidecar/src/browser.ts` 提供
+- IM 多渠道扩展走 `apps/runtime/sidecar/src/adapters/`
+- 两者共享 sidecar 进程，但没有运行时耦合
 
 ## 启动参数
 

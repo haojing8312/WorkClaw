@@ -27,6 +27,8 @@ import {
   matchesEmployeeHubRunFilter,
   matchesEmployeeHubTeamFilter,
 } from "./employeeHubOverview";
+import { ConnectorConfigPanel } from "../connectors/ConnectorConfigPanel";
+import { getConnectorSchema } from "../connectors/connectorSchemas";
 
 interface Props {
   employees: AgentEmployee[];
@@ -742,6 +744,29 @@ export function EmployeeHubView({
     : `确定清空${clearMemoryScopeLabel}下的长期记忆吗？`;
   const clearMemoryDialogImpact = selectedEmployeeMemoryId ? `员工编号: ${selectedEmployeeMemoryId}` : undefined;
   const selectedEmployeeFeishuStatus = selectedEmployee ? resolveFeishuStatus(selectedEmployee) : null;
+  const feishuConnectorSchema = getConnectorSchema("feishu");
+  const selectedEmployeeFeishuRuntimeStatus = useMemo(() => {
+    if (!selectedEmployee) return null;
+    const key = employeeKey(selectedEmployee).toLowerCase();
+    return key ? feishuStatusByEmployeeId.get(key) ?? null : null;
+  }, [feishuStatusByEmployeeId, selectedEmployee]);
+  const selectedConnectorDiagnostics = useMemo(() => {
+    if (!selectedEmployeeFeishuRuntimeStatus) return [];
+    return [
+      {
+        label: "重连次数",
+        value: String(selectedEmployeeFeishuRuntimeStatus.reconnect_attempts ?? 0),
+      },
+      {
+        label: "队列事件",
+        value: String(selectedEmployeeFeishuRuntimeStatus.queued_events ?? 0),
+      },
+      {
+        label: "最后事件",
+        value: selectedEmployeeFeishuRuntimeStatus.last_event_at?.trim() || "暂无",
+      },
+    ];
+  }, [selectedEmployeeFeishuRuntimeStatus]);
   const tabs: Array<{ id: EmployeeHubTab; label: string }> = [
     { id: "overview", label: "总览" },
     { id: "employees", label: "员工" },
@@ -1453,21 +1478,17 @@ export function EmployeeHubView({
                 </div>
 
                 {selectedEmployeeFeishuStatus && (
-                  <div className="rounded-lg border border-gray-200 p-3 space-y-2">
-                    <div className="text-xs font-medium text-gray-700">飞书连接与配置</div>
-                    <div className="flex items-center gap-2"><span className={`inline-block h-2.5 w-2.5 rounded-full ${selectedEmployeeFeishuStatus.dotClass}`} /><span className="text-xs text-gray-900">{selectedEmployeeFeishuStatus.label}</span></div>
-                    <div className="text-[11px] text-gray-500">{selectedEmployeeFeishuStatus.detail}</div>
-                    {selectedEmployeeFeishuStatus.error && <div className="text-xs text-red-600">{selectedEmployeeFeishuStatus.error}</div>}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                      <input className="w-full border border-gray-200 rounded px-2 py-1.5 text-sm md:col-span-2" placeholder="飞书机器人 open_id（可空，仅用于飞书@精准路由）" value={feishuForm.openId} onChange={(e) => setFeishuForm((s) => ({ ...s, openId: e.target.value }))} />
-                      <input className="w-full border border-gray-200 rounded px-2 py-1.5 text-sm" placeholder="机器人 App ID" value={feishuForm.appId} onChange={(e) => setFeishuForm((s) => ({ ...s, appId: e.target.value }))} />
-                      <input className="w-full border border-gray-200 rounded px-2 py-1.5 text-sm" type="password" placeholder="机器人 App Secret" value={feishuForm.appSecret} onChange={(e) => setFeishuForm((s) => ({ ...s, appSecret: e.target.value }))} />
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button type="button" onClick={saveFeishuConfig} disabled={savingFeishuConfig} className="h-8 px-3 rounded bg-blue-500 hover:bg-blue-600 disabled:bg-blue-300 text-white text-xs">{savingFeishuConfig ? "保存中..." : "保存飞书配置"}</button>
-                      <button type="button" onClick={retryFeishuConnection} disabled={retryingFeishuConnection} className="h-8 px-3 rounded border border-blue-200 hover:bg-blue-50 disabled:bg-gray-100 text-blue-700 text-xs">{retryingFeishuConnection ? "重试中..." : "重试连接"}</button>
-                    </div>
-                  </div>
+                  <ConnectorConfigPanel
+                    schema={feishuConnectorSchema}
+                    status={selectedEmployeeFeishuStatus}
+                    values={feishuForm}
+                    saving={savingFeishuConfig}
+                    retrying={retryingFeishuConnection}
+                    diagnostics={selectedConnectorDiagnostics}
+                    onChange={(key, value) => setFeishuForm((s) => ({ ...s, [key]: value }))}
+                    onSave={saveFeishuConfig}
+                    onRetry={retryFeishuConnection}
+                  />
                 )}
 
                 <div className="rounded-lg border border-gray-200 p-3 space-y-2">

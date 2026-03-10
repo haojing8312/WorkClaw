@@ -103,5 +103,6 @@ describe("EmployeeHubView thread binding removal", () => {
     expect(calledCommands).not.toContain("list_recent_im_threads");
     expect(calledCommands).not.toContain("get_thread_employee_bindings");
     expect(calledCommands).not.toContain("bind_thread_employees");
+    expect(screen.getByTestId("connector-panel-feishu")).toBeInTheDocument();
   });
 });

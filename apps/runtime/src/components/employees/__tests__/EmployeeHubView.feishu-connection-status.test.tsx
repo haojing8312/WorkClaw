@@ -116,6 +116,11 @@ describe("EmployeeHubView feishu connection status", () => {
     expect(screen.getByTestId("employee-connection-dot-emp-green")).toHaveClass("bg-emerald-500");
     expect(screen.getByTestId("employee-connection-dot-emp-red")).toHaveClass("bg-red-500");
     expect(screen.getByTestId("employee-connection-dot-emp-gray")).toHaveClass("bg-gray-300");
+    expect(screen.getByTestId("connector-panel-feishu")).toBeInTheDocument();
+    expect(screen.getByTestId("connector-diagnostics-feishu")).toBeInTheDocument();
+    expect(screen.getByText("渠道连接器 / 飞书")).toBeInTheDocument();
+    expect(screen.getByText("重连次数")).toBeInTheDocument();
+    expect(screen.getByText("3")).toBeInTheDocument();
     expect(screen.getByText("auth failed")).toBeInTheDocument();
   });
 });

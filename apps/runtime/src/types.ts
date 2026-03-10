@@ -534,6 +534,7 @@ export interface ImRoutingBinding {
   guild_id: string;
   team_id: string;
   role_ids: string[];
+  connector_meta?: Record<string, unknown>;
   priority: number;
   enabled: boolean;
   created_at: string;
@@ -550,57 +551,7 @@ export interface UpsertImRoutingBindingInput {
   guild_id: string;
   team_id: string;
   role_ids: string[];
-  priority: number;
-  enabled: boolean;
-}
-
-export interface ImRouteSimulationPayload {
-  channel: string;
-  account_id: string;
-  peer: {
-    kind: "group" | "channel" | "direct";
-    id: string;
-  };
-  default_agent_id: string;
-  bindings: Array<{
-    agentId: string;
-    match: {
-      channel: string;
-      accountId?: string;
-      peer?: { kind: "group" | "channel" | "direct"; id: string };
-      guildId?: string;
-      teamId?: string;
-      roles?: string[];
-    };
-  }>;
-}
-
-export interface ImRoutingBinding {
-  id: string;
-  agent_id: string;
-  channel: string;
-  account_id: string;
-  peer_kind: string;
-  peer_id: string;
-  guild_id: string;
-  team_id: string;
-  role_ids: string[];
-  priority: number;
-  enabled: boolean;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface UpsertImRoutingBindingInput {
-  id?: string;
-  agent_id: string;
-  channel: string;
-  account_id: string;
-  peer_kind: string;
-  peer_id: string;
-  guild_id: string;
-  team_id: string;
-  role_ids: string[];
+  connector_meta?: Record<string, unknown>;
   priority: number;
   enabled: boolean;
 }

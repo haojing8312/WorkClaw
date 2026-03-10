@@ -10,12 +10,14 @@ async fn list_recent_threads_returns_latest_per_thread() {
     process_im_event(
         &pool,
         ImEvent {
+            channel: "feishu".to_string(),
             event_type: ImEventType::MessageCreated,
             thread_id: "chat-a".to_string(),
             event_id: Some("evt-a-1".to_string()),
             message_id: Some("msg-a-1".to_string()),
             text: Some("hello a1".to_string()),
             role_id: None,
+            account_id: None,
             tenant_id: None,
         },
     )
@@ -25,12 +27,14 @@ async fn list_recent_threads_returns_latest_per_thread() {
     process_im_event(
         &pool,
         ImEvent {
+            channel: "feishu".to_string(),
             event_type: ImEventType::MessageCreated,
             thread_id: "chat-b".to_string(),
             event_id: Some("evt-b-1".to_string()),
             message_id: Some("msg-b-1".to_string()),
             text: Some("hello b1".to_string()),
             role_id: None,
+            account_id: None,
             tenant_id: None,
         },
     )
@@ -40,12 +44,14 @@ async fn list_recent_threads_returns_latest_per_thread() {
     process_im_event(
         &pool,
         ImEvent {
+            channel: "feishu".to_string(),
             event_type: ImEventType::MessageCreated,
             thread_id: "chat-a".to_string(),
             event_id: Some("evt-a-2".to_string()),
             message_id: Some("msg-a-2".to_string()),
             text: Some("hello a2".to_string()),
             role_id: None,
+            account_id: None,
             tenant_id: None,
         },
     )

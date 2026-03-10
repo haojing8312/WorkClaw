@@ -22,6 +22,7 @@ const blankRule: UpsertImRoutingBindingInput = {
   guild_id: "",
   team_id: "",
   role_ids: [],
+  connector_meta: {},
   priority: 100,
   enabled: true,
 };
@@ -89,6 +90,10 @@ export function FeishuRoutingWizard({ bindings, onSaveRule, onDeleteRule, onSimu
         peer_kind: rule.peer_kind.trim().toLowerCase(),
         peer_id: rule.peer_id.trim(),
         role_ids: rule.role_ids.map((x) => x.trim()).filter(Boolean),
+        connector_meta: {
+          ...(rule.connector_meta || {}),
+          connector_id: "feishu",
+        },
       });
       setRule(blankRule);
       setMessage("路由规则已保存");
@@ -122,6 +127,7 @@ export function FeishuRoutingWizard({ bindings, onSaveRule, onDeleteRule, onSimu
             guild_id: item.guild_id,
             team_id: item.team_id,
             role_ids: item.role_ids,
+            connector_meta: item.connector_meta || {},
             priority: item.priority,
             enabled: item.enabled,
           })),
@@ -139,7 +145,7 @@ export function FeishuRoutingWizard({ bindings, onSaveRule, onDeleteRule, onSimu
 
   return (
     <div className="bg-white rounded-lg p-4 space-y-3">
-      <div className="text-xs font-medium text-gray-500">飞书路由规则向导</div>
+      <div className="text-xs font-medium text-gray-500">渠道连接器路由向导（当前：飞书）</div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
         <input
           className="w-full border border-gray-200 rounded px-2 py-1.5 text-sm"

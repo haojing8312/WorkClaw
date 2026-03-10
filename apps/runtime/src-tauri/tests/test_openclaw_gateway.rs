@@ -66,6 +66,22 @@ fn parse_openclaw_payload_extracts_mentioned_role() {
     assert_eq!(evt.role_id.as_deref(), Some("architect"));
 }
 
+#[test]
+fn parse_openclaw_payload_keeps_channel_and_account_metadata() {
+    let raw = r#"{
+      "channel": "discord",
+      "event_type": "message.created",
+      "thread_id": "discord-thread-1",
+      "account_id": "guild-account-9",
+      "tenant_id": "legacy-tenant"
+    }"#;
+
+    let evt = parse_openclaw_payload(raw).expect("payload should parse");
+    assert_eq!(evt.channel, "discord");
+    assert_eq!(evt.thread_id, "discord-thread-1");
+    assert_eq!(evt.account_id.as_deref(), Some("guild-account-9"));
+}
+
 #[tokio::test]
 async fn validate_openclaw_auth_honors_configured_token() {
     let (pool, _tmp) = helpers::setup_test_db().await;
@@ -199,6 +215,7 @@ async fn resolve_route_prefers_peer_binding() {
             guild_id: "".to_string(),
             team_id: "".to_string(),
             role_ids: vec![],
+            connector_meta: serde_json::json!({}),
             priority: 200,
             enabled: true,
         },
@@ -218,6 +235,7 @@ async fn resolve_route_prefers_peer_binding() {
             guild_id: "".to_string(),
             team_id: "".to_string(),
             role_ids: vec![],
+            connector_meta: serde_json::json!({}),
             priority: 100,
             enabled: true,
         },
@@ -228,12 +246,14 @@ async fn resolve_route_prefers_peer_binding() {
     let route = resolve_openclaw_route_with_pool(
         &pool,
         &ImEvent {
+            channel: "feishu".to_string(),
             event_type: ImEventType::MessageCreated,
             thread_id: "chat-1".to_string(),
             event_id: Some("evt-rt-1".to_string()),
             message_id: Some("msg-rt-1".to_string()),
             text: Some("hello".to_string()),
             role_id: None,
+            account_id: Some("tenant-a".to_string()),
             tenant_id: Some("tenant-a".to_string()),
         },
     )

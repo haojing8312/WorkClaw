@@ -162,6 +162,7 @@ pub fn parse_feishu_payload(payload: &str) -> Result<ParsedFeishuPayload, String
     };
 
     Ok(ParsedFeishuPayload::Event(ImEvent {
+        channel: "feishu".to_string(),
         event_type,
         thread_id: message
             .chat_id
@@ -170,6 +171,7 @@ pub fn parse_feishu_payload(payload: &str) -> Result<ParsedFeishuPayload, String
         message_id: message.message_id,
         text: content_text,
         role_id,
+        account_id: header.tenant_key.clone(),
         tenant_id: header.tenant_key.or_else(|| {
             event
                 .sender
@@ -1108,6 +1110,7 @@ async fn sync_feishu_ws_events_core(
             source_employee_ids.push(e.employee_id.trim().to_string());
         }
         let inbound = ImEvent {
+            channel: "feishu".to_string(),
             event_type: ImEventType::MessageCreated,
             thread_id: e.chat_id.clone(),
             event_id: Some(e.id.clone()),
@@ -1125,6 +1128,11 @@ async fn sync_feishu_ws_events_core(
                 &source_employee_ids,
                 &enabled_employees,
             ),
+            account_id: if e.sender_open_id.trim().is_empty() {
+                None
+            } else {
+                Some(e.sender_open_id.clone())
+            },
             tenant_id: if e.sender_open_id.trim().is_empty() {
                 None
             } else {

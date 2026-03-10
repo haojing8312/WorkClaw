@@ -141,12 +141,14 @@ async fn feishu_thread_multi_role_collaboration_e2e() {
     let callback_result = process_im_event(
         &pool,
         ImEvent {
+            channel: "feishu".to_string(),
             event_type: ImEventType::MessageCreated,
             thread_id: "thread-e2e-1".to_string(),
             event_id: Some("evt-e2e-1".to_string()),
             message_id: Some("msg-e2e-1".to_string()),
             text: Some("请评估这个商机".to_string()),
             role_id: None,
+            account_id: None,
             tenant_id: Some("tenant-a".to_string()),
         },
     )

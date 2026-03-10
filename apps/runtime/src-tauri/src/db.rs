@@ -258,6 +258,7 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
             guild_id TEXT NOT NULL DEFAULT '',
             team_id TEXT NOT NULL DEFAULT '',
             role_ids_json TEXT NOT NULL DEFAULT '[]',
+            connector_meta_json TEXT NOT NULL DEFAULT '{}',
             priority INTEGER NOT NULL DEFAULT 100,
             enabled INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL,
@@ -278,6 +279,7 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
             guild_id TEXT NOT NULL DEFAULT '',
             team_id TEXT NOT NULL DEFAULT '',
             role_ids_json TEXT NOT NULL DEFAULT '[]',
+            connector_meta_json TEXT NOT NULL DEFAULT '{}',
             priority INTEGER NOT NULL DEFAULT 100,
             enabled INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL,
@@ -286,6 +288,12 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
     )
     .execute(&pool)
     .await?;
+
+    let _ = sqlx::query(
+        "ALTER TABLE im_routing_bindings ADD COLUMN connector_meta_json TEXT NOT NULL DEFAULT '{}'",
+    )
+    .execute(&pool)
+    .await;
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS im_inbox_events (

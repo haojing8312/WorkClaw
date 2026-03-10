@@ -164,6 +164,61 @@ async fn spawn_mock_sidecar_with_priority(
 }
 
 #[tokio::test]
+async fn resolve_route_uses_event_channel_instead_of_feishu_default() {
+    let (pool, _tmp) = helpers::setup_test_db().await;
+    let (base_url, server_task) = spawn_mock_sidecar_with_priority(1).await;
+    sqlx::query(
+        "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('feishu_sidecar_base_url', ?)",
+    )
+    .bind(&base_url)
+    .execute(&pool)
+    .await
+    .expect("seed sidecar base");
+
+    upsert_im_routing_binding_with_pool(
+        &pool,
+        UpsertImRoutingBindingInput {
+            id: None,
+            agent_id: "discord-agent".to_string(),
+            channel: "discord".to_string(),
+            account_id: "*".to_string(),
+            peer_kind: "".to_string(),
+            peer_id: "".to_string(),
+            guild_id: "".to_string(),
+            team_id: "".to_string(),
+            role_ids: vec![],
+            connector_meta: serde_json::json!({}),
+            priority: 100,
+            enabled: true,
+        },
+    )
+    .await
+    .expect("seed discord binding");
+
+    let out = resolve_openclaw_route_with_pool(
+        &pool,
+        &ImEvent {
+            channel: "discord".to_string(),
+            event_type: ImEventType::MessageCreated,
+            thread_id: "discord-room-1".to_string(),
+            event_id: Some("evt-discord".to_string()),
+            message_id: Some("msg-discord".to_string()),
+            text: Some("hello".to_string()),
+            role_id: None,
+            account_id: Some("tenant-discord".to_string()),
+            tenant_id: Some("tenant-discord".to_string()),
+        },
+    )
+    .await
+    .expect("resolve route");
+
+    assert_eq!(out["agentId"], "discord-agent");
+    assert_eq!(out["matchedBy"], "binding.channel");
+
+    server_task.await.expect("mock sidecar task");
+}
+
+#[tokio::test]
 async fn route_regression_vectors_match_expected_priority() {
     let (pool, _tmp) = helpers::setup_test_db().await;
     let vectors = vec![
@@ -218,6 +273,7 @@ async fn route_regression_vectors_match_expected_priority() {
                     guild_id: "".to_string(),
                     team_id: "".to_string(),
                     role_ids: vec![],
+                    connector_meta: serde_json::json!({}),
                     priority: 300,
                     enabled: true,
                 },
@@ -239,6 +295,7 @@ async fn route_regression_vectors_match_expected_priority() {
                     guild_id: "".to_string(),
                     team_id: "".to_string(),
                     role_ids: vec![],
+                    connector_meta: serde_json::json!({}),
                     priority: 200,
                     enabled: true,
                 },
@@ -260,6 +317,7 @@ async fn route_regression_vectors_match_expected_priority() {
                     guild_id: "".to_string(),
                     team_id: "".to_string(),
                     role_ids: vec![],
+                    connector_meta: serde_json::json!({}),
                     priority: 100,
                     enabled: true,
                 },
@@ -271,12 +329,14 @@ async fn route_regression_vectors_match_expected_priority() {
         let out = resolve_openclaw_route_with_pool(
             &pool,
             &ImEvent {
+                channel: "feishu".to_string(),
                 event_type: ImEventType::MessageCreated,
                 thread_id: thread_id.to_string(),
                 event_id: Some(format!("evt-{}", name)),
                 message_id: Some(format!("msg-{}", name)),
                 text: Some("hello".to_string()),
                 role_id: None,
+                account_id: Some(tenant_id.to_string()),
                 tenant_id: Some(tenant_id.to_string()),
             },
         )

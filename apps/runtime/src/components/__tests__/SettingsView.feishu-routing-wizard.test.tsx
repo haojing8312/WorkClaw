@@ -59,10 +59,10 @@ describe("SettingsView feishu routing wizard", () => {
   test("saves routing rule from wizard and can run simulation", async () => {
     render(<SettingsView onClose={() => {}} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "飞书协作" }));
+    fireEvent.click(screen.getByRole("button", { name: "渠道连接器" }));
 
     await waitFor(() => {
-      expect(screen.getByText("飞书路由规则向导")).toBeInTheDocument();
+      expect(screen.getByText("渠道连接器路由向导（当前：飞书）")).toBeInTheDocument();
     });
 
     fireEvent.change(screen.getByPlaceholderText("agent_id（如 main）"), {

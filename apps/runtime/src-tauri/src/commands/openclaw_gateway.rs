@@ -36,11 +36,13 @@ pub fn parse_openclaw_payload(payload: &str) -> Result<ImEvent, String> {
 
 #[derive(Debug, Clone, serde::Deserialize)]
 struct OpenClawRawEvent {
+    channel: Option<String>,
     event_type: Option<String>,
     event_id: Option<String>,
     thread_id: Option<String>,
     message_id: Option<String>,
     text: Option<String>,
+    account_id: Option<String>,
     tenant_id: Option<String>,
     mention_role: Option<String>,
     message: Option<OpenClawMessage>,
@@ -101,12 +103,14 @@ fn map_raw_event(raw: OpenClawRawEvent) -> Result<ImEvent, String> {
     });
 
     Ok(ImEvent {
+        channel: raw.channel.unwrap_or_else(|| "feishu".to_string()),
         event_type,
         thread_id,
         event_id: raw.event_id,
         message_id,
         text,
         role_id,
+        account_id: raw.account_id.clone().or_else(|| raw.tenant_id.clone()),
         tenant_id: raw.tenant_id.or_else(|| raw.sender.and_then(|s| s.id)),
     })
 }
@@ -232,8 +236,8 @@ pub async fn resolve_openclaw_route_with_pool(
     let bindings = list_im_routing_bindings_with_pool(pool).await?;
     let default_agent_id = "main";
     let body = serde_json::json!({
-        "channel": "feishu",
-        "account_id": event.tenant_id.clone().unwrap_or_default(),
+        "channel": if event.channel.trim().is_empty() { "feishu" } else { event.channel.trim() },
+        "account_id": event.account_id.clone().or_else(|| event.tenant_id.clone()).unwrap_or_default(),
         "peer": {
             "kind": "group",
             "id": event.thread_id.clone(),
