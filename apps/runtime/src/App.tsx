@@ -2605,7 +2605,6 @@ export default function App() {
                 onSetAsMainAndEnter={handleSetAsMainAndEnter}
                 onStartTaskWithEmployee={handleStartTaskWithEmployee}
                 onOpenGroupRunSession={handleOpenGroupRunSession}
-<<<<<<< HEAD
                 onEmployeeGroupsChanged={() => {
                   void loadEmployeeGroups();
                 }}
