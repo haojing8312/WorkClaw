@@ -5,19 +5,19 @@ import { StreamItem, ToolCallInfo } from "../types";
 
 /** 工具名 → 人性化描述 */
 const TOOL_LABELS: Record<string, string> = {
-  read_file: "正在读取文件",
-  write_file: "正在写入文件",
-  edit: "正在编辑文件",
-  glob: "正在搜索文件",
-  grep: "正在搜索内容",
-  bash: "正在执行命令",
-  web_search: "正在搜索网页",
-  web_fetch: "正在获取网页",
-  task: "子任务执行中",
-  todo_write: "正在更新任务",
-  memory: "正在访问记忆",
+  read_file: "读取文件",
+  write_file: "写入文件",
+  edit: "编辑文件",
+  glob: "搜索文件",
+  grep: "搜索内容",
+  bash: "执行命令",
+  web_search: "网页搜索",
+  web_fetch: "获取网页",
+  task: "子任务",
+  todo_write: "更新任务",
+  memory: "访问记忆",
   ask_user: "等待用户回复",
-  compact: "正在压缩上下文",
+  compact: "压缩上下文",
 };
 
 /** 提取工具调用的关键参数摘要 */
@@ -37,6 +37,17 @@ function getParamSummary(tc: ToolCallInfo): string {
   return "";
 }
 
+function getToolStatusLabel(tc: ToolCallInfo): string {
+  const baseLabel = TOOL_LABELS[tc.name] || tc.name;
+  if (tc.status === "error") {
+    return `${baseLabel}失败`;
+  }
+  if (tc.status === "running") {
+    return `正在${baseLabel}`;
+  }
+  return baseLabel;
+}
+
 interface ToolIslandProps {
   /** 当前批次的工具调用 items（仅 type==="tool_call"） */
   toolCalls: ToolCallInfo[];
@@ -52,12 +63,18 @@ export function ToolIsland({ toolCalls, isRunning, subAgentBuffer }: ToolIslandP
 
   const completed = toolCalls.filter((tc) => tc.status !== "running").length;
   const total = toolCalls.length;
+  const errorCount = toolCalls.filter((tc) => tc.status === "error").length;
   const current = toolCalls.find((tc) => tc.status === "running");
   const currentLabel = current
-    ? TOOL_LABELS[current.name] || `正在执行 ${current.name}`
+    ? `${getToolStatusLabel(current)}${getParamSummary(current) ? ` · ${getParamSummary(current)}` : ""}`
     : null;
 
   const allDone = !isRunning && total > 0;
+  const summaryLabel = isRunning
+    ? currentLabel || "正在处理步骤"
+    : errorCount > 0
+    ? `已完成 ${completed} 个步骤，${errorCount} 个待处理`
+    : `已完成 ${total} 个步骤`;
 
   return (
     <motion.div
@@ -92,9 +109,7 @@ export function ToolIsland({ toolCalls, isRunning, subAgentBuffer }: ToolIslandP
 
           {/* 描述文字 */}
           <span className="flex-1 text-xs font-medium text-gray-700 truncate">
-            {isRunning
-              ? currentLabel || "执行中..."
-              : `已执行 ${total} 个操作`}
+            {summaryLabel}
           </span>
 
           {/* 进度计数 */}
@@ -161,8 +176,8 @@ export function ToolIsland({ toolCalls, isRunning, subAgentBuffer }: ToolIslandP
                         </svg>
                       )}
                       {/* 工具名 */}
-                      <span className="font-mono text-gray-600 w-20 truncate flex-shrink-0">
-                        {tc.name === "task" ? "子任务" : tc.name}
+                      <span className="text-gray-700 w-20 truncate flex-shrink-0">
+                        {getToolStatusLabel(tc)}
                       </span>
                       {/* 参数摘要 */}
                       <span className="text-gray-400 truncate flex-1">
