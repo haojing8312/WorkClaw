@@ -128,6 +128,26 @@ function inferCurrentTaskTitle(toolCalls: ToolCallInfo[]): string {
   return "处理中";
 }
 
+function buildRunningToolTitle(toolCall: ToolCallInfo | undefined): string {
+  if (!toolCall) return "";
+  if (toolCall.name === "bash") {
+    const command = String(toolCall.input?.command || "").trim();
+    if (!command) return "执行命令：bash";
+    const compact = command.length > 48 ? `${command.slice(0, 48)}...` : command;
+    return `执行命令：${compact}`;
+  }
+  if (toolCall.name === "web_search") {
+    return "搜索资料";
+  }
+  if (toolCall.name === "write_file" || toolCall.name === "edit") {
+    return "生成交付文件";
+  }
+  if (toolCall.name === "todo_write") {
+    return "更新任务清单";
+  }
+  return `执行工具：${toolCall.name}`;
+}
+
 function extractDomain(url: string): string {
   try {
     return new URL(url).hostname;
@@ -200,30 +220,22 @@ export function buildTaskPanelViewModel(messages: Message[]): TaskPanelViewModel
     status: normalizeTaskStatus(todo?.status),
     priority: String(todo?.priority || "medium"),
   }));
-  const fallbackJourney = buildTaskJourneyViewModel(messages);
-  const fallbackItems: TaskItemView[] = fallbackJourney.steps
-    .filter((step) => step.kind !== "error")
-    .map((step, index) => ({
-      id: step.id || `journey-${index}`,
-      title: step.title,
-      status: step.status === "running" ? "in_progress" : "completed",
-      priority: "medium",
-    }));
-  const items = todoItems.length > 0 ? todoItems : fallbackItems;
+  const latestRunningTool = [...toolCalls].reverse().find((tc) => tc.status === "running");
+  const items = todoItems;
   const completedTasks = items.filter((item) => item.status === "completed").length;
   const inProgressItems = items.filter((item) => item.status === "in_progress");
   const touchedFiles = extractSessionTouchedFiles(messages);
   const webSearches = buildWebSearchViewModel(messages);
 
   return {
-    hasTodoList: items.length > 0,
+    hasTodoList: todoItems.length > 0,
     totalTasks: items.length,
     completedTasks,
     inProgressTasks: inProgressItems.length,
     currentTaskTitle:
+      buildRunningToolTitle(latestRunningTool) ||
       inProgressItems[0]?.title ||
       items.find((item) => item.status === "pending")?.title ||
-      fallbackJourney.currentTaskTitle ||
       "",
     items,
     touchedFileCount: touchedFiles.length,

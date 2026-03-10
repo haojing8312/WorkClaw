@@ -5,14 +5,37 @@ interface TaskPanelProps {
 }
 
 export function TaskPanel({ model }: TaskPanelProps) {
+  const taskListStatus =
+    !model.hasTodoList
+      ? { label: "未建清单", className: "bg-gray-100 text-gray-600" }
+      : model.inProgressTasks > 0
+      ? { label: "进行中", className: "bg-blue-100 text-blue-700" }
+      : { label: "已完成", className: "bg-emerald-100 text-emerald-700" };
+
   return (
     <div className="space-y-4">
       <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
-        <div className="text-xs font-medium text-gray-500">当前任务</div>
+        <div className="text-xs font-medium text-gray-500">当前步骤</div>
+        <div className="mt-2 text-base font-semibold text-gray-900">{model.currentTaskTitle || "暂无执行中的步骤"}</div>
+      </div>
+
+      <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+        <div className="flex items-center justify-between gap-3">
+          <div className="text-xs font-medium text-gray-500">当前任务</div>
+          <span className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${taskListStatus.className}`}>
+            {taskListStatus.label}
+          </span>
+        </div>
         {model.hasTodoList ? (
           <>
-            <div className="mt-2 text-sm text-gray-500">当前执行项</div>
-            <div className="text-base font-semibold text-gray-900">{model.currentTaskTitle || "暂无进行中的任务"}</div>
+            <div className="mt-2 text-base font-semibold text-gray-900">
+              {model.inProgressTasks > 0 ? "任务清单进行中" : "任务清单已完成"}
+            </div>
+            <div className="mt-1 text-sm text-gray-500">
+              {model.inProgressTasks > 0
+                ? `共有 ${model.inProgressTasks} 个任务项正在推进，${model.completedTasks} 个已完成`
+                : `当前会话已有结构化任务清单，${model.completedTasks} 个任务项已完成`}
+            </div>
           </>
         ) : (
           <>
@@ -86,7 +109,14 @@ export function TaskPanel({ model }: TaskPanelProps) {
                   {item.status === "completed" ? "✓" : item.status === "in_progress" ? "•" : "○"}
                 </span>
                 <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-medium text-gray-800">{item.title}</div>
+                  <div className="flex items-center gap-2">
+                    <div className="truncate text-sm font-medium text-gray-800">{item.title}</div>
+                    {item.status === "in_progress" && (
+                      <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-medium text-blue-700">
+                        当前
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
             ))}

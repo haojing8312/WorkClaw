@@ -268,17 +268,56 @@ describe("chat side panel view-model", () => {
       },
     ]);
 
-    expect(model.hasTodoList).toBe(true);
-    expect(model.currentTaskTitle).toBe("生成交付文件");
-    expect(model.items).toEqual([
-      expect.objectContaining({
-        title: "已完成资料搜索",
-        status: "completed",
-      }),
-      expect.objectContaining({
-        title: "已生成交付文件",
-        status: "completed",
-      }),
+    expect(model.hasTodoList).toBe(false);
+    expect(model.totalTasks).toBe(0);
+    expect(model.completedTasks).toBe(0);
+    expect(model.inProgressTasks).toBe(0);
+    expect(model.currentTaskTitle).toBe("");
+    expect(model.items).toEqual([]);
+  });
+
+  test("prefers the latest running tool as current execution item while keeping todo counts", () => {
+    const model = buildTaskPanelViewModel([
+      {
+        role: "assistant",
+        content: "",
+        created_at: new Date().toISOString(),
+        streamItems: [
+          {
+            type: "tool_call",
+            toolCall: {
+              id: "todo-1",
+              name: "todo_write",
+              input: {
+                todos: [
+                  { id: "a", content: "搜索资料", status: "completed", priority: "high" },
+                  { id: "b", content: "安装 ClawHub", status: "completed", priority: "high" },
+                ],
+              },
+              status: "completed",
+              output: "ok",
+            },
+          },
+          {
+            type: "tool_call",
+            toolCall: {
+              id: "bash-1",
+              name: "bash",
+              input: {
+                command: "npm cache clean --force && npm install -g n --force",
+              },
+              status: "running",
+              output: "",
+            },
+          },
+        ],
+      },
     ]);
+
+    expect(model.hasTodoList).toBe(true);
+    expect(model.totalTasks).toBe(2);
+    expect(model.completedTasks).toBe(2);
+    expect(model.inProgressTasks).toBe(0);
+    expect(model.currentTaskTitle).toContain("bash");
   });
 });
