@@ -14,6 +14,8 @@ pub struct ImRoutingBinding {
     pub guild_id: String,
     pub team_id: String,
     pub role_ids: Vec<String>,
+    #[serde(default)]
+    pub connector_meta: serde_json::Value,
     pub priority: i64,
     pub enabled: bool,
     pub created_at: String,
@@ -31,6 +33,8 @@ pub struct UpsertImRoutingBindingInput {
     pub guild_id: String,
     pub team_id: String,
     pub role_ids: Vec<String>,
+    #[serde(default)]
+    pub connector_meta: serde_json::Value,
     pub priority: i64,
     pub enabled: bool,
 }
@@ -59,13 +63,14 @@ pub async fn list_im_routing_bindings_with_pool(
             String,
             String,
             String,
+            String,
             i64,
             i64,
             String,
             String,
         ),
     >(
-        "SELECT id, agent_id, channel, account_id, peer_kind, peer_id, guild_id, team_id, role_ids_json, priority, enabled, created_at, updated_at
+        "SELECT id, agent_id, channel, account_id, peer_kind, peer_id, guild_id, team_id, role_ids_json, COALESCE(connector_meta_json, '{}'), priority, enabled, created_at, updated_at
          FROM im_routing_bindings
          ORDER BY priority ASC, updated_at DESC",
     )
@@ -84,6 +89,7 @@ pub async fn list_im_routing_bindings_with_pool(
         guild_id,
         team_id,
         role_ids_json,
+        connector_meta_json,
         priority,
         enabled,
         created_at,
@@ -92,6 +98,9 @@ pub async fn list_im_routing_bindings_with_pool(
     {
         let role_ids =
             serde_json::from_str::<Vec<String>>(&role_ids_json).unwrap_or_else(|_| Vec::new());
+        let connector_meta =
+            serde_json::from_str::<serde_json::Value>(&connector_meta_json)
+                .unwrap_or_else(|_| serde_json::json!({}));
         out.push(ImRoutingBinding {
             id,
             agent_id,
@@ -102,6 +111,7 @@ pub async fn list_im_routing_bindings_with_pool(
             guild_id,
             team_id,
             role_ids,
+            connector_meta,
             priority,
             enabled: enabled != 0,
             created_at,
@@ -129,12 +139,14 @@ pub async fn upsert_im_routing_binding_with_pool(
     let now = chrono::Utc::now().to_rfc3339();
     let role_ids_json =
         serde_json::to_string(&normalize_role_ids(&input.role_ids)).map_err(|e| e.to_string())?;
+    let connector_meta_json =
+        serde_json::to_string(&input.connector_meta).map_err(|e| e.to_string())?;
 
     sqlx::query(
         "INSERT INTO im_routing_bindings (
             id, agent_id, channel, account_id, peer_kind, peer_id, guild_id, team_id,
-            role_ids_json, priority, enabled, created_at, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            role_ids_json, connector_meta_json, priority, enabled, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
             agent_id = excluded.agent_id,
             channel = excluded.channel,
@@ -144,6 +156,7 @@ pub async fn upsert_im_routing_binding_with_pool(
             guild_id = excluded.guild_id,
             team_id = excluded.team_id,
             role_ids_json = excluded.role_ids_json,
+            connector_meta_json = excluded.connector_meta_json,
             priority = excluded.priority,
             enabled = excluded.enabled,
             updated_at = excluded.updated_at",
@@ -157,6 +170,7 @@ pub async fn upsert_im_routing_binding_with_pool(
     .bind(input.guild_id.trim())
     .bind(input.team_id.trim())
     .bind(role_ids_json)
+    .bind(connector_meta_json)
     .bind(input.priority)
     .bind(if input.enabled { 1 } else { 0 })
     .bind(&now)

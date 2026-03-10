@@ -233,6 +233,7 @@ pub async fn setup_test_db() -> (SqlitePool, TempDir) {
             guild_id TEXT NOT NULL DEFAULT '',
             team_id TEXT NOT NULL DEFAULT '',
             role_ids_json TEXT NOT NULL DEFAULT '[]',
+            connector_meta_json TEXT NOT NULL DEFAULT '{}',
             priority INTEGER NOT NULL DEFAULT 100,
             enabled INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL,
