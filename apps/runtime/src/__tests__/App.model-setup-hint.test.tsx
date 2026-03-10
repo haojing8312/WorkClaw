@@ -557,7 +557,7 @@ describe("App model setup hint", () => {
     expect(screen.queryByTestId("model-setup-hint")).not.toBeInTheDocument();
   });
 
-  test("can open quick setup directly from dev settings tools", async () => {
+  test("can reopen the first-use model setup gate from dev settings tools", async () => {
     window.localStorage.setItem(INITIAL_MODEL_SETUP_COMPLETED_KEY, "1");
     render(<App />);
 
@@ -574,7 +574,7 @@ describe("App model setup hint", () => {
     fireEvent.click(screen.getByText("open-dev-quick-setup"));
 
     await waitFor(() => {
-      expect(screen.getByTestId("quick-model-setup-dialog")).toBeInTheDocument();
+      expect(screen.getByTestId("model-setup-gate")).toBeInTheDocument();
     });
   });
 });

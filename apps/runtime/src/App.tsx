@@ -304,7 +304,7 @@ export default function App() {
   const isBlockingInitialModelSetup = models.length === 0 && !showSettings && !hasCompletedInitialModelSetup;
   const isBlockingInitialSearchSetup = searchConfigs.length === 0 && !showSettings && !hasCompletedInitialSearchSetup;
   const isBlockingInitialSetup = isBlockingInitialModelSetup || isBlockingInitialSearchSetup;
-  const canDismissQuickModelSetup = !quickModelSaving && !quickModelTesting && !isBlockingInitialSetup;
+  const canDismissQuickModelSetup = !quickModelSaving && !quickModelTesting && !isBlockingInitialModelSetup;
   const canDismissQuickSearchSetup = !quickSearchSaving && !quickSearchTesting && !isBlockingInitialSetup;
   const selectedQuickModelProvider = getModelProviderCatalogItem(quickModelPresetKey);
   const selectedQuickSearchProvider = getSearchProviderCatalogItem(quickSearchPresetKey);
@@ -764,7 +764,8 @@ export default function App() {
   }
 
   async function loadSearchConfigs() {
-    const list = await invoke<ModelConfig[]>("list_search_configs");
+    const raw = await invoke<ModelConfig[] | null>("list_search_configs");
+    const list = Array.isArray(raw) ? raw : [];
     setSearchConfigs(list);
   }
 
