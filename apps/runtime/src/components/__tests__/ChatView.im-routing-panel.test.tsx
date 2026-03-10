@@ -81,7 +81,7 @@ describe("ChatView IM routing panel", () => {
     });
   });
 
-  test("shows routing timeline events for role collaboration", async () => {
+  test("shows routing collaboration signals in chat area", async () => {
     render(
       <ChatView
         skill={{
@@ -148,20 +148,11 @@ describe("ChatView IM routing panel", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText(/已自动路由 1 个子 Skill/)).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByText(/已自动路由 1 个子 Skill/));
-
-    await waitFor(() => {
-      expect(screen.getByText("IM 协作时间线")).toBeInTheDocument();
-      expect(screen.getAllByText("架构师").length).toBeGreaterThan(0);
-      expect(screen.getByText("正在评估技术可行性")).toBeInTheDocument();
-      expect(screen.getByText("任务已分发(plan) -> 架构师")).toBeInTheDocument();
-      expect(screen.getByText("路由决策")).toBeInTheDocument();
-      expect(screen.getByText("agent: peer-agent")).toBeInTheDocument();
-      expect(screen.getByText("matched_by: binding.peer")).toBeInTheDocument();
-      expect(screen.getByText("session_key: agent:peer-agent:main")).toBeInTheDocument();
+      expect(screen.getByTestId("team-collab-status-bar")).toHaveTextContent("主员工");
+      expect(screen.getByTestId("team-collab-status-bar")).toHaveTextContent("架构师");
+      expect(screen.getByTestId("group-orchestration-board")).toHaveTextContent("架构师");
+      expect(screen.getByText("主员工 已将任务分配给 架构师")).toBeInTheDocument();
+      expect(screen.getByText("执行中")).toBeInTheDocument();
     });
   });
 
@@ -206,7 +197,7 @@ describe("ChatView IM routing panel", () => {
     });
   });
 
-  test("shows main/sub employee badges in IM timeline", async () => {
+  test("keeps the redesigned side panel available during IM routing events", async () => {
     render(
       <ChatView
         skill={{
@@ -262,11 +253,12 @@ describe("ChatView IM routing panel", () => {
       });
     });
 
-    fireEvent.click(screen.getByText(/已自动路由 1 个子 Skill/));
+    fireEvent.click(screen.getByRole("button", { name: "面板" }));
 
     await waitFor(() => {
-      expect(screen.getByText("主员工")).toBeInTheDocument();
-      expect(screen.getByText("子员工")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "当前任务" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "文件" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Web 搜索" })).toBeInTheDocument();
     });
   });
 

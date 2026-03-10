@@ -371,6 +371,8 @@ pub fn run() {
             commands::mcp::remove_mcp_server,
             commands::dialog::select_directory,
             commands::dialog::open_external_url,
+            commands::workspace_files::list_workspace_files,
+            commands::workspace_files::read_workspace_file_preview,
             commands::packaging::read_skill_dir,
             commands::packaging::scan_workclaw_dirs,
             commands::packaging::update_skill_dir_tags,

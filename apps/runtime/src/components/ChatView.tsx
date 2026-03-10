@@ -5,11 +5,19 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
-import { SkillManifest, ModelConfig, Message, StreamItem, FileAttachment, SkillRouteEvent, ImRoleTimelineEvent, ImRoleDispatchRequest, ImRouteDecisionEvent, EmployeeGroupRunSnapshot, EmployeeGroup, EmployeeGroupRule } from "../types";
-import { motion, AnimatePresence } from "framer-motion";
+import { SkillManifest, ModelConfig, Message, StreamItem, FileAttachment, ImRoleTimelineEvent, ImRoleDispatchRequest, EmployeeGroupRunSnapshot, EmployeeGroup, EmployeeGroupRule } from "../types";
+import { motion } from "framer-motion";
 import { ToolIsland } from "./ToolIsland";
 import { RiskConfirmDialog } from "./RiskConfirmDialog";
 import { useImmersiveTranslation } from "../hooks/useImmersiveTranslation";
+import { ChatWorkspaceSidePanel } from "./chat-side-panel/ChatWorkspaceSidePanel";
+import {
+  buildTaskJourneyViewModel,
+  buildTaskPanelViewModel,
+  buildWebSearchViewModel,
+  extractSessionTouchedFiles,
+} from "./chat-side-panel/view-model";
+import { TaskJourneySummary } from "./chat-journey/TaskJourneySummary";
 
 type ClawhubInstallCandidate = {
   slug: string;
@@ -108,22 +116,6 @@ export function ChatView({
     if (!message.includes(prefix)) return null;
     return message.split(prefix)[1]?.trim() || null;
   };
-  const routeErrorHint = (code?: string) => {
-    switch (code) {
-      case "SKILL_NOT_FOUND":
-        return "建议：检查 Skill 名称、安装状态和搜索路径。";
-      case "CALL_DEPTH_EXCEEDED":
-        return "建议：减少嵌套调用或调低递归链路复杂度。";
-      case "CALL_CYCLE_DETECTED":
-        return "建议：检查 Skill 互相调用关系，移除循环依赖。";
-      case "PERMISSION_DENIED":
-        return "建议：在父会话允许工具范围内调整子 Skill 声明。";
-      case "TIMEOUT":
-        return "建议：缩小任务范围后重试。";
-      default:
-        return "";
-    }
-  };
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
@@ -181,10 +173,8 @@ export function ChatView({
 
   // 右侧面板状态
   const [sidePanelOpen, setSidePanelOpen] = useState(false);
-  const [sidePanelTab, setSidePanelTab] = useState<"assets" | "routing">("assets");
-  const [routeEvents, setRouteEvents] = useState<SkillRouteEvent[]>([]);
+  const [sidePanelTab, setSidePanelTab] = useState<"tasks" | "files" | "websearch">("tasks");
   const [imRoleEvents, setImRoleEvents] = useState<ImRoleTimelineEvent[]>([]);
-  const [imRouteDecisions, setImRouteDecisions] = useState<ImRouteDecisionEvent[]>([]);
   const [groupRunSnapshot, setGroupRunSnapshot] = useState<EmployeeGroupRunSnapshot | null>(null);
   const [groupRunMemberEmployeeIds, setGroupRunMemberEmployeeIds] = useState<string[]>([]);
   const [groupRunCoordinatorEmployeeId, setGroupRunCoordinatorEmployeeId] = useState("");
@@ -245,7 +235,8 @@ export function ChatView({
   const loadWorkspace = async (sid: string) => {
     try {
       const sessions = await invoke<any[]>("list_sessions");
-      const current = sessions.find((s: any) => s.id === sid);
+      const list = Array.isArray(sessions) ? sessions : [];
+      const current = list.find((s: any) => s.id === sid);
       if (current) {
         setWorkspace(current.work_dir || "");
       }
@@ -293,9 +284,8 @@ export function ChatView({
     setAskUserAnswer("");
     setAgentState(null);
     setToolConfirm(null);
-    setRouteEvents([]);
+    setSidePanelTab("tasks");
     setImRoleEvents([]);
-    setImRouteDecisions([]);
     setGroupRunSnapshot(null);
     setGroupRunMemberEmployeeIds([]);
     setGroupRunCoordinatorEmployeeId("");
@@ -463,25 +453,6 @@ export function ChatView({
     };
   }, [sessionId]);
 
-  // skill-route-node-updated 事件监听：自动路由调用链
-  useEffect(() => {
-    const unlistenPromise = listen<SkillRouteEvent>("skill-route-node-updated", ({ payload }) => {
-      if (payload.session_id !== sessionId) return;
-      setRouteEvents((prev) => {
-        const idx = prev.findIndex((e) => e.node_id === payload.node_id);
-        if (idx >= 0) {
-          const next = [...prev];
-          next[idx] = payload;
-          return next;
-        }
-        return [...prev, payload];
-      });
-    });
-    return () => {
-      unlistenPromise.then((fn) => fn());
-    };
-  }, [sessionId]);
-
   useEffect(() => {
     const unlistenPromise = listen<ImRoleTimelineEvent>("im-role-event", ({ payload }) => {
       if (payload.session_id !== sessionId) return;
@@ -582,16 +553,6 @@ export function ChatView({
       unlistenPromise.then((fn) => fn());
     };
   }, [mainRoleName, sessionId]);
-
-  useEffect(() => {
-    const unlistenPromise = listen<ImRouteDecisionEvent>("im-route-decision", ({ payload }) => {
-      if (payload.session_id && payload.session_id !== sessionId) return;
-      setImRouteDecisions((prev) => [...prev, payload]);
-    });
-    return () => {
-      unlistenPromise.then((fn) => fn());
-    };
-  }, [sessionId]);
 
   useEffect(() => {
     let disposed = false;
@@ -1030,9 +991,39 @@ export function ChatView({
   // 从 models 查找当前会话的模型名称
   const currentModel = models[0];
   const installedSkillSet = new Set(installedSkillIds);
-  const routeCompleted = routeEvents.filter((e) => e.status === "completed").length;
-  const routeFailed = routeEvents.filter((e) => e.status === "failed").length;
-  const routeTotalDuration = routeEvents.reduce((sum, e) => sum + (e.duration_ms || 0), 0);
+  const sidePanelMessages = useMemo<Message[]>(() => {
+    if (streamItems.length === 0) return messages;
+    return [
+      ...messages,
+      {
+        role: "assistant",
+        content: "",
+        created_at: new Date().toISOString(),
+        streamItems,
+      },
+    ];
+  }, [messages, streamItems]);
+  const taskPanelModel = useMemo(() => buildTaskPanelViewModel(sidePanelMessages), [sidePanelMessages]);
+  const taskJourneyModel = useMemo(() => buildTaskJourneyViewModel(sidePanelMessages), [sidePanelMessages]);
+  const webSearchEntries = useMemo(() => buildWebSearchViewModel(sidePanelMessages), [sidePanelMessages]);
+  const touchedFilePaths = useMemo(
+    () => extractSessionTouchedFiles(sidePanelMessages).map((item) => item.path),
+    [sidePanelMessages]
+  );
+  const failedWorkPrompt = useMemo(() => {
+    if (taskJourneyModel.warnings.length === 0) return "";
+    const warningSummary = taskJourneyModel.warnings.join("\n- ");
+    return [
+      `请继续补做失败项，目标任务：${taskJourneyModel.currentTaskTitle || "当前任务"}`,
+      "已生成的文件：",
+      ...(taskJourneyModel.deliverables.length > 0
+        ? taskJourneyModel.deliverables.map((item) => `- ${item.path}`)
+        : ["- 暂无可用产物"]),
+      "待处理问题：",
+      `- ${warningSummary}`,
+      "请直接续做缺失步骤，并在完成后明确说明新增了哪些文件。",
+    ].join("\n");
+  }, [taskJourneyModel]);
   const normalizedSessionMode = (sessionMode || "").trim().toLowerCase();
   const isTeamEntrySession = normalizedSessionMode === "team_entry";
   const normalizedSessionTitle = (sessionTitle || "").trim();
@@ -1636,6 +1627,37 @@ export function ChatView({
     });
   }
 
+  function getAgentStateLabel() {
+    if (!agentState) return "";
+    if (agentState.state === "thinking") return "正在分析任务";
+    if (agentState.state === "tool_calling") {
+      return agentState.detail ? `正在处理步骤：${agentState.detail}` : "正在处理步骤";
+    }
+    if (agentState.state === "error") {
+      return `执行异常：${agentState.detail || "未知错误"}`;
+    }
+    return agentState.detail || agentState.state;
+  }
+
+  function handleOpenWorkspaceFolder() {
+    if (!workspace) return;
+    void invoke("open_external_url", { url: workspace });
+  }
+
+  function handleViewFilesFromDelivery() {
+    setSidePanelOpen(true);
+    setSidePanelTab("files");
+  }
+
+  function handleResumeFailedWork() {
+    if (!failedWorkPrompt) return;
+    setInput(failedWorkPrompt);
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(failedWorkPrompt.length, failedWorkPrompt.length);
+    });
+  }
+
   return (
     <div className="flex flex-col h-full">
       {/* 头部 */}
@@ -1791,11 +1813,7 @@ export function ChatView({
         {agentState && (
           <div className="sticky top-0 z-10 flex items-center gap-2 bg-white/80 backdrop-blur-lg px-4 py-2 rounded-xl text-xs text-gray-600 border border-gray-200 shadow-sm mx-4 mt-2">
             <span className="animate-spin h-3 w-3 border-2 border-blue-400 border-t-transparent rounded-full" />
-            {agentState.state === "thinking" && "思考中..."}
-            {agentState.state === "tool_calling" && `执行工具: ${agentState.detail}`}
-            {agentState.state === "error" && (
-              <span className="text-red-400">错误: {agentState.detail}</span>
-            )}
+            <span className={agentState.state === "error" ? "text-red-500" : undefined}>{getAgentStateLabel()}</span>
           </div>
         )}
         {(mainRoleName || primaryDelegationCard) && (
@@ -2172,6 +2190,13 @@ export function ChatView({
             )}
           </div>
         )}
+        <TaskJourneySummary
+          model={taskJourneyModel}
+          workspace={workspace}
+          onViewFiles={handleViewFilesFromDelivery}
+          onOpenWorkspace={handleOpenWorkspaceFolder}
+          onResumeFailedWork={handleResumeFailedWork}
+        />
         {messages.map((m, i) => {
           const isLatest = i === messages.length - 1;
           const isSessionFocusTarget = highlightedMessageIndex === i;
@@ -2343,269 +2368,21 @@ export function ChatView({
       </div>
 
       {/* 右侧面板 */}
-      <AnimatePresence>
-        {sidePanelOpen && (
-          <motion.div
-            initial={{ width: 0, opacity: 0 }}
-            animate={{ width: 320, opacity: 1 }}
-            exit={{ width: 0, opacity: 0 }}
-            transition={{ type: "spring", stiffness: 300, damping: 30 }}
-            className="h-full bg-gray-50 border-l border-gray-200 overflow-hidden flex flex-col"
-          >
-            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-white/50">
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setSidePanelTab("assets")}
-                  className={`px-2 py-1 rounded text-xs transition-colors ${
-                    sidePanelTab === "assets" ? "bg-blue-100 text-blue-600" : "text-gray-500 hover:bg-gray-100"
-                  }`}
-                >
-                  附件与工具
-                </button>
-                <button
-                  onClick={() => setSidePanelTab("routing")}
-                  className={`px-2 py-1 rounded text-xs transition-colors ${
-                    sidePanelTab === "routing" ? "bg-blue-100 text-blue-600" : "text-gray-500 hover:bg-gray-100"
-                  }`}
-                >
-                  自动路由
-                </button>
-              </div>
-              <button
-                onClick={() => setSidePanelOpen(false)}
-                className="p-1 hover:bg-gray-100 rounded"
-              >
-                <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-            <div className="flex-1 overflow-y-auto p-4 space-y-4">
-              {sidePanelTab === "routing" && (
-                <div className="space-y-3">
-                  <div className="p-3 bg-white rounded-lg border border-gray-200 shadow-sm">
-                    <div className="text-xs text-gray-500 mb-2">概览</div>
-                    <div className="grid grid-cols-2 gap-2 text-xs">
-                      <div className="p-2 rounded bg-gray-50 text-gray-600">总节点: {routeEvents.length}</div>
-                      <div className="p-2 rounded bg-gray-50 text-green-600">成功: {routeCompleted}</div>
-                      <div className="p-2 rounded bg-gray-50 text-red-500">失败: {routeFailed}</div>
-                      <div className="p-2 rounded bg-gray-50 text-gray-600">总耗时: {routeTotalDuration}ms</div>
-                    </div>
-                  </div>
-
-                  <div className="p-3 bg-white rounded-lg border border-gray-200 shadow-sm">
-                    <div className="text-xs text-gray-500 mb-2">IM 协作时间线</div>
-                    {imRoleEvents.length === 0 ? (
-                      <div className="text-xs text-gray-400">暂无 IM 协作事件</div>
-                    ) : (
-                      <div className="space-y-2">
-                        {imRoleEvents.slice(-8).map((evt, idx) => (
-                          <div key={`${evt.thread_id}-${evt.role_id}-${idx}`} className="text-xs bg-gray-50 rounded p-2">
-                            <div className="flex items-center justify-between">
-                              <div className="flex items-center gap-1.5">
-                                <span
-                                  className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-semibold text-white ${
-                                    evt.sender_role === "sub_agent" ? "bg-emerald-500" : "bg-blue-500"
-                                  }`}
-                                >
-                                  {evt.sender_role === "sub_agent" ? "子" : "主"}
-                                </span>
-                                <span className="font-mono text-gray-700">{evt.role_name}</span>
-                                {evt.sender_role === "main_agent" && (
-                                  <span className="px-1.5 py-0.5 rounded bg-blue-100 text-blue-700">主员工</span>
-                                )}
-                                {evt.sender_role === "sub_agent" && (
-                                  <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">子员工</span>
-                                )}
-                              </div>
-                              <span
-                                className={`px-1.5 py-0.5 rounded ${
-                                  evt.status === "completed"
-                                    ? "bg-green-100 text-green-700"
-                                    : evt.status === "failed"
-                                    ? "bg-red-100 text-red-600"
-                                    : "bg-blue-100 text-blue-600"
-                                }`}
-                              >
-                                {evt.status}
-                              </span>
-                            </div>
-                            {evt.summary && <div className="text-gray-500 mt-1">{evt.summary}</div>}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="p-3 bg-white rounded-lg border border-gray-200 shadow-sm">
-                    <div className="text-xs text-gray-500 mb-2">路由决策</div>
-                    {imRouteDecisions.length === 0 ? (
-                      <div className="text-xs text-gray-400">暂无路由决策事件</div>
-                    ) : (
-                      <div className="space-y-2">
-                        {imRouteDecisions.slice(-8).map((evt, idx) => (
-                          <div key={`${evt.thread_id}-${evt.session_key}-${idx}`} className="text-xs bg-gray-50 rounded p-2">
-                            <div className="font-mono text-gray-700">agent: {evt.agent_id}</div>
-                            <div className="text-gray-500 mt-1">matched_by: {evt.matched_by}</div>
-                            <div className="text-gray-500">session_key: {evt.session_key}</div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  <div>
-                    <div className="text-xs font-medium text-gray-500 mb-2">调用链</div>
-                    {routeEvents.length === 0 ? (
-                      <div className="text-center text-gray-400 text-sm py-6">暂无路由事件</div>
-                    ) : (
-                      <div className="space-y-2">
-                        {routeEvents.map((evt) => (
-                          <div
-                            key={evt.node_id}
-                            className="p-3 bg-white rounded-lg border border-gray-200 shadow-sm"
-                          >
-                            <div className="flex items-center justify-between mb-1">
-                              <span className="text-sm font-medium text-gray-700 font-mono">{evt.skill_name || "(unknown)"}</span>
-                              <span
-                                className={`text-[11px] px-1.5 py-0.5 rounded ${
-                                  evt.status === "completed"
-                                    ? "bg-green-100 text-green-700"
-                                    : evt.status === "failed"
-                                    ? "bg-red-100 text-red-600"
-                                    : "bg-blue-100 text-blue-600"
-                                }`}
-                              >
-                                {evt.status}
-                              </span>
-                            </div>
-                            <div className="text-[11px] text-gray-500 space-y-0.5">
-                              <div>depth: {evt.depth}</div>
-                              <div>node: {evt.node_id}</div>
-                              {evt.parent_node_id && <div>parent: {evt.parent_node_id}</div>}
-                              {typeof evt.duration_ms === "number" && <div>duration: {evt.duration_ms}ms</div>}
-                              {evt.error_code && <div className="text-red-500">error: {evt.error_code}</div>}
-                              {evt.error_code && routeErrorHint(evt.error_code) && (
-                                <div className="text-amber-600">{routeErrorHint(evt.error_code)}</div>
-                              )}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {sidePanelTab === "assets" && (
-                <>
-              {/* 附件列表 */}
-              {attachedFiles.length > 0 && (
-                <div>
-                  <div className="text-xs font-medium text-gray-500 mb-2">附件 ({attachedFiles.length})</div>
-                  <div className="space-y-2">
-                    {attachedFiles.map((file, index) => (
-                      <div
-                        key={index}
-                        className="p-3 bg-white rounded-lg border border-gray-200 shadow-sm"
-                      >
-                        <div className="flex items-center justify-between mb-2">
-                          <div className="flex items-center gap-2">
-                            <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                            </svg>
-                            <span className="text-sm font-medium text-gray-700 truncate max-w-[180px]">{file.name}</span>
-                          </div>
-                          <button
-                            onClick={() => removeAttachedFile(index)}
-                            className="p-1 hover:bg-gray-100 rounded"
-                          >
-                            <svg className="w-3.5 h-3.5 text-gray-400 hover:text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                            </svg>
-                          </button>
-                        </div>
-                        <div className="text-xs text-gray-400">{(file.size / 1024).toFixed(1)} KB</div>
-                        {/* 文件内容预览（只显示前200字符） */}
-                        {file.content.length > 0 && (
-                          <div className="mt-2 p-2 bg-gray-50 rounded text-xs text-gray-600 font-mono max-h-24 overflow-y-auto">
-                            {file.content.slice(0, 200)}
-                            {file.content.length > 200 && "..."}
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* 工具调用历史（从消息中提取） */}
-              {messages.some(m => m.toolCalls && m.toolCalls.length > 0) && (
-                <div>
-                  <div className="text-xs font-medium text-gray-500 mb-2">工具调用</div>
-                  <div className="space-y-2">
-                    {messages.flatMap((m, mi) =>
-                      (m.toolCalls || []).map((tc, ti) => (
-                        <div
-                          key={`${mi}-${ti}`}
-                          className="p-3 bg-white rounded-lg border border-gray-200 shadow-sm"
-                        >
-                          <div className="flex items-center gap-2 mb-1">
-                            {tc.status === "completed" ? (
-                              <svg className="w-3.5 h-3.5 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                              </svg>
-                            ) : tc.status === "error" ? (
-                              <svg className="w-3.5 h-3.5 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                              </svg>
-                            ) : (
-                              <span className="h-2.5 w-2.5 rounded-full bg-blue-400 animate-pulse" />
-                            )}
-                            <span className="text-sm font-medium text-gray-700 font-mono">{tc.name}</span>
-                          </div>
-                          {tc.output && (
-                            <div className="mt-2 p-2 bg-gray-50 rounded text-xs text-gray-600 font-mono max-h-24 overflow-y-auto">
-                              {tc.output.slice(0, 200)}
-                              {tc.output.length > 200 && "..."}
-                            </div>
-                          )}
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* 空状态 */}
-              {attachedFiles.length === 0 && !messages.some(m => m.toolCalls && m.toolCalls.length > 0) && (
-                <div className="text-center text-gray-400 text-sm py-8">
-                  暂无附件和工具调用
-                </div>
-              )}
-                </>
-              )}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <ChatWorkspaceSidePanel
+        open={sidePanelOpen}
+        tab={sidePanelTab}
+        onTabChange={setSidePanelTab}
+        onClose={() => setSidePanelOpen(false)}
+        workspace={workspace}
+        touchedFiles={touchedFilePaths}
+        active={sidePanelOpen}
+        taskModel={taskPanelModel}
+        webSearchEntries={webSearchEntries}
+      />
       </div>
 
       {/* 输入区域 */}
       <div className="px-6 py-3 bg-[var(--sm-surface-muted)]/80">
-        {routeEvents.length > 0 && (
-          <div className="max-w-3xl mx-auto mb-2">
-            <button
-              onClick={() => {
-                setSidePanelOpen(true);
-                setSidePanelTab("routing");
-              }}
-              className="sm-btn sm-btn-secondary w-full text-left px-3 py-2 rounded-xl text-xs justify-start"
-            >
-              已自动路由 {routeEvents.length} 个子 Skill · 成功 {routeCompleted} · 失败 {routeFailed} · {routeTotalDuration}ms
-            </button>
-          </div>
-        )}
         <div className="sm-panel max-w-3xl mx-auto focus-within:border-[var(--sm-primary)] focus-within:shadow-[var(--sm-focus-ring)] transition-all">
           {quickPrompts.length > 0 && (
             <div data-testid="chat-quick-prompts" className="px-3 pt-3 pb-1 flex flex-wrap gap-2 border-b border-gray-100">
