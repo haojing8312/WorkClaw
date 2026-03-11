@@ -95,6 +95,45 @@ describe("ChatView semantic theme", () => {
     expect(screen.getByRole("button", { name: "发送" })).toHaveClass("sm-btn-primary");
   });
 
+  test("shows the explicit default model in the header instead of the first model", async () => {
+    render(
+      <ChatView
+        skill={{
+          id: "builtin-general",
+          name: "General",
+          description: "desc",
+          version: "1.0.0",
+          author: "test",
+          recommended_model: "",
+          tags: [],
+          created_at: new Date().toISOString(),
+        }}
+        models={[
+          {
+            id: "m0",
+            name: "first-model",
+            api_format: "openai",
+            base_url: "https://example.com/first",
+            model_name: "first-model",
+            is_default: false,
+          },
+          {
+            id: "m1",
+            name: "default-model",
+            api_format: "openai",
+            base_url: "https://example.com/default",
+            model_name: "default-model",
+            is_default: true,
+          },
+        ]}
+        sessionId="session-a"
+      />
+    );
+
+    expect(await screen.findByText("default-model")).toBeInTheDocument();
+    expect(screen.queryByText("first-model")).not.toBeInTheDocument();
+  });
+
   test("does not expose a manual compact button in the composer", async () => {
     render(
       <ChatView

@@ -3,6 +3,7 @@ use crate::agent::skill_config::SkillConfig;
 use crate::agent::tools::{EmployeeManageTool, MemoryTool};
 use crate::agent::{AgentExecutor, ToolRegistry};
 use crate::commands::im_routing::list_im_routing_bindings_with_pool;
+use crate::commands::models::resolve_default_model_id_with_pool;
 use crate::commands::runtime_preferences::resolve_default_work_dir_with_pool;
 use crate::commands::skills::DbState;
 use crate::im::types::ImEvent;
@@ -1969,21 +1970,9 @@ async fn ensure_group_run_session_with_pool(
         return Ok((existing_session_id.to_string(), existing_skill_id));
     }
 
-    let model_row =
-        sqlx::query("SELECT id FROM model_configs WHERE is_default = 1 ORDER BY rowid ASC LIMIT 1")
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| e.to_string())?;
-    let model_id = if let Some(row) = model_row {
-        row.try_get::<String, _>("id").map_err(|e| e.to_string())?
-    } else {
-        sqlx::query("SELECT id FROM model_configs ORDER BY rowid ASC LIMIT 1")
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| e.to_string())?
-            .and_then(|row| row.try_get::<String, _>("id").ok())
-            .ok_or_else(|| "model config not found".to_string())?
-    };
+    let model_id = resolve_default_model_id_with_pool(pool)
+        .await?
+        .ok_or_else(|| "model config not found".to_string())?;
 
     let session_id = Uuid::new_v4().to_string();
     let title = format!("群组协作：{}", group_name.trim());
@@ -2078,21 +2067,9 @@ async fn ensure_group_step_session_with_pool(
         skill_id_raw.trim().to_string()
     };
 
-    let model_row =
-        sqlx::query("SELECT id FROM model_configs WHERE is_default = 1 ORDER BY rowid ASC LIMIT 1")
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| e.to_string())?;
-    let model_id = if let Some(row) = model_row {
-        row.try_get::<String, _>("id").map_err(|e| e.to_string())?
-    } else {
-        sqlx::query("SELECT id FROM model_configs ORDER BY rowid ASC LIMIT 1")
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| e.to_string())?
-            .and_then(|row| row.try_get::<String, _>("id").ok())
-            .ok_or_else(|| "model config not found".to_string())?
-    };
+    let model_id = resolve_default_model_id_with_pool(pool)
+        .await?
+        .ok_or_else(|| "model config not found".to_string())?;
 
     let session_id = Uuid::new_v4().to_string();
     let title = format!("群组执行:{}@{}", run_id, assignee_employee_id);

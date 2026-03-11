@@ -1,8 +1,8 @@
 mod helpers;
 
 use runtime_lib::commands::models::{
-    delete_model_config_with_pool, save_model_config_with_pool, set_default_model_with_pool,
-    ModelConfig,
+    delete_model_config_with_pool, resolve_default_model_id_with_pool,
+    save_model_config_with_pool, set_default_model_with_pool, ModelConfig,
 };
 
 async fn insert_model(
@@ -136,4 +136,53 @@ async fn delete_non_default_model_keeps_existing_default() {
     .expect("query remaining models");
 
     assert_eq!(models, vec![("model-1".to_string(), true)]);
+}
+
+#[tokio::test]
+async fn resolve_default_model_id_self_heals_when_default_flag_is_missing() {
+    let (pool, _tmp) = helpers::setup_test_db().await;
+    insert_model(&pool, "model-1", "Primary", "openai", false).await;
+    insert_model(&pool, "model-2", "Secondary", "openai", false).await;
+
+    let resolved = resolve_default_model_id_with_pool(&pool)
+        .await
+        .expect("resolve default model");
+
+    assert_eq!(resolved.as_deref(), Some("model-1"));
+
+    let models: Vec<(String, bool)> = sqlx::query_as(
+        "SELECT id, CAST(is_default AS BOOLEAN) FROM model_configs WHERE api_format NOT LIKE 'search_%' ORDER BY rowid ASC",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("query healed models");
+
+    assert_eq!(
+        models,
+        vec![
+            ("model-1".to_string(), true),
+            ("model-2".to_string(), false),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn resolve_default_model_id_ignores_search_configs_when_healing() {
+    let (pool, _tmp) = helpers::setup_test_db().await;
+    insert_model(&pool, "search-1", "Search", "search_brave", false).await;
+    insert_model(&pool, "model-1", "Primary", "openai", false).await;
+
+    let resolved = resolve_default_model_id_with_pool(&pool)
+        .await
+        .expect("resolve default model");
+
+    assert_eq!(resolved.as_deref(), Some("model-1"));
+
+    let search_default: (bool,) = sqlx::query_as(
+        "SELECT CAST(is_default AS BOOLEAN) FROM model_configs WHERE id = 'search-1'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("query search default");
+    assert!(!search_default.0);
 }

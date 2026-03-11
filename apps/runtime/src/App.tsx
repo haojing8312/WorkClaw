@@ -37,6 +37,7 @@ import {
   EMPTY_SEARCH_CONFIG_FORM,
   validateSearchConfigForm,
 } from "./lib/search-config";
+import { getDefaultModelId } from "./lib/default-model";
 import { openExternalUrl } from "./utils/openExternalUrl";
 import {
   ExpertCreatePayload,
@@ -752,7 +753,7 @@ export default function App() {
 
   async function handleCreateSession(initialMessage = "") {
     const skillId = getDefaultSkillId(skills);
-    const modelId = models[0]?.id;
+    const modelId = getDefaultModelId(models);
     if (!skillId || !modelId || creatingSession) return;
 
     setCreatingSession(true);
@@ -784,7 +785,7 @@ export default function App() {
   async function handleCreateTeamEntrySession(input: { teamId: string; initialMessage?: string }) {
     const teamId = (input.teamId || "").trim();
     const initialMessage = (input.initialMessage || "").trim();
-    const modelId = models[0]?.id;
+    const modelId = getDefaultModelId(models);
     if (!teamId || !modelId || creatingSession) return;
 
     const group = employeeGroups.find((item) => item.id === teamId);
@@ -894,7 +895,7 @@ export default function App() {
     if (options?.createSession === false) {
       return;
     }
-    const modelId = models[0]?.id;
+    const modelId = getDefaultModelId(models);
     if (modelId) {
       try {
         const sessionId = await createRuntimeSession({
@@ -1519,7 +1520,7 @@ export default function App() {
     if (!employee) return;
 
     const skillId = employee.primary_skill_id || getDefaultSkillId(skills);
-    const modelId = models[0]?.id;
+    const modelId = getDefaultModelId(models);
 
     setSelectedEmployeeId(employee.id);
     if (skillId) {
@@ -1578,7 +1579,7 @@ export default function App() {
     }
 
     const skillId = BUILTIN_EMPLOYEE_CREATOR_SKILL_ID;
-    const modelId = models[0]?.id;
+    const modelId = getDefaultModelId(models);
 
     if (launchMode === "update" && targetEmployee) {
       setSelectedEmployeeId(targetEmployee.id);

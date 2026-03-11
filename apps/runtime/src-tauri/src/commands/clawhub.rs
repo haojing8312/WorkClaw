@@ -15,6 +15,7 @@ use walkdir::WalkDir;
 use zip::ZipArchive;
 
 use crate::agent::types::LLMResponse;
+use crate::commands::models::resolve_default_usable_model_id_with_pool;
 use crate::commands::runtime_preferences::get_runtime_preferences_with_pool;
 use crate::commands::skills::{
     ensure_skill_display_name_available, import_local_skill_to_pool, DbState, ImportResult,
@@ -704,16 +705,25 @@ async fn load_translation_model(
     };
 
     let primary = if preferred.is_none() {
-        sqlx::query_as::<_, (String, String, String, String)>(
-            "SELECT api_format, base_url, model_name, api_key
-             FROM model_configs
-             WHERE is_default = 1 AND TRIM(api_key) != ''
-             ORDER BY id ASC LIMIT 1",
-        )
-        .fetch_optional(pool)
-        .await
-        .ok()
-        .flatten()
+        let resolved_id = resolve_default_usable_model_id_with_pool(pool)
+            .await
+            .ok()
+            .flatten();
+        if let Some(model_id) = resolved_id {
+            sqlx::query_as::<_, (String, String, String, String)>(
+                "SELECT api_format, base_url, model_name, api_key
+                 FROM model_configs
+                 WHERE id = ? AND TRIM(api_key) != ''
+                 LIMIT 1",
+            )
+            .bind(model_id)
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten()
+        } else {
+            None
+        }
     } else {
         None
     };
@@ -722,8 +732,8 @@ async fn load_translation_model(
         sqlx::query_as::<_, (String, String, String, String)>(
             "SELECT api_format, base_url, model_name, api_key
              FROM model_configs
-             WHERE TRIM(api_key) != ''
-             ORDER BY id ASC LIMIT 1",
+             WHERE api_format NOT LIKE 'search_%' AND TRIM(api_key) != ''
+             ORDER BY rowid ASC LIMIT 1",
         )
         .fetch_optional(pool)
         .await

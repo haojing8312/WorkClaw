@@ -80,6 +80,14 @@ describe("App session create flow", () => {
       if (command === "list_model_configs") {
         return Promise.resolve([
           {
+            id: "model-non-default",
+            name: "Model Non Default",
+            api_format: "openai",
+            base_url: "https://example.com/non-default",
+            model_name: "model-non-default",
+            is_default: false,
+          },
+          {
             id: "model-a",
             name: "Model A",
             api_format: "openai",
@@ -181,6 +189,14 @@ describe("App session create flow", () => {
       if (command === "list_model_configs") {
         return Promise.resolve([
           {
+            id: "model-non-default",
+            name: "Model Non Default",
+            api_format: "openai",
+            base_url: "https://example.com/non-default",
+            model_name: "model-non-default",
+            is_default: false,
+          },
+          {
             id: "model-a",
             name: "Model A",
             api_format: "openai",
@@ -242,5 +258,24 @@ describe("App session create flow", () => {
       ).toBe(true);
     });
     expect(openMock).not.toHaveBeenCalled();
+  });
+
+  test("uses the explicit default model instead of the first model in the list", async () => {
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "create-with-input" })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "create-with-input" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        "create_session",
+        expect.objectContaining({
+          modelId: "model-a",
+        })
+      );
+    });
   });
 });

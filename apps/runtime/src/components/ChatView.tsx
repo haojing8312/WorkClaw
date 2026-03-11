@@ -18,6 +18,7 @@ import {
   extractSessionTouchedFiles,
 } from "./chat-side-panel/view-model";
 import { TaskJourneySummary } from "./chat-journey/TaskJourneySummary";
+import { getDefaultModel } from "../lib/default-model";
 
 type ClawhubInstallCandidate = {
   slug: string;
@@ -1003,7 +1004,7 @@ export function ChatView({
   }
 
   // 从 models 查找当前会话的模型名称
-  const currentModel = models[0];
+  const currentModel = getDefaultModel(models);
   const installedSkillSet = new Set(installedSkillIds);
   const sidePanelMessages = useMemo<Message[]>(() => {
     if (streamItems.length === 0) return messages;
