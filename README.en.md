@@ -283,26 +283,9 @@ workclaw/
 - Node.js 20+
 - pnpm
 
-### Windows Contributor Prerequisites (source builds)
+### Windows Source Build and Release
 
-If you only want to use WorkClaw, use the published release installer instead of building from source. The requirements below are for contributors running the desktop app from source on Windows.
-
-- Windows 10 / 11 x64
-- Rust stable with `x86_64-pc-windows-msvc`
-- Visual Studio 2022 Build Tools (stable)
-- `Desktop development with C++`
-- Windows 10/11 SDK
-- WebView2 Runtime
-
-If a local Windows build fails, run:
-
-```bash
-pnpm doctor:windows
-```
-
-See the troubleshooting guide for common Windows-native build failures:
-
-- [docs/troubleshooting/windows-dev-setup.md](docs/troubleshooting/windows-dev-setup.md)
+- For contributor prerequisites, local Tauri startup, and GitHub-based Windows release, see [docs/development/windows-contributor-guide.md](docs/development/windows-contributor-guide.md).
 
 ### Development
 
@@ -320,27 +303,6 @@ pnpm build:app
 cd apps/runtime/src-tauri
 cargo test
 ```
-
-### Windows Auto Release (GitHub)
-
-Tag-driven Windows release is enabled via GitHub Actions.
-
-```bash
-# 1) Keep versions aligned (apps/runtime/src-tauri/tauri.conf.json -> version)
-# 2) Push a semantic version tag (triggers .github/workflows/release-windows.yml)
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-Before publishing, CI validates that `tag(vX.Y.Z)` matches `tauri.conf.json` `version`.
-
-Recommended release assets:
-
-- `*-setup.exe`: recommended for most users and supports future in-app auto-update.
-- `*.msi`: intended for enterprise IT rollout and manual upgrades.
-- Auto-update path: desktop installs created from `setup.exe` consume `latest.json` and `.sig` from GitHub Releases.
-
-If you only want to install and use WorkClaw, choose the `.exe` installer first.
 
 ### Installing a Skill
 
