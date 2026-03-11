@@ -1,0 +1,6 @@
+[package]
+name = "builtin-skill-checks"
+version = "0.1.0"
+edition = "2021"
+
+[dev-dependencies]
