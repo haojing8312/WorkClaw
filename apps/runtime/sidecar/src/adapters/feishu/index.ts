@@ -9,9 +9,11 @@ import type {
   AdapterHandle,
   AdapterHealth,
   ChannelAdapter,
+  ConnectorDescriptor,
   SendMessageRequest,
   SendMessageResult,
 } from "../types.js";
+import { classifyConnectorIssue } from "../types.js";
 import { normalizeFeishuEvent } from "./normalize.js";
 
 interface FeishuInstanceState {
@@ -34,6 +36,7 @@ function toHealth(status: FeishuEmployeeWsStatus, instanceId: string): AdapterHe
     last_error: status.last_error,
     reconnect_attempts: status.reconnect_attempts,
     queue_depth: status.queued_events,
+    issue: classifyConnectorIssue(status.last_error, status.last_event_at || status.started_at),
   };
 }
 
@@ -48,6 +51,14 @@ export class FeishuChannelAdapter implements ChannelAdapter {
     private readonly client: Pick<FeishuClient, "sendMessage"> = new FeishuClient(),
     private readonly manager: FeishuWsManagerLike = new FeishuLongConnectionManager(),
   ) {}
+
+  async describe(): Promise<ConnectorDescriptor> {
+    return {
+      channel: "feishu",
+      display_name: "飞书连接器",
+      capabilities: ["receive_text", "send_text", "group_route", "direct_route"],
+    };
+  }
 
   async start(config: AdapterConfig): Promise<AdapterHandle> {
     const employeeId = String(config.settings.employee_id || config.connector_id).trim();

@@ -20,6 +20,14 @@ describe("Sidebar session source badge", () => {
             source_label: "飞书",
           },
           {
+            id: "s-wecom",
+            title: "企业微信项目同步",
+            created_at: "2026-03-05T00:00:00Z",
+            model_id: "m1",
+            source_channel: "wecom",
+            source_label: "企业微信",
+          },
+          {
             id: "s-local",
             title: "本地任务",
             created_at: "2026-03-05T00:00:00Z",
@@ -39,11 +47,12 @@ describe("Sidebar session source badge", () => {
     );
   }
 
-  test("shows badge for Feishu-synced session only", () => {
+  test("shows source badges for IM-synced sessions only", () => {
     renderSidebar();
-    const badges = screen.getAllByText("飞书");
-    expect(badges).toHaveLength(1);
+    expect(screen.getAllByText("飞书")).toHaveLength(1);
+    expect(screen.getAllByText("企业微信")).toHaveLength(1);
     expect(screen.getByText("飞书需求讨论")).toBeInTheDocument();
+    expect(screen.getByText("企业微信项目同步")).toBeInTheDocument();
     expect(screen.getByText("本地任务")).toBeInTheDocument();
   });
 });

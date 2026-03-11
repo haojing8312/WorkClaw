@@ -192,6 +192,51 @@ describe("ChatView IM routing panel", () => {
     });
   });
 
+  test("defaults IM routing events to app source when payload omits source_channel", async () => {
+    render(
+      <ChatView
+        skill={{
+          id: "builtin-general",
+          name: "General",
+          description: "desc",
+          version: "1.0.0",
+          author: "test",
+          recommended_model: "",
+          tags: [],
+          created_at: new Date().toISOString(),
+        }}
+        models={[
+          {
+            id: "m1",
+            name: "model",
+            api_format: "openai",
+            base_url: "https://example.com",
+            model_name: "model",
+            is_default: true,
+          },
+        ]}
+        sessionId="session-app-default"
+      />
+    );
+
+    act(() => {
+      emit("im-role-dispatch-request", {
+        session_id: "session-app-default",
+        thread_id: "thread-app-default",
+        role_id: "architect",
+        role_name: "架构师",
+        prompt: "请开始评审",
+        agent_type: "plan",
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("team-collab-status-bar")).toHaveTextContent("架构师");
+      expect(screen.getByTestId("group-orchestration-board")).toHaveTextContent("架构师");
+      expect(screen.getByText("主员工 已将任务分配给 架构师")).toBeInTheDocument();
+    });
+  });
+
   test("suppresses local ask-user dialog for IM-managed session", async () => {
     render(
       <ChatView
@@ -792,6 +837,40 @@ describe("ChatView IM routing panel", () => {
 
     await waitFor(() => {
       expect(screen.getByTestId("chat-session-source-badge")).toHaveTextContent("飞书同步");
+    });
+  });
+
+  test("shows session source badge in chat area for wecom synced session", async () => {
+    render(
+      <ChatView
+        skill={{
+          id: "builtin-general",
+          name: "General",
+          description: "desc",
+          version: "1.0.0",
+          author: "test",
+          recommended_model: "",
+          tags: [],
+          created_at: new Date().toISOString(),
+        }}
+        models={[
+          {
+            id: "m1",
+            name: "model",
+            api_format: "openai",
+            base_url: "https://example.com",
+            model_name: "model",
+            is_default: true,
+          },
+        ]}
+        sessionId="session-source-badge-wecom"
+        sessionSourceChannel="wecom"
+        sessionSourceLabel="企业微信"
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("chat-session-source-badge")).toHaveTextContent("企业微信");
     });
   });
 

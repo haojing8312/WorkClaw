@@ -90,3 +90,50 @@ async fn apply_agent_profile_writes_agents_soul_user_files() {
     assert!(soul_text.contains("专业、直接、可执行"));
     assert!(user_text.contains("# USER"));
 }
+
+#[tokio::test]
+async fn agent_profile_draft_uses_employee_enabled_scopes_in_agents_doc() {
+    let (pool, tmp) = helpers::setup_test_db().await;
+    let work_dir = tmp
+        .path()
+        .join("employee-workspace-wecom")
+        .to_string_lossy()
+        .to_string();
+
+    let employee_db_id = upsert_agent_employee_with_pool(
+        &pool,
+        UpsertAgentEmployeeInput {
+            id: None,
+            employee_id: "wecom_operator".to_string(),
+            name: "企业微信运营".to_string(),
+            role_id: "wecom_operator".to_string(),
+            persona: "".to_string(),
+            feishu_open_id: "".to_string(),
+            feishu_app_id: "".to_string(),
+            feishu_app_secret: "".to_string(),
+            primary_skill_id: "builtin-general".to_string(),
+            default_work_dir: work_dir,
+            openclaw_agent_id: "wecom_operator".to_string(),
+            routing_priority: 100,
+            enabled_scopes: vec!["app".to_string(), "wecom".to_string()],
+            enabled: true,
+            is_default: false,
+            skill_ids: vec![],
+        },
+    )
+    .await
+    .expect("upsert employee");
+
+    let draft = generate_agent_profile_draft_with_pool(
+        &pool,
+        AgentProfilePayload {
+            employee_db_id,
+            answers: vec![],
+        },
+    )
+    .await
+    .expect("generate draft");
+
+    assert!(draft.agents_md.contains("适用范围: app, wecom"));
+    assert!(!draft.agents_md.contains("飞书范围: feishu"));
+}

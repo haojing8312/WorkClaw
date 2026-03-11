@@ -117,6 +117,7 @@ const MODEL_SETUP_OUTCOMES = ["创建会话", "执行技能", "驱动智能体�
 
 type ImBridgeSessionContext = {
   threadId: string;
+  sourceChannel: string;
   primaryRoleName: string;
   roleName: string;
   streamBuffer: string;
@@ -436,7 +437,8 @@ export default function App() {
       }, safeDelay);
     };
 
-    const buildFeishuRetryKey = (threadId: string, text: string) => `${threadId}::${text}`;
+    const buildChannelRetryKey = (channel: string, threadId: string, text: string) =>
+      `${channel}::${threadId}::${text}`;
 
     const clearFeishuRetryTimer = (key: string) => {
       const timer = feishuRetryTimers.get(key);
@@ -456,13 +458,21 @@ export default function App() {
       });
     };
 
+    const invokeWecomSend = async (threadId: string, text: string) => {
+      await invoke("send_wecom_text_message", {
+        conversation_id: threadId,
+        text,
+        sidecar_base_url: null,
+      });
+    };
+
     const scheduleFeishuRetry = (
       threadId: string,
       text: string,
       attempt: number,
       lastError: unknown
     ) => {
-      const key = buildFeishuRetryKey(threadId, text);
+      const key = buildChannelRetryKey("feishu", threadId, text);
       if (attempt > FEISHU_MAX_ATTEMPTS) {
         clearFeishuRetryTimer(key);
         console.error(
@@ -491,13 +501,31 @@ export default function App() {
       const chatId = threadId.trim();
       const messageText = text.trim().slice(0, 1800);
       if (!chatId || !messageText) return;
-      const key = buildFeishuRetryKey(chatId, messageText);
+      const key = buildChannelRetryKey("feishu", chatId, messageText);
       clearFeishuRetryTimer(key);
       try {
         await invokeFeishuSend(chatId, messageText);
       } catch (error) {
         scheduleFeishuRetry(chatId, messageText, 2, error);
       }
+    };
+
+    const sendTextToImThread = async (sourceChannel: string, threadId: string, text: string) => {
+      const normalizedChannel = (sourceChannel || "app").trim().toLowerCase();
+      const targetThreadId = threadId.trim();
+      const messageText = text.trim().slice(0, 1800);
+      if (!targetThreadId || !messageText) return;
+
+      if (normalizedChannel === "wecom") {
+        await invokeWecomSend(targetThreadId, messageText);
+        return;
+      }
+
+      if (normalizedChannel !== "feishu") {
+        return;
+      }
+
+      await sendTextToFeishu(targetThreadId, messageText);
     };
 
     const flushImStream = async (
@@ -526,14 +554,22 @@ export default function App() {
       ctx.lastStreamFlushAt = Date.now();
       try {
         if (chunk.length <= 1800) {
-          await sendTextToFeishu(ctx.threadId, formatFeishuRoleMessage(ctx.roleName, chunk));
+          await sendTextToImThread(
+            ctx.sourceChannel,
+            ctx.threadId,
+            formatFeishuRoleMessage(ctx.roleName, chunk),
+          );
           ctx.streamSentCount += 1;
           return;
         }
         let start = 0;
         while (start < chunk.length) {
           const part = chunk.slice(start, start + 1800);
-          await sendTextToFeishu(ctx.threadId, formatFeishuRoleMessage(ctx.roleName, part));
+          await sendTextToImThread(
+            ctx.sourceChannel,
+            ctx.threadId,
+            formatFeishuRoleMessage(ctx.roleName, part),
+          );
           ctx.streamSentCount += 1;
           start += 1800;
         }
@@ -560,6 +596,7 @@ export default function App() {
       const primaryRoleName = payload.role_name || payload.role_id;
       const ctx: ImBridgeSessionContext = {
         threadId: payload.thread_id,
+        sourceChannel: (payload.source_channel || existing?.sourceChannel || "app").trim() || "app",
         primaryRoleName,
         roleName: existing?.roleName || primaryRoleName,
         streamBuffer: existing?.streamBuffer ?? "",
@@ -596,9 +633,10 @@ export default function App() {
             .reverse()
             .find((m) => m.role === "assistant" && m.content?.trim().length > 0);
           if (latestAssistant) {
-            await sendTextToFeishu(
+            await sendTextToImThread(
+              ctx.sourceChannel,
               ctx.threadId,
-              formatFeishuRoleMessage(ctx.roleName, latestAssistant.content.slice(0, 1800))
+              formatFeishuRoleMessage(ctx.roleName, latestAssistant.content.slice(0, 1800)),
             );
           }
         }
@@ -656,12 +694,13 @@ export default function App() {
       const optionsText = payload.options?.length ? `\n可选项：${payload.options.join(" / ")}` : "";
       void (async () => {
         await flushImStream(payload.session_id, { force: true });
-        await sendTextToFeishu(
+        await sendTextToImThread(
+          ctx.sourceChannel,
           ctx.threadId,
           formatFeishuRoleMessage(
             ctx.roleName,
-            `${payload.question}${optionsText}\n请直接回复你的选择或补充信息。`
-          )
+            `${payload.question}${optionsText}\n请直接回复你的选择或补充信息。`,
+          ),
         );
       })();
     });
@@ -1211,7 +1250,7 @@ export default function App() {
         default_work_dir: employee.default_work_dir,
         openclaw_agent_id: employee.employee_id || employee.openclaw_agent_id || employee.role_id,
         routing_priority: employee.routing_priority ?? 100,
-        enabled_scopes: employee.enabled_scopes?.length ? employee.enabled_scopes : ["feishu"],
+        enabled_scopes: employee.enabled_scopes?.length ? employee.enabled_scopes : ["app"],
         enabled: employee.enabled,
         is_default: true,
         skill_ids: employee.skill_ids,

@@ -270,6 +270,97 @@ async fn group_message_with_mention_routes_to_target_employee() {
 }
 
 #[tokio::test]
+async fn wecom_event_prefers_wecom_scoped_employee_and_creates_session() {
+    let (pool, _tmp) = helpers::setup_test_db().await;
+    sqlx::query(
+        "INSERT INTO model_configs (id, name, api_format, base_url, model_name, is_default, api_key)
+         VALUES ('m1', 'default', 'openai', 'https://example.com', 'gpt-4o-mini', 1, 'k')",
+    )
+    .execute(&pool)
+    .await
+    .expect("seed model config");
+
+    upsert_agent_employee_with_pool(
+        &pool,
+        UpsertAgentEmployeeInput {
+            id: None,
+            employee_id: "main".to_string(),
+            name: "主员工".to_string(),
+            role_id: "main".to_string(),
+            persona: "".to_string(),
+            feishu_open_id: "ou_main".to_string(),
+            feishu_app_id: "".to_string(),
+            feishu_app_secret: "".to_string(),
+            primary_skill_id: "builtin-general".to_string(),
+            default_work_dir: "".to_string(),
+            openclaw_agent_id: "main".to_string(),
+            routing_priority: 100,
+            enabled_scopes: vec!["feishu".to_string()],
+            enabled: true,
+            is_default: true,
+            skill_ids: vec![],
+        },
+    )
+    .await
+    .expect("upsert feishu default");
+
+    let wecom_employee_id = upsert_agent_employee_with_pool(
+        &pool,
+        UpsertAgentEmployeeInput {
+            id: None,
+            employee_id: "wecom_sales".to_string(),
+            name: "企业微信销售".to_string(),
+            role_id: "wecom_sales".to_string(),
+            persona: "".to_string(),
+            feishu_open_id: "".to_string(),
+            feishu_app_id: "".to_string(),
+            feishu_app_secret: "".to_string(),
+            primary_skill_id: "builtin-general".to_string(),
+            default_work_dir: "E:/workspace/wecom-sales".to_string(),
+            openclaw_agent_id: "wecom_sales".to_string(),
+            routing_priority: 90,
+            enabled_scopes: vec!["wecom".to_string()],
+            enabled: true,
+            is_default: false,
+            skill_ids: vec!["builtin-general".to_string()],
+        },
+    )
+    .await
+    .expect("upsert wecom employee");
+
+    let event = ImEvent {
+        channel: "wecom".to_string(),
+        event_type: ImEventType::MessageCreated,
+        thread_id: "wecom_chat_001".to_string(),
+        event_id: Some("evt_wecom_001".to_string()),
+        message_id: Some("msg_wecom_001".to_string()),
+        text: Some("请跟进企业微信线索".to_string()),
+        role_id: None,
+        account_id: Some("corp-123".to_string()),
+        tenant_id: Some("corp-123".to_string()),
+    };
+
+    let targets = resolve_target_employees_for_event(&pool, &event)
+        .await
+        .expect("resolve wecom target employees");
+    assert_eq!(targets.len(), 1);
+    assert_eq!(targets[0].id, wecom_employee_id);
+
+    let sessions = ensure_employee_sessions_for_event_with_pool(&pool, &event)
+        .await
+        .expect("ensure wecom sessions");
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].employee_id, wecom_employee_id);
+
+    let (work_dir,): (String,) = sqlx::query_as("SELECT work_dir FROM sessions WHERE id = ?")
+        .bind(&sessions[0].session_id)
+        .fetch_one(&pool)
+        .await
+        .expect("query wecom session");
+    assert_eq!(work_dir, "E:/workspace/wecom-sales");
+}
+
+#[tokio::test]
 async fn group_message_with_text_mention_routes_to_target_employee_when_role_id_missing() {
     let (pool, _tmp) = helpers::setup_test_db().await;
     sqlx::query(

@@ -16,8 +16,12 @@ import {
   validateSearchConfigForm,
 } from "../lib/search-config";
 import {
+  ChannelConnectorDescriptor,
+  ChannelConnectorDiagnostics,
   CapabilityRouteTemplateInfo,
   CapabilityRoutingPolicy,
+  FeishuGatewaySettings,
+  FeishuWsStatus,
   ImRouteSimulationPayload,
   ImRoutingBinding,
   ModelConfig,
@@ -27,9 +31,14 @@ import {
   RouteAttemptLog,
   RouteAttemptStat,
   UpsertImRoutingBindingInput,
+  WecomConnectorStatus,
+  WecomGatewaySettings,
 } from "../types";
-import { FeishuRoutingWizard } from "./employees/FeishuRoutingWizard";
 import { RiskConfirmDialog } from "./RiskConfirmDialog";
+import { ConnectorConfigPanel } from "./connectors/ConnectorConfigPanel";
+import { ConnectorDiagnosticsPanel } from "./connectors/ConnectorDiagnosticsPanel";
+import { getConnectorSchema } from "./connectors/connectorSchemas";
+import { ImRoutingWizard } from "./employees/FeishuRoutingWizard";
 
 const MCP_PRESETS = [
   { label: "— 快速选择 —", value: "", name: "", command: "", args: "", env: "" },
@@ -216,6 +225,27 @@ export function SettingsView({
   const [routeStatsCapability, setRouteStatsCapability] = useState("all");
   const [routeStatsHours, setRouteStatsHours] = useState(24);
   const [routingBindings, setRoutingBindings] = useState<ImRoutingBinding[]>([]);
+  const [feishuConnectorSettings, setFeishuConnectorSettings] = useState<FeishuGatewaySettings>({
+    app_id: "",
+    app_secret: "",
+    ingress_token: "",
+    encrypt_key: "",
+    sidecar_base_url: "",
+  });
+  const [wecomConnectorSettings, setWecomConnectorSettings] = useState<WecomGatewaySettings>({
+    corp_id: "",
+    agent_id: "",
+    agent_secret: "",
+    sidecar_base_url: "",
+  });
+  const [feishuConnectorStatus, setFeishuConnectorStatus] = useState<FeishuWsStatus | null>(null);
+  const [wecomConnectorStatus, setWecomConnectorStatus] = useState<WecomConnectorStatus | null>(null);
+  const [connectorCatalog, setConnectorCatalog] = useState<ChannelConnectorDescriptor[]>([]);
+  const [connectorDiagnostics, setConnectorDiagnostics] = useState<ChannelConnectorDiagnostics[]>([]);
+  const [savingFeishuConnector, setSavingFeishuConnector] = useState(false);
+  const [savingWecomConnector, setSavingWecomConnector] = useState(false);
+  const [retryingFeishuConnector, setRetryingFeishuConnector] = useState(false);
+  const [retryingWecomConnector, setRetryingWecomConnector] = useState(false);
   const [runtimePreferences, setRuntimePreferences] = useState<RuntimePreferences>(
     DEFAULT_RUNTIME_PREFERENCES,
   );
@@ -370,9 +400,13 @@ export function SettingsView({
   }, [activeTab]);
 
   useEffect(() => {
-    if (activeTab === "feishu") {
-      void loadRoutingBindings();
+    if (activeTab !== "feishu") {
+      return;
     }
+
+    void loadConnectorSettings();
+    void loadConnectorStatuses();
+    void loadConnectorPlatformData();
   }, [activeTab]);
 
   useEffect(() => {
@@ -703,6 +737,106 @@ export function SettingsView({
     }
   }
 
+  async function loadConnectorSettings() {
+    try {
+      const [feishuSettings, wecomSettings] = await Promise.all([
+        invoke<FeishuGatewaySettings>("get_feishu_gateway_settings"),
+        invoke<WecomGatewaySettings>("get_wecom_gateway_settings"),
+      ]);
+      setFeishuConnectorSettings({
+        app_id: feishuSettings?.app_id || "",
+        app_secret: feishuSettings?.app_secret || "",
+        ingress_token: feishuSettings?.ingress_token || "",
+        encrypt_key: feishuSettings?.encrypt_key || "",
+        sidecar_base_url: feishuSettings?.sidecar_base_url || "",
+      });
+      setWecomConnectorSettings({
+        corp_id: wecomSettings?.corp_id || "",
+        agent_id: wecomSettings?.agent_id || "",
+        agent_secret: wecomSettings?.agent_secret || "",
+        sidecar_base_url: wecomSettings?.sidecar_base_url || "",
+      });
+    } catch (e) {
+      console.warn("加载渠道连接器配置失败:", e);
+    }
+  }
+
+  async function loadConnectorStatuses() {
+    try {
+      const [feishuStatus, wecomStatus] = await Promise.all([
+        invoke<FeishuWsStatus>("get_feishu_long_connection_status", { sidecarBaseUrl: null }),
+        invoke<WecomConnectorStatus>("get_wecom_connector_status", { sidecarBaseUrl: null }),
+      ]);
+      setFeishuConnectorStatus(
+        feishuStatus
+          ? {
+              running: !!feishuStatus.running,
+              started_at: feishuStatus.started_at ?? null,
+              queued_events: feishuStatus.queued_events ?? 0,
+            }
+          : null,
+      );
+      setWecomConnectorStatus(
+        wecomStatus
+          ? {
+              running: !!wecomStatus.running,
+              started_at: wecomStatus.started_at ?? null,
+              last_error: wecomStatus.last_error ?? null,
+              reconnect_attempts: wecomStatus.reconnect_attempts ?? 0,
+              queue_depth: wecomStatus.queue_depth ?? 0,
+              instance_id: wecomStatus.instance_id || "wecom:wecom-main",
+            }
+          : null,
+      );
+    } catch (e) {
+      console.warn("加载渠道连接器状态失败:", e);
+      setFeishuConnectorStatus(null);
+      setWecomConnectorStatus(null);
+    }
+  }
+
+  function resolveConnectorInstanceId(channel: string) {
+    if (channel === "feishu") {
+      return "feishu:default";
+    }
+    if (channel === "wecom") {
+      return "wecom:wecom-main";
+    }
+    return `${channel}:default`;
+  }
+
+  async function loadConnectorPlatformData() {
+    try {
+      const catalog = await invoke<ChannelConnectorDescriptor[]>("list_channel_connectors", {
+        sidecarBaseUrl: null,
+      });
+      const normalizedCatalog = Array.isArray(catalog) ? catalog : [];
+      setConnectorCatalog(normalizedCatalog);
+
+      const results = await Promise.allSettled(
+        normalizedCatalog.map((connector) =>
+          invoke<ChannelConnectorDiagnostics>("get_channel_connector_diagnostics", {
+            instanceId: resolveConnectorInstanceId(connector.channel),
+            sidecarBaseUrl: null,
+          }),
+        ),
+      );
+
+      setConnectorDiagnostics(
+        results
+          .filter(
+            (result): result is PromiseFulfilledResult<ChannelConnectorDiagnostics> =>
+              result.status === "fulfilled" && Boolean(result.value?.connector?.channel),
+          )
+          .map((result) => result.value),
+      );
+    } catch (error) {
+      console.warn("加载连接器平台诊断失败:", error);
+      setConnectorCatalog([]);
+      setConnectorDiagnostics([]);
+    }
+  }
+
   async function loadChatPrimaryModels(providerId: string, capability: string) {
     if (!providerId) {
       setChatPrimaryModels([]);
@@ -937,6 +1071,126 @@ export function SettingsView({
 
   function handleSimulateRoute(payload: ImRouteSimulationPayload) {
     return invoke("simulate_im_route", { payload });
+  }
+
+  function getEnabledRoutingRuleCount(channel: string) {
+    return routingBindings.filter((binding) => binding.enabled && binding.channel === channel).length;
+  }
+
+  function summarizeConnectorIssue(rawIssue: string | null | undefined) {
+    const normalized = String(rawIssue || "").trim().toLowerCase();
+    if (!normalized) {
+      return "无";
+    }
+    if (normalized.includes("signature mismatch")) {
+      return "签名校验失败";
+    }
+    if (normalized.includes("secret") || normalized.includes("credential") || normalized.includes("token")) {
+      return "凭据配置异常";
+    }
+    if (normalized.includes("timeout")) {
+      return "连接超时";
+    }
+    if (normalized.includes("refused") || normalized.includes("unreachable") || normalized.includes("network")) {
+      return "连接不可用";
+    }
+    return "连接异常";
+  }
+
+  function resolveFeishuConnectorStatus() {
+    if (feishuConnectorStatus?.running) {
+      return {
+        dotClass: "bg-emerald-500",
+        label: "飞书连接正常",
+        detail: "长连接已启动，可继续使用统一路由入口。",
+        error: "",
+      };
+    }
+    return {
+      dotClass: "bg-gray-300",
+      label: "未启动",
+      detail: "保存凭据后可直接重试连接。",
+      error: "",
+    };
+  }
+
+  function resolveWecomConnectorPanelStatus() {
+    if (wecomConnectorStatus?.running) {
+      return {
+        dotClass: "bg-emerald-500",
+        label: "企业微信连接正常",
+        detail: "企业微信 connector 已通过统一 adapter boundary 启动。",
+        error: wecomConnectorStatus.last_error || "",
+      };
+    }
+    if (wecomConnectorStatus?.last_error?.trim()) {
+      return {
+        dotClass: "bg-red-500",
+        label: "企业微信连接异常",
+        detail: "请检查 Corp ID / Agent ID / Secret 后重试。",
+        error: wecomConnectorStatus.last_error,
+      };
+    }
+    return {
+      dotClass: "bg-gray-300",
+      label: "未启动",
+      detail: "保存企业微信配置后可启动 connector。",
+      error: "",
+    };
+  }
+
+  async function handleSaveFeishuConnector() {
+    setSavingFeishuConnector(true);
+    try {
+      await invoke("set_feishu_gateway_settings", {
+        settings: feishuConnectorSettings,
+      });
+    } finally {
+      setSavingFeishuConnector(false);
+    }
+  }
+
+  async function handleRetryFeishuConnector() {
+    setRetryingFeishuConnector(true);
+    try {
+      await invoke("start_feishu_long_connection", {
+        sidecarBaseUrl: feishuConnectorSettings.sidecar_base_url || null,
+        appId: feishuConnectorSettings.app_id || null,
+        appSecret: feishuConnectorSettings.app_secret || null,
+      });
+      await loadConnectorStatuses();
+      await loadConnectorPlatformData();
+    } finally {
+      setRetryingFeishuConnector(false);
+    }
+  }
+
+  async function handleSaveWecomConnector() {
+    setSavingWecomConnector(true);
+    try {
+      await invoke("set_wecom_gateway_settings", {
+        settings: wecomConnectorSettings,
+      });
+      await loadConnectorPlatformData();
+    } finally {
+      setSavingWecomConnector(false);
+    }
+  }
+
+  async function handleRetryWecomConnector() {
+    setRetryingWecomConnector(true);
+    try {
+      await invoke("start_wecom_connector", {
+        sidecarBaseUrl: wecomConnectorSettings.sidecar_base_url || null,
+        corpId: wecomConnectorSettings.corp_id || null,
+        agentId: wecomConnectorSettings.agent_id || null,
+        agentSecret: wecomConnectorSettings.agent_secret || null,
+      });
+      await loadConnectorStatuses();
+      await loadConnectorPlatformData();
+    } finally {
+      setRetryingWecomConnector(false);
+    }
   }
 
   // 加载已保存的模型配置到表单（用于编辑）
@@ -1218,6 +1472,8 @@ export function SettingsView({
   const labelCls = "sm-field-label";
   const parsedMcpEnv = parseMcpEnvJson(mcpForm.env);
   const mcpApiKeyEnvKeys = Object.keys(parsedMcpEnv.env).filter((key) => key.toUpperCase().includes("API_KEY"));
+  const feishuConnectorSchema = getConnectorSchema("feishu");
+  const wecomConnectorSchema = getConnectorSchema("wecom");
 
   // 眼睛图标：显示状态（可见）
   function EyeOpenIcon() {
@@ -2672,9 +2928,96 @@ export function SettingsView({
         <div className="space-y-3">
           <div className="bg-white rounded-lg p-4 space-y-1">
             <div className="text-sm font-medium text-gray-900">渠道连接器</div>
-            <div className="text-xs text-gray-500">当前已接入 Feishu 连接器，后续新增渠道将复用同一配置与路由入口。</div>
+            <div className="text-xs text-gray-500">先连接消息渠道，再设置处理规则，最后用模拟结果确认命中原因。</div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-2 pt-2">
+              <div className="rounded border border-gray-100 bg-gray-50 px-3 py-2">
+                <div className="text-[11px] font-medium text-gray-700">连接器概览</div>
+                <div className="text-[11px] text-gray-500">查看飞书、企业微信等渠道是否已连接。</div>
+              </div>
+              <div className="rounded border border-gray-100 bg-gray-50 px-3 py-2">
+                <div className="text-[11px] font-medium text-gray-700">消息处理规则</div>
+                <div className="text-[11px] text-gray-500">设置不同渠道、会话范围的消息应该交给谁处理。</div>
+              </div>
+              <div className="rounded border border-gray-100 bg-gray-50 px-3 py-2">
+                <div className="text-[11px] font-medium text-gray-700">模拟与诊断</div>
+                <div className="text-[11px] text-gray-500">先看用户语言结果，再按需展开技术详情。</div>
+              </div>
+            </div>
           </div>
-          <FeishuRoutingWizard
+          <div className="text-xs font-medium text-gray-500 px-1">连接器概览</div>
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+            <ConnectorConfigPanel
+              schema={feishuConnectorSchema}
+              status={resolveFeishuConnectorStatus()}
+              values={{
+                openId: "",
+                appId: feishuConnectorSettings.app_id,
+                appSecret: feishuConnectorSettings.app_secret,
+              }}
+              saving={savingFeishuConnector}
+              retrying={retryingFeishuConnector}
+              diagnostics={[
+                { label: "已启用规则数", value: String(getEnabledRoutingRuleCount("feishu")) },
+                { label: "回调凭据", value: feishuConnectorSettings.ingress_token ? "已配置" : "未配置" },
+                { label: "加密配置", value: feishuConnectorSettings.encrypt_key ? "已配置" : "未配置" },
+                { label: "连接地址", value: feishuConnectorSettings.sidecar_base_url || "默认 http://localhost:8765" },
+                { label: "最近问题", value: summarizeConnectorIssue(resolveFeishuConnectorStatus().error) },
+              ]}
+              onChange={(key, value) => {
+                if (key === "appId") {
+                  setFeishuConnectorSettings((state) => ({ ...state, app_id: value }));
+                } else if (key === "appSecret") {
+                  setFeishuConnectorSettings((state) => ({ ...state, app_secret: value }));
+                }
+              }}
+              onSave={handleSaveFeishuConnector}
+              onRetry={handleRetryFeishuConnector}
+            />
+            <ConnectorConfigPanel
+              schema={wecomConnectorSchema}
+              status={resolveWecomConnectorPanelStatus()}
+              values={{
+                corpId: wecomConnectorSettings.corp_id,
+                agentId: wecomConnectorSettings.agent_id,
+                agentSecret: wecomConnectorSettings.agent_secret,
+              }}
+              saving={savingWecomConnector}
+              retrying={retryingWecomConnector}
+              diagnostics={[
+                { label: "已启用规则数", value: String(getEnabledRoutingRuleCount("wecom")) },
+                { label: "连接标识", value: wecomConnectorStatus?.instance_id || "wecom:wecom-main" },
+                { label: "待处理消息", value: String(wecomConnectorStatus?.queue_depth ?? 0) },
+                { label: "连接地址", value: wecomConnectorSettings.sidecar_base_url || "默认 http://localhost:8765" },
+                { label: "最近问题", value: summarizeConnectorIssue(wecomConnectorStatus?.last_error) },
+              ]}
+              onChange={(key, value) => {
+                if (key === "corpId") {
+                  setWecomConnectorSettings((state) => ({ ...state, corp_id: value }));
+                } else if (key === "agentId") {
+                  setWecomConnectorSettings((state) => ({ ...state, agent_id: value }));
+                } else if (key === "agentSecret") {
+                  setWecomConnectorSettings((state) => ({ ...state, agent_secret: value }));
+                }
+              }}
+              onSave={handleSaveWecomConnector}
+              onRetry={handleRetryWecomConnector}
+            />
+          </div>
+          {connectorDiagnostics.length > 0 && (
+            <>
+              <div className="text-xs font-medium text-gray-500 px-1">连接器诊断</div>
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                {connectorDiagnostics.map((diagnostics) => (
+                  <ConnectorDiagnosticsPanel
+                    key={diagnostics.connector.channel}
+                    diagnostics={diagnostics}
+                  />
+                ))}
+              </div>
+            </>
+          )}
+          <div className="text-xs font-medium text-gray-500 px-1">消息处理规则与模拟诊断</div>
+          <ImRoutingWizard
             bindings={routingBindings}
             onSaveRule={handleSaveRoutingRule}
             onDeleteRule={handleDeleteRoutingRule}

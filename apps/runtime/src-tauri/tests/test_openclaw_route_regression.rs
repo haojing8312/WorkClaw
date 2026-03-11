@@ -219,6 +219,64 @@ async fn resolve_route_uses_event_channel_instead_of_feishu_default() {
 }
 
 #[tokio::test]
+async fn resolve_route_supports_wecom_channel_via_generic_im_sidecar_base() {
+    let (pool, _tmp) = helpers::setup_test_db().await;
+    let (base_url, server_task) = spawn_mock_sidecar_with_priority(1).await;
+    sqlx::query(
+        "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('im_sidecar_base_url', ?)",
+    )
+    .bind(&base_url)
+    .execute(&pool)
+    .await
+    .expect("seed generic sidecar base");
+
+    upsert_im_routing_binding_with_pool(
+        &pool,
+        UpsertImRoutingBindingInput {
+            id: None,
+            agent_id: "wecom-agent".to_string(),
+            channel: "wecom".to_string(),
+            account_id: "agent-1000002".to_string(),
+            peer_kind: "".to_string(),
+            peer_id: "".to_string(),
+            guild_id: "".to_string(),
+            team_id: "".to_string(),
+            role_ids: vec![],
+            connector_meta: serde_json::json!({
+                "connector_id": "wecom-main",
+                "workspace_id": "corp-123"
+            }),
+            priority: 100,
+            enabled: true,
+        },
+    )
+    .await
+    .expect("seed wecom binding");
+
+    let out = resolve_openclaw_route_with_pool(
+        &pool,
+        &ImEvent {
+            channel: "wecom".to_string(),
+            event_type: ImEventType::MessageCreated,
+            thread_id: "wecom-room-1".to_string(),
+            event_id: Some("evt-wecom".to_string()),
+            message_id: Some("msg-wecom".to_string()),
+            text: Some("请处理企业微信消息".to_string()),
+            role_id: None,
+            account_id: Some("agent-1000002".to_string()),
+            tenant_id: Some("corp-123".to_string()),
+        },
+    )
+    .await
+    .expect("resolve wecom route");
+
+    assert_eq!(out["agentId"], "wecom-agent");
+    assert_eq!(out["matchedBy"], "binding.account");
+
+    server_task.await.expect("mock sidecar task");
+}
+
+#[tokio::test]
 async fn route_regression_vectors_match_expected_priority() {
     let (pool, _tmp) = helpers::setup_test_db().await;
     let vectors = vec![

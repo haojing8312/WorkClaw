@@ -1,6 +1,6 @@
 import { expect, type Page, test } from "@playwright/test";
 
-test.setTimeout(180_000);
+test.setTimeout(60_000);
 
 type TauriInvokeCall = {
   cmd: string;
@@ -60,27 +60,10 @@ async function installTauriMocks(page: Page): Promise<void> {
             launch_minimized: false,
             close_to_tray: true,
           };
-        case "get_desktop_lifecycle_paths":
-          return {
-            app_data_dir: "",
-            cache_dir: "",
-            log_dir: "",
-            default_work_dir: "",
-          };
-        case "get_routing_settings":
-          return { max_call_depth: 4, node_timeout_seconds: 60, retry_count: 0 };
-        case "list_builtin_provider_plugins":
-          return [];
-        case "list_provider_configs":
-          return [];
-        case "get_capability_routing_policy":
-          return null;
-        case "list_capability_route_templates":
-          return [];
         case "get_feishu_gateway_settings":
           return {
-            app_id: "cli-app",
-            app_secret: "cli-secret",
+            app_id: "",
+            app_secret: "",
             ingress_token: "",
             encrypt_key: "",
             sidecar_base_url: "",
@@ -121,17 +104,17 @@ async function installTauriMocks(page: Page): Promise<void> {
             },
           ];
         case "get_channel_connector_diagnostics":
-          if (args?.instanceId === "wecom:wecom-main") {
+          if (args?.instanceId === "feishu:default") {
             return {
               connector: {
-                channel: "wecom",
-                display_name: "企业微信连接器",
+                channel: "feishu",
+                display_name: "飞书连接器",
                 capabilities: ["receive_text", "send_text", "group_route", "direct_route"],
               },
               status: "stopped",
               health: {
-                adapter_name: "wecom",
-                instance_id: "wecom:wecom-main",
+                adapter_name: "feishu",
+                instance_id: "feishu:default",
                 state: "stopped",
                 last_ok_at: null,
                 last_error: null,
@@ -147,14 +130,14 @@ async function installTauriMocks(page: Page): Promise<void> {
           }
           return {
             connector: {
-              channel: "feishu",
-              display_name: "飞书连接器",
+              channel: "wecom",
+              display_name: "企业微信连接器",
               capabilities: ["receive_text", "send_text", "group_route", "direct_route"],
             },
             status: "stopped",
             health: {
-              adapter_name: "feishu",
-              instance_id: "feishu:default",
+              adapter_name: "wecom",
+              instance_id: "wecom:wecom-main",
               state: "stopped",
               last_ok_at: null,
               last_error: null,
@@ -167,10 +150,33 @@ async function installTauriMocks(page: Page): Promise<void> {
               acked_events: 0,
             },
           };
+        case "get_routing_settings":
+          return { max_call_depth: 4, node_timeout_seconds: 60, retry_count: 0 };
+        case "list_builtin_provider_plugins":
+          return [];
+        case "list_provider_configs":
+          return [];
+        case "get_capability_routing_policy":
+          return null;
+        case "list_capability_route_templates":
+          return [];
+        case "get_desktop_lifecycle_paths":
+          return {
+            app_data_dir: "",
+            cache_dir: "",
+            log_dir: "",
+            default_work_dir: "",
+          };
         case "list_im_routing_bindings":
           return [];
+        case "set_wecom_gateway_settings":
+          return null;
+        case "start_wecom_connector":
+          return "wecom:wecom-main";
+        case "upsert_im_routing_binding":
+          return "rule-wecom-1";
         case "simulate_im_route":
-          return { agentId: "main", matchedBy: "default" };
+          return { agentId: "wecom-agent", matchedBy: "binding.channel" };
         default:
           return null;
       }
@@ -200,19 +206,57 @@ test.beforeEach(async ({ page }) => {
   ).toBeVisible({ timeout: 30_000 });
 });
 
-test("settings exposes connector overview while keeping routing data lazy-loaded", async ({ page }) => {
+test("settings supports minimal wecom connector and routing flow", async ({ page }) => {
   await page.getByRole("button", { name: "设置" }).first().click();
-  await expect(page.getByRole("button", { name: "模型连接" })).toBeVisible();
-
   await page.getByRole("button", { name: "渠道连接器" }).click();
-  await expect(page.locator("div").filter({ hasText: /^渠道连接器$/ })).toBeVisible();
-  await expect(
-    page.getByText("先连接消息渠道，再设置处理规则，最后用模拟结果确认命中原因。"),
-  ).toBeVisible();
-  await expect(page.getByText("连接器概览").first()).toBeVisible();
-  await expect(page.getByText("连接器诊断").first()).toBeVisible();
-  await expect(page.getByText("消息处理规则").first()).toBeVisible();
+
+  await expect(page.getByTestId("connector-panel-wecom")).toBeVisible();
+
+  await page.getByPlaceholder("企业微信 Corp ID").fill("wwcorp-updated");
+  await page.getByRole("button", { name: "保存企业微信连接器" }).click();
+
+  const retryButtons = page.getByRole("button", { name: "重试连接" });
+  await retryButtons.nth(1).click();
+
+  await page.getByLabel("路由渠道").selectOption("wecom");
+  await page.getByPlaceholder("agent_id（如 main）").fill("wecom-agent");
+  await page.getByRole("button", { name: "保存规则" }).click();
+  await page.getByRole("button", { name: "模拟路由" }).click();
+
+  await expect(page.getByText("将由：wecom-agent")).toBeVisible();
+  await expect(page.getByText("命中原因：渠道规则")).toBeVisible();
 
   const calls = await readInvokeCalls(page);
-  expect(calls.some((call) => call.cmd === "list_im_routing_bindings")).toBe(false);
+  expect(
+    calls.some(
+      (call) =>
+        call.cmd === "set_wecom_gateway_settings" &&
+        String((call.args?.settings as Record<string, unknown> | undefined)?.corp_id ?? "") ===
+          "wwcorp-updated",
+    ),
+  ).toBe(true);
+  expect(
+    calls.some(
+      (call) =>
+        call.cmd === "start_wecom_connector" &&
+        String(call.args?.corpId ?? "") === "wwcorp-updated" &&
+        String(call.args?.agentId ?? "") === "1000002",
+    ),
+  ).toBe(true);
+  expect(
+    calls.some(
+      (call) =>
+        call.cmd === "upsert_im_routing_binding" &&
+        String((call.args?.input as Record<string, unknown> | undefined)?.channel ?? "") ===
+          "wecom",
+    ),
+  ).toBe(true);
+  expect(
+    calls.some(
+      (call) =>
+        call.cmd === "simulate_im_route" &&
+        String((call.args?.payload as Record<string, unknown> | undefined)?.channel ?? "") ===
+          "wecom",
+    ),
+  ).toBe(true);
 });

@@ -1,5 +1,6 @@
 pub mod agent_profile;
 pub mod chat;
+pub mod channel_connectors;
 pub mod clawhub;
 pub mod desktop_lifecycle;
 pub mod dialog;
@@ -14,4 +15,5 @@ pub mod openclaw_gateway;
 pub mod packaging;
 pub mod runtime_preferences;
 pub mod skills;
+pub mod wecom_gateway;
 pub mod workspace_files;

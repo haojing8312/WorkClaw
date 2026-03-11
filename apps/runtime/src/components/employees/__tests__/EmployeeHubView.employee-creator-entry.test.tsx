@@ -54,7 +54,7 @@ describe("EmployeeHubView employee creator skill entry", () => {
       expect(invokeMock).toHaveBeenCalledWith("get_runtime_preferences");
     });
     expect(
-      screen.getByText("用员工编号统一管理 OpenClaw 与飞书路由。主员工默认进入且拥有全技能权限。"),
+      screen.getByText("用员工编号统一管理 OpenClaw 与多渠道路由。主员工默认进入且拥有全技能权限。"),
     ).toBeInTheDocument();
     expect(
       screen.getByText("通过对话描述岗位需求，系统会自动给出技能匹配与配置建议，并在你确认后创建员工。"),

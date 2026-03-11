@@ -26,8 +26,8 @@ fn default_sender_role_main() -> String {
     "main_agent".to_string()
 }
 
-fn default_source_channel_feishu() -> String {
-    "feishu".to_string()
+fn default_source_channel_app() -> String {
+    "app".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -57,7 +57,7 @@ pub struct ImRoleEventPayload {
     pub task_id: String,
     #[serde(default)]
     pub parent_task_id: String,
-    #[serde(default = "default_source_channel_feishu")]
+    #[serde(default = "default_source_channel_app")]
     pub source_channel: String,
     pub status: String,
     pub summary: String,
@@ -82,7 +82,7 @@ pub struct ImRoleDispatchRequest {
     pub task_id: String,
     #[serde(default)]
     pub parent_task_id: String,
-    #[serde(default = "default_source_channel_feishu")]
+    #[serde(default = "default_source_channel_app")]
     pub source_channel: String,
     pub prompt: String,
     pub agent_type: String,
@@ -129,6 +129,28 @@ pub fn build_im_role_event_payload(
     summary: &str,
     duration_ms: Option<u64>,
 ) -> ImRoleEventPayload {
+    build_im_role_event_payload_for_channel(
+        session_id,
+        thread_id,
+        role_id,
+        role_name,
+        "app",
+        status,
+        summary,
+        duration_ms,
+    )
+}
+
+pub fn build_im_role_event_payload_for_channel(
+    session_id: &str,
+    thread_id: &str,
+    role_id: &str,
+    role_name: &str,
+    source_channel: &str,
+    status: &str,
+    summary: &str,
+    duration_ms: Option<u64>,
+) -> ImRoleEventPayload {
     ImRoleEventPayload {
         session_id: session_id.to_string(),
         thread_id: thread_id.to_string(),
@@ -140,7 +162,7 @@ pub fn build_im_role_event_payload(
         target_employee_id: role_id.to_string(),
         task_id: String::new(),
         parent_task_id: String::new(),
-        source_channel: default_source_channel_feishu(),
+        source_channel: source_channel.trim().to_lowercase(),
         status: status.to_string(),
         summary: summary.to_string(),
         duration_ms,
@@ -155,6 +177,26 @@ pub fn build_im_role_dispatch_request(
     prompt: &str,
     agent_type: &str,
 ) -> ImRoleDispatchRequest {
+    build_im_role_dispatch_request_for_channel(
+        session_id,
+        thread_id,
+        role_id,
+        role_name,
+        "app",
+        prompt,
+        agent_type,
+    )
+}
+
+pub fn build_im_role_dispatch_request_for_channel(
+    session_id: &str,
+    thread_id: &str,
+    role_id: &str,
+    role_name: &str,
+    source_channel: &str,
+    prompt: &str,
+    agent_type: &str,
+) -> ImRoleDispatchRequest {
     ImRoleDispatchRequest {
         session_id: session_id.to_string(),
         thread_id: thread_id.to_string(),
@@ -166,7 +208,7 @@ pub fn build_im_role_dispatch_request(
         target_employee_id: role_id.to_string(),
         task_id: String::new(),
         parent_task_id: String::new(),
-        source_channel: default_source_channel_feishu(),
+        source_channel: source_channel.trim().to_lowercase(),
         prompt: prompt.to_string(),
         agent_type: agent_type.to_string(),
     }

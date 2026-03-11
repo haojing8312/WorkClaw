@@ -9,8 +9,8 @@ use crate::commands::skills::DbState;
 use crate::im::feishu_adapter::{build_feishu_markdown_message, build_feishu_text_message};
 use crate::im::feishu_formatter::format_role_message;
 use crate::im::runtime_bridge::{
-    build_im_role_dispatch_request, build_im_role_event_payload, ImRoleDispatchRequest,
-    ImRoleEventPayload,
+    build_im_role_dispatch_request_for_channel, build_im_role_event_payload_for_channel,
+    ImRoleDispatchRequest, ImRoleEventPayload,
 };
 use crate::im::types::{ImEvent, ImEventType};
 use reqwest::Client;
@@ -284,7 +284,15 @@ pub async fn resolve_feishu_sidecar_base_url(
             return Ok(Some(v));
         }
     }
-    Ok(get_app_setting(pool, "feishu_sidecar_base_url").await?)
+    let feishu_specific = get_app_setting(pool, "feishu_sidecar_base_url").await?;
+    if feishu_specific
+        .as_deref()
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+    {
+        return Ok(feishu_specific);
+    }
+    Ok(get_app_setting(pool, "im_sidecar_base_url").await?)
 }
 
 pub async fn resolve_feishu_app_credentials(
@@ -420,11 +428,12 @@ pub async fn plan_role_events_for_feishu(
     Ok(roles
         .into_iter()
         .map(|role_id| {
-            build_im_role_event_payload(
+            build_im_role_event_payload_for_channel(
                 &session_id,
                 &event.thread_id,
                 &role_id,
                 &role_id,
+                "feishu",
                 "running",
                 &format!("飞书事件触发：{}", text),
                 None,
@@ -470,11 +479,12 @@ pub async fn plan_role_dispatch_requests_for_feishu(
     Ok(roles
         .into_iter()
         .map(|role_id| {
-            build_im_role_dispatch_request(
+            build_im_role_dispatch_request_for_channel(
                 &session_id,
                 &event.thread_id,
                 &role_id,
                 &role_id,
+                "feishu",
                 &format!("场景={}。用户输入：{}", cfg.scenario_template, user_text),
                 agent_type,
             )
@@ -545,11 +555,12 @@ pub async fn handle_feishu_event(
 
                     let _ = app.emit(
                         "im-role-event",
-                        build_im_role_event_payload(
+                        build_im_role_event_payload_for_channel(
                             &s.session_id,
                             &event.thread_id,
                             &s.role_id,
                             &s.employee_name,
+                            "feishu",
                             "running",
                             "飞书消息已同步到桌面会话，正在执行",
                             None,
@@ -561,11 +572,12 @@ pub async fn handle_feishu_event(
                         .unwrap_or_else(|| "请继续基于当前上下文推进".to_string());
                     let _ = app.emit(
                         "im-role-dispatch-request",
-                        build_im_role_dispatch_request(
+                        build_im_role_dispatch_request_for_channel(
                             &s.session_id,
                             &event.thread_id,
                             &s.role_id,
                             &s.employee_name,
+                            "feishu",
                             &prompt,
                             "general-purpose",
                         ),
@@ -1184,11 +1196,12 @@ async fn sync_feishu_ws_events_core(
                         );
                         let _ = app.emit(
                             "im-role-event",
-                            build_im_role_event_payload(
+                            build_im_role_event_payload_for_channel(
                                 &s.session_id,
                                 &inbound.thread_id,
                                 &s.role_id,
                                 &s.employee_name,
+                                "feishu",
                                 "running",
                                 "飞书消息已同步到桌面会话，正在执行",
                                 None,
@@ -1196,11 +1209,12 @@ async fn sync_feishu_ws_events_core(
                         );
                         let _ = app.emit(
                             "im-role-dispatch-request",
-                            build_im_role_dispatch_request(
+                            build_im_role_dispatch_request_for_channel(
                                 &s.session_id,
                                 &inbound.thread_id,
                                 &s.role_id,
                                 &s.employee_name,
+                                "feishu",
                                 &inbound
                                     .text
                                     .clone()

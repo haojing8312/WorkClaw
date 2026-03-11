@@ -278,7 +278,7 @@ impl EmployeeManageTool {
             enabled_scopes: {
                 let scopes = Self::parse_string_array(&input, "enabled_scopes");
                 if scopes.is_empty() {
-                    vec!["feishu".to_string()]
+                    vec!["app".to_string()]
                 } else {
                     scopes
                 }
@@ -739,7 +739,7 @@ mod tests {
                     "persona": "推进需求交付并协调多技能执行",
                     "primary_skill_id": "builtin-general",
                     "skill_ids": ["builtin-general"],
-                    "enabled_scopes": ["feishu"],
+                    "enabled_scopes": ["app"],
                     "default_work_dir": profile_root_text,
                     "profile_answers": [
                         { "key": "mission", "question": "核心使命", "answer": "推进需求上线交付" },
@@ -872,6 +872,31 @@ mod tests {
             Some(1)
         );
         assert_eq!(created["employee"]["skill_ids"][0], "builtin-general");
+        let _ = std::fs::remove_dir_all(&profile_root);
+    }
+
+    #[test]
+    fn employee_manage_defaults_enabled_scopes_to_app() {
+        let pool = setup_pool();
+        let tool = EmployeeManageTool::new(pool);
+        let profile_root =
+            std::env::temp_dir().join(format!("employee-manage-default-scope-{}", Uuid::new_v4()));
+        let profile_root_text = profile_root.to_string_lossy().to_string();
+
+        let create_output = tool
+            .execute(
+                json!({
+                    "action": "create_employee",
+                    "name": "默认范围员工",
+                    "employee_id": "default_scope_employee",
+                    "default_work_dir": profile_root_text,
+                    "auto_apply_profile": false
+                }),
+                &ToolContext::default(),
+            )
+            .expect("create employee");
+        let created: Value = serde_json::from_str(&create_output).expect("parse create output");
+        assert_eq!(created["employee"]["enabled_scopes"], json!(["app"]));
         let _ = std::fs::remove_dir_all(&profile_root);
     }
 

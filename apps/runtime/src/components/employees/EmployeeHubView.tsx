@@ -15,6 +15,8 @@ import {
   RuntimePreferences,
   SkillManifest,
   UpsertAgentEmployeeInput,
+  WecomConnectorStatus,
+  WecomGatewaySettings,
 } from "../../types";
 import { RiskConfirmDialog } from "../RiskConfirmDialog";
 import {
@@ -134,6 +136,14 @@ export function EmployeeHubView({
     appId: "",
     appSecret: "",
   });
+  const [savingWecomConfig, setSavingWecomConfig] = useState(false);
+  const [retryingWecomConnection, setRetryingWecomConnection] = useState(false);
+  const [wecomForm, setWecomForm] = useState({
+    corpId: "",
+    agentId: "",
+    agentSecret: "",
+  });
+  const [wecomStatus, setWecomStatus] = useState<WecomConnectorStatus | null>(null);
   const [groupName, setGroupName] = useState("");
   const [groupCoordinatorId, setGroupCoordinatorId] = useState("");
   const [groupMemberIds, setGroupMemberIds] = useState<string[]>([]);
@@ -275,6 +285,34 @@ export function EmployeeHubView({
     return () => {
       disposed = true;
       clearInterval(timer);
+    };
+  }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    const loadWecom = async () => {
+      try {
+        const [settings, status] = await Promise.all([
+          invoke<WecomGatewaySettings>("get_wecom_gateway_settings"),
+          invoke<WecomConnectorStatus>("get_wecom_connector_status", { sidecarBaseUrl: null }),
+        ]);
+        if (disposed) return;
+        setWecomForm({
+          corpId: settings?.corp_id || "",
+          agentId: settings?.agent_id || "",
+          agentSecret: settings?.agent_secret || "",
+        });
+        setWecomStatus(status || null);
+      } catch {
+        if (disposed) {
+          return;
+        }
+        setWecomStatus(null);
+      }
+    };
+    void loadWecom();
+    return () => {
+      disposed = true;
     };
   }, []);
 
@@ -448,7 +486,7 @@ export function EmployeeHubView({
         routing_priority: Number.isFinite(selectedEmployee.routing_priority)
           ? selectedEmployee.routing_priority
           : 100,
-        enabled_scopes: selectedEmployee.enabled_scopes?.length ? selectedEmployee.enabled_scopes : ["feishu"],
+        enabled_scopes: selectedEmployee.enabled_scopes?.length ? selectedEmployee.enabled_scopes : ["app"],
         enabled: selectedEmployee.enabled,
         is_default: selectedEmployee.is_default,
         skill_ids: selectedEmployee.skill_ids,
@@ -482,6 +520,55 @@ export function EmployeeHubView({
       setMessage(`重试飞书连接失败: ${String(e)}`);
     } finally {
       setRetryingFeishuConnection(false);
+    }
+  }
+
+  async function saveWecomConfig() {
+    setSavingWecomConfig(true);
+    setMessage("");
+    try {
+      await invoke("set_wecom_gateway_settings", {
+        settings: {
+          corp_id: wecomForm.corpId.trim(),
+          agent_id: wecomForm.agentId.trim(),
+          agent_secret: wecomForm.agentSecret.trim(),
+          sidecar_base_url: "",
+        },
+      });
+      setMessage("企业微信连接器配置已保存");
+    } catch (e) {
+      setMessage(`保存企业微信连接器失败: ${String(e)}`);
+    } finally {
+      setSavingWecomConfig(false);
+    }
+  }
+
+  async function retryWecomConnection() {
+    const corpId = wecomForm.corpId.trim();
+    const agentId = wecomForm.agentId.trim();
+    const agentSecret = wecomForm.agentSecret.trim();
+    if (!corpId || !agentId || !agentSecret) {
+      setMessage("请先填写并保存 Corp ID / Agent ID / Secret，再重试连接");
+      return;
+    }
+    setRetryingWecomConnection(true);
+    setMessage("");
+    try {
+      await invoke("start_wecom_connector", {
+        sidecarBaseUrl: null,
+        corpId,
+        agentId,
+        agentSecret,
+      });
+      const latest = await invoke<WecomConnectorStatus>("get_wecom_connector_status", {
+        sidecarBaseUrl: null,
+      });
+      setWecomStatus(latest);
+      setMessage("已触发企业微信连接器重连，请稍后查看状态");
+    } catch (e) {
+      setMessage(`重试企业微信连接器失败: ${String(e)}`);
+    } finally {
+      setRetryingWecomConnection(false);
     }
   }
 
@@ -745,6 +832,7 @@ export function EmployeeHubView({
   const clearMemoryDialogImpact = selectedEmployeeMemoryId ? `员工编号: ${selectedEmployeeMemoryId}` : undefined;
   const selectedEmployeeFeishuStatus = selectedEmployee ? resolveFeishuStatus(selectedEmployee) : null;
   const feishuConnectorSchema = getConnectorSchema("feishu");
+  const wecomConnectorSchema = getConnectorSchema("wecom");
   const selectedEmployeeFeishuRuntimeStatus = useMemo(() => {
     if (!selectedEmployee) return null;
     const key = employeeKey(selectedEmployee).toLowerCase();
@@ -767,6 +855,29 @@ export function EmployeeHubView({
       },
     ];
   }, [selectedEmployeeFeishuRuntimeStatus]);
+  const selectedEmployeeWecomStatus = selectedEmployee
+    ? wecomStatus?.running
+      ? {
+          dotClass: "bg-emerald-500",
+          label: "企业微信连接正常",
+          detail: "当前员工可复用共享的企业微信 connector 进行路由和回消息。",
+          error: wecomStatus.last_error || "",
+        }
+      : {
+          dotClass: "bg-gray-300",
+          label: "未启动",
+          detail: "当前面板管理共享的企业微信 connector，可直接保存并重试连接。",
+          error: wecomStatus?.last_error || "",
+        }
+    : null;
+  const selectedWecomDiagnostics = useMemo(() => {
+    if (!wecomStatus) return [];
+    return [
+      { label: "实例", value: wecomStatus.instance_id || "wecom:wecom-main" },
+      { label: "重连次数", value: String(wecomStatus.reconnect_attempts ?? 0) },
+      { label: "队列事件", value: String(wecomStatus.queue_depth ?? 0) },
+    ];
+  }, [wecomStatus]);
   const tabs: Array<{ id: EmployeeHubTab; label: string }> = [
     { id: "overview", label: "总览" },
     { id: "employees", label: "员工" },
@@ -839,7 +950,7 @@ export function EmployeeHubView({
         <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
           <div>
             <h1 className="text-2xl font-semibold text-gray-900">智能体员工</h1>
-            <p className="text-sm text-gray-600 mt-2">用员工编号统一管理 OpenClaw 与飞书路由。主员工默认进入且拥有全技能权限。</p>
+            <p className="text-sm text-gray-600 mt-2">用员工编号统一管理 OpenClaw 与多渠道路由。主员工默认进入且拥有全技能权限。</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <button
@@ -1488,6 +1599,20 @@ export function EmployeeHubView({
                     onChange={(key, value) => setFeishuForm((s) => ({ ...s, [key]: value }))}
                     onSave={saveFeishuConfig}
                     onRetry={retryFeishuConnection}
+                  />
+                )}
+
+                {selectedEmployeeWecomStatus && (
+                  <ConnectorConfigPanel
+                    schema={wecomConnectorSchema}
+                    status={selectedEmployeeWecomStatus}
+                    values={wecomForm}
+                    saving={savingWecomConfig}
+                    retrying={retryingWecomConnection}
+                    diagnostics={selectedWecomDiagnostics}
+                    onChange={(key, value) => setWecomForm((s) => ({ ...s, [key]: value }))}
+                    onSave={saveWecomConfig}
+                    onRetry={retryWecomConnection}
                   />
                 )}
 

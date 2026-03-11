@@ -59,7 +59,7 @@ pub async fn process_im_event(
         .bind(thread_id)
         .bind(message_id)
         .bind(text_preview)
-        .bind(if source.is_empty() { "feishu" } else { source })
+        .bind(if source.is_empty() { "app" } else { source })
         .bind(&now)
         .execute(pool)
         .await

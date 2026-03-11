@@ -814,7 +814,7 @@ pub async fn list_agent_employees_with_pool(
         .await
         .map_err(|e| e.to_string())?;
         let enabled_scopes = serde_json::from_str::<Vec<String>>(&enabled_scopes_json)
-            .unwrap_or_else(|_| vec!["feishu".to_string()]);
+            .unwrap_or_else(|_| vec!["app".to_string()]);
         let employee_id = if employee_id_raw.trim().is_empty() {
             role_id.clone()
         } else {
@@ -842,6 +842,20 @@ pub async fn list_agent_employees_with_pool(
         });
     }
     Ok(result)
+}
+
+fn normalize_enabled_scopes_for_storage(enabled_scopes: &[String]) -> Vec<String> {
+    let normalized = enabled_scopes
+        .iter()
+        .map(|v| v.trim())
+        .filter(|v| !v.is_empty())
+        .map(|v| v.to_lowercase())
+        .collect::<Vec<_>>();
+    if normalized.is_empty() {
+        vec!["app".to_string()]
+    } else {
+        normalized
+    }
 }
 
 pub async fn upsert_agent_employee_with_pool(
@@ -894,17 +908,7 @@ pub async fn upsert_agent_employee_with_pool(
     } else {
         input.openclaw_agent_id.trim().to_string()
     };
-    let enabled_scopes = if input.enabled_scopes.is_empty() {
-        vec!["feishu".to_string()]
-    } else {
-        input
-            .enabled_scopes
-            .iter()
-            .map(|v| v.trim())
-            .filter(|v| !v.is_empty())
-            .map(|v| v.to_lowercase())
-            .collect::<Vec<_>>()
-    };
+    let enabled_scopes = normalize_enabled_scopes_for_storage(&input.enabled_scopes);
     let enabled_scopes_json = serde_json::to_string(&enabled_scopes).map_err(|e| e.to_string())?;
     let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
 
@@ -3758,6 +3762,28 @@ pub async fn retry_employee_group_run_failed_steps_with_pool(
     Ok(())
 }
 
+fn employee_scope_matches_event(employee: &AgentEmployee, event: &ImEvent) -> bool {
+    let event_channel = event.channel.trim().to_lowercase();
+    let normalized_event_channel = if event_channel.is_empty() {
+        "app"
+    } else {
+        event_channel.as_str()
+    };
+    let normalized_scopes = if employee.enabled_scopes.is_empty() {
+        vec!["app".to_string()]
+    } else {
+        employee
+            .enabled_scopes
+            .iter()
+            .map(|scope| scope.trim().to_lowercase())
+            .filter(|scope| !scope.is_empty())
+            .collect::<Vec<_>>()
+    };
+    normalized_scopes
+        .iter()
+        .any(|scope| scope == "app" || scope == normalized_event_channel)
+}
+
 pub async fn resolve_target_employees_for_event(
     pool: &SqlitePool,
     event: &ImEvent,
@@ -3773,7 +3799,7 @@ pub async fn resolve_target_employees_for_event(
     let all_enabled = list_agent_employees_with_pool(pool)
         .await?
         .into_iter()
-        .filter(|e| e.enabled)
+        .filter(|e| e.enabled && employee_scope_matches_event(e, event))
         .collect::<Vec<_>>();
 
     if let Some(role_id) = event
@@ -3835,7 +3861,9 @@ fn im_binding_matches_event(
     if !binding.enabled {
         return false;
     }
-    if !binding.channel.trim().is_empty() && !binding.channel.eq_ignore_ascii_case("feishu") {
+    if !binding.channel.trim().is_empty()
+        && !binding.channel.eq_ignore_ascii_case(event.channel.trim())
+    {
         return false;
     }
     if !binding.account_id.trim().is_empty() {
@@ -3893,6 +3921,7 @@ async fn resolve_team_entry_employee_for_event_with_pool(
         .into_iter()
         .find(|employee| {
             employee.enabled
+                && employee_scope_matches_event(employee, event)
                 && (employee
                     .employee_id
                     .eq_ignore_ascii_case(preferred_employee_id.trim())
@@ -4204,6 +4233,7 @@ pub async fn ensure_employee_sessions_for_event_with_pool(
 }
 
 fn build_route_session_key(event: &ImEvent, employee: &AgentEmployee) -> String {
+    let channel = event.channel.trim().to_lowercase();
     let tenant = event
         .tenant_id
         .as_ref()
@@ -4215,7 +4245,16 @@ fn build_route_session_key(event: &ImEvent, employee: &AgentEmployee) -> String 
     } else {
         employee.openclaw_agent_id.trim().to_lowercase()
     };
-    format!("feishu:{}:{}", tenant, agent_id)
+    format!(
+        "{}:{}:{}",
+        if channel.is_empty() {
+            "app"
+        } else {
+            channel.as_str()
+        },
+        tenant,
+        agent_id
+    )
 }
 
 pub async fn link_inbound_event_to_session_with_pool(
@@ -4581,7 +4620,7 @@ mod tests {
             "primary_skill_id": "builtin-general",
             "default_work_dir": "",
             "openclaw_agent_id": "project_manager",
-            "enabled_scopes": ["feishu"],
+            "enabled_scopes": ["app"],
             "enabled": true,
             "is_default": false,
             "skill_ids": []
@@ -4589,5 +4628,138 @@ mod tests {
         let parsed: UpsertAgentEmployeeInput =
             serde_json::from_value(payload).expect("deserialize upsert input");
         assert_eq!(parsed.routing_priority, 100);
+    }
+
+    #[test]
+    fn im_binding_matches_event_respects_non_feishu_channels() {
+        let binding = crate::commands::im_routing::ImRoutingBinding {
+            id: "binding-1".to_string(),
+            agent_id: "architect".to_string(),
+            channel: "wecom".to_string(),
+            account_id: "tenant-wecom".to_string(),
+            peer_kind: "group".to_string(),
+            peer_id: "wecom-room-1".to_string(),
+            guild_id: String::new(),
+            team_id: String::new(),
+            role_ids: Vec::new(),
+            connector_meta: serde_json::json!({}),
+            priority: 100,
+            enabled: true,
+            created_at: "2026-03-11T00:00:00Z".to_string(),
+            updated_at: "2026-03-11T00:00:00Z".to_string(),
+        };
+
+        let wecom_event = crate::im::types::ImEvent {
+            channel: "wecom".to_string(),
+            event_type: crate::im::types::ImEventType::MessageCreated,
+            thread_id: "wecom-room-1".to_string(),
+            event_id: Some("evt-wecom".to_string()),
+            message_id: Some("msg-wecom".to_string()),
+            text: Some("企业微信消息".to_string()),
+            role_id: None,
+            account_id: Some("tenant-wecom".to_string()),
+            tenant_id: Some("tenant-wecom".to_string()),
+        };
+        assert!(super::im_binding_matches_event(&binding, &wecom_event));
+
+        let feishu_event = crate::im::types::ImEvent {
+            channel: "feishu".to_string(),
+            ..wecom_event.clone()
+        };
+        assert!(!super::im_binding_matches_event(&binding, &feishu_event));
+    }
+
+    #[test]
+    fn build_route_session_key_uses_event_channel_namespace() {
+        let employee = super::AgentEmployee {
+            id: "emp-1".to_string(),
+            employee_id: "main".to_string(),
+            name: "主员工".to_string(),
+            role_id: "main".to_string(),
+            persona: String::new(),
+            feishu_open_id: String::new(),
+            feishu_app_id: String::new(),
+            feishu_app_secret: String::new(),
+            primary_skill_id: "builtin-general".to_string(),
+            default_work_dir: String::new(),
+            openclaw_agent_id: "main-agent".to_string(),
+            routing_priority: 100,
+            enabled_scopes: vec!["app".to_string()],
+            enabled: true,
+            is_default: true,
+            skill_ids: Vec::new(),
+            created_at: "2026-03-11T00:00:00Z".to_string(),
+            updated_at: "2026-03-11T00:00:00Z".to_string(),
+        };
+
+        let wecom_event = crate::im::types::ImEvent {
+            channel: "wecom".to_string(),
+            event_type: crate::im::types::ImEventType::MessageCreated,
+            thread_id: "wecom-room-1".to_string(),
+            event_id: Some("evt-wecom".to_string()),
+            message_id: Some("msg-wecom".to_string()),
+            text: Some("企业微信消息".to_string()),
+            role_id: None,
+            account_id: Some("tenant-wecom".to_string()),
+            tenant_id: Some("tenant-wecom".to_string()),
+        };
+
+        assert_eq!(
+            super::build_route_session_key(&wecom_event, &employee),
+            "wecom:tenant-wecom:main-agent"
+        );
+    }
+
+    #[test]
+    fn build_route_session_key_defaults_empty_channel_to_app_namespace() {
+        let employee = super::AgentEmployee {
+            id: "emp-1".to_string(),
+            employee_id: "main".to_string(),
+            name: "主员工".to_string(),
+            role_id: "main".to_string(),
+            persona: String::new(),
+            feishu_open_id: String::new(),
+            feishu_app_id: String::new(),
+            feishu_app_secret: String::new(),
+            primary_skill_id: "builtin-general".to_string(),
+            default_work_dir: String::new(),
+            openclaw_agent_id: "main-agent".to_string(),
+            routing_priority: 100,
+            enabled_scopes: vec!["app".to_string()],
+            enabled: true,
+            is_default: true,
+            skill_ids: Vec::new(),
+            created_at: "2026-03-11T00:00:00Z".to_string(),
+            updated_at: "2026-03-11T00:00:00Z".to_string(),
+        };
+
+        let app_event = crate::im::types::ImEvent {
+            channel: String::new(),
+            event_type: crate::im::types::ImEventType::MessageCreated,
+            thread_id: "room-1".to_string(),
+            event_id: Some("evt-app".to_string()),
+            message_id: Some("msg-app".to_string()),
+            text: Some("本地消息".to_string()),
+            role_id: None,
+            account_id: None,
+            tenant_id: None,
+        };
+
+        assert_eq!(
+            super::build_route_session_key(&app_event, &employee),
+            "app:default:main-agent"
+        );
+    }
+
+    #[test]
+    fn normalize_enabled_scopes_defaults_to_app_scope() {
+        assert_eq!(
+            super::normalize_enabled_scopes_for_storage(&[]),
+            vec!["app".to_string()]
+        );
+        assert_eq!(
+            super::normalize_enabled_scopes_for_storage(&["wecom".to_string()]),
+            vec!["wecom".to_string()]
+        );
     }
 }
