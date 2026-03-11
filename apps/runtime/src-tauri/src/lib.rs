@@ -81,6 +81,7 @@ pub fn run() {
             app.manage(sidecar_manager.clone());
             let feishu_relay_state = commands::feishu_gateway::FeishuEventRelayState::default();
             app.manage(feishu_relay_state.clone());
+            app.manage(commands::feishu_browser_setup::FeishuBrowserSetupState::default());
 
             let startup_prefs = tauri::async_runtime::block_on(
                 commands::runtime_preferences::get_runtime_preferences_with_pool(&pool),
@@ -320,6 +321,9 @@ pub fn run() {
             commands::chat::cancel_agent,
             commands::chat::compact_context,
             commands::feishu_gateway::handle_feishu_event,
+            commands::feishu_browser_setup::start_feishu_browser_setup,
+            commands::feishu_browser_setup::get_feishu_browser_setup_session,
+            commands::feishu_browser_setup::apply_feishu_browser_setup_event,
             commands::feishu_gateway::send_feishu_text_message,
             commands::feishu_gateway::list_feishu_chats,
             commands::feishu_gateway::push_role_summary_to_feishu,
