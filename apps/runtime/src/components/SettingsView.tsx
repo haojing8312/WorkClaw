@@ -145,6 +145,7 @@ export function SettingsView({
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<boolean | null>(null);
   const [modelSuggestions, setModelSuggestions] = useState<string[]>(DEFAULT_MODEL_PROVIDER.models);
+  const [modelSaveMessage, setModelSaveMessage] = useState("");
 
   // 编辑状态 + API Key 可见性
   const [editingModelId, setEditingModelId] = useState<string | null>(null);
@@ -275,6 +276,7 @@ export function SettingsView({
     setShowApiKey(false);
     setError("");
     setTestResult(null);
+    setModelSaveMessage("");
   }
 
   function validateModelForm() {
@@ -372,6 +374,12 @@ export function SettingsView({
       void loadRoutingBindings();
     }
   }, [activeTab]);
+
+  useEffect(() => {
+    if (!modelSaveMessage) return;
+    const timer = window.setTimeout(() => setModelSaveMessage(""), 1200);
+    return () => window.clearTimeout(timer);
+  }, [modelSaveMessage]);
 
   async function loadModels() {
     try {
@@ -985,7 +993,10 @@ export function SettingsView({
       return;
     }
     setError("");
+    setModelSaveMessage("");
     try {
+      const isCreateMode = !editingModelId;
+      let nextSaveMessage = "已保存";
       const savedModelId = await invoke<string>("save_model_config", {
         config: {
           id: editingModelId || "",
@@ -999,10 +1010,12 @@ export function SettingsView({
         },
         apiKey: form.api_key.trim(),
       });
-      if (!editingModelId) {
+      if (isCreateMode) {
         await invoke("set_default_model", { modelId: savedModelId });
+        nextSaveMessage = "已保存，并切换为默认模型";
       }
       resetModelForm();
+      setModelSaveMessage(nextSaveMessage);
       await loadModels();
     } catch (e: unknown) {
       setError(String(e));
@@ -1505,6 +1518,14 @@ export function SettingsView({
         {testResult !== null && (
           <div className={"text-xs " + (testResult ? "bg-green-50 text-green-600 px-2 py-1 rounded" : "bg-red-50 text-red-600 px-2 py-1 rounded")}>
             {testResult ? "连接成功" : "连接失败，请检查配置"}
+          </div>
+        )}
+        {modelSaveMessage && (
+          <div
+            data-testid="settings-model-provider-save-hint"
+            className="bg-green-50 text-green-600 text-xs px-2 py-1 rounded"
+          >
+            {modelSaveMessage}
           </div>
         )}
         <div className="flex gap-2 pt-1">

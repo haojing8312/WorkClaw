@@ -287,4 +287,67 @@ describe("SettingsView model providers", () => {
       expect(invokeMock).toHaveBeenCalledWith("set_default_model", { modelId: "model-2" });
     });
   });
+
+  test("shows explicit save hint when a new model becomes default", async () => {
+    mockModels = [
+      {
+        id: "model-1",
+        name: "Primary Model",
+        api_format: "openai",
+        base_url: "https://api.openai.com/v1",
+        model_name: "gpt-4o-mini",
+        is_default: true,
+      },
+    ];
+
+    render(<SettingsView onClose={() => {}} />);
+
+    await screen.findByText("Primary Model");
+
+    fireEvent.change(screen.getByTestId("settings-model-provider-name"), {
+      target: { value: "Backup Model" },
+    });
+    fireEvent.change(screen.getByTestId("settings-model-provider-base-url"), {
+      target: { value: "https://backup.example.com/v1" },
+    });
+    fireEvent.change(screen.getByTestId("settings-model-provider-model-name"), {
+      target: { value: "gpt-4.1-mini" },
+    });
+    fireEvent.change(screen.getByTestId("settings-model-provider-api-key"), {
+      target: { value: "sk-backup-123" },
+    });
+
+    fireEvent.click(screen.getByTestId("settings-model-provider-save"));
+
+    expect(await screen.findByText("已保存，并切换为默认模型")).toBeInTheDocument();
+  });
+
+  test("shows generic save hint when editing an existing model", async () => {
+    mockModels = [
+      {
+        id: "model-1",
+        name: "Primary Model",
+        api_format: "openai",
+        base_url: "https://api.openai.com/v1",
+        model_name: "gpt-4o-mini",
+        is_default: true,
+      },
+    ];
+
+    render(<SettingsView onClose={() => {}} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("settings-model-provider-name")).toHaveValue("Primary Model");
+    });
+
+    fireEvent.change(screen.getByTestId("settings-model-provider-name"), {
+      target: { value: "Primary Model Updated" },
+    });
+    fireEvent.click(screen.getByTestId("settings-model-provider-save"));
+
+    expect(await screen.findByText("已保存")).toBeInTheDocument();
+    expect(screen.queryByText("已保存，并切换为默认模型")).not.toBeInTheDocument();
+  });
 });
