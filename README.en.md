@@ -350,24 +350,13 @@ This README keeps a high-level roadmap only. Detailed technical plans and iterat
 
 ## ⚠️ Security Disclaimer
 
-**IMPORTANT - READ BEFORE USE**
+Before downloading, installing, compiling, configuring, connecting third-party models or services, importing Skills, or running WorkClaw, read the full [WorkClaw Security Disclaimer](docs/legal/security-disclaimer.en.md).
 
-Desktop Agents have powerful capabilities including file system access and command execution. This creates inherent security risks:
+By downloading, installing, copying, deploying, configuring, integrating, or using WorkClaw, you acknowledge that you have read, understood, and accepted the full disclaimer, including the sections covering product capability boundaries, inherent risks, user security responsibilities, third-party dependency risk, the no-warranty statement, and limitation of liability.
 
-- **Malicious Skills**: Third parties may distribute `.skillpack` files containing harmful code
-- **System Access**: Installed Skills can read, modify, or delete files on your computer
-- **Command Execution**: Skills can execute arbitrary shell commands with your user permissions
-- **Data Exposure**: Skills may access sensitive data in your workspace folders
+If you do not agree to that disclaimer, do not download, install, deploy, or use WorkClaw.
 
-**By downloading, installing, or running this software, you acknowledge:**
-1. You understand the security risks associated with desktop AI Agents
-2. You will only install Skills from trusted sources
-3. You will review and configure workspace permissions carefully
-4. **The developers assume NO LIABILITY for any damages, data loss, or security breaches** resulting from the use of this software or any Skills installed through it
-
-**If you do not agree to these terms, DO NOT download, install, or run this software.**
-
-For security best practices, see [SECURITY.md](SECURITY.md).
+For vulnerability disclosure and security reporting, see [SECURITY.md](SECURITY.md).
 
 ## Advanced Technical Docs (Integrators & Maintainers)
 
