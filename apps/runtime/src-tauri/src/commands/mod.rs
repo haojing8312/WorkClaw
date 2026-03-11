@@ -4,6 +4,7 @@ pub mod clawhub;
 pub mod desktop_lifecycle;
 pub mod dialog;
 pub mod employee_agents;
+pub mod feishu_browser_setup;
 pub mod feishu_gateway;
 pub mod im_config;
 pub mod im_gateway;
