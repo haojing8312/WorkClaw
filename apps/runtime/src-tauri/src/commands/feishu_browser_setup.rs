@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::commands::feishu_gateway::set_app_setting;
 use serde::{Deserialize, Serialize};
+use sqlx::SqlitePool;
 use tauri::State;
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -90,6 +92,30 @@ impl FeishuBrowserSetupStore {
         }
 
         Ok(session.clone())
+    }
+
+    pub async fn report_credentials_and_bind(
+        &self,
+        pool: &SqlitePool,
+        session_id: String,
+        app_id: String,
+        app_secret: String,
+    ) -> Result<FeishuBrowserSetupSession, String> {
+        set_app_setting(pool, "feishu_app_id", app_id.as_str()).await?;
+        set_app_setting(pool, "feishu_app_secret", app_secret.as_str()).await?;
+
+        let updated = self
+            .apply_event(
+                session_id.clone(),
+                SetupEvent::CredentialsReported {
+                    app_id,
+                    app_secret,
+                },
+            )
+            .await?;
+
+        self.apply_event(session_id, SetupEvent::BindSucceeded).await?;
+        self.get_session(updated.session_id).await
     }
 }
 
