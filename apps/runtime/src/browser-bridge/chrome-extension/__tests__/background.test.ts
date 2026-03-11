@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { forwardCredentialsToLocalBridge, getNativeHostName } from "../background";
+import { describe, expect, it, vi } from "vitest";
+import {
+  forwardCredentialsToLocalBridge,
+  forwardCredentialsViaNativeHost,
+  getNativeHostName,
+} from "../background";
 
 describe("chrome extension background bridge", () => {
   it("exposes the expected native host name", () => {
@@ -39,5 +43,59 @@ describe("chrome extension background bridge", () => {
       kind: "response",
       payload: { type: "action.pause", reason: "saved" },
     });
+  });
+
+  it("forwards credentials via chrome.runtime.connectNative when available", async () => {
+    const postMessage = vi.fn();
+    const disconnect = vi.fn();
+    const listeners: Array<(message: unknown) => void> = [];
+
+    const chromeLike = {
+      runtime: {
+        connectNative: vi.fn(() => ({
+          postMessage,
+          disconnect,
+          onMessage: {
+            addListener(listener: (message: unknown) => void) {
+              listeners.push(listener);
+            },
+          },
+        })),
+      },
+    };
+
+    const pending = forwardCredentialsViaNativeHost(
+      {
+        sessionId: "sess-2",
+        appId: "cli_native_123",
+        appSecret: "sec_native_456",
+      },
+      chromeLike,
+    );
+
+    expect(chromeLike.runtime.connectNative).toHaveBeenCalledWith("dev.workclaw.runtime");
+    expect(postMessage).toHaveBeenCalledWith({
+      version: 1,
+      sessionId: "sess-2",
+      kind: "request",
+      payload: {
+        type: "credentials.report",
+        appId: "cli_native_123",
+        appSecret: "sec_native_456",
+      },
+    });
+
+    listeners[0]?.({
+      version: 1,
+      sessionId: "sess-2",
+      kind: "response",
+      payload: { type: "action.pause", reason: "saved" },
+    });
+
+    await expect(pending).resolves.toMatchObject({
+      kind: "response",
+      payload: { type: "action.pause", reason: "saved" },
+    });
+    expect(disconnect).toHaveBeenCalled();
   });
 });
