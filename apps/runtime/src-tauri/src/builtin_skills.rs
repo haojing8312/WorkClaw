@@ -81,6 +81,7 @@ pub fn local_skill_template_markdown() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::skill_config::SkillConfig;
 
     #[test]
     fn builtin_skill_entries_include_expert_presets() {
@@ -149,6 +150,33 @@ mod tests {
                 && markdown.contains("SOUL.md`：定义行为准则")
                 && markdown.contains("USER.md`：定义服务对象画像"),
             "employee creator should explain the purpose of AGENTS/SOUL/USER files"
+        );
+    }
+
+    #[test]
+    fn builtin_find_skills_declares_confirmation_and_github_download_tools() {
+        let markdown =
+            builtin_skill_markdown(BUILTIN_FIND_SKILLS_ID).expect("find-skills markdown exists");
+        let config = SkillConfig::parse(markdown);
+        let allowed_tools = config.allowed_tools.unwrap_or_default();
+
+        assert!(
+            allowed_tools.iter().any(|tool| tool == "ask_user"),
+            "find-skills should be able to ask for 1/2 confirmation"
+        );
+        assert!(
+            allowed_tools
+                .iter()
+                .any(|tool| tool == "github_repo_download"),
+            "find-skills should be able to download github repos into workspace"
+        );
+        assert!(
+            markdown.contains("输入 1 或 2"),
+            "find-skills prompt should guide numeric confirmation"
+        );
+        assert!(
+            markdown.contains("安装技能 -> 本地 Skill 目录"),
+            "find-skills prompt should guide manual local install after download"
         );
     }
 }

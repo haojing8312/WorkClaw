@@ -334,4 +334,55 @@ describe("ChatView find-skills install flow", () => {
       ).toBeInTheDocument();
     });
   });
+
+  test("does not render install card for github fallback repo links", async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_messages") {
+        return Promise.resolve([
+          {
+            role: "assistant",
+            content:
+              "未找到可直接安装技能。GitHub 备选仓库： https://github.com/obra/superpowers",
+            created_at: new Date().toISOString(),
+          },
+        ]);
+      }
+      if (command === "get_sessions") return Promise.resolve([]);
+      return Promise.resolve(null);
+    });
+
+    render(
+      <ChatView
+        skill={{
+          id: "builtin-find-skills",
+          name: "找技能",
+          description: "desc",
+          version: "1.0.0",
+          author: "test",
+          recommended_model: "model-a",
+          tags: [],
+          created_at: new Date().toISOString(),
+        }}
+        models={[
+          {
+            id: "model-a",
+            name: "Model A",
+            api_format: "openai",
+            base_url: "https://example.com",
+            model_name: "model-a",
+            is_default: true,
+          },
+        ]}
+        sessionId="session-1"
+        installedSkillIds={[]}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("https://github.com/obra/superpowers")).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText("GitHub 仓库")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "立即安装" })).not.toBeInTheDocument();
+  });
 });

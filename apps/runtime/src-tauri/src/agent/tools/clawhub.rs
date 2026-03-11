@@ -101,38 +101,6 @@ fn build_recommend_reason(hits: usize, stars: i64) -> String {
     }
 }
 
-fn normalize_skill(item: &Value) -> Option<ClawhubSkillSummary> {
-    let name = item.get("name")?.as_str()?.to_string();
-    let slug = item.get("slug")?.as_str()?.to_string();
-    let description = item
-        .get("description")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string();
-    let github_url = item
-        .get("github_url")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    let source_url = item
-        .get("source_url")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    let stars = item
-        .get("stars")
-        .or_else(|| item.get("github_stars"))
-        .and_then(|v| v.as_i64())
-        .unwrap_or(0);
-
-    Some(ClawhubSkillSummary {
-        name,
-        slug,
-        description,
-        github_url,
-        source_url,
-        stars,
-    })
-}
-
 fn normalize_library_item(item: &Value) -> Option<ClawhubLibraryItem> {
     let slug = item.get("slug")?.as_str()?.to_string();
     let name = item
@@ -155,6 +123,46 @@ fn normalize_library_item(item: &Value) -> Option<ClawhubLibraryItem> {
         slug,
         name,
         summary,
+        stars,
+    })
+}
+
+fn normalize_search_skill_from_library_item(item: &Value) -> Option<ClawhubSkillSummary> {
+    let slug = item.get("slug")?.as_str()?.to_string();
+    let name = item
+        .get("displayName")
+        .and_then(|v| v.as_str())
+        .or_else(|| item.get("name").and_then(|v| v.as_str()))
+        .unwrap_or(&slug)
+        .to_string();
+    let description = item
+        .get("summary")
+        .and_then(|v| v.as_str())
+        .or_else(|| item.get("description").and_then(|v| v.as_str()))
+        .unwrap_or_default()
+        .to_string();
+    let github_url = item
+        .get("github_url")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let source_url = item
+        .get("source_url")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .or_else(|| Some(format!("{}/skills/{}", clawhub_base_url(), slug)));
+    let stars = item
+        .get("stats")
+        .and_then(|s| s.get("stars"))
+        .and_then(|v| v.as_i64())
+        .or_else(|| item.get("stars").and_then(|v| v.as_i64()))
+        .unwrap_or(0);
+
+    Some(ClawhubSkillSummary {
+        name,
+        slug,
+        description,
+        github_url,
+        source_url,
         stars,
     })
 }
@@ -194,11 +202,11 @@ fn fetch_search_once(
 ) -> Result<Vec<ClawhubSkillSummary>> {
     let base = clawhub_base_url();
     let url = format!(
-        "{}/api/v1/search?query={}&page={}&limit={}",
+        "{}/api/v1/skills?limit={}&sort={}&nonSuspicious=true&q={}",
         base,
-        urlencoding::encode(query),
-        page,
-        limit
+        limit,
+        if page > 1 { "updated" } else { "downloads" },
+        urlencoding::encode(query)
     );
 
     let resp = client
@@ -213,14 +221,15 @@ fn fetch_search_once(
         .map_err(|e| anyhow!("ClawHub 响应解析失败: {}", e))?;
 
     let items = body
-        .get("results")
+        .get("items")
         .and_then(|v| v.as_array())
-        .or_else(|| body.get("skills").and_then(|v| v.as_array()))
         .cloned()
-        .or_else(|| body.as_array().cloned())
         .unwrap_or_default();
 
-    let mut out: Vec<ClawhubSkillSummary> = items.iter().filter_map(normalize_skill).collect();
+    let mut out: Vec<ClawhubSkillSummary> = items
+        .iter()
+        .filter_map(normalize_search_skill_from_library_item)
+        .collect();
     out.sort_by(|a, b| b.stars.cmp(&a.stars).then_with(|| a.name.cmp(&b.name)));
     Ok(out)
 }
@@ -231,7 +240,12 @@ fn fetch_library_candidates(
     limit: u32,
 ) -> Result<Vec<ClawhubSkillSummary>> {
     let base = clawhub_base_url();
-    let url = format!("{}/api/v1/skills?limit={}&sort=updated", base, 200);
+    let url = format!(
+        "{}/api/v1/skills?limit={}&sort=downloads&nonSuspicious=true&q={}",
+        base,
+        200,
+        urlencoding::encode(query)
+    );
     let resp = client
         .get(url)
         .send()
@@ -277,7 +291,7 @@ fn fetch_library_candidates(
 
     let mut out: Vec<ClawhubSkillSummary> = scored
         .into_iter()
-        .filter(|(score, hits, _)| *hits > 0 || *score >= 8.0)
+        .filter(|(_, hits, _)| *hits > 0)
         .map(|(_, _, s)| s)
         .collect();
     out.truncate(limit as usize);

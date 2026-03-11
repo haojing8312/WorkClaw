@@ -1,5 +1,6 @@
 use super::employee_agents::{
-    list_agent_employees_with_pool, maybe_handle_team_entry_session_message_with_pool, AgentEmployee,
+    list_agent_employees_with_pool, maybe_handle_team_entry_session_message_with_pool,
+    AgentEmployee,
 };
 use super::models::load_routing_settings_from_pool;
 use super::runtime_preferences::resolve_default_work_dir_with_pool;
@@ -11,7 +12,8 @@ use crate::agent::tools::search_providers::cache::SearchCache;
 use crate::agent::tools::{
     browser_tools::register_browser_tools, AskUserResponder, AskUserTool, BashKillTool,
     BashOutputTool, BashTool, ClawhubRecommendTool, ClawhubSearchTool, CompactTool,
-    EmployeeManageTool, MemoryTool, ProcessManager, SkillInvokeTool, TaskTool, WebSearchTool,
+    EmployeeManageTool, GithubRepoDownloadTool, MemoryTool, ProcessManager, SkillInvokeTool,
+    TaskTool, WebSearchTool,
 };
 use crate::agent::AgentExecutor;
 use chrono::Utc;
@@ -451,7 +453,9 @@ pub async fn send_message(
         .map_err(|e| e.to_string())?;
     }
 
-    if let Some(group_run) = maybe_handle_team_entry_session_message_with_pool(&db.0, &session_id, &user_message).await? {
+    if let Some(group_run) =
+        maybe_handle_team_entry_session_message_with_pool(&db.0, &session_id, &user_message).await?
+    {
         let _ = app.emit(
             "stream-token",
             StreamToken {
@@ -708,6 +712,9 @@ pub async fn send_message(
     agent_executor
         .registry()
         .register(Arc::new(ClawhubRecommendTool));
+    agent_executor
+        .registry()
+        .register(Arc::new(GithubRepoDownloadTool::new()));
     agent_executor
         .registry()
         .register(Arc::new(EmployeeManageTool::new(db.0.clone())));
@@ -1464,8 +1471,7 @@ mod tests {
         is_supported_protocol, normalize_permission_mode_for_storage,
         normalize_session_mode_for_storage, normalize_team_id_for_storage,
         parse_fallback_chain_targets, parse_permission_mode, permission_mode_label_for_display,
-        retry_backoff_ms, retry_budget_for_error, should_retry_same_candidate,
-        ModelRouteErrorKind,
+        retry_backoff_ms, retry_budget_for_error, should_retry_same_candidate, ModelRouteErrorKind,
     };
     use crate::agent::permissions::PermissionMode;
     use std::collections::HashMap;
@@ -1504,7 +1510,10 @@ mod tests {
     fn normalize_session_mode_defaults_to_general() {
         assert_eq!(normalize_session_mode_for_storage(None), "general");
         assert_eq!(normalize_session_mode_for_storage(Some("")), "general");
-        assert_eq!(normalize_session_mode_for_storage(Some("invalid")), "general");
+        assert_eq!(
+            normalize_session_mode_for_storage(Some("invalid")),
+            "general"
+        );
     }
 
     #[test]
@@ -1525,7 +1534,10 @@ mod tests {
 
     #[test]
     fn normalize_team_id_only_keeps_team_entry_values() {
-        assert_eq!(normalize_team_id_for_storage("general", Some("group-1")), "");
+        assert_eq!(
+            normalize_team_id_for_storage("general", Some("group-1")),
+            ""
+        );
         assert_eq!(
             normalize_team_id_for_storage("employee_direct", Some("group-1")),
             ""

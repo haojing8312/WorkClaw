@@ -1369,6 +1369,7 @@ export function ChatView({
             stars: typeof item?.stars === "number" ? item.stars : undefined,
             githubUrl: typeof item?.github_url === "string" ? item.github_url : null,
             sourceUrl: typeof item?.source_url === "string" ? item.source_url : null,
+            sourceKind: "clawhub",
           } as ClawhubInstallCandidate;
         })
         .filter(Boolean) as ClawhubInstallCandidate[];
@@ -1377,24 +1378,30 @@ export function ChatView({
     }
   }
 
-  function extractInstallCandidates(items: StreamItem[] | undefined): ClawhubInstallCandidate[] {
-    if (!items || items.length === 0) return [];
+  function mergeInstallCandidate(map: Map<string, ClawhubInstallCandidate>, candidate: ClawhubInstallCandidate) {
+    const key = `${candidate.slug}:${candidate.githubUrl ?? ""}`;
+    const exists = map.get(key);
+    if (!exists) {
+      map.set(key, candidate);
+      return;
+    }
+    const existingLen = exists.description?.length ?? 0;
+    const currentLen = candidate.description?.length ?? 0;
+    if (currentLen > existingLen || (candidate.stars ?? 0) > (exists.stars ?? 0)) {
+      map.set(key, candidate);
+    }
+  }
+
+  function extractInstallCandidates(items: StreamItem[] | undefined, content?: string): ClawhubInstallCandidate[] {
     const map = new Map<string, ClawhubInstallCandidate>();
-    for (const item of items) {
-      if (item.type !== "tool_call" || !item.toolCall) continue;
-      const name = item.toolCall.name;
-      if (name !== "clawhub_search" && name !== "clawhub_recommend") continue;
-      const parsed = parseClawhubCandidatesFromOutput(item.toolCall.output);
-      for (const c of parsed) {
-        const exists = map.get(c.slug);
-        if (!exists) {
-          map.set(c.slug, c);
-          continue;
-        }
-        const existingLen = exists.description?.length ?? 0;
-        const currentLen = c.description?.length ?? 0;
-        if (currentLen > existingLen || (c.stars ?? 0) > (exists.stars ?? 0)) {
-          map.set(c.slug, c);
+    if (items && items.length > 0) {
+      for (const item of items) {
+        if (item.type !== "tool_call" || !item.toolCall) continue;
+        const name = item.toolCall.name;
+        if (name !== "clawhub_search" && name !== "clawhub_recommend") continue;
+        const parsed = parseClawhubCandidatesFromOutput(item.toolCall.output);
+        for (const candidate of parsed) {
+          mergeInstallCandidate(map, candidate);
         }
       }
     }
@@ -1404,7 +1411,7 @@ export function ChatView({
   const candidateTranslationTexts = useMemo(
     () => [
       ...messages.flatMap((m) =>
-        extractInstallCandidates(m.streamItems).flatMap((candidate) => [
+        extractInstallCandidates(m.streamItems, m.content).flatMap((candidate) => [
           candidate.name,
           candidate.description ?? "",
         ]),
@@ -1434,7 +1441,7 @@ export function ChatView({
             const installed = installedSkillSet.has(`clawhub-${candidate.slug}`);
             const isInstalling = installingSlug === candidate.slug;
             return (
-              <div key={candidate.slug} className="rounded-lg border border-blue-100 bg-white p-2.5">
+              <div key={`${candidate.slug}:${candidate.githubUrl ?? ""}`} className="rounded-lg border border-blue-100 bg-white p-2.5">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <div className="text-sm font-medium text-gray-800 truncate">
@@ -1466,9 +1473,7 @@ export function ChatView({
                     {renderCandidateText(candidate.description)}
                   </div>
                 )}
-                <div className="mt-1.5 text-[11px] text-gray-400">
-                  stars: {candidate.stars ?? 0}
-                </div>
+                <div className="mt-1.5 text-[11px] text-gray-400">stars: {candidate.stars ?? 0}</div>
               </div>
             );
           })}
@@ -2225,7 +2230,7 @@ export function ChatView({
                 {m.role === "assistant" && m.streamItems ? (
                   <>
                     {renderStreamItems(m.streamItems, false)}
-                    {renderInstallCandidates(extractInstallCandidates(m.streamItems))}
+                    {renderInstallCandidates(extractInstallCandidates(m.streamItems, m.content))}
                   </>
                 ) : m.role === "assistant" && m.toolCalls ? (
                   <>
@@ -2233,7 +2238,9 @@ export function ChatView({
                     <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{m.content}</ReactMarkdown>
                   </>
                 ) : m.role === "assistant" ? (
-                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{m.content}</ReactMarkdown>
+                  <>
+                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{m.content}</ReactMarkdown>
+                  </>
                 ) : (
                   m.content
                 )}

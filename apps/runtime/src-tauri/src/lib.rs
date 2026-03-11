@@ -267,6 +267,7 @@ pub fn run() {
             commands::clawhub::translate_texts_with_preferences,
             commands::clawhub::translate_clawhub_texts,
             commands::clawhub::install_clawhub_skill,
+            commands::clawhub::install_github_skill_repo,
             commands::clawhub::check_clawhub_skill_update,
             commands::clawhub::update_clawhub_skill,
             commands::models::save_model_config,

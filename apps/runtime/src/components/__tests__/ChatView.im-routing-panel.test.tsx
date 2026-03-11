@@ -541,6 +541,55 @@ describe("ChatView IM routing panel", () => {
     });
   });
 
+  test("sends numeric ask-user option back to the session when user clicks it", async () => {
+    render(
+      <ChatView
+        skill={{
+          id: "builtin-find-skills",
+          name: "找技能",
+          description: "desc",
+          version: "1.0.0",
+          author: "test",
+          recommended_model: "",
+          tags: [],
+          created_at: new Date().toISOString(),
+        }}
+        models={[
+          {
+            id: "m1",
+            name: "model",
+            api_format: "openai",
+            base_url: "https://example.com",
+            model_name: "model",
+            is_default: true,
+          },
+        ]}
+        sessionId="session-find-skill-download"
+      />
+    );
+
+    act(() => {
+      emit("ask-user-event", {
+        session_id: "session-find-skill-download",
+        question: "检测到可导入仓库 obra/superpowers，是否下载到当前工作目录？输入 1 或 2",
+        options: ["1", "2"],
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "1" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "2" })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "1" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("answer_user_question", {
+        answer: "1",
+      });
+    });
+  });
+
   test("shows main employee summarizing hint after delegated sub employee completes", async () => {
     render(
       <ChatView

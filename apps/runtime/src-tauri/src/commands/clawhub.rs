@@ -16,7 +16,9 @@ use zip::ZipArchive;
 
 use crate::agent::types::LLMResponse;
 use crate::commands::runtime_preferences::get_runtime_preferences_with_pool;
-use crate::commands::skills::{ensure_skill_display_name_available, DbState, ImportResult};
+use crate::commands::skills::{
+    ensure_skill_display_name_available, import_local_skill_to_pool, DbState, ImportResult,
+};
 
 const DEFAULT_CLAWHUB_BASE: &str = "https://www.clawhub.ai";
 const CLAWHUB_LIBRARY_CACHE_TTL_SECONDS: i64 = 10 * 60;
@@ -89,6 +91,32 @@ pub struct ClawhubUpdateStatus {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscoveredSkillDir {
+    pub name: String,
+    pub dir_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GithubRepoSkippedImport {
+    pub dir_path: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GithubRepoInstallResult {
+    pub repo_dir: String,
+    pub detected_skills: Vec<DiscoveredSkillDir>,
+    pub imported_manifests: Vec<skillpack_rs::SkillManifest>,
+    pub skipped: Vec<GithubRepoSkippedImport>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GithubRepoDownloadResult {
+    pub repo_dir: String,
+    pub detected_skills: Vec<DiscoveredSkillDir>,
+}
+
 fn clawhub_base_url() -> String {
     std::env::var("CLAWHUB_API_BASE")
         .ok()
@@ -120,9 +148,7 @@ fn build_library_cache_key(cursor: Option<&str>, limit: u32, sort: &str) -> Stri
         .unwrap_or(CLAWHUB_FIRST_CURSOR);
     format!(
         "clawhub:library:v1:sort={}:limit={}:cursor={}",
-        sort,
-        limit,
-        normalized_cursor
+        sort, limit, normalized_cursor
     )
 }
 
@@ -224,36 +250,19 @@ fn default_market_skill_base_dir(app: &AppHandle) -> PathBuf {
     Path::new(&home).join(".workclaw").join("market-skills")
 }
 
-fn normalize_skill(item: &Value) -> Option<ClawhubSkillSummary> {
-    let name = item.get("name")?.as_str()?.to_string();
-    let slug = item.get("slug")?.as_str()?.to_string();
-    let description = item
-        .get("description")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string();
-    let github_url = item
-        .get("github_url")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    let source_url = item
-        .get("source_url")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    let stars = item
-        .get("stars")
-        .or_else(|| item.get("github_stars"))
-        .and_then(|v| v.as_i64())
-        .unwrap_or(0);
+fn default_workspace_import_base_dir(app: &AppHandle, workspace: Option<&str>) -> PathBuf {
+    if let Some(dir) = workspace
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+    {
+        return dir.join(".workclaw-imports");
+    }
+    default_market_skill_base_dir(app)
+}
 
-    Some(ClawhubSkillSummary {
-        name,
-        slug,
-        description,
-        github_url,
-        source_url,
-        stars,
-    })
+pub fn workspace_import_base_dir(workspace: &str) -> PathBuf {
+    PathBuf::from(workspace.trim()).join(".workclaw-imports")
 }
 
 fn normalize_library_item(item: &Value) -> Option<ClawhubLibraryItem> {
@@ -294,6 +303,46 @@ fn normalize_library_item(item: &Value) -> Option<ClawhubLibraryItem> {
         tags,
         stars,
         downloads,
+    })
+}
+
+fn normalize_search_skill_from_library_item(item: &Value) -> Option<ClawhubSkillSummary> {
+    let slug = item.get("slug")?.as_str()?.to_string();
+    let name = item
+        .get("displayName")
+        .and_then(|v| v.as_str())
+        .or_else(|| item.get("name").and_then(|v| v.as_str()))
+        .unwrap_or(&slug)
+        .to_string();
+    let description = item
+        .get("summary")
+        .and_then(|v| v.as_str())
+        .or_else(|| item.get("description").and_then(|v| v.as_str()))
+        .unwrap_or_default()
+        .to_string();
+    let github_url = item
+        .get("github_url")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let source_url = item
+        .get("source_url")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .or_else(|| Some(format!("{}/skills/{}", clawhub_base_url(), slug)));
+    let stars = item
+        .get("stats")
+        .and_then(|s| s.get("stars"))
+        .and_then(|v| v.as_i64())
+        .or_else(|| item.get("stars").and_then(|v| v.as_i64()))
+        .unwrap_or(0);
+
+    Some(ClawhubSkillSummary {
+        name,
+        slug,
+        description,
+        github_url,
+        source_url,
+        stars,
     })
 }
 
@@ -750,7 +799,8 @@ async fn translate_text_via_model(
     }
 }
 
-fn find_skill_root(extract_dir: &Path) -> Option<PathBuf> {
+fn find_skill_roots(extract_dir: &Path) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
     for entry in WalkDir::new(extract_dir).min_depth(1).into_iter().flatten() {
         if !entry.file_type().is_file() {
             continue;
@@ -762,10 +812,103 @@ fn find_skill_root(extract_dir: &Path) -> Option<PathBuf> {
             .map(|n| n.eq_ignore_ascii_case("SKILL.md"))
             .unwrap_or(false)
         {
-            return entry.path().parent().map(|p| p.to_path_buf());
+            if let Some(parent) = entry.path().parent() {
+                roots.push(parent.to_path_buf());
+            }
         }
     }
-    None
+    roots.sort();
+    roots.dedup();
+    roots
+}
+
+fn find_skill_root(extract_dir: &Path) -> Option<PathBuf> {
+    find_skill_roots(extract_dir).into_iter().next()
+}
+
+fn describe_skill_dir(dir_path: &Path) -> DiscoveredSkillDir {
+    let name = std::fs::read_to_string(dir_path.join("SKILL.md"))
+        .ok()
+        .and_then(|content| crate::agent::skill_config::SkillConfig::parse(&content).name)
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            dir_path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .map(|value| value.to_string())
+        })
+        .unwrap_or_else(|| "unnamed-skill".to_string());
+    DiscoveredSkillDir {
+        name,
+        dir_path: dir_path.to_string_lossy().to_string(),
+    }
+}
+
+fn build_github_repo_key(repo_url: &str, repo_slug: &str) -> String {
+    sanitize_slug_stable(if repo_slug.trim().is_empty() {
+        repo_url
+            .rsplit('/')
+            .next()
+            .unwrap_or("github-skill")
+            .trim_end_matches(".git")
+    } else {
+        repo_slug.trim()
+    })
+}
+
+fn extract_github_repo_archive(
+    bytes: &[u8],
+    base_dir: &Path,
+    repo_key: &str,
+) -> Result<GithubRepoDownloadResult, String> {
+    std::fs::create_dir_all(base_dir).map_err(|e| e.to_string())?;
+    let extract_dir = base_dir.join(format!("{}-{}", repo_key, Utc::now().timestamp_millis()));
+    std::fs::create_dir_all(&extract_dir).map_err(|e| e.to_string())?;
+    extract_zip_to_dir(bytes, &extract_dir)?;
+
+    let roots = find_skill_roots(&extract_dir);
+    if roots.is_empty() {
+        return Err("未在 GitHub 仓库中发现可导入的 SKILL.md".to_string());
+    }
+
+    Ok(GithubRepoDownloadResult {
+        repo_dir: extract_dir.to_string_lossy().to_string(),
+        detected_skills: roots.iter().map(|dir| describe_skill_dir(dir)).collect(),
+    })
+}
+
+pub async fn download_github_skill_repo_to_workspace(
+    app: &AppHandle,
+    repo_url: &str,
+    repo_slug: &str,
+    workspace: Option<&str>,
+) -> Result<GithubRepoDownloadResult, String> {
+    let clean_repo_url = repo_url.trim().to_string();
+    if clean_repo_url.is_empty() {
+        return Err("repo_url 不能为空".to_string());
+    }
+
+    let repo_key = build_github_repo_key(&clean_repo_url, repo_slug);
+    let client = Client::new();
+    let bytes = download_skill_zip_bytes(&client, &clean_repo_url).await?;
+    let base_dir = default_workspace_import_base_dir(app, workspace);
+    extract_github_repo_archive(&bytes, &base_dir, &repo_key)
+}
+
+pub async fn download_github_skill_repo_to_dir(
+    repo_url: &str,
+    repo_slug: &str,
+    base_dir: &Path,
+) -> Result<GithubRepoDownloadResult, String> {
+    let clean_repo_url = repo_url.trim().to_string();
+    if clean_repo_url.is_empty() {
+        return Err("repo_url 不能为空".to_string());
+    }
+
+    let repo_key = build_github_repo_key(&clean_repo_url, repo_slug);
+    let client = Client::new();
+    let bytes = download_skill_zip_bytes(&client, &clean_repo_url).await?;
+    extract_github_repo_archive(&bytes, base_dir, &repo_key)
 }
 
 async fn fetch_skill_detail_candidate(client: &Client, url: &str) -> Result<Option<Value>, String> {
@@ -775,7 +918,11 @@ async fn fetch_skill_detail_candidate(client: &Client, url: &str) -> Result<Opti
         .await
         .map_err(|e| format!("ClawHub 详情加载失败: {}", e))?;
     if resp.status().is_success() {
-        return resp.json::<Value>().await.map(Some).map_err(|e| e.to_string());
+        return resp
+            .json::<Value>()
+            .await
+            .map(Some)
+            .map_err(|e| e.to_string());
     }
     if resp.status() == StatusCode::NOT_FOUND {
         return Ok(None);
@@ -783,7 +930,10 @@ async fn fetch_skill_detail_candidate(client: &Client, url: &str) -> Result<Opti
     Err(format!("ClawHub 详情加载失败: HTTP {}", resp.status()))
 }
 
-async fn fetch_skill_detail_from_search(client: &Client, slug: &str) -> Result<Option<Value>, String> {
+async fn fetch_skill_detail_from_search(
+    client: &Client,
+    slug: &str,
+) -> Result<Option<Value>, String> {
     let base = clawhub_base_url();
     let search_url = format!(
         "{}/api/v1/search?query={}&page=1&limit=20",
@@ -908,30 +1058,29 @@ pub async fn search_clawhub_skills(
         return Ok(Vec::new());
     }
 
-    let base = clawhub_base_url();
-    let url = format!(
-        "{}/api/v1/search?query={}&page={}&limit={}",
-        base,
-        urlencoding::encode(q),
-        page.unwrap_or(1),
-        limit.unwrap_or(20)
-    );
     let client = Client::new();
-    let resp = client.get(url).send().await.map_err(|e| e.to_string())?;
-    if !resp.status().is_success() {
-        return Err(format!("ClawHub 搜索失败: HTTP {}", resp.status()));
-    }
-    let body: Value = resp.json().await.map_err(|e| e.to_string())?;
-
+    let body = fetch_library_body(
+        &client,
+        None,
+        limit.unwrap_or(20),
+        if page.unwrap_or(1) > 1 {
+            "updated"
+        } else {
+            "downloads"
+        },
+        Some(q),
+    )
+    .await?;
     let items = body
-        .get("results")
+        .get("items")
         .and_then(|v| v.as_array())
-        .or_else(|| body.get("skills").and_then(|v| v.as_array()))
         .cloned()
-        .or_else(|| body.as_array().cloned())
         .unwrap_or_default();
 
-    let mut out: Vec<ClawhubSkillSummary> = items.iter().filter_map(normalize_skill).collect();
+    let mut out: Vec<ClawhubSkillSummary> = items
+        .iter()
+        .filter_map(normalize_search_skill_from_library_item)
+        .collect();
     out.sort_by(|a, b| b.stars.cmp(&a.stars).then_with(|| a.name.cmp(&b.name)));
     Ok(out)
 }
@@ -946,30 +1095,24 @@ pub async fn recommend_clawhub_skills(
         return Ok(Vec::new());
     }
 
-    let base = clawhub_base_url();
-    let url = format!(
-        "{}/api/v1/search?query={}&page=1&limit={}",
-        base,
-        urlencoding::encode(q),
-        limit.unwrap_or(20).max(5).min(50)
-    );
     let client = Client::new();
-    let resp = client.get(url).send().await.map_err(|e| e.to_string())?;
-    if !resp.status().is_success() {
-        return Err(format!("推荐检索失败: HTTP {}", resp.status()));
-    }
-    let body: Value = resp.json().await.map_err(|e| e.to_string())?;
+    let body = fetch_library_body(
+        &client,
+        None,
+        limit.unwrap_or(20).max(5).min(50),
+        "downloads",
+        Some(q),
+    )
+    .await?;
     let items = body
-        .get("results")
+        .get("items")
         .and_then(|v| v.as_array())
-        .or_else(|| body.get("skills").and_then(|v| v.as_array()))
         .cloned()
-        .or_else(|| body.as_array().cloned())
         .unwrap_or_default();
 
     let mut recs: Vec<ClawhubSkillRecommendation> = items
         .iter()
-        .filter_map(normalize_skill)
+        .filter_map(normalize_search_skill_from_library_item)
         .map(|skill| {
             let (score, hits) = calc_recommendation_score(q, &skill);
             ClawhubSkillRecommendation {
@@ -983,6 +1126,7 @@ pub async fn recommend_clawhub_skills(
                 source_url: skill.source_url,
             }
         })
+        .filter(|rec| rec.score >= 8.0)
         .collect();
 
     recs.sort_by(|a, b| {
@@ -1003,14 +1147,19 @@ async fn fetch_library_body(
     cursor: Option<&str>,
     limit: u32,
     sort: &str,
+    query: Option<&str>,
 ) -> Result<Value, String> {
     let base = clawhub_base_url();
     let mut url = format!(
-        "{}/api/v1/skills?limit={}&sort={}",
+        "{}/api/v1/skills?limit={}&sort={}&nonSuspicious=true",
         base,
         limit,
         urlencoding::encode(sort)
     );
+    if let Some(q) = query.map(str::trim).filter(|value| !value.is_empty()) {
+        url.push_str("&q=");
+        url.push_str(&urlencoding::encode(q));
+    }
     if let Some(c) = cursor.filter(|s| !s.trim().is_empty()) {
         url.push_str("&cursor=");
         url.push_str(&urlencoding::encode(c));
@@ -1075,6 +1224,7 @@ pub async fn list_clawhub_library_with_pool(
                         cursor_for_refresh.as_deref(),
                         normalized_limit,
                         &sort_for_refresh,
+                        None,
                     )
                     .await
                     {
@@ -1092,7 +1242,14 @@ pub async fn list_clawhub_library_with_pool(
     }
 
     let client = Client::new();
-    let body = fetch_library_body(&client, cursor_ref, normalized_limit, &normalized_sort).await?;
+    let body = fetch_library_body(
+        &client,
+        cursor_ref,
+        normalized_limit,
+        &normalized_sort,
+        None,
+    )
+    .await?;
     let response = normalize_library_response(&body);
     let _ = upsert_http_cache_body(pool, &cache_key, &body.to_string()).await;
     Ok(response)
@@ -1129,7 +1286,8 @@ pub async fn get_clawhub_skill_detail_with_pool(
                     let pool_for_refresh = pool.clone();
                     spawn_refresh_if_needed(key_for_refresh.clone(), async move {
                         let client = Client::new();
-                        if let Ok(fresh_json) = fetch_skill_detail_body(&client, &slug_for_refresh).await
+                        if let Ok(fresh_json) =
+                            fetch_skill_detail_body(&client, &slug_for_refresh).await
                         {
                             let _ = upsert_http_cache_body(
                                 &pool_for_refresh,
@@ -1299,25 +1457,7 @@ pub async fn install_clawhub_skill(
     std::fs::create_dir_all(&base_dir).map_err(|e| e.to_string())?;
     let extract_dir = base_dir.join(format!("{}-{}", clean_slug, Utc::now().timestamp_millis()));
     std::fs::create_dir_all(&extract_dir).map_err(|e| e.to_string())?;
-
-    let reader = Cursor::new(bytes);
-    let mut archive = ZipArchive::new(reader).map_err(|e| format!("解压失败: {}", e))?;
-    for i in 0..archive.len() {
-        let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
-        let Some(rel_path) = sanitize_zip_entry_path(entry.name()) else {
-            continue;
-        };
-        let out_path = extract_dir.join(rel_path);
-        if entry.is_dir() {
-            std::fs::create_dir_all(&out_path).map_err(|e| e.to_string())?;
-            continue;
-        }
-        if let Some(parent) = out_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
-        let mut outfile = std::fs::File::create(&out_path).map_err(|e| e.to_string())?;
-        std::io::copy(&mut entry, &mut outfile).map_err(|e| e.to_string())?;
-    }
+    extract_zip_to_dir(&bytes, &extract_dir)?;
 
     let skill_root =
         find_skill_root(&extract_dir).ok_or_else(|| "未在下载包中找到 SKILL.md".to_string())?;
@@ -1363,6 +1503,44 @@ pub async fn install_clawhub_skill(
     Ok(ImportResult {
         manifest,
         missing_mcp,
+    })
+}
+
+#[tauri::command]
+pub async fn install_github_skill_repo(
+    repo_url: String,
+    repo_slug: String,
+    workspace: Option<String>,
+    db: State<'_, DbState>,
+    app: AppHandle,
+) -> Result<GithubRepoInstallResult, String> {
+    let download =
+        download_github_skill_repo_to_workspace(&app, &repo_url, &repo_slug, workspace.as_deref())
+            .await?;
+
+    let mut imported_manifests = Vec::new();
+    let mut skipped = Vec::new();
+    for skill in &download.detected_skills {
+        let dir_path = skill.dir_path.clone();
+        match import_local_skill_to_pool(dir_path.clone(), &db.0, &[]).await {
+            Ok(result) => imported_manifests.push(result.manifest),
+            Err(reason) => skipped.push(GithubRepoSkippedImport { dir_path, reason }),
+        }
+    }
+
+    if imported_manifests.is_empty() {
+        let reason = skipped
+            .first()
+            .map(|item| item.reason.clone())
+            .unwrap_or_else(|| "未导入任何技能".to_string());
+        return Err(reason);
+    }
+
+    Ok(GithubRepoInstallResult {
+        repo_dir: download.repo_dir,
+        detected_skills: download.detected_skills,
+        imported_manifests,
+        skipped,
     })
 }
 
@@ -1427,4 +1605,121 @@ pub async fn update_clawhub_skill(
     }
     let slug = skill_id.trim_start_matches("clawhub-").to_string();
     install_clawhub_skill(slug, None, db, app).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+    use zip::write::FileOptions;
+
+    fn build_skill_repo_zip() -> Vec<u8> {
+        let mut cursor = Cursor::new(Vec::new());
+        {
+            let mut writer = zip::ZipWriter::new(&mut cursor);
+            let options = FileOptions::default();
+            writer
+                .add_directory("repo-main/skills/brainstorming/", options)
+                .expect("add brainstorming dir");
+            writer
+                .start_file("repo-main/skills/brainstorming/SKILL.md", options)
+                .expect("start brainstorming skill");
+            use std::io::Write as _;
+            writer
+                .write_all(b"---\nname: brainstorming\n---\n")
+                .expect("write brainstorming skill");
+            writer
+                .add_directory("repo-main/skills/debugging/", options)
+                .expect("add debugging dir");
+            writer
+                .start_file("repo-main/skills/debugging/SKILL.md", options)
+                .expect("start debugging skill");
+            writer
+                .write_all(b"---\nname: debugging\n---\n")
+                .expect("write debugging skill");
+            writer.finish().expect("finish zip");
+        }
+        cursor.into_inner()
+    }
+
+    #[test]
+    fn find_skill_roots_returns_all_matching_skill_directories() {
+        let tmp = tempdir().expect("tempdir");
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("repo-a/skills/brainstorming")).expect("mkdir first");
+        std::fs::create_dir_all(root.join("repo-a/skills/debugging")).expect("mkdir second");
+        std::fs::write(
+            root.join("repo-a/skills/brainstorming/SKILL.md"),
+            "---\nname: brainstorming\n---\n",
+        )
+        .expect("write first skill");
+        std::fs::write(
+            root.join("repo-a/skills/debugging/SKILL.md"),
+            "---\nname: debugging\n---\n",
+        )
+        .expect("write second skill");
+
+        let roots = find_skill_roots(root);
+
+        assert_eq!(roots.len(), 2);
+        assert!(roots.iter().any(|path| path.ends_with("brainstorming")));
+        assert!(roots.iter().any(|path| path.ends_with("debugging")));
+    }
+
+    #[test]
+    fn extract_github_repo_archive_returns_repo_dir_and_detected_skills() {
+        let tmp = tempdir().expect("tempdir");
+        let zip_bytes = build_skill_repo_zip();
+
+        let result =
+            extract_github_repo_archive(&zip_bytes, tmp.path(), "superpowers").expect("extract");
+
+        assert!(result.repo_dir.contains("superpowers-"));
+        assert_eq!(result.detected_skills.len(), 2);
+        assert!(result
+            .detected_skills
+            .iter()
+            .any(|skill| skill.name.eq_ignore_ascii_case("brainstorming")));
+        assert!(result
+            .detected_skills
+            .iter()
+            .any(|skill| skill.name.eq_ignore_ascii_case("debugging")));
+    }
+
+    #[test]
+    fn build_github_repo_key_prefers_slug_and_strips_git_suffix_from_url() {
+        assert_eq!(
+            build_github_repo_key(
+                "https://github.com/obra/superpowers.git",
+                "obra/superpowers"
+            ),
+            "obra-superpowers"
+        );
+        assert_eq!(
+            build_github_repo_key("https://github.com/obra/superpowers.git", ""),
+            "superpowers"
+        );
+    }
+}
+
+fn extract_zip_to_dir(bytes: &[u8], extract_dir: &Path) -> Result<(), String> {
+    let reader = Cursor::new(bytes);
+    let mut archive = ZipArchive::new(reader).map_err(|e| format!("解压失败: {}", e))?;
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
+        let Some(rel_path) = sanitize_zip_entry_path(entry.name()) else {
+            continue;
+        };
+        let out_path = extract_dir.join(rel_path);
+        if entry.is_dir() {
+            std::fs::create_dir_all(&out_path).map_err(|e| e.to_string())?;
+            continue;
+        }
+        if let Some(parent) = out_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        let mut outfile = std::fs::File::create(&out_path).map_err(|e| e.to_string())?;
+        std::io::copy(&mut entry, &mut outfile).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
