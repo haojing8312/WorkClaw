@@ -10,6 +10,12 @@ interface WorkClawDirSummary {
   tags: string[];
 }
 
+const ALL_TAG_OPTION = "全部标签";
+
+function getPathLeaf(path: string) {
+  return path.split(/[/\\]/).filter(Boolean).pop() ?? "";
+}
+
 export function IndustryPackView() {
   const [rootDir, setRootDir] = useState("");
   const [skills, setSkills] = useState<WorkClawDirSummary[]>([]);
@@ -19,7 +25,7 @@ export function IndustryPackView() {
   const [packId, setPackId] = useState("");
   const [version, setVersion] = useState("1.0.0");
   const [industryTag, setIndustryTag] = useState("");
-  const [filterTag, setFilterTag] = useState("全部");
+  const [filterTag, setFilterTag] = useState(ALL_TAG_OPTION);
   const [status, setStatus] = useState<"idle" | "packing" | "done" | "error">("idle");
   const [message, setMessage] = useState("");
   const packInFlightRef = useRef(false);
@@ -31,19 +37,38 @@ export function IndustryPackView() {
         if (tag.trim()) tags.add(tag.trim());
       }
     }
-    return ["全部", ...Array.from(tags)];
+    return [ALL_TAG_OPTION, ...Array.from(tags)];
   }, [skills]);
 
   const visibleSkills = useMemo(() => {
-    if (filterTag === "全部") return skills;
+    if (filterTag === ALL_TAG_OPTION) return skills;
     return skills.filter((item) => (item.tags ?? []).includes(filterTag));
   }, [skills, filterTag]);
+
+  const selectedCount = useMemo(
+    () => skills.filter((item) => selectedMap[item.dir_path]).length,
+    [selectedMap, skills]
+  );
+
+  function setAllSelections(checked: boolean) {
+    setSelectedMap(() => {
+      const nextSelected: Record<string, boolean> = {};
+      for (const skill of skills) {
+        nextSelected[skill.dir_path] = checked;
+      }
+      return nextSelected;
+    });
+  }
 
   async function handlePickRootDir() {
     const selected = await open({ directory: true, multiple: false });
     if (!selected || typeof selected !== "string") return;
 
+    const dirName = getPathLeaf(selected);
     setRootDir(selected);
+    setPackName(dirName);
+    setPackId(dirName);
+    setFilterTag(ALL_TAG_OPTION);
     setStatus("idle");
     setMessage("");
     try {
@@ -53,7 +78,7 @@ export function IndustryPackView() {
       const nextSelected: Record<string, boolean> = {};
       const nextDrafts: Record<string, string> = {};
       for (const row of list) {
-        nextSelected[row.dir_path] = false;
+        nextSelected[row.dir_path] = true;
         nextDrafts[row.dir_path] = (row.tags ?? []).join(", ");
       }
       setSkills(list);
@@ -206,20 +231,44 @@ export function IndustryPackView() {
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center gap-2">
-        {tagOptions.map((tag) => (
-          <button
-            key={tag}
-            onClick={() => setFilterTag(tag)}
-            className={`px-2.5 h-7 rounded-full text-xs border transition-colors ${
-              filterTag === tag
-                ? "bg-blue-500 text-white border-blue-500"
-                : "bg-white text-gray-600 border-gray-200 hover:border-blue-300"
-            }`}
-          >
-            {tag}
-          </button>
-        ))}
+      <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+        <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-medium text-gray-500">标签筛选</span>
+            {tagOptions.map((tag) => (
+              <button
+                key={tag}
+                onClick={() => setFilterTag(tag)}
+                className={`px-2.5 h-7 rounded-full text-xs border transition-colors ${
+                  filterTag === tag
+                    ? "bg-blue-500 text-white border-blue-500"
+                    : "bg-white text-gray-600 border-gray-200 hover:border-blue-300"
+                }`}
+              >
+                {tag}
+              </button>
+            ))}
+          </div>
+          {skills.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-gray-500">
+                已选 {selectedCount} / {skills.length}
+              </span>
+              <button
+                onClick={() => setAllSelections(true)}
+                className="h-7 px-2.5 rounded-md bg-white border border-gray-200 text-xs text-gray-700 hover:border-blue-300 transition-colors"
+              >
+                全选
+              </button>
+              <button
+                onClick={() => setAllSelections(false)}
+                className="h-7 px-2.5 rounded-md bg-white border border-gray-200 text-xs text-gray-700 hover:border-blue-300 transition-colors"
+              >
+                全不选
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       {visibleSkills.length === 0 ? (
@@ -233,6 +282,7 @@ export function IndustryPackView() {
               <div className="flex items-start gap-3">
                 <input
                   type="checkbox"
+                  aria-label={`选择 ${skill.front_matter.name || skill.slug}`}
                   checked={Boolean(selectedMap[skill.dir_path])}
                   onChange={(e) =>
                     setSelectedMap((prev) => ({

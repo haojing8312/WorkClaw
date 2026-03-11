@@ -21,7 +21,46 @@ describe("IndustryPackView", () => {
     saveMock.mockReset();
   });
 
-  test("scans skills by root dir and packs selected skills", async () => {
+  test("defaults pack metadata from selected root and selects all skills", async () => {
+    openMock.mockResolvedValueOnce("C:\\workspace\\teacher-suite");
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "scan_workclaw_dirs") {
+        return Promise.resolve([
+          {
+            dir_path: "C:\\workspace\\teacher-suite\\teacher-helper",
+            slug: "teacher-helper",
+            front_matter: { name: "Teacher Helper", description: "desc", version: "1.0.0" },
+            tags: ["教师", "备课"],
+          },
+          {
+            dir_path: "C:\\workspace\\teacher-suite\\grader",
+            slug: "grader",
+            front_matter: { name: "Auto Grader", description: "desc", version: "1.0.0" },
+            tags: ["教师", "作业"],
+          },
+        ]);
+      }
+      return Promise.resolve(null);
+    });
+
+    render(<IndustryPackView />);
+
+    fireEvent.click(screen.getByRole("button", { name: "选择技能根目录" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Teacher Helper")).toBeInTheDocument();
+      expect(screen.getByText("Auto Grader")).toBeInTheDocument();
+    });
+
+    expect(screen.getByLabelText("行业包名称")).toHaveValue("teacher-suite");
+    expect(screen.getByLabelText("包 ID")).toHaveValue("teacher-suite");
+
+    expect(screen.getByLabelText("选择 Teacher Helper")).toBeChecked();
+    expect(screen.getByLabelText("选择 Auto Grader")).toBeChecked();
+    expect(screen.getByText("已选 2 / 2")).toBeInTheDocument();
+  });
+
+  test("supports select all toggles and packs selected skills", async () => {
     openMock.mockResolvedValueOnce("C:\\skills");
     saveMock.mockResolvedValueOnce("C:\\packs\\teacher-suite.industrypack");
     invokeMock.mockImplementation((command: string) => {
@@ -69,9 +108,14 @@ describe("IndustryPackView", () => {
       target: { value: "教师" },
     });
 
-    const checkboxes = screen.getAllByRole("checkbox");
-    fireEvent.click(checkboxes[0]);
-    fireEvent.click(checkboxes[1]);
+    fireEvent.click(screen.getByRole("button", { name: "全不选" }));
+    expect(screen.getByLabelText("选择 Teacher Helper")).not.toBeChecked();
+    expect(screen.getByLabelText("选择 Auto Grader")).not.toBeChecked();
+
+    fireEvent.click(screen.getByRole("button", { name: "全选" }));
+    expect(screen.getByLabelText("选择 Teacher Helper")).toBeChecked();
+    expect(screen.getByLabelText("选择 Auto Grader")).toBeChecked();
+
     fireEvent.click(screen.getByRole("button", { name: "导出行业包" }));
 
     await waitFor(() => {
