@@ -77,6 +77,15 @@ fn permission_mode_label_for_display(permission_mode: &str) -> &'static str {
     }
 }
 
+fn resolve_im_session_source(channel: Option<&str>) -> (String, String) {
+    match channel.unwrap_or("").trim().to_ascii_lowercase().as_str() {
+        "" => ("local".to_string(), String::new()),
+        "wecom" => ("wecom".to_string(), "企业微信".to_string()),
+        "feishu" => ("feishu".to_string(), "飞书".to_string()),
+        other => (other.to_string(), other.to_string()),
+    }
+}
+
 fn is_supported_protocol(protocol: &str) -> bool {
     matches!(protocol, "openai" | "anthropic")
 }
@@ -1385,7 +1394,7 @@ pub async fn get_messages(
 
 #[tauri::command]
 pub async fn list_sessions(db: State<'_, DbState>) -> Result<Vec<serde_json::Value>, String> {
-    let rows = sqlx::query_as::<_, (String, String, String, String, String, String, String, String, String, String, String)>(
+    let rows = sqlx::query_as::<_, (String, String, String, String, String, String, String, String, String, String)>(
         "SELECT
             s.id,
             s.title,
@@ -1396,14 +1405,13 @@ pub async fn list_sessions(db: State<'_, DbState>) -> Result<Vec<serde_json::Val
             COALESCE(s.permission_mode, 'accept_edits'),
             COALESCE(s.session_mode, 'general'),
             COALESCE(s.team_id, ''),
-            CASE
-                WHEN EXISTS (SELECT 1 FROM im_thread_sessions ts WHERE ts.session_id = s.id) THEN 'feishu'
-                ELSE 'local'
-            END AS source_channel,
-            CASE
-                WHEN EXISTS (SELECT 1 FROM im_thread_sessions ts WHERE ts.session_id = s.id) THEN '飞书'
-                ELSE ''
-            END AS source_label
+            COALESCE((
+                SELECT ts.channel
+                FROM im_thread_sessions ts
+                WHERE ts.session_id = s.id
+                ORDER BY ts.updated_at DESC, ts.created_at DESC
+                LIMIT 1
+            ), '') AS im_source_channel
          FROM sessions s
          ORDER BY s.created_at DESC"
     )
@@ -1424,9 +1432,10 @@ pub async fn list_sessions(db: State<'_, DbState>) -> Result<Vec<serde_json::Val
                 permission_mode,
                 session_mode,
                 team_id,
-                source_channel,
-                source_label,
+                im_source_channel,
             )| {
+                let (source_channel, source_label) =
+                    resolve_im_session_source(Some(im_source_channel));
                 json!({
                     "id": id,
                     "title": title,
@@ -1754,7 +1763,7 @@ pub async fn search_sessions_global(
     db: State<'_, DbState>,
 ) -> Result<Vec<serde_json::Value>, String> {
     let pattern = format!("%{}%", query);
-    let rows = sqlx::query_as::<_, (String, String, String, String, String, String, String, String)>(
+    let rows = sqlx::query_as::<_, (String, String, String, String, String, String, String)>(
         "SELECT DISTINCT
             s.id,
             s.title,
@@ -1762,14 +1771,13 @@ pub async fn search_sessions_global(
             s.model_id,
             COALESCE(s.work_dir, ''),
             COALESCE(s.employee_id, ''),
-            CASE
-                WHEN EXISTS (SELECT 1 FROM im_thread_sessions ts WHERE ts.session_id = s.id) THEN 'feishu'
-                ELSE 'local'
-            END AS source_channel,
-            CASE
-                WHEN EXISTS (SELECT 1 FROM im_thread_sessions ts WHERE ts.session_id = s.id) THEN '飞书'
-                ELSE ''
-            END AS source_label
+            COALESCE((
+                SELECT ts.channel
+                FROM im_thread_sessions ts
+                WHERE ts.session_id = s.id
+                ORDER BY ts.updated_at DESC, ts.created_at DESC
+                LIMIT 1
+            ), '') AS im_source_channel
          FROM sessions s
          LEFT JOIN messages m ON m.session_id = s.id
          WHERE (s.title LIKE ? OR m.content LIKE ?)
@@ -1791,9 +1799,10 @@ pub async fn search_sessions_global(
                 model_id,
                 work_dir,
                 employee_id,
-                source_channel,
-                source_label,
+                im_source_channel,
             )| {
+                let (source_channel, source_label) =
+                    resolve_im_session_source(Some(im_source_channel));
                 json!({
                     "id": id,
                     "title": title,
@@ -1846,6 +1855,31 @@ pub async fn export_session(session_id: String, db: State<'_, DbState>) -> Resul
         ));
     }
     Ok(md)
+}
+
+#[cfg(test)]
+mod session_source_tests {
+    use super::resolve_im_session_source;
+
+    #[test]
+    fn resolve_im_session_source_maps_wecom_and_feishu_labels() {
+        assert_eq!(
+            resolve_im_session_source(Some("wecom")),
+            ("wecom".to_string(), "企业微信".to_string())
+        );
+        assert_eq!(
+            resolve_im_session_source(Some("feishu")),
+            ("feishu".to_string(), "飞书".to_string())
+        );
+        assert_eq!(
+            resolve_im_session_source(Some("")),
+            ("local".to_string(), String::new())
+        );
+        assert_eq!(
+            resolve_im_session_source(None),
+            ("local".to_string(), String::new())
+        );
+    }
 }
 
 /// 写入导出文件

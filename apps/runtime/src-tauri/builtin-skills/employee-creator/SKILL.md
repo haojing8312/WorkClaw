@@ -56,7 +56,7 @@ allowed_tools:
   "persona": "推进需求交付并协调多技能执行",
   "primary_skill_id": "builtin-general",
   "skill_ids": ["builtin-general", "builtin-find-skills"],
-  "enabled_scopes": ["feishu"],
+  "enabled_scopes": ["app"],
   "profile_answers": [
     { "key": "mission", "question": "核心使命", "answer": "把需求推进到上线交付并对里程碑负责" },
     { "key": "responsibilities", "question": "关键职责", "answer": "需求澄清、任务拆解、风险同步、验收把关" },

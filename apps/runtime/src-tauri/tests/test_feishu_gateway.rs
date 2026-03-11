@@ -216,3 +216,16 @@ async fn resolve_feishu_settings_reads_from_app_settings() {
         .expect("resolve sidecar");
     assert_eq!(base_url.as_deref(), Some("http://127.0.0.1:9000"));
 }
+
+#[tokio::test]
+async fn resolve_feishu_sidecar_base_url_falls_back_to_generic_im_sidecar_key() {
+    let (pool, _tmp) = helpers::setup_test_db().await;
+    set_app_setting(&pool, "im_sidecar_base_url", "http://127.0.0.1:9100")
+        .await
+        .expect("set generic sidecar url");
+
+    let base_url = resolve_feishu_sidecar_base_url(&pool, None)
+        .await
+        .expect("resolve generic sidecar");
+    assert_eq!(base_url.as_deref(), Some("http://127.0.0.1:9100"));
+}

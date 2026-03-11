@@ -103,7 +103,7 @@ fn map_raw_event(raw: OpenClawRawEvent) -> Result<ImEvent, String> {
     });
 
     Ok(ImEvent {
-        channel: raw.channel.unwrap_or_else(|| "feishu".to_string()),
+        channel: raw.channel.unwrap_or_else(|| "app".to_string()),
         event_type,
         thread_id,
         event_id: raw.event_id,
@@ -180,7 +180,7 @@ pub async fn plan_role_events_for_openclaw(
     Ok(roles
         .into_iter()
         .map(|role_id| {
-            build_im_role_event_payload(
+            let mut payload = build_im_role_event_payload(
                 &session_id,
                 &event.thread_id,
                 &role_id,
@@ -188,7 +188,13 @@ pub async fn plan_role_events_for_openclaw(
                 "running",
                 &format!("OpenClaw事件触发：{}", text),
                 None,
-            )
+            );
+            payload.source_channel = if event.channel.trim().is_empty() {
+                "app".to_string()
+            } else {
+                event.channel.trim().to_lowercase()
+            };
+            payload
         })
         .collect())
 }
@@ -236,7 +242,7 @@ pub async fn resolve_openclaw_route_with_pool(
     let bindings = list_im_routing_bindings_with_pool(pool).await?;
     let default_agent_id = "main";
     let body = serde_json::json!({
-        "channel": if event.channel.trim().is_empty() { "feishu" } else { event.channel.trim() },
+        "channel": if event.channel.trim().is_empty() { "app" } else { event.channel.trim() },
         "account_id": event.account_id.clone().or_else(|| event.tenant_id.clone()).unwrap_or_default(),
         "peer": {
             "kind": "group",
@@ -258,7 +264,7 @@ pub async fn simulate_im_route(
     let channel = payload
         .get("channel")
         .and_then(serde_json::Value::as_str)
-        .unwrap_or("feishu");
+        .unwrap_or("app");
     let account_id = payload
         .get("account_id")
         .and_then(serde_json::Value::as_str)

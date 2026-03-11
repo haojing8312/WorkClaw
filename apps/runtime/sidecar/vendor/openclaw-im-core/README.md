@@ -5,6 +5,7 @@ This folder reserves the future vendor lane for OpenClaw IM adapter code that is
 ## Current State
 
 - No second channel is enabled yet.
+- WeCom is the first planned second-channel adoption through this lane.
 - The lane exists so maintainers can add a new OpenClaw-backed connector without mixing upstream code directly into WorkClaw business layers.
 - Until a channel is selected, `UPSTREAM_COMMIT` may remain `uninitialized`.
 
@@ -26,3 +27,4 @@ This folder reserves the future vendor lane for OpenClaw IM adapter code that is
 - Keep upstream code inside the sidecar boundary only.
 - Record every local deviation in `PATCHES.md` before merging.
 - Expand the sync manifest only when a concrete second connector is being integrated.
+- For WeCom, prefer patching only adapter-boundary code and config shims, not WorkClaw runtime/business modules.

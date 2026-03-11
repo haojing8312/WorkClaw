@@ -245,8 +245,9 @@ export function Sidebar({
               <AnimatePresence>
                 {sessions.map((s) => {
                   const sourceLabel = (s.source_label || "").trim();
-                  const isFeishuSession = (s.source_channel || "").toLowerCase() === "feishu";
-                  const badgeText = sourceLabel || "飞书";
+                  const sourceChannel = (s.source_channel || "").trim().toLowerCase();
+                  const isImSession = sourceChannel.length > 0 && sourceChannel !== "local";
+                  const badgeText = sourceLabel || sourceChannel || "IM";
                   return (
                     <motion.div
                       key={s.id}
@@ -263,9 +264,9 @@ export function Sidebar({
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 min-w-0">
                           <div className="truncate text-[13px]">{s.title || "未命名任务"}</div>
-                          {isFeishuSession && (
+                          {isImSession && (
                             <span
-                              title="来自飞书会话同步"
+                              title={`来自${badgeText}会话同步`}
                               className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium bg-blue-50 text-blue-700 border border-blue-100 flex-shrink-0"
                             >
                               {badgeText}

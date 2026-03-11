@@ -22,8 +22,8 @@ export interface ConnectorSchema {
 export const FEISHU_CONNECTOR_SCHEMA: ConnectorSchema = {
   id: "feishu",
   label: "飞书",
-  title: "渠道连接器 / 飞书",
-  description: "通过统一连接器模型管理飞书长连接、凭据与重试动作。",
+  title: "飞书连接器",
+  description: "接入飞书消息，交给统一的消息处理规则分发。",
   saveLabel: "保存连接器配置",
   retryLabel: "重试连接",
   fields: [
@@ -47,8 +47,36 @@ export const FEISHU_CONNECTOR_SCHEMA: ConnectorSchema = {
   ],
 };
 
+export const WECOM_CONNECTOR_SCHEMA: ConnectorSchema = {
+  id: "wecom",
+  label: "企业微信",
+  title: "企业微信连接器",
+  description: "接入企业微信消息，交给统一的消息处理规则分发。",
+  saveLabel: "保存企业微信连接器",
+  retryLabel: "重试连接",
+  fields: [
+    {
+      key: "corpId",
+      label: "Corp ID",
+      placeholder: "企业微信 Corp ID",
+    },
+    {
+      key: "agentId",
+      label: "Agent ID",
+      placeholder: "企业应用 Agent ID",
+    },
+    {
+      key: "agentSecret",
+      label: "Agent Secret",
+      placeholder: "企业应用 Secret",
+      type: "password",
+    },
+  ],
+};
+
 export const CONNECTOR_SCHEMAS: Record<string, ConnectorSchema> = {
   feishu: FEISHU_CONNECTOR_SCHEMA,
+  wecom: WECOM_CONNECTOR_SCHEMA,
 };
 
 export function getConnectorSchema(connectorId: string): ConnectorSchema {

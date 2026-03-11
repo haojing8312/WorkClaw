@@ -8,6 +8,7 @@ import { FeishuClient } from './feishu.js';
 import { FeishuLongConnectionManager } from './feishu_ws.js';
 import { resolveRoute } from './openclaw-bridge/route-engine.js';
 import { FeishuChannelAdapter } from './adapters/feishu/index.js';
+import { WecomChannelAdapter } from './adapters/wecom/index.js';
 import { ChannelAdapterKernel, createChannelAdapterRegistry } from './adapters/kernel.js';
 import type { ApiResponse } from './types.js';
 
@@ -21,7 +22,7 @@ interface SidecarDeps {
   routeResolver: RouteResolver;
   channelKernel: Pick<
     ChannelAdapterKernel,
-    'start' | 'stop' | 'health' | 'drainEvents' | 'sendMessage'
+    'start' | 'stop' | 'health' | 'drainEvents' | 'sendMessage' | 'catalog' | 'diagnostics' | 'ack' | 'replayEvents'
   >;
 }
 
@@ -58,6 +59,7 @@ function createDefaultDeps(): SidecarDeps {
   const feishuWs = new FeishuLongConnectionManager();
   const registry = createChannelAdapterRegistry();
   registry.register('feishu', new FeishuChannelAdapter(feishu, feishuWs));
+  registry.register('wecom', new WecomChannelAdapter());
   const channelKernel = new ChannelAdapterKernel(registry);
   return {
     browser,
@@ -400,6 +402,52 @@ export function createSidecarApp(overrides: Partial<SidecarDeps> = {}) {
       const result = await deps.channelKernel.sendMessage(
         String(body?.instance_id || ''),
         body?.request || {},
+      );
+      return c.json({ output: JSON.stringify(result) } as ApiResponse);
+    } catch (e: any) {
+      return c.json({ error: e.message } as ApiResponse, 500);
+    }
+  });
+
+  app.post('/api/channels/catalog', async (c) => {
+    try {
+      await c.req.json().catch(() => ({}));
+      const result = await deps.channelKernel.catalog();
+      return c.json({ output: JSON.stringify(result) } as ApiResponse);
+    } catch (e: any) {
+      return c.json({ error: e.message } as ApiResponse, 500);
+    }
+  });
+
+  app.post('/api/channels/diagnostics', async (c) => {
+    try {
+      const body = await c.req.json().catch(() => ({}));
+      const result = await deps.channelKernel.diagnostics(String(body?.instance_id || ''));
+      return c.json({ output: JSON.stringify(result) } as ApiResponse);
+    } catch (e: any) {
+      return c.json({ error: e.message } as ApiResponse, 500);
+    }
+  });
+
+  app.post('/api/channels/ack', async (c) => {
+    try {
+      const body = await c.req.json().catch(() => ({}));
+      await deps.channelKernel.ack(String(body?.instance_id || ''), {
+        message_id: String(body?.message_id || ''),
+        status: body?.status ? String(body.status) : undefined,
+      });
+      return c.json({ output: JSON.stringify({ ok: true }) } as ApiResponse);
+    } catch (e: any) {
+      return c.json({ error: e.message } as ApiResponse, 500);
+    }
+  });
+
+  app.post('/api/channels/replay-events', async (c) => {
+    try {
+      const body = await c.req.json().catch(() => ({}));
+      const result = await deps.channelKernel.replayEvents(
+        String(body?.instance_id || ''),
+        Number(body?.limit || 50),
       );
       return c.json({ output: JSON.stringify(result) } as ApiResponse);
     } catch (e: any) {

@@ -530,7 +530,7 @@ export function ChatView({
           task_id: payload.task_id,
           parent_task_id: payload.parent_task_id,
           message_type: payload.message_type ?? "delegate_request",
-          source_channel: payload.source_channel ?? "feishu",
+          source_channel: payload.source_channel ?? "app",
           status: "running",
           summary: `任务已分发(${payload.agent_type}) -> ${roleLabel}`,
         },
@@ -1029,8 +1029,11 @@ export function ChatView({
   const normalizedSessionTitle = (sessionTitle || "").trim();
   const sessionDisplayTitle = isTeamEntrySession ? "团队协作" : skill.name;
   const sessionDisplaySubtitle = isTeamEntrySession ? normalizedSessionTitle || "团队已连接" : "";
-  const isFeishuSource = (sessionSourceChannel || "").trim().toLowerCase() === "feishu";
-  const sessionSourceBadgeText = (sessionSourceLabel || "").trim() || "飞书同步";
+  const normalizedSessionSourceChannel = (sessionSourceChannel || "").trim().toLowerCase();
+  const isImSource = normalizedSessionSourceChannel.length > 0 && normalizedSessionSourceChannel !== "local";
+  const sessionSourceBadgeText =
+    (sessionSourceLabel || "").trim() ||
+    (normalizedSessionSourceChannel ? `${normalizedSessionSourceChannel} 同步` : "IM 同步");
   const activeDelegationCard = [...delegationCards]
     .reverse()
     .find((card) => card.status === "running");
@@ -1679,10 +1682,10 @@ export function ChatView({
               </div>
             )}
           </div>
-          {isFeishuSource && (
+          {isImSource && (
             <span
               data-testid="chat-session-source-badge"
-              title="该会话由飞书消息同步触发"
+              title={`该会话由${sessionSourceBadgeText}触发`}
               className="inline-flex items-center rounded-md border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-700"
             >
               {sessionSourceBadgeText}

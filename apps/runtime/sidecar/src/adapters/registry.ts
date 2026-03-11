@@ -10,6 +10,10 @@ export class ChannelAdapterRegistry {
   get(name: string): ChannelAdapter | undefined {
     return this.adapters.get(name);
   }
+
+  entries(): Array<[string, ChannelAdapter]> {
+    return Array.from(this.adapters.entries());
+  }
 }
 
 export function createChannelAdapterRegistry(): ChannelAdapterRegistry {

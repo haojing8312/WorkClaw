@@ -182,7 +182,7 @@ export interface SessionInfo {
   session_mode?: "general" | "employee_direct" | "team_entry";
   team_id?: string;
   permission_mode_label?: string;
-  source_channel?: "local" | "feishu" | string;
+  source_channel?: "local" | "app" | "feishu" | "wecom" | string;
   source_label?: string;
 }
 
@@ -219,7 +219,7 @@ export interface ImRoleTimelineEvent {
   target_employee_id?: string;
   task_id?: string;
   parent_task_id?: string;
-  source_channel?: "desktop" | "feishu" | string;
+  source_channel?: "desktop" | "app" | "feishu" | "wecom" | string;
   status: "running" | "completed" | "failed" | string;
   summary?: string;
   duration_ms?: number;
@@ -236,7 +236,7 @@ export interface ImRoleDispatchRequest {
   target_employee_id?: string;
   task_id?: string;
   parent_task_id?: string;
-  source_channel?: "desktop" | "feishu" | string;
+  source_channel?: "desktop" | "app" | "feishu" | "wecom" | string;
   prompt: string;
   agent_type: string;
 }
@@ -257,10 +257,64 @@ export interface FeishuGatewaySettings {
   sidecar_base_url: string;
 }
 
+export interface WecomGatewaySettings {
+  corp_id: string;
+  agent_id: string;
+  agent_secret: string;
+  sidecar_base_url: string;
+}
+
 export interface FeishuWsStatus {
   running: boolean;
   started_at?: string | null;
   queued_events: number;
+}
+
+export interface WecomConnectorStatus {
+  running: boolean;
+  started_at?: string | null;
+  last_error?: string | null;
+  reconnect_attempts: number;
+  queue_depth: number;
+  instance_id: string;
+}
+
+export interface ChannelConnectorIssue {
+  code: string;
+  category: string;
+  user_message: string;
+  technical_message: string;
+  retryable: boolean;
+  occurred_at?: string | null;
+}
+
+export interface ChannelConnectorDescriptor {
+  channel: string;
+  display_name: string;
+  capabilities: string[];
+}
+
+export interface ChannelConnectorHealth {
+  adapter_name: string;
+  instance_id: string;
+  state: string;
+  last_ok_at?: string | null;
+  last_error?: string | null;
+  reconnect_attempts: number;
+  queue_depth: number;
+  issue?: ChannelConnectorIssue | null;
+}
+
+export interface ChannelConnectorReplayStats {
+  retained_events: number;
+  acked_events: number;
+}
+
+export interface ChannelConnectorDiagnostics {
+  connector: ChannelConnectorDescriptor;
+  status: string;
+  health: ChannelConnectorHealth;
+  replay: ChannelConnectorReplayStats;
 }
 
 export interface FeishuEmployeeWsStatus {

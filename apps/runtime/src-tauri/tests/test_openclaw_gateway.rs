@@ -82,6 +82,18 @@ fn parse_openclaw_payload_keeps_channel_and_account_metadata() {
     assert_eq!(evt.account_id.as_deref(), Some("guild-account-9"));
 }
 
+#[test]
+fn parse_openclaw_payload_defaults_missing_channel_to_app() {
+    let raw = r#"{
+      "event_type": "message.created",
+      "thread_id": "thread-app-1",
+      "message_id": "msg-app-1"
+    }"#;
+
+    let evt = parse_openclaw_payload(raw).expect("payload should parse");
+    assert_eq!(evt.channel, "app");
+}
+
 #[tokio::test]
 async fn validate_openclaw_auth_honors_configured_token() {
     let (pool, _tmp) = helpers::setup_test_db().await;
@@ -122,6 +134,38 @@ async fn plan_role_events_uses_thread_bindings() {
     assert_eq!(planned.len(), 2);
     assert_eq!(planned[0].thread_id, "thread-1");
     assert_eq!(planned[0].status, "running");
+}
+
+#[tokio::test]
+async fn plan_role_events_preserves_wecom_source_channel() {
+    let (pool, _tmp) = helpers::setup_test_db().await;
+    bind_thread_roles_with_pool(
+        &pool,
+        "wecom-thread-1",
+        "corp-123",
+        "wecom_review",
+        &["architect".to_string()],
+    )
+    .await
+    .expect("bind roles");
+
+    let evt = ImEvent {
+        channel: "wecom".to_string(),
+        event_type: ImEventType::MessageCreated,
+        thread_id: "wecom-thread-1".to_string(),
+        event_id: Some("evt-wecom-role".to_string()),
+        message_id: Some("msg-wecom-role".to_string()),
+        text: Some("企业微信触发评审".to_string()),
+        role_id: None,
+        account_id: Some("agent-1000002".to_string()),
+        tenant_id: Some("corp-123".to_string()),
+    };
+
+    let planned = plan_role_events_for_openclaw(&pool, &evt)
+        .await
+        .expect("plan wecom events");
+    assert_eq!(planned.len(), 1);
+    assert_eq!(planned[0].source_channel, "wecom");
 }
 
 async fn spawn_mock_sidecar_once() -> (String, tokio::task::JoinHandle<()>) {

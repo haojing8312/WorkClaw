@@ -1,4 +1,5 @@
 import type { ConnectorSchema } from "./connectorSchemas";
+import { useState } from "react";
 
 interface Props {
   schema: ConnectorSchema;
@@ -28,6 +29,8 @@ export function ConnectorConfigPanel({
   onSave,
   onRetry,
 }: Props) {
+  const [showTechnicalDetails, setShowTechnicalDetails] = useState(false);
+
   return (
     <div className="rounded-lg border border-gray-200 p-3 space-y-2" data-testid={`connector-panel-${schema.id}`}>
       <div className="text-xs font-medium text-gray-700">{schema.title}</div>
@@ -37,7 +40,18 @@ export function ConnectorConfigPanel({
         <span className="text-xs text-gray-900">{status.label}</span>
       </div>
       <div className="text-[11px] text-gray-500">{status.detail}</div>
-      {status.error && <div className="text-xs text-red-600">{status.error}</div>}
+      {status.error && (
+        <div className="space-y-1">
+          <button
+            type="button"
+            onClick={() => setShowTechnicalDetails((value) => !value)}
+            className="text-[11px] text-blue-600 hover:text-blue-700"
+          >
+            {showTechnicalDetails ? "收起技术详情" : "查看技术详情"}
+          </button>
+          {showTechnicalDetails && <div className="text-xs text-red-600">{`原始错误：${status.error}`}</div>}
+        </div>
+      )}
       {diagnostics.length > 0 && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-2" data-testid={`connector-diagnostics-${schema.id}`}>
           {diagnostics.map((item) => (

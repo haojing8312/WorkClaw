@@ -8,6 +8,10 @@ class FakeChannelKernel {
   public healthCalls: string[] = [];
   public drainCalls: Array<{ instanceId: string; limit: number }> = [];
   public sendCalls: Array<{ instanceId: string; request: unknown }> = [];
+  public ackCalls: Array<{ instanceId: string; request: unknown }> = [];
+  public replayCalls: Array<{ instanceId: string; limit: number }> = [];
+  public diagnosticsCalls: string[] = [];
+  public catalogCalls = 0;
 
   async start(config: unknown) {
     this.startCalls.push(config);
@@ -71,6 +75,87 @@ class FakeChannelKernel {
       delivered_at: "2026-03-10T00:00:01Z",
       raw_response: { ok: true },
     };
+  }
+
+  async ack(instanceId: string, request: unknown) {
+    this.ackCalls.push({ instanceId, request });
+  }
+
+  async replayEvents(instanceId: string, limit = 50) {
+    this.replayCalls.push({ instanceId, limit });
+    return [
+      {
+        channel: "feishu",
+        workspace_id: "tenant-1",
+        account_id: "tenant-1",
+        thread_id: "chat-1",
+        message_id: "msg-1",
+        sender_id: "ou_user_1",
+        sender_name: null,
+        text: "hello",
+        mentions: [],
+        raw_event_type: "im.message.receive_v1",
+        occurred_at: "2026-03-10T00:00:00Z",
+        reply_target: "msg-1",
+        routing_context: {
+          peer: { kind: "group", id: "chat-1" },
+          parent_peer: null,
+          guild_id: null,
+          team_id: null,
+          member_role_ids: [],
+          identity_links: [],
+        },
+        raw_payload: { ok: true, replay: true },
+      },
+    ];
+  }
+
+  async diagnostics(instanceId: string) {
+    this.diagnosticsCalls.push(instanceId);
+    return {
+      connector: {
+        channel: "feishu",
+        display_name: "飞书连接器",
+        capabilities: ["receive_text", "send_text", "group_route", "direct_route"],
+      },
+      health: {
+        adapter_name: "feishu",
+        instance_id: instanceId,
+        state: "running",
+        last_ok_at: "2026-03-10T00:00:00Z",
+        last_error: "signature mismatch",
+        reconnect_attempts: 1,
+        queue_depth: 2,
+        issue: {
+          code: "signature_mismatch",
+          category: "authentication_error",
+          user_message: "签名校验失败",
+          technical_message: "signature mismatch",
+          retryable: false,
+          occurred_at: "2026-03-10T00:00:00Z",
+        },
+      },
+      replay: {
+        retained_events: 1,
+        acked_events: 0,
+      },
+    };
+  }
+
+  async catalog() {
+    this.catalogCalls += 1;
+    return [
+      {
+        channel: "feishu",
+        display_name: "飞书连接器",
+        capabilities: ["receive_text", "send_text", "group_route", "direct_route"],
+      },
+      {
+        channel: "wecom",
+        display_name: "企业微信连接器",
+        capabilities: ["receive_text", "send_text", "group_route", "direct_route"],
+      },
+    ];
   }
 }
 
@@ -163,4 +248,122 @@ test("route resolve endpoint remains channel-neutral after channel endpoint wiri
   assert.equal(res.status, 200);
   const json = await res.json();
   assert.equal(Boolean(json.output), true);
+});
+
+test("default sidecar app can start a wecom adapter through channel endpoints", async () => {
+  const app = createSidecarApp();
+
+  const startRes = await app.fetch(
+    new Request("http://localhost/api/channels/start", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        adapter_name: "wecom",
+        connector_id: "wecom-main",
+        settings: {
+          corp_id: "corp-123",
+          agent_id: "1000002",
+          agent_secret: "secret-abc",
+        },
+      }),
+    }),
+  );
+
+  assert.equal(startRes.status, 200);
+  const startJson = await startRes.json();
+  const started = JSON.parse(String(startJson.output || "null"));
+  assert.equal(started.instance_id, "wecom:wecom-main");
+
+  const healthRes = await app.fetch(
+    new Request("http://localhost/api/channels/health", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ instance_id: "wecom:wecom-main" }),
+    }),
+  );
+
+  assert.equal(healthRes.status, 200);
+  const healthJson = await healthRes.json();
+  const health = JSON.parse(String(healthJson.output || "null"));
+  assert.equal(health.adapter_name, "wecom");
+});
+
+test("channel endpoints expose connector catalog and diagnostics", async () => {
+  const kernel = new FakeChannelKernel();
+  const app = createSidecarApp({ channelKernel: kernel as never });
+
+  const catalogRes = await app.fetch(
+    new Request("http://localhost/api/channels/catalog", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    }),
+  );
+  assert.equal(catalogRes.status, 200);
+  const catalogJson = await catalogRes.json();
+  const catalog = JSON.parse(String(catalogJson.output || "[]"));
+  assert.equal(catalog.length, 2);
+  assert.deepEqual(catalog[1]?.capabilities, [
+    "receive_text",
+    "send_text",
+    "group_route",
+    "direct_route",
+  ]);
+
+  const diagnosticsRes = await app.fetch(
+    new Request("http://localhost/api/channels/diagnostics", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ instance_id: "feishu:connector-1" }),
+    }),
+  );
+  assert.equal(diagnosticsRes.status, 200);
+  const diagnosticsJson = await diagnosticsRes.json();
+  const diagnostics = JSON.parse(String(diagnosticsJson.output || "null"));
+  assert.equal(diagnostics.connector.display_name, "飞书连接器");
+  assert.equal(diagnostics.health.issue.user_message, "签名校验失败");
+  assert.equal(kernel.catalogCalls, 1);
+  assert.equal(kernel.diagnosticsCalls[0], "feishu:connector-1");
+});
+
+test("channel endpoints acknowledge and replay retained events", async () => {
+  const kernel = new FakeChannelKernel();
+  const app = createSidecarApp({ channelKernel: kernel as never });
+
+  const ackRes = await app.fetch(
+    new Request("http://localhost/api/channels/ack", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        instance_id: "feishu:connector-1",
+        message_id: "msg-1",
+        status: "processed",
+      }),
+    }),
+  );
+  assert.equal(ackRes.status, 200);
+  assert.deepEqual(kernel.ackCalls[0], {
+    instanceId: "feishu:connector-1",
+    request: {
+      message_id: "msg-1",
+      status: "processed",
+    },
+  });
+
+  const replayRes = await app.fetch(
+    new Request("http://localhost/api/channels/replay-events", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ instance_id: "feishu:connector-1", limit: 10 }),
+    }),
+  );
+  assert.equal(replayRes.status, 200);
+  const replayJson = await replayRes.json();
+  const replayed = JSON.parse(String(replayJson.output || "[]"));
+  assert.equal(replayed.length, 1);
+  assert.equal(replayed[0]?.raw_payload?.replay, true);
+  assert.deepEqual(kernel.replayCalls[0], {
+    instanceId: "feishu:connector-1",
+    limit: 10,
+  });
 });

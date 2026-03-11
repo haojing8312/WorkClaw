@@ -1,6 +1,6 @@
 use runtime_lib::im::runtime_bridge::{
-    build_im_role_event_payload, build_runtime_task_payload, normalize_stream_token,
-    RoleTaskRequest,
+    build_im_role_dispatch_request, build_im_role_event_payload, build_runtime_task_payload,
+    normalize_stream_token, RoleTaskRequest,
 };
 
 #[tokio::test]
@@ -46,4 +46,15 @@ async fn bridge_dispatches_role_task_and_receives_stream_events() {
     assert_eq!(timeline.session_id, "session-1");
     assert_eq!(timeline.thread_id, "thread-1");
     assert_eq!(timeline.status, "running");
+    assert_eq!(timeline.source_channel, "app");
+
+    let dispatch = build_im_role_dispatch_request(
+        "session-1",
+        "thread-1",
+        "architect",
+        "架构师",
+        "请继续评审",
+        "plan",
+    );
+    assert_eq!(dispatch.source_channel, "app");
 }

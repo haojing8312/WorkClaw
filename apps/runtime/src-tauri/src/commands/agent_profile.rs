@@ -76,10 +76,25 @@ fn render_markdown(
     let boundaries = normalized_answer(answers, "boundaries");
     let user_profile = normalized_answer(answers, "user_profile");
 
+    let enabled_scope_text = {
+        let scopes = employee
+            .enabled_scopes
+            .iter()
+            .map(|scope| scope.trim().to_lowercase())
+            .filter(|scope| !scope.is_empty())
+            .collect::<Vec<_>>();
+        if scopes.is_empty() {
+            "app".to_string()
+        } else {
+            scopes.join(", ")
+        }
+    };
+
     let agents_md = format!(
-        "# AGENTS\n\n## Agent\n- 名称: {name}\n- 员工编号: {employee_id}\n- 飞书范围: feishu\n\n## Mission\n{mission}\n\n## Responsibilities\n{responsibilities}\n\n## Collaboration\n{collaboration}\n",
+        "# AGENTS\n\n## Agent\n- 名称: {name}\n- 员工编号: {employee_id}\n- 适用范围: {enabled_scopes}\n\n## Mission\n{mission}\n\n## Responsibilities\n{responsibilities}\n\n## Collaboration\n{collaboration}\n",
         name = employee.name,
         employee_id = employee.employee_id,
+        enabled_scopes = enabled_scope_text,
         mission = if mission.is_empty() { "请补充该员工的核心使命。" } else { mission.as_str() },
         responsibilities = if responsibilities.is_empty() { "请补充该员工的关键职责。" } else { responsibilities.as_str() },
         collaboration = if collaboration.is_empty() { "请补充该员工的协作方式与升级路径。" } else { collaboration.as_str() },

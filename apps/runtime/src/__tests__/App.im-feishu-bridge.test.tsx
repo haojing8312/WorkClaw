@@ -71,6 +71,12 @@ function listFeishuTextCalls() {
     .map(([, payload]) => payload);
 }
 
+function listWecomTextCalls() {
+  return invokeMock.mock.calls
+    .filter(([cmd]) => cmd === "send_wecom_text_message")
+    .map(([, payload]) => payload);
+}
+
 function defaultInvokeImpl(command: string) {
   if (command === "list_skills") {
     return Promise.resolve([
@@ -119,6 +125,9 @@ function defaultInvokeImpl(command: string) {
   if (command === "send_feishu_text_message") {
     return Promise.resolve("om_reply_1");
   }
+  if (command === "send_wecom_text_message") {
+    return Promise.resolve("wecom_reply_1");
+  }
   if (command === "answer_user_question") {
     return Promise.resolve(null);
   }
@@ -146,6 +155,7 @@ describe("App feishu IM bridge", () => {
       thread_id: "chat-feishu-1",
       role_id: "project_manager",
       role_name: "项目经理",
+      source_channel: "feishu",
       prompt: "请先拆解任务",
       agent_type: "general-purpose",
     };
@@ -205,6 +215,7 @@ describe("App feishu IM bridge", () => {
         thread_id: "chat-feishu-mention-clean",
         role_id: "dev_team",
         role_name: "开发团队",
+        source_channel: "feishu",
         prompt: "@_user_1 你细化一下技术方案 ",
         agent_type: "general-purpose",
       });
@@ -227,6 +238,7 @@ describe("App feishu IM bridge", () => {
         thread_id: "chat-feishu-plain-mention-clean",
         role_id: "dev_team",
         role_name: "开发团队",
+        source_channel: "feishu",
         prompt: "@开发团队 你细化一下技术方案 ",
         agent_type: "general-purpose",
       });
@@ -249,6 +261,7 @@ describe("App feishu IM bridge", () => {
         thread_id: "chat-feishu-stream",
         role_id: "project_manager",
         role_name: "项目经理",
+        source_channel: "feishu",
         prompt: "请输出执行进度",
         agent_type: "general-purpose",
       });
@@ -290,6 +303,7 @@ describe("App feishu IM bridge", () => {
         thread_id: "chat-feishu-sub-agent",
         role_id: "project_manager",
         role_name: "项目经理",
+        source_channel: "feishu",
         prompt: "请安排开发团队接管",
         agent_type: "general-purpose",
       });
@@ -331,6 +345,7 @@ describe("App feishu IM bridge", () => {
         thread_id: "chat-feishu-throttle",
         role_id: "project_manager",
         role_name: "项目经理",
+        source_channel: "feishu",
         prompt: "请持续汇报进度",
         agent_type: "general-purpose",
       });
@@ -386,6 +401,7 @@ describe("App feishu IM bridge", () => {
       thread_id: "chat-feishu-closed-loop",
       role_id: "project_manager",
       role_name: "项目经理",
+      source_channel: "feishu",
       prompt: "请先分析并分派开发团队",
       agent_type: "general-purpose",
     };
@@ -448,6 +464,7 @@ describe("App feishu IM bridge", () => {
       thread_id: "chat-feishu-role-prefix",
       role_id: "project_manager",
       role_name: "项目经理",
+      source_channel: "feishu",
       prompt: "请先安排开发团队",
       agent_type: "general-purpose",
     };
@@ -543,6 +560,7 @@ describe("App feishu IM bridge", () => {
         thread_id: "chat-feishu-retry",
         role_id: "project_manager",
         role_name: "项目经理",
+        source_channel: "feishu",
         prompt: "请开始执行",
         agent_type: "general-purpose",
       });
@@ -615,6 +633,7 @@ describe("App feishu IM bridge", () => {
         thread_id: "chat-feishu-degrade",
         role_id: "project_manager",
         role_name: "项目经理",
+        source_channel: "feishu",
         prompt: "请开始执行",
         agent_type: "general-purpose",
       });
@@ -658,5 +677,89 @@ describe("App feishu IM bridge", () => {
     );
     expect(degradeCalls.length).toBe(4);
     vi.useRealTimers();
+  });
+
+  test("routes wecom IM replies through the channel-neutral bridge", async () => {
+    render(<App />);
+
+    await act(async () => {
+      emit("im-role-dispatch-request", {
+        session_id: "session-im-wecom",
+        thread_id: "chat-wecom-1",
+        role_id: "project_manager",
+        role_name: "项目经理",
+        source_channel: "wecom",
+        prompt: "请同步项目状态",
+        agent_type: "general-purpose",
+      });
+    });
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("send_message", {
+        sessionId: "session-im-wecom",
+        userMessage: "请同步项目状态",
+      });
+    });
+
+    await act(async () => {
+      emit("ask-user-event", {
+        session_id: "session-im-wecom",
+        question: "请确认企业微信渠道回发",
+        options: ["继续", "暂停"],
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        listWecomTextCalls().some(
+          (payload) =>
+            String(payload?.conversation_id ?? "") === "chat-wecom-1" &&
+            String(payload?.text ?? "").includes("请确认企业微信渠道回发"),
+        ),
+      ).toBe(true);
+    });
+
+    expect(
+      listFeishuTextCalls().some(
+        (payload) =>
+          String(payload?.chatId ?? "") === "chat-wecom-1" &&
+          String(payload?.text ?? "").includes("请确认企业微信渠道回发"),
+      ),
+    ).toBe(false);
+  });
+
+  test("does not fall back to Feishu when IM dispatch payload omits source_channel", async () => {
+    render(<App />);
+
+    await act(async () => {
+      emit("im-role-dispatch-request", {
+        session_id: "session-im-generic",
+        thread_id: "thread-generic",
+        role_id: "project_manager",
+        role_name: "项目经理",
+        prompt: "请先拆解任务",
+        agent_type: "general-purpose",
+      });
+    });
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("send_message", {
+        sessionId: "session-im-generic",
+        userMessage: "请先拆解任务",
+      });
+    });
+
+    await act(async () => {
+      emit("ask-user-event", {
+        session_id: "session-im-generic",
+        question: "请选择处理方案",
+        options: ["A", "B"],
+      });
+    });
+
+    await waitFor(() => {
+      expect(listFeishuTextCalls()).toHaveLength(0);
+      expect(listWecomTextCalls()).toHaveLength(0);
+    });
   });
 });
