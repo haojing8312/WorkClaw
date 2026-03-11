@@ -11,13 +11,25 @@ description: {{SKILL_DESCRIPTION}}
 ## When to Use
 - {{SKILL_WHEN_TO_USE}}
 
+## When Not to Use
+- [TODO: Describe the most similar requests that should NOT trigger this skill]
+
+## Suggested Structure
+- [TODO: Pick a body structure that fits this skill: workflow-based, task-based, reference-based, or capability-based]
+
 ## Workflow
 1. 明确任务目标、输入资料和交付标准。
 2. 拆分执行步骤，先确认关键约束再动手。
 3. 使用可复现的方法完成任务并记录关键决策。
 4. 交付前进行结果校验，必要时给出备选方案。
 
+## Prompt Examples
+- 应触发：`[TODO: add a realistic user request that should trigger this skill]`
+- 应触发：`[TODO: add another trigger example covering a different wording]`
+- 不触发：`[TODO: add a nearby request that should route somewhere else]`
+
 ## Quality Checklist
 - 结果是否满足用户目标与约束
 - 输出是否可执行且包含关键上下文
 - 风险点与限制是否已明确说明
+- 触发边界是否清楚，是否覆盖了误触发/漏触发高风险场景

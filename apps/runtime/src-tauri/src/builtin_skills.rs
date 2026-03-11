@@ -179,4 +179,63 @@ mod tests {
             "find-skills prompt should guide manual local install after download"
         );
     }
+
+    #[test]
+    fn builtin_skill_creator_emphasizes_trigger_quality_and_evaluation() {
+        let markdown =
+            builtin_skill_markdown(BUILTIN_SKILL_CREATOR_ID).expect("skill creator markdown");
+
+        assert!(
+            markdown.contains("复用")
+                || markdown.contains("已有技能")
+                || markdown.contains("是否真的需要新建"),
+            "skill creator should guide create-vs-reuse decisions"
+        );
+        assert!(
+            markdown.contains("触发示例") || markdown.contains("正向示例"),
+            "skill creator should require trigger examples"
+        );
+        assert!(
+            markdown.contains("不触发") || markdown.contains("反例") || markdown.contains("非触发"),
+            "skill creator should require non-trigger examples"
+        );
+        assert!(
+            markdown.contains("评测") || markdown.contains("误触发") || markdown.contains("漏触发"),
+            "skill creator should mention lightweight evaluation"
+        );
+    }
+
+    #[test]
+    fn builtin_skill_creator_guide_mentions_advanced_frontmatter_and_prompt_quality() {
+        let markdown = include_str!("../builtin-skills/skill-creator-guide/SKILL.md");
+
+        assert!(
+            markdown.contains("allowed_tools")
+                || markdown.contains("context")
+                || markdown.contains("agent")
+                || markdown.contains("mcp-servers"),
+            "guide should mention optional advanced frontmatter supported by runtime"
+        );
+        assert!(
+            markdown.contains("误触发")
+                || markdown.contains("漏触发")
+                || markdown.contains("Prompt Examples")
+                || markdown.contains("non-trigger"),
+            "guide should mention prompt-quality iteration"
+        );
+    }
+
+    #[test]
+    fn local_skill_template_includes_non_trigger_and_prompt_example_sections() {
+        let markdown = local_skill_template_markdown();
+
+        assert!(
+            markdown.contains("## When Not to Use"),
+            "local skill template should include a non-trigger section"
+        );
+        assert!(
+            markdown.contains("## Prompt Examples"),
+            "local skill template should include prompt examples"
+        );
+    }
 }
