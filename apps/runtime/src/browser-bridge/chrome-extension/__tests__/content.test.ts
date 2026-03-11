@@ -1,5 +1,10 @@
-import { describe, expect, it } from "vitest";
-import { detectCurrentFeishuPage, extractFeishuCredentials } from "../content";
+import { describe, expect, it, vi } from "vitest";
+import {
+  detectCurrentFeishuPage,
+  extractFeishuCredentials,
+  getFeishuBrowserSetupSessionId,
+  maybeReportFeishuCredentialsToExtension,
+} from "../content";
 
 describe("chrome extension content helpers", () => {
   it("detects the current Feishu page", () => {
@@ -54,6 +59,46 @@ describe("chrome extension content helpers", () => {
     expect(extractFeishuCredentials(document)).toEqual({
       appId: "cli_adjacent_123",
       appSecret: "sec_adjacent_456",
+    });
+  });
+
+  it("reads the setup session id from the current url", () => {
+    expect(getFeishuBrowserSetupSessionId("https://open.feishu.cn/?workclaw_session_id=sess-url-1")).toBe(
+      "sess-url-1",
+    );
+    expect(getFeishuBrowserSetupSessionId("https://open.feishu.cn/")).toBeNull();
+  });
+
+  it("reports extracted credentials to the extension runtime when session id is present", async () => {
+    document.body.innerHTML = `
+      <section>
+        <div>凭证与基础信息</div>
+        <div data-field="app-id">cli_message_123</div>
+        <div data-field="app-secret">sec_message_456</div>
+      </section>
+    `;
+
+    const sendMessage = vi.fn(async () => undefined);
+
+    await expect(
+      maybeReportFeishuCredentialsToExtension(
+        {
+          href: "https://open.feishu.cn/?workclaw_session_id=sess-message-1",
+        } as Location,
+        document,
+        {
+          runtime: {
+            sendMessage,
+          },
+        },
+      ),
+    ).resolves.toBe(true);
+
+    expect(sendMessage).toHaveBeenCalledWith({
+      type: "workclaw.report-feishu-credentials",
+      sessionId: "sess-message-1",
+      appId: "cli_message_123",
+      appSecret: "sec_message_456",
     });
   });
 });

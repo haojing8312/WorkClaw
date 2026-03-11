@@ -53,5 +53,13 @@ describe("EmployeeHubView browser setup panel", () => {
     });
 
     expect(screen.getByText("请先登录飞书")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "打开浏览器" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("open_external_url", {
+        url: "https://open.feishu.cn/?workclaw_session_id=sess-1",
+      });
+    });
   });
 });

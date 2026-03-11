@@ -11,4 +11,16 @@ describe("detectFeishuPage", () => {
     document.body.innerHTML = `<div>凭证与基础信息</div><div>App ID</div><div>App Secret</div>`;
     expect(detectFeishuPage(document).kind).toBe("credentials");
   });
+
+  it("detects credential page from structured credential fields", () => {
+    document.body.innerHTML = `
+      <section>
+        <div>凭证与基础信息</div>
+        <div data-field="app-id">cli_structured_123</div>
+        <div data-field="app-secret">sec_structured_456</div>
+      </section>
+    `;
+
+    expect(detectFeishuPage(document).kind).toBe("credentials");
+  });
 });

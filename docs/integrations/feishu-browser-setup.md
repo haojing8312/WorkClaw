@@ -18,15 +18,18 @@
 - Tauri 侧 Feishu setup session store
 - Chrome 扩展骨架与页面 detector
 - 凭证页 `App ID / App Secret` 提取函数
+- `workclaw_session_id` URL 透传与默认浏览器打开
+- content script 自动读取凭据并发送到扩展 runtime
+- background script 自动接收凭据并优先走 `connectNative`，失败回退到本地 HTTP bridge
 - native-host framing 与本地 HTTP bridge client
 - 员工中心设置页中的“飞书浏览器配置向导”入口
 - Windows 下 Chrome native host manifest 生成脚本
 
 尚未完全接通的部分：
 
-- Tauri `invoke_handler` 中正式注册 `start_feishu_browser_setup` 等命令
-- 真正的 Chrome `connectNative` 通道
 - 飞书后台真实页面的稳定 selector/step detector
+- native host 可执行入口与安装后的端到端联调
+- background 收到凭据后自动调用本地 Tauri 命令完成 session 推进
 
 ## 目录结构
 
@@ -84,22 +87,23 @@ manifest 内容包含：
 1. 用户在 WorkClaw 员工中心设置页点击“启动飞书浏览器配置”
 2. WorkClaw 创建本地 setup session
 3. 用户默认 Chrome 打开 `https://open.feishu.cn/`
+   - 实际 URL 现会带上 `?workclaw_session_id=<session_id>`
 4. 扩展识别当前页面：
    - 未登录：提示用户先登录
    - 凭证页：读取 `App ID / App Secret`
-5. 扩展把凭据发送到本地 bridge
-6. WorkClaw 写入现有飞书设置键：
+5. content script 通过扩展 runtime 把凭据发送给 background
+6. background 优先通过 `chrome.runtime.connectNative` 把凭据发送到本地；若不可用，则回退到本地 HTTP bridge
+7. WorkClaw 写入现有飞书设置键：
    - `feishu_app_id`
    - `feishu_app_secret`
-7. UI 状态推进到 `ENABLE_LONG_CONNECTION`
+8. UI 状态推进到 `ENABLE_LONG_CONNECTION`
 
 ## 当前限制
 
-- 目前凭证提取使用的是测试用 `data-field="app-id"` / `data-field="app-secret"` 选择器
-- 尚未接入真实飞书后台 DOM
-- 当前桥接仍通过本地 HTTP client 抽象模拟，尚未切到 Chrome 原生 `connectNative`
-- `start_feishu_browser_setup` 等命令尚未正式挂入 `lib.rs` 的 `invoke_handler`
-- 在当前 Windows 环境下，`src-tauri/src/lib.rs` 新增命令注册会触发极慢编译和 Cargo cache 锁争用，需要单独处理
+- 凭证提取当前同时支持测试用 `data-field` 与简单的标签/相邻文本模式，但还没覆盖真实飞书后台全部 DOM 变体
+- native host transport 已有 helper 和 listener，但尚未与安装后的本地 host 进程做端到端联调
+- 扩展 background 当前把凭据发给本地 bridge 后，还没有自动轮询或订阅 Tauri session 状态变化
+- Windows 环境下 Rust 验证仍建议使用独立 `CARGO_HOME`，以避开系统 Cargo cache 锁争用
 
 ## 安全边界
 

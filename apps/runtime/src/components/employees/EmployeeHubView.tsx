@@ -284,9 +284,12 @@ export function EmployeeHubView({
   }
 
   async function openFeishuBrowserSetupPage() {
+    const query = feishuBrowserSetupSession?.session_id
+      ? `?workclaw_session_id=${encodeURIComponent(feishuBrowserSetupSession.session_id)}`
+      : "";
     try {
       await invoke("open_external_url", {
-        url: "https://open.feishu.cn/",
+        url: `https://open.feishu.cn/${query}`,
       });
     } catch (error) {
       setMessage(String(error));

@@ -3,6 +3,9 @@ import {
   forwardCredentialsToLocalBridge,
   forwardCredentialsViaNativeHost,
   getNativeHostName,
+  handleFeishuExtensionMessage,
+  registerFeishuBackgroundMessageHandler,
+  reportFeishuCredentialsFromDocument,
 } from "../background";
 
 describe("chrome extension background bridge", () => {
@@ -97,5 +100,164 @@ describe("chrome extension background bridge", () => {
       payload: { type: "action.pause", reason: "saved" },
     });
     expect(disconnect).toHaveBeenCalled();
+  });
+
+  it("detects and reports credentials from the current page via native host", async () => {
+    document.body.innerHTML = `
+      <section>
+        <div>凭证与基础信息</div>
+        <div>App ID</div>
+        <div>cli_report_123</div>
+        <div>App Secret</div>
+        <div>sec_report_456</div>
+      </section>
+    `;
+
+    const sendViaNativeHost = vi.fn(async () => ({
+      version: 1 as const,
+      sessionId: "sess-3",
+      kind: "response" as const,
+      payload: { type: "action.pause" as const, reason: "saved" },
+    }));
+    const sendViaLocalBridge = vi.fn();
+
+    const response = await reportFeishuCredentialsFromDocument(
+      {
+        sessionId: "sess-3",
+        bridgeBaseUrl: "http://127.0.0.1:4312",
+      },
+      {
+        doc: document,
+        sendViaNativeHost,
+        sendViaLocalBridge,
+      },
+    );
+
+    expect(sendViaNativeHost).toHaveBeenCalledWith({
+      sessionId: "sess-3",
+      appId: "cli_report_123",
+      appSecret: "sec_report_456",
+    });
+    expect(sendViaLocalBridge).not.toHaveBeenCalled();
+    expect(response).toMatchObject({
+      kind: "response",
+      payload: { type: "action.pause", reason: "saved" },
+    });
+  });
+
+  it("falls back to the local bridge when native host is unavailable", async () => {
+    document.body.innerHTML = `
+      <section>
+        <div>凭证与基础信息</div>
+        <div data-field="app-id">cli_fallback_123</div>
+        <div data-field="app-secret">sec_fallback_456</div>
+      </section>
+    `;
+
+    const sendViaNativeHost = vi.fn(async () => {
+      throw new Error("native host unavailable");
+    });
+    const sendViaLocalBridge = vi.fn(async () => ({
+      version: 1 as const,
+      sessionId: "sess-4",
+      kind: "response" as const,
+      payload: { type: "action.pause" as const, reason: "saved-via-http" },
+    }));
+
+    const response = await reportFeishuCredentialsFromDocument(
+      {
+        sessionId: "sess-4",
+        bridgeBaseUrl: "http://127.0.0.1:4312",
+      },
+      {
+        doc: document,
+        sendViaNativeHost,
+        sendViaLocalBridge,
+      },
+    );
+
+    expect(sendViaNativeHost).toHaveBeenCalledTimes(1);
+    expect(sendViaLocalBridge).toHaveBeenCalledWith(
+      {
+        sessionId: "sess-4",
+        appId: "cli_fallback_123",
+        appSecret: "sec_fallback_456",
+      },
+      "http://127.0.0.1:4312",
+    );
+    expect(response).toMatchObject({
+      kind: "response",
+      payload: { type: "action.pause", reason: "saved-via-http" },
+    });
+  });
+
+  it("handles credential report messages from the content script", async () => {
+    const sendViaNativeHost = vi.fn(async () => ({
+      version: 1 as const,
+      sessionId: "sess-5",
+      kind: "response" as const,
+      payload: { type: "action.pause" as const, reason: "saved-from-message" },
+    }));
+
+    const response = await handleFeishuExtensionMessage(
+      {
+        type: "workclaw.report-feishu-credentials",
+        sessionId: "sess-5",
+        appId: "cli_msg_123",
+        appSecret: "sec_msg_456",
+      },
+      {
+        bridgeBaseUrl: "http://127.0.0.1:4312",
+        sendViaNativeHost,
+      },
+    );
+
+    expect(sendViaNativeHost).toHaveBeenCalledWith({
+      sessionId: "sess-5",
+      appId: "cli_msg_123",
+      appSecret: "sec_msg_456",
+    });
+    expect(response).toMatchObject({
+      kind: "response",
+      payload: { type: "action.pause", reason: "saved-from-message" },
+    });
+  });
+
+  it("registers a runtime message listener that handles credential reports", async () => {
+    const listeners: Array<(message: unknown) => unknown> = [];
+    const chromeLike = {
+      runtime: {
+        onMessage: {
+          addListener(listener: (message: unknown) => unknown) {
+            listeners.push(listener);
+          },
+        },
+      },
+    };
+    const sendViaNativeHost = vi.fn(async () => ({
+      version: 1 as const,
+      sessionId: "sess-6",
+      kind: "response" as const,
+      payload: { type: "action.pause" as const, reason: "saved-from-listener" },
+    }));
+
+    registerFeishuBackgroundMessageHandler(chromeLike, {
+      bridgeBaseUrl: "http://127.0.0.1:4312",
+      sendViaNativeHost,
+    });
+
+    expect(listeners).toHaveLength(1);
+
+    await expect(
+      listeners[0]?.({
+        type: "workclaw.report-feishu-credentials",
+        sessionId: "sess-6",
+        appId: "cli_listener_123",
+        appSecret: "sec_listener_456",
+      }),
+    ).resolves.toMatchObject({
+      kind: "response",
+      payload: { type: "action.pause", reason: "saved-from-listener" },
+    });
   });
 });
