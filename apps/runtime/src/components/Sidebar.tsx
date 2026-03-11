@@ -9,12 +9,10 @@ import {
   PanelLeftOpen,
   Search,
   Settings2,
-  ShieldCheck,
   Trash2,
   Users,
 } from "lucide-react";
 import { SessionInfo } from "../types";
-import { RiskConfirmDialog } from "./RiskConfirmDialog";
 import workclawLogo from "../assets/branding/workclaw-logo.png";
 
 interface Props {
@@ -26,8 +24,6 @@ interface Props {
   sessions: SessionInfo[];
   selectedSessionId: string | null;
   onSelectSession: (id: string) => void;
-  newSessionPermissionMode: "default" | "accept_edits" | "unrestricted";
-  onChangeNewSessionPermissionMode: (mode: "default" | "accept_edits" | "unrestricted") => void;
   onDeleteSession: (id: string) => void;
   onSettings: () => void;
   onSearchSessions: (query: string) => void;
@@ -45,8 +41,6 @@ export function Sidebar({
   sessions,
   selectedSessionId,
   onSelectSession,
-  newSessionPermissionMode,
-  onChangeNewSessionPermissionMode,
   onDeleteSession,
   onSettings,
   onSearchSessions,
@@ -55,8 +49,6 @@ export function Sidebar({
   collapsed,
 }: Props) {
   const [searchQuery, setSearchQuery] = useState("");
-  const [pendingPermissionMode, setPendingPermissionMode] = useState<"default" | "accept_edits" | "unrestricted" | null>(null);
-  const [showPermissionConfirm, setShowPermissionConfirm] = useState(false);
 
   const isStartTask = activeMainView === "start-task";
   const isExperts = activeMainView === "experts" || activeMainView === "experts-new";
@@ -66,31 +58,6 @@ export function Sidebar({
   function handleSearchChange(value: string) {
     setSearchQuery(value);
     onSearchSessions(value);
-  }
-
-  function requestPermissionModeChange(nextMode: "default" | "accept_edits" | "unrestricted") {
-    if (nextMode !== "unrestricted") {
-      onChangeNewSessionPermissionMode(nextMode);
-      return;
-    }
-    if (newSessionPermissionMode === "unrestricted") {
-      return;
-    }
-    setPendingPermissionMode(nextMode);
-    setShowPermissionConfirm(true);
-  }
-
-  function handleConfirmUnrestrictedMode() {
-    if (pendingPermissionMode) {
-      onChangeNewSessionPermissionMode(pendingPermissionMode);
-    }
-    setPendingPermissionMode(null);
-    setShowPermissionConfirm(false);
-  }
-
-  function handleCancelUnrestrictedMode() {
-    setPendingPermissionMode(null);
-    setShowPermissionConfirm(false);
   }
 
   if (collapsed) {
@@ -210,23 +177,6 @@ export function Sidebar({
               <span>会话历史</span>
             </div>
             <div className="sm-divider px-3 py-2 border-b">
-              <label className="sm-field-label text-[11px] flex items-center gap-1.5">
-                <ShieldCheck className="h-3.5 w-3.5" />
-                <span>操作确认级别</span>
-              </label>
-              <select
-                value={newSessionPermissionMode}
-                onChange={(e) =>
-                  requestPermissionModeChange(e.target.value as "default" | "accept_edits" | "unrestricted")
-                }
-                className="sm-select w-full py-1 text-xs"
-              >
-                <option value="accept_edits">推荐模式（常见改动自动处理）</option>
-                <option value="default">谨慎模式（关键操作先确认）</option>
-                <option value="unrestricted">全自动模式（高风险）</option>
-              </select>
-            </div>
-            <div className="sm-divider px-3 py-2 border-b">
               <div className="relative">
                 <Search className="h-3.5 w-3.5 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none sm-text-muted" />
                 <input
@@ -313,20 +263,6 @@ export function Sidebar({
           设置
         </button>
       </div>
-
-      <RiskConfirmDialog
-        open={showPermissionConfirm}
-        level="high"
-        title="切换为全自动模式"
-        summary="该模式会在高风险操作时减少确认环节，请仅在可信任务中使用。"
-        impact="可能执行不可逆操作（如文件改写、删除）且自动化程度更高。"
-        irreversible
-        confirmLabel="确认切换"
-        cancelLabel="取消"
-        loading={false}
-        onConfirm={handleConfirmUnrestrictedMode}
-        onCancel={handleCancelUnrestrictedMode}
-      />
     </div>
   );
 }

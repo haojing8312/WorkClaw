@@ -173,7 +173,7 @@ describe("App employee list refresh on chat update", () => {
             title: "General Session",
             created_at: new Date().toISOString(),
             model_id: "model-a",
-            permission_mode: "accept_edits",
+            permission_mode: "standard",
           },
         ]);
       }

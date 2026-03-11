@@ -219,7 +219,7 @@ async fn sessions_support_explicit_mode_and_team_columns() {
     .bind("General")
     .bind("2026-03-08T00:00:00Z")
     .bind("model-1")
-    .bind("accept_edits")
+    .bind("standard")
     .bind("")
     .bind("")
     .bind("general")
@@ -238,7 +238,7 @@ async fn sessions_support_explicit_mode_and_team_columns() {
     .bind("Team Entry")
     .bind("2026-03-08T00:00:00Z")
     .bind("model-1")
-    .bind("accept_edits")
+    .bind("standard")
     .bind("")
     .bind("taizi")
     .bind("team_entry")
@@ -247,21 +247,19 @@ async fn sessions_support_explicit_mode_and_team_columns() {
     .await
     .expect("insert team entry session");
 
-    let general_row: (String, String) = sqlx::query_as(
-        "SELECT session_mode, team_id FROM sessions WHERE id = 'session-general'",
-    )
-    .fetch_one(&pool)
-    .await
-    .expect("query general session");
+    let general_row: (String, String) =
+        sqlx::query_as("SELECT session_mode, team_id FROM sessions WHERE id = 'session-general'")
+            .fetch_one(&pool)
+            .await
+            .expect("query general session");
     assert_eq!(general_row.0, "general");
     assert_eq!(general_row.1, "");
 
-    let team_row: (String, String) = sqlx::query_as(
-        "SELECT session_mode, team_id FROM sessions WHERE id = 'session-team'",
-    )
-    .fetch_one(&pool)
-    .await
-    .expect("query team session");
+    let team_row: (String, String) =
+        sqlx::query_as("SELECT session_mode, team_id FROM sessions WHERE id = 'session-team'")
+            .fetch_one(&pool)
+            .await
+            .expect("query team session");
     assert_eq!(team_row.0, "team_entry");
     assert_eq!(team_row.1, "group-1");
 }
@@ -312,7 +310,7 @@ async fn employee_group_runs_can_be_listed_for_recent_overview_cards() {
     .bind("交付运行")
     .bind("2026-03-08T10:00:00Z")
     .bind("model-1")
-    .bind("accept_edits")
+    .bind("standard")
     .bind("")
     .bind("pm")
     .bind("team_entry")
@@ -331,7 +329,7 @@ async fn employee_group_runs_can_be_listed_for_recent_overview_cards() {
     .bind("复盘运行")
     .bind("2026-03-08T09:00:00Z")
     .bind("model-1")
-    .bind("accept_edits")
+    .bind("standard")
     .bind("")
     .bind("ops")
     .bind("team_entry")

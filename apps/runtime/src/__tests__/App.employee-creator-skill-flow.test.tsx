@@ -155,7 +155,7 @@ describe("App employee creator skill flow", () => {
               title: "创建员工会话",
               created_at: new Date().toISOString(),
               model_id: "model-a",
-              permission_mode: "accept_edits",
+              permission_mode: "standard",
             },
           ]);
         }

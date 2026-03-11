@@ -192,7 +192,7 @@ describe("App employee assistant create+update regression", () => {
             title: "智能体员工助手会话",
             created_at: new Date().toISOString(),
             model_id: "model-a",
-            permission_mode: "accept_edits",
+            permission_mode: "standard",
           },
         ]);
       }

@@ -80,6 +80,7 @@ interface Props {
   sessionMode?: "general" | "employee_direct" | "team_entry" | string;
   sessionSourceChannel?: string;
   sessionSourceLabel?: string;
+  operationPermissionMode?: "standard" | "full_access" | string;
 }
 
 export function ChatView({
@@ -104,6 +105,7 @@ export function ChatView({
   sessionMode,
   sessionSourceChannel,
   sessionSourceLabel,
+  operationPermissionMode = "standard",
 }: Props) {
   const parseDuplicateSkillName = (error: unknown): string | null => {
     const message =
@@ -133,6 +135,10 @@ export function ChatView({
   const [toolConfirm, setToolConfirm] = useState<{
     toolName: string;
     toolInput: Record<string, unknown>;
+    title: string;
+    summary: string;
+    impact?: string;
+    irreversible?: boolean;
   } | null>(null);
   const [pendingInstallSkill, setPendingInstallSkill] = useState<ClawhubInstallCandidate | null>(null);
   const [showInstallConfirm, setShowInstallConfirm] = useState(false);
@@ -670,11 +676,19 @@ export function ChatView({
       session_id: string;
       tool_name: string;
       tool_input: Record<string, unknown>;
+      title?: string;
+      summary?: string;
+      impact?: string;
+      irreversible?: boolean;
     }>("tool-confirm-event", ({ payload }) => {
       if (payload.session_id !== sessionId) return;
       setToolConfirm({
         toolName: payload.tool_name,
         toolInput: payload.tool_input,
+        title: payload.title || "高危操作确认",
+        summary: payload.summary || `将执行工具 ${payload.tool_name}`,
+        impact: payload.impact,
+        irreversible: payload.irreversible,
       });
     });
     return () => {
@@ -2326,34 +2340,19 @@ export function ChatView({
             </div>
           </div>
         )}
-        {/* 工具确认卡片 */}
-        {toolConfirm && (
-          <div className="flex justify-start">
-            <div className="max-w-[80%] bg-orange-50 border border-orange-200 rounded-2xl px-4 py-3 text-sm">
-              <div className="font-medium text-orange-700 mb-2">需要确认</div>
-              <div className="text-gray-600 mb-1">
-                工具: <span className="text-orange-600 font-mono">{toolConfirm.toolName}</span>
-              </div>
-              <pre className="bg-gray-50 rounded-xl p-2.5 text-xs text-gray-600 mb-3 overflow-x-auto max-h-40 overflow-y-auto">
-                {JSON.stringify(toolConfirm.toolInput, null, 2)}
-              </pre>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => handleToolConfirm(true)}
-                  className="bg-green-600 hover:bg-green-700 text-white px-4 py-1 rounded text-xs font-medium transition-colors"
-                >
-                  允许
-                </button>
-                <button
-                  onClick={() => handleToolConfirm(false)}
-                  className="bg-red-600 hover:bg-red-700 text-white px-4 py-1 rounded text-xs font-medium transition-colors"
-                >
-                  拒绝
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
+        <RiskConfirmDialog
+          open={Boolean(toolConfirm)}
+          level="high"
+          title={toolConfirm?.title || "高危操作确认"}
+          summary={toolConfirm?.summary || "请确认是否继续执行。"}
+          impact={toolConfirm?.impact}
+          irreversible={toolConfirm?.irreversible}
+          confirmLabel="确认继续"
+          cancelLabel="取消"
+          loading={false}
+          onConfirm={() => void handleToolConfirm(true)}
+          onCancel={() => void handleToolConfirm(false)}
+        />
         <RiskConfirmDialog
           open={showInstallConfirm && Boolean(pendingInstallSkill)}
           level="medium"
@@ -2391,6 +2390,16 @@ export function ChatView({
       {/* 输入区域 */}
       <div className="px-6 py-3 bg-[var(--sm-surface-muted)]/80">
         <div className="sm-panel max-w-3xl mx-auto focus-within:border-[var(--sm-primary)] focus-within:shadow-[var(--sm-focus-ring)] transition-all">
+          {operationPermissionMode === "full_access" && (
+            <div className="px-3 pt-3">
+              <div
+                data-testid="full-access-badge"
+                className="inline-flex items-center rounded-full border border-red-200 bg-red-50 px-2.5 py-1 text-[11px] font-medium text-red-700"
+              >
+                全自动模式
+              </div>
+            </div>
+          )}
           {quickPrompts.length > 0 && (
             <div data-testid="chat-quick-prompts" className="px-3 pt-3 pb-1 flex flex-wrap gap-2 border-b border-gray-100">
               {quickPrompts.map((item, index) => (

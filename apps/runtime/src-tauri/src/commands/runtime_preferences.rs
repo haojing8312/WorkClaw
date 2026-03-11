@@ -25,6 +25,7 @@ const KEY_RUNTIME_LAST_UPDATE_CHECK_AT: &str = "runtime_last_update_check_at";
 const KEY_RUNTIME_LAUNCH_AT_LOGIN: &str = "runtime_launch_at_login";
 const KEY_RUNTIME_LAUNCH_MINIMIZED: &str = "runtime_launch_minimized";
 const KEY_RUNTIME_CLOSE_TO_TRAY: &str = "runtime_close_to_tray";
+const KEY_RUNTIME_OPERATION_PERMISSION_MODE: &str = "runtime_operation_permission_mode";
 
 const DEFAULT_LANGUAGE: &str = "zh-CN";
 const DEFAULT_IMMERSIVE_TRANSLATION_ENABLED: bool = true;
@@ -36,6 +37,7 @@ const DEFAULT_UPDATE_CHANNEL: &str = "stable";
 const DEFAULT_LAUNCH_AT_LOGIN: bool = false;
 const DEFAULT_LAUNCH_MINIMIZED: bool = false;
 const DEFAULT_CLOSE_TO_TRAY: bool = true;
+const DEFAULT_OPERATION_PERMISSION_MODE: &str = "standard";
 const AUTOSTART_NAME: &str = "dev.workclaw.runtime";
 
 #[cfg(target_os = "windows")]
@@ -68,6 +70,7 @@ pub struct RuntimePreferences {
     pub launch_at_login: bool,
     pub launch_minimized: bool,
     pub close_to_tray: bool,
+    pub operation_permission_mode: String,
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -107,7 +110,10 @@ pub fn sync_launch_at_login(_app: &AppHandle, enabled: bool) -> Result<(), Strin
                 .output()
                 .map_err(|e| format!("设置 Windows 开机启动失败: {e}"))?;
             if !output.status.success() {
-                return Err(format_windows_command_failure("设置 Windows 开机启动", &output));
+                return Err(format_windows_command_failure(
+                    "设置 Windows 开机启动",
+                    &output,
+                ));
             }
         } else {
             let query_output = Command::new("reg")
@@ -145,11 +151,8 @@ pub fn sync_launch_at_login(_app: &AppHandle, enabled: bool) -> Result<(), Strin
     #[cfg(target_os = "macos")]
     {
         let home = resolve_home_dir()?;
-        let launch_dir = home
-            .join("Library")
-            .join("LaunchAgents");
-        fs::create_dir_all(&launch_dir)
-            .map_err(|e| format!("创建 LaunchAgents 目录失败: {e}"))?;
+        let launch_dir = home.join("Library").join("LaunchAgents");
+        fs::create_dir_all(&launch_dir).map_err(|e| format!("创建 LaunchAgents 目录失败: {e}"))?;
 
         let plist_path = launch_dir.join(format!("{AUTOSTART_NAME}.plist"));
         if !enabled {
@@ -157,8 +160,7 @@ pub fn sync_launch_at_login(_app: &AppHandle, enabled: bool) -> Result<(), Strin
                 Ok(()) => Ok(()),
                 Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
                 Err(e) => Err(format!("移除 LaunchAgent 文件失败: {e}")),
-            }?
-            ;
+            }?;
             return Ok(());
         }
 
@@ -176,8 +178,8 @@ pub fn sync_launch_at_login(_app: &AppHandle, enabled: bool) -> Result<(), Strin
         plist.push_str("  <key>KeepAlive</key>\n  <false/>\n");
         plist.push_str("</dict>\n</plist>\n");
 
-        let mut file = File::create(&plist_path)
-            .map_err(|e| format!("写入 LaunchAgent 文件失败: {e}"))?;
+        let mut file =
+            File::create(&plist_path).map_err(|e| format!("写入 LaunchAgent 文件失败: {e}"))?;
         use std::io::Write;
         file.write_all(plist.as_bytes())
             .map_err(|e| format!("写入 LaunchAgent 文件失败: {e}"))?;
@@ -191,8 +193,7 @@ pub fn sync_launch_at_login(_app: &AppHandle, enabled: bool) -> Result<(), Strin
             .map(PathBuf::from)
             .unwrap_or_else(|| home.join(".config"));
         let autostart_dir = base.join("autostart");
-        fs::create_dir_all(&autostart_dir)
-            .map_err(|e| format!("创建 autostart 目录失败: {e}"))?;
+        fs::create_dir_all(&autostart_dir).map_err(|e| format!("创建 autostart 目录失败: {e}"))?;
 
         let desktop_path = autostart_dir.join(format!("{AUTOSTART_NAME}.desktop"));
         if !enabled {
@@ -200,8 +201,7 @@ pub fn sync_launch_at_login(_app: &AppHandle, enabled: bool) -> Result<(), Strin
                 Ok(()) => Ok(()),
                 Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
                 Err(e) => Err(format!("移除自启动配置失败: {e}")),
-            }?
-            ;
+            }?;
             return Ok(());
         }
 
@@ -212,8 +212,7 @@ pub fn sync_launch_at_login(_app: &AppHandle, enabled: bool) -> Result<(), Strin
         desktop.push_str("Name=WorkClaw\n");
         let _ = writeln!(desktop, "Exec={}", exe_path_s);
         desktop.push_str("X-GNOME-Autostart-enabled=true\n");
-        fs::write(&desktop_path, desktop)
-            .map_err(|e| format!("写入 Desktop 文件失败: {e}"))?;
+        fs::write(&desktop_path, desktop).map_err(|e| format!("写入 Desktop 文件失败: {e}"))?;
         return Ok(());
     }
 
@@ -237,6 +236,7 @@ pub struct RuntimePreferencesInput {
     pub launch_at_login: Option<bool>,
     pub launch_minimized: Option<bool>,
     pub close_to_tray: Option<bool>,
+    pub operation_permission_mode: Option<String>,
 }
 
 fn home_dir_from_env() -> Option<PathBuf> {
@@ -317,6 +317,13 @@ fn normalize_update_channel(raw: &str) -> String {
 
 fn normalize_optional_text(raw: &str) -> String {
     raw.trim().to_string()
+}
+
+fn normalize_operation_permission_mode(raw: &str) -> String {
+    match raw.trim() {
+        "full_access" => "full_access".to_string(),
+        _ => DEFAULT_OPERATION_PERMISSION_MODE.to_string(),
+    }
 }
 
 async fn get_app_setting(pool: &SqlitePool, key: &str) -> Result<Option<String>, String> {
@@ -404,6 +411,10 @@ pub async fn get_runtime_preferences_with_pool(
         get_app_setting(pool, KEY_RUNTIME_CLOSE_TO_TRAY).await?,
         DEFAULT_CLOSE_TO_TRAY,
     );
+    let operation_permission_mode = get_app_setting(pool, KEY_RUNTIME_OPERATION_PERMISSION_MODE)
+        .await?
+        .map(|v| normalize_operation_permission_mode(&v))
+        .unwrap_or_else(|| DEFAULT_OPERATION_PERMISSION_MODE.to_string());
     Ok(RuntimePreferences {
         default_work_dir: dir,
         default_language,
@@ -419,6 +430,7 @@ pub async fn get_runtime_preferences_with_pool(
         launch_at_login,
         launch_minimized,
         close_to_tray,
+        operation_permission_mode,
     })
 }
 
@@ -478,6 +490,10 @@ pub async fn set_runtime_preferences_with_pool(
     let launch_at_login = input.launch_at_login.unwrap_or(current.launch_at_login);
     let launch_minimized = input.launch_minimized.unwrap_or(current.launch_minimized);
     let close_to_tray = input.close_to_tray.unwrap_or(current.close_to_tray);
+    let operation_permission_mode = input
+        .operation_permission_mode
+        .map(|v| normalize_operation_permission_mode(&v))
+        .unwrap_or(current.operation_permission_mode);
 
     set_app_setting(pool, KEY_RUNTIME_DEFAULT_WORK_DIR, &default_work_dir).await?;
     set_app_setting(pool, KEY_RUNTIME_DEFAULT_LANGUAGE, &default_language).await?;
@@ -547,6 +563,12 @@ pub async fn set_runtime_preferences_with_pool(
         if close_to_tray { "true" } else { "false" },
     )
     .await?;
+    set_app_setting(
+        pool,
+        KEY_RUNTIME_OPERATION_PERMISSION_MODE,
+        &operation_permission_mode,
+    )
+    .await?;
     Ok(RuntimePreferences {
         default_work_dir,
         default_language,
@@ -562,6 +584,7 @@ pub async fn set_runtime_preferences_with_pool(
         launch_at_login,
         launch_minimized,
         close_to_tray,
+        operation_permission_mode,
     })
 }
 
@@ -639,6 +662,7 @@ mod tests {
         assert_eq!(prefs_json["launch_at_login"], json!(false));
         assert_eq!(prefs_json["launch_minimized"], json!(false));
         assert_eq!(prefs_json["close_to_tray"], json!(true));
+        assert_eq!(prefs_json["operation_permission_mode"], json!("standard"));
     }
 
     #[tokio::test]
@@ -652,7 +676,8 @@ mod tests {
             "last_update_check_at": "2026-03-06T10:00:00Z",
             "launch_at_login": true,
             "launch_minimized": true,
-            "close_to_tray": false
+            "close_to_tray": false,
+            "operation_permission_mode": "full_access"
         }))
         .expect("deserialize runtime preferences input");
 
@@ -676,6 +701,10 @@ mod tests {
         assert_eq!(prefs_json["launch_at_login"], json!(true));
         assert_eq!(prefs_json["launch_minimized"], json!(true));
         assert_eq!(prefs_json["close_to_tray"], json!(false));
+        assert_eq!(
+            prefs_json["operation_permission_mode"],
+            json!("full_access")
+        );
     }
 
     #[cfg(target_os = "windows")]

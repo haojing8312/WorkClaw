@@ -186,6 +186,7 @@ The integrated environment where users can package, install, and run encrypted S
 - Session history with searchable conversation archives
 - Multi-model support (Claude 4.6, GPT-4, MiniMax M2.5, GLM-4, DeepSeek)
 - Local secure workspace folder configuration
+- Two operation modes: default `Standard Mode` only interrupts truly critical actions, with optional `Full Access`
 - Default language and immersive translation settings (`translated_only` / `bilingual_inline`)
 - Translation failures fall back to source text and never alter install parameters (`slug` / `githubUrl` / `sourceUrl`)
 - No command line required
@@ -198,7 +199,7 @@ Creators can develop Skills with **Claude Code** or **VS Code**, then package di
 ### Security & Privacy
 - **Military-Grade Encryption**: AES-256-GCM with deterministic key derivation from username
 - **Secure Workspace**: Configure trusted local folders for file operations
-- **Permission Control**: Multi-layer validation for sensitive operations
+- **Permission Control**: Default `Standard Mode` only confirms truly critical actions such as delete, destructive overwrite, or external submission; users can switch to `Full Access`
 - **No Cloud Dependency**: All processing happens locally
 
 ### Agent Capabilities

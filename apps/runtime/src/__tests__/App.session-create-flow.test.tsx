@@ -95,6 +95,11 @@ describe("App session create flow", () => {
       if (command === "list_agent_employees") {
         return Promise.resolve([]);
       }
+      if (command === "get_runtime_preferences") {
+        return Promise.resolve({
+          operation_permission_mode: "standard",
+        });
+      }
       if (command === "create_session") {
         return Promise.resolve("session-new-1");
       }
@@ -115,12 +120,13 @@ describe("App session create flow", () => {
     fireEvent.click(screen.getByRole("button", { name: "create-with-input" }));
 
     await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith(
+        expect(invokeMock).toHaveBeenCalledWith(
         "create_session",
         expect.objectContaining({
           skillId: "builtin-general",
           modelId: "model-a",
           workDir: "",
+          permissionMode: "standard",
         })
       );
     });
@@ -141,11 +147,12 @@ describe("App session create flow", () => {
     fireEvent.click(screen.getByRole("button", { name: "create-empty" }));
 
     await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith(
+        expect(invokeMock).toHaveBeenCalledWith(
         "create_session",
         expect.objectContaining({
           skillId: "builtin-general",
           workDir: "",
+          permissionMode: "standard",
         })
       );
     });
@@ -189,6 +196,11 @@ describe("App session create flow", () => {
       if (command === "list_agent_employees") {
         return Promise.resolve([]);
       }
+      if (command === "get_runtime_preferences") {
+        return Promise.resolve({
+          operation_permission_mode: "full_access",
+        });
+      }
       if (command === "create_session") {
         return Promise.resolve("session-new-1");
       }
@@ -207,6 +219,12 @@ describe("App session create flow", () => {
       expect(screen.getByTestId("chat-view")).toBeInTheDocument();
     });
     expect(screen.getByTestId("chat-initial-message")).toHaveTextContent("整理本地文件");
+    expect(invokeMock).toHaveBeenCalledWith(
+      "create_session",
+      expect.objectContaining({
+        permissionMode: "full_access",
+      })
+    );
   });
 
   test("does not require directory picker before creating session", async () => {

@@ -13,8 +13,6 @@ describe("Sidebar semantic theme", () => {
         sessions={[]}
         selectedSessionId={null}
         onSelectSession={() => {}}
-        newSessionPermissionMode="accept_edits"
-        onChangeNewSessionPermissionMode={() => {}}
         onDeleteSession={() => {}}
         onSettings={() => {}}
         onSearchSessions={() => {}}
@@ -33,6 +31,6 @@ describe("Sidebar semantic theme", () => {
     expect(screen.getByRole("button", { name: "折叠侧边栏" }).closest("div")).toHaveClass("sm-surface");
     expect(screen.getByRole("button", { name: "开始任务" })).toHaveClass("sm-btn");
     expect(screen.getByPlaceholderText("搜索会话...")).toHaveClass("sm-input");
-    expect(screen.getByRole("combobox")).toHaveClass("sm-select");
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
   });
 });

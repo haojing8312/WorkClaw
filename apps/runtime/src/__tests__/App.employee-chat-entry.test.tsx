@@ -137,6 +137,11 @@ describe("App employee chat entry", () => {
         }
         return Promise.resolve([]);
       }
+      if (command === "get_runtime_preferences") {
+        return Promise.resolve({
+          operation_permission_mode: "standard",
+        });
+      }
       if (command === "create_session") {
         return Promise.resolve("session-sales");
       }
@@ -161,7 +166,7 @@ describe("App employee chat entry", () => {
           modelId: "model-a",
           workDir: "D:\\\\workspace\\\\sales",
           employeeId: "sales_lead",
-          permissionMode: "accept_edits",
+          permissionMode: "standard",
           sessionMode: "employee_direct",
           teamId: "",
         }),

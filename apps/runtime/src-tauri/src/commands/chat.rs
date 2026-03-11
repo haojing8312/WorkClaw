@@ -6,7 +6,6 @@ use super::models::load_routing_settings_from_pool;
 use super::runtime_preferences::resolve_default_work_dir_with_pool;
 use super::skills::DbState;
 use crate::agent::compactor;
-use crate::agent::executor::estimate_tokens;
 use crate::agent::permissions::PermissionMode;
 use crate::agent::tools::search_providers::cache::SearchCache;
 use crate::agent::tools::{
@@ -17,6 +16,7 @@ use crate::agent::tools::{
 };
 use crate::agent::AgentExecutor;
 use chrono::Utc;
+use runtime_executor_core::estimate_tokens;
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -39,10 +39,9 @@ pub struct CancelFlagState(pub Arc<AtomicBool>);
 
 fn normalize_permission_mode_for_storage(permission_mode: Option<&str>) -> &'static str {
     match permission_mode.unwrap_or("").trim() {
-        "default" => "default",
-        "unrestricted" => "unrestricted",
-        "accept_edits" => "accept_edits",
-        _ => "accept_edits",
+        "standard" | "default" | "accept_edits" => "standard",
+        "full_access" | "unrestricted" => "full_access",
+        _ => "standard",
     }
 }
 
@@ -63,19 +62,21 @@ fn normalize_team_id_for_storage(session_mode: &str, team_id: Option<&str>) -> S
     }
 }
 
-fn parse_permission_mode(permission_mode: &str) -> PermissionMode {
+fn parse_permission_mode_for_runtime(permission_mode: &str) -> PermissionMode {
     match permission_mode {
-        "default" => PermissionMode::Default,
-        "unrestricted" => PermissionMode::Unrestricted,
+        "standard" | "default" | "accept_edits" => PermissionMode::AcceptEdits,
+        "full_access" | "unrestricted" => PermissionMode::Unrestricted,
         _ => PermissionMode::AcceptEdits,
     }
 }
 
 fn permission_mode_label_for_display(permission_mode: &str) -> &'static str {
     match permission_mode {
-        "default" => "谨慎模式",
-        "unrestricted" => "全自动模式（高风险）",
-        _ => "推荐模式",
+        "standard" => "标准模式",
+        "full_access" => "全自动模式",
+        "default" => "标准模式",
+        "unrestricted" => "全自动模式",
+        _ => "标准模式",
     }
 }
 
@@ -486,7 +487,7 @@ pub async fn send_message(
     .await
     .map_err(|e| format!("会话不存在 (session_id={session_id}): {e}"))?;
 
-    let permission_mode = parse_permission_mode(&perm_str);
+    let permission_mode = parse_permission_mode_for_runtime(&perm_str);
     let routing_settings = load_routing_settings_from_pool(&db.0).await?;
 
     // 加载 Skill 信息（含 pack_path 和 source_type，用 COALESCE 兼容旧数据）
@@ -1400,7 +1401,7 @@ pub async fn list_sessions(db: State<'_, DbState>) -> Result<Vec<serde_json::Val
             s.model_id,
             COALESCE(s.work_dir, ''),
             COALESCE(s.employee_id, ''),
-            COALESCE(s.permission_mode, 'accept_edits'),
+            COALESCE(s.permission_mode, 'standard'),
             COALESCE(s.session_mode, 'general'),
             COALESCE(s.team_id, ''),
             CASE
@@ -1470,39 +1471,45 @@ mod tests {
         extract_skill_prompt_from_decrypted_files, infer_capability_from_user_message,
         is_supported_protocol, normalize_permission_mode_for_storage,
         normalize_session_mode_for_storage, normalize_team_id_for_storage,
-        parse_fallback_chain_targets, parse_permission_mode, permission_mode_label_for_display,
-        retry_backoff_ms, retry_budget_for_error, should_retry_same_candidate, ModelRouteErrorKind,
+        parse_fallback_chain_targets, parse_permission_mode_for_runtime,
+        permission_mode_label_for_display, retry_backoff_ms, retry_budget_for_error,
+        should_retry_same_candidate, ModelRouteErrorKind,
     };
     use crate::agent::permissions::PermissionMode;
     use std::collections::HashMap;
     use std::path::Path;
 
     #[test]
-    fn normalize_permission_mode_defaults_to_accept_edits() {
-        assert_eq!(normalize_permission_mode_for_storage(None), "accept_edits");
-        assert_eq!(
-            normalize_permission_mode_for_storage(Some("")),
-            "accept_edits"
-        );
+    fn normalize_permission_mode_defaults_to_standard() {
+        assert_eq!(normalize_permission_mode_for_storage(None), "standard");
+        assert_eq!(normalize_permission_mode_for_storage(Some("")), "standard");
         assert_eq!(
             normalize_permission_mode_for_storage(Some("invalid")),
-            "accept_edits"
+            "standard"
         );
     }
 
     #[test]
-    fn normalize_permission_mode_keeps_supported_values() {
+    fn normalize_permission_mode_maps_legacy_values_to_modern_storage() {
+        assert_eq!(
+            normalize_permission_mode_for_storage(Some("standard")),
+            "standard"
+        );
+        assert_eq!(
+            normalize_permission_mode_for_storage(Some("full_access")),
+            "full_access"
+        );
         assert_eq!(
             normalize_permission_mode_for_storage(Some("default")),
-            "default"
+            "standard"
         );
         assert_eq!(
             normalize_permission_mode_for_storage(Some("accept_edits")),
-            "accept_edits"
+            "standard"
         );
         assert_eq!(
             normalize_permission_mode_for_storage(Some("unrestricted")),
-            "unrestricted"
+            "full_access"
         );
     }
 
@@ -1549,37 +1556,56 @@ mod tests {
     }
 
     #[test]
-    fn parse_permission_mode_defaults_to_accept_edits() {
-        assert_eq!(parse_permission_mode(""), PermissionMode::AcceptEdits);
+    fn parse_permission_mode_for_runtime_defaults_to_standard_behavior() {
         assert_eq!(
-            parse_permission_mode("invalid"),
+            parse_permission_mode_for_runtime(""),
+            PermissionMode::AcceptEdits
+        );
+        assert_eq!(
+            parse_permission_mode_for_runtime("invalid"),
             PermissionMode::AcceptEdits
         );
     }
 
     #[test]
-    fn parse_permission_mode_keeps_supported_values() {
-        assert_eq!(parse_permission_mode("default"), PermissionMode::Default);
+    fn parse_permission_mode_for_runtime_supports_modern_and_legacy_values() {
         assert_eq!(
-            parse_permission_mode("accept_edits"),
+            parse_permission_mode_for_runtime("standard"),
             PermissionMode::AcceptEdits
         );
         assert_eq!(
-            parse_permission_mode("unrestricted"),
+            parse_permission_mode_for_runtime("full_access"),
+            PermissionMode::Unrestricted
+        );
+        assert_eq!(
+            parse_permission_mode_for_runtime("default"),
+            PermissionMode::AcceptEdits
+        );
+        assert_eq!(
+            parse_permission_mode_for_runtime("accept_edits"),
+            PermissionMode::AcceptEdits
+        );
+        assert_eq!(
+            parse_permission_mode_for_runtime("unrestricted"),
             PermissionMode::Unrestricted
         );
     }
 
     #[test]
     fn permission_mode_label_is_user_friendly() {
+        assert_eq!(permission_mode_label_for_display("standard"), "标准模式");
+        assert_eq!(
+            permission_mode_label_for_display("full_access"),
+            "全自动模式"
+        );
         assert_eq!(
             permission_mode_label_for_display("accept_edits"),
-            "推荐模式"
+            "标准模式"
         );
-        assert_eq!(permission_mode_label_for_display("default"), "谨慎模式");
+        assert_eq!(permission_mode_label_for_display("default"), "标准模式");
         assert_eq!(
             permission_mode_label_for_display("unrestricted"),
-            "全自动模式（高风险）"
+            "全自动模式"
         );
     }
 

@@ -1989,7 +1989,7 @@ async fn ensure_group_run_session_with_pool(
     let title = format!("群组协作：{}", group_name.trim());
     sqlx::query(
         "INSERT INTO sessions (id, skill_id, title, created_at, model_id, permission_mode, work_dir, employee_id)
-         VALUES (?, ?, ?, ?, ?, 'accept_edits', ?, ?)",
+         VALUES (?, ?, ?, ?, ?, 'standard', ?, ?)",
     )
     .bind(&session_id)
     .bind(&session_skill_id)
@@ -2098,7 +2098,7 @@ async fn ensure_group_step_session_with_pool(
     let title = format!("群组执行:{}@{}", run_id, assignee_employee_id);
     sqlx::query(
         "INSERT INTO sessions (id, skill_id, title, created_at, model_id, permission_mode, work_dir, employee_id)
-         VALUES (?, ?, ?, ?, ?, 'accept_edits', ?, ?)",
+         VALUES (?, ?, ?, ?, ?, 'standard', ?, ?)",
     )
     .bind(&session_id)
     .bind(&session_skill_id)
@@ -4075,7 +4075,7 @@ pub async fn ensure_employee_sessions_for_event_with_pool(
 
                 sqlx::query(
                     "INSERT INTO sessions (id, skill_id, title, created_at, model_id, permission_mode, work_dir, employee_id)
-                     VALUES (?, ?, ?, ?, ?, 'accept_edits', ?, ?)",
+                     VALUES (?, ?, ?, ?, ?, 'standard', ?, ?)",
                 )
                 .bind(&session_id)
                 .bind(&skill_id)
@@ -4173,7 +4173,7 @@ pub async fn ensure_employee_sessions_for_event_with_pool(
 
                 sqlx::query(
                     "INSERT INTO sessions (id, skill_id, title, created_at, model_id, permission_mode, work_dir, employee_id)
-                     VALUES (?, ?, ?, ?, ?, 'accept_edits', ?, ?)",
+                     VALUES (?, ?, ?, ?, ?, 'standard', ?, ?)",
                 )
                 .bind(&session_id)
                 .bind(&skill_id)

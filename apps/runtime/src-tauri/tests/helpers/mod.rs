@@ -38,7 +38,7 @@ pub async fn setup_test_db() -> (SqlitePool, TempDir) {
             title TEXT,
             created_at TEXT NOT NULL,
             model_id TEXT NOT NULL,
-            permission_mode TEXT NOT NULL DEFAULT 'accept_edits',
+            permission_mode TEXT NOT NULL DEFAULT 'standard',
             work_dir TEXT NOT NULL DEFAULT '',
             employee_id TEXT NOT NULL DEFAULT '',
             session_mode TEXT NOT NULL DEFAULT 'general',

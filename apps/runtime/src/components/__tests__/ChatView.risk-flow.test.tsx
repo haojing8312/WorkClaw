@@ -1,14 +1,20 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ChatView } from "../ChatView";
 
 const invokeMock = vi.fn();
+const listenHandlers = new Map<string, (payload: { payload: any }) => void>();
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: () => Promise.resolve(() => {}),
+  listen: (event: string, handler: (payload: { payload: any }) => void) => {
+    listenHandlers.set(event, handler);
+    return Promise.resolve(() => {
+      listenHandlers.delete(event);
+    });
+  },
 }));
 
 function buildToolOutput() {
@@ -26,7 +32,10 @@ function buildToolOutput() {
   });
 }
 
-function renderChat(onSkillInstalled?: (skillId: string) => Promise<void> | void) {
+function renderChat(
+  onSkillInstalled?: (skillId: string) => Promise<void> | void,
+  operationPermissionMode: "standard" | "full_access" = "standard"
+) {
   return render(
     <ChatView
       skill={{
@@ -52,6 +61,7 @@ function renderChat(onSkillInstalled?: (skillId: string) => Promise<void> | void
       sessionId="session-1"
       installedSkillIds={[]}
       onSkillInstalled={onSkillInstalled}
+      operationPermissionMode={operationPermissionMode}
     />
   );
 }
@@ -63,6 +73,7 @@ describe("ChatView risk flow", () => {
       value: vi.fn(),
     });
     invokeMock.mockReset();
+    listenHandlers.clear();
   });
 
   test("canceling install confirmation does not call install_clawhub_skill", async () => {
@@ -162,5 +173,62 @@ describe("ChatView risk flow", () => {
     await waitFor(() => {
       expect(onSkillInstalled).toHaveBeenCalledWith("clawhub-video-maker");
     });
+  });
+
+  test("renders human-readable critical action confirmation dialog", async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_messages") return Promise.resolve([]);
+      if (command === "get_sessions") return Promise.resolve([]);
+      if (command === "confirm_tool_execution") return Promise.resolve(null);
+      return Promise.resolve(null);
+    });
+
+    renderChat();
+
+    await waitFor(() => {
+      expect(listenHandlers.has("tool-confirm-event")).toBe(true);
+    });
+
+    await act(async () => {
+      listenHandlers.get("tool-confirm-event")?.({
+        payload: {
+          session_id: "session-1",
+          tool_name: "file_delete",
+          tool_input: { path: "E:\\workspace\\danger.txt" },
+          title: "删除文件",
+          summary: "将删除 E:\\workspace\\danger.txt",
+          impact: "该操作不可逆，删除后无法自动恢复。",
+          irreversible: true,
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+    });
+    expect(screen.getByText("删除文件")).toBeInTheDocument();
+    expect(screen.getByText("将删除 E:\\workspace\\danger.txt")).toBeInTheDocument();
+    expect(screen.getByText("该操作不可逆，删除后无法自动恢复。")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "确认继续" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("confirm_tool_execution", { confirmed: true });
+    });
+  });
+
+  test("shows full access badge when chat runs in full access mode", async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_messages") return Promise.resolve([]);
+      if (command === "get_sessions") return Promise.resolve([]);
+      return Promise.resolve(null);
+    });
+
+    renderChat(undefined, "full_access");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("full-access-badge")).toBeInTheDocument();
+    });
+    expect(screen.getByText("全自动模式")).toBeInTheDocument();
   });
 });

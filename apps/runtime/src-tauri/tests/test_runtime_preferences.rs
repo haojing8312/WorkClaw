@@ -19,6 +19,7 @@ async fn runtime_preferences_returns_default_when_not_configured() {
     assert_eq!(prefs.immersive_translation_trigger, "auto");
     assert_eq!(prefs.translation_engine, "model_then_free");
     assert_eq!(prefs.translation_model_id, "");
+    assert_eq!(prefs.operation_permission_mode, "standard");
 }
 
 #[tokio::test]
@@ -47,6 +48,7 @@ async fn runtime_preferences_can_be_saved_and_resolved_with_auto_create() {
             launch_at_login: Some(false),
             launch_minimized: Some(false),
             close_to_tray: Some(true),
+            operation_permission_mode: Some("full_access".to_string()),
         },
     )
     .await
@@ -58,6 +60,7 @@ async fn runtime_preferences_can_be_saved_and_resolved_with_auto_create() {
     assert_eq!(saved.immersive_translation_trigger, "manual");
     assert_eq!(saved.translation_engine, "model_only");
     assert_eq!(saved.translation_model_id, "model-1");
+    assert_eq!(saved.operation_permission_mode, "full_access");
 
     let resolved = resolve_default_work_dir_with_pool(&pool)
         .await
@@ -89,6 +92,7 @@ async fn runtime_preferences_partial_update_keeps_existing_translation_settings(
             launch_at_login: Some(true),
             launch_minimized: Some(false),
             close_to_tray: Some(false),
+            operation_permission_mode: Some("full_access".to_string()),
         },
     )
     .await
@@ -111,6 +115,7 @@ async fn runtime_preferences_partial_update_keeps_existing_translation_settings(
             launch_at_login: None,
             launch_minimized: None,
             close_to_tray: None,
+            operation_permission_mode: None,
         },
     )
     .await
@@ -123,4 +128,35 @@ async fn runtime_preferences_partial_update_keeps_existing_translation_settings(
     assert_eq!(updated.immersive_translation_trigger, "manual");
     assert_eq!(updated.translation_engine, "model_only");
     assert_eq!(updated.translation_model_id, "model-a");
+    assert_eq!(updated.operation_permission_mode, "full_access");
+}
+
+#[tokio::test]
+async fn runtime_preferences_invalid_permission_mode_falls_back_to_standard() {
+    let (pool, _tmp) = helpers::setup_test_db().await;
+
+    let saved = set_runtime_preferences_with_pool(
+        &pool,
+        RuntimePreferencesInput {
+            default_work_dir: None,
+            default_language: None,
+            immersive_translation_enabled: None,
+            immersive_translation_display: None,
+            immersive_translation_trigger: None,
+            translation_engine: None,
+            translation_model_id: None,
+            auto_update_enabled: None,
+            update_channel: None,
+            dismissed_update_version: None,
+            last_update_check_at: None,
+            launch_at_login: None,
+            launch_minimized: None,
+            close_to_tray: None,
+            operation_permission_mode: Some("weird".to_string()),
+        },
+    )
+    .await
+    .expect("save runtime preferences");
+
+    assert_eq!(saved.operation_permission_mode, "standard");
 }

@@ -178,7 +178,7 @@ export interface SessionInfo {
   model_id: string;
   work_dir?: string;
   employee_id?: string;
-  permission_mode?: "default" | "accept_edits" | "unrestricted";
+  permission_mode?: "standard" | "full_access" | "default" | "accept_edits" | "unrestricted";
   session_mode?: "general" | "employee_direct" | "team_entry";
   team_id?: string;
   permission_mode_label?: string;
@@ -592,6 +592,7 @@ export interface RuntimePreferences {
   launch_at_login: boolean;
   launch_minimized: boolean;
   close_to_tray: boolean;
+  operation_permission_mode: "standard" | "full_access" | string;
 }
 
 /// 文件附件（用于 File Upload 功能）

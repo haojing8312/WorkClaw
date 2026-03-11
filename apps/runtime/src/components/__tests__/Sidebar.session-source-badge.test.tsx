@@ -29,8 +29,6 @@ describe("Sidebar session source badge", () => {
         ]}
         selectedSessionId={null}
         onSelectSession={() => {}}
-        newSessionPermissionMode="accept_edits"
-        onChangeNewSessionPermissionMode={() => {}}
         onDeleteSession={() => {}}
         onSettings={() => {}}
         onSearchSessions={() => {}}

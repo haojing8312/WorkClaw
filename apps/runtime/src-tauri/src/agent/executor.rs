@@ -4,228 +4,17 @@ use super::system_prompts::SystemPromptBuilder;
 use super::types::{LLMResponse, ToolContext, ToolResult};
 use crate::adapters;
 use anyhow::{anyhow, Result};
+use runtime_executor_core::{
+    estimate_tokens, extract_tool_call_parse_error, micro_compact, split_error_code_and_message,
+    trim_messages, truncate_tool_output, update_tool_failure_streak, ToolFailureStreak,
+    DEFAULT_TOKEN_BUDGET, MAX_TOOL_OUTPUT_CHARS,
+};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
 use uuid::Uuid;
-
-/// 单次工具输出允许的最大字符数
-const MAX_TOOL_OUTPUT_CHARS: usize = 30_000;
-const REPEATED_TOOL_FAILURE_THRESHOLD: usize = 3;
-const TOOL_CALL_PARSE_ERROR_KEY: &str = "__tool_call_parse_error";
-
-#[derive(Debug, Clone, Default)]
-struct ToolFailureStreak {
-    signature: String,
-    error: String,
-    count: usize,
-}
-
-/// 截断过长的工具输出
-///
-/// 当输出超过 `max_chars` 字符时，保留前 `max_chars` 个字符并附加截断提示信息。
-pub fn truncate_tool_output(output: &str, max_chars: usize) -> String {
-    if output.len() <= max_chars {
-        return output.to_string();
-    }
-    let truncated: String = output.chars().take(max_chars).collect();
-    format!(
-        "{}\n\n[输出已截断，共 {} 字符，已显示前 {} 字符]",
-        truncated,
-        output.len(),
-        max_chars
-    )
-}
-
-fn stable_tool_input_signature(input: &Value) -> String {
-    serde_json::to_string(input).unwrap_or_else(|_| "<unserializable>".to_string())
-}
-
-fn extract_tool_call_parse_error(input: &Value) -> Option<String> {
-    input
-        .get(TOOL_CALL_PARSE_ERROR_KEY)
-        .and_then(Value::as_str)
-        .map(ToString::to_string)
-}
-
-fn update_tool_failure_streak(
-    streak: &mut Option<ToolFailureStreak>,
-    tool_name: &str,
-    input: &Value,
-    error: &str,
-) -> Option<String> {
-    let signature = format!("{}:{}", tool_name, stable_tool_input_signature(input));
-    match streak {
-        Some(current) if current.signature == signature && current.error == error => {
-            current.count += 1;
-            if current.count >= REPEATED_TOOL_FAILURE_THRESHOLD {
-                Some(format!(
-                    "检测到同一工具重复调用且持续失败，已停止自动重试。工具: {}，错误: {}",
-                    tool_name, error
-                ))
-            } else {
-                None
-            }
-        }
-        _ => {
-            *streak = Some(ToolFailureStreak {
-                signature,
-                error: error.to_string(),
-                count: 1,
-            });
-            None
-        }
-    }
-}
-
-const CHARS_PER_TOKEN: usize = 4;
-const DEFAULT_TOKEN_BUDGET: usize = 100_000; // 约 400k 字符
-
-/// 估算消息列表的 token 数（简单估算：字符数 / 4）
-pub fn estimate_tokens(messages: &[Value]) -> usize {
-    let total_chars: usize = messages
-        .iter()
-        .map(|m| {
-            // 纯文本 content
-            let text_len = m["content"].as_str().map_or(0, |s| s.len());
-            // 数组型 content（如 tool_use / tool_result blocks）
-            let array_len = m["content"].as_array().map_or(0, |arr| {
-                arr.iter()
-                    .map(|v| serde_json::to_string(v).map_or(0, |s| s.len()))
-                    .sum()
-            });
-            text_len + array_len
-        })
-        .sum();
-    total_chars / CHARS_PER_TOKEN
-}
-
-/// Layer 1 微压缩：替换旧的 tool_result 内容为占位符
-///
-/// 保留最近 `keep_recent` 条 tool_result 的完整内容，
-/// 将更早的替换为 "[已执行]" 占位符。
-/// 仅修改发送给 LLM 的副本，不影响原始数据。
-///
-/// 同时支持两种格式：
-/// - Anthropic：`content` 数组中 `type == "tool_result"` 的条目
-/// - OpenAI：`role == "tool"` 的消息
-pub fn micro_compact(messages: &[Value], keep_recent: usize) -> Vec<Value> {
-    // 找出所有包含 tool_result 的消息索引
-    let tool_result_indices: Vec<usize> = messages
-        .iter()
-        .enumerate()
-        .filter(|(_, m)| {
-            // Anthropic: content 是数组且包含 tool_result
-            m["content"].as_array().map_or(false, |arr| {
-                arr.iter().any(|v| v["type"].as_str() == Some("tool_result"))
-            })
-            // OpenAI: role == "tool"
-            || m["role"].as_str() == Some("tool")
-        })
-        .map(|(i, _)| i)
-        .collect();
-
-    if tool_result_indices.len() <= keep_recent {
-        return messages.to_vec();
-    }
-
-    let cutoff = tool_result_indices.len() - keep_recent;
-    let old_indices: std::collections::HashSet<usize> =
-        tool_result_indices[..cutoff].iter().copied().collect();
-
-    messages
-        .iter()
-        .enumerate()
-        .map(|(i, m)| {
-            if old_indices.contains(&i) {
-                if m["role"].as_str() == Some("tool") {
-                    // OpenAI 格式
-                    json!({
-                        "role": "tool",
-                        "tool_call_id": m["tool_call_id"],
-                        "content": "[已执行]"
-                    })
-                } else {
-                    // Anthropic 格式：替换 content 数组中的 tool_result 条目
-                    let replaced = m["content"].as_array().map(|arr| {
-                        arr.iter()
-                            .map(|v| {
-                                if v["type"].as_str() == Some("tool_result") {
-                                    json!({
-                                        "type": "tool_result",
-                                        "tool_use_id": v["tool_use_id"],
-                                        "content": "[已执行]"
-                                    })
-                                } else {
-                                    v.clone()
-                                }
-                            })
-                            .collect::<Vec<_>>()
-                    });
-                    match replaced {
-                        Some(arr) => json!({"role": "user", "content": arr}),
-                        None => m.clone(),
-                    }
-                }
-            } else {
-                m.clone()
-            }
-        })
-        .collect()
-}
-
-/// 裁剪消息列表到 token 预算内
-/// 保留第一条消息和最后的消息，从第二条开始裁剪中间的
-pub fn trim_messages(messages: &[Value], token_budget: usize) -> Vec<Value> {
-    if messages.len() <= 2 || estimate_tokens(messages) <= token_budget {
-        return messages.to_vec();
-    }
-
-    let first = &messages[0];
-    let last = &messages[messages.len() - 1];
-
-    // 从后往前累加保留的消息
-    let budget_chars = token_budget * CHARS_PER_TOKEN * 70 / 100;
-    let first_chars = first["content"].as_str().map_or(0, |s| s.len());
-    let last_chars = last["content"].as_str().map_or(0, |s| s.len());
-    let mut char_count = first_chars + last_chars;
-
-    let mut keep_from_end: Vec<&Value> = Vec::new();
-
-    for msg in messages[1..messages.len() - 1].iter().rev() {
-        let msg_chars = msg["content"].as_str().map_or(0, |s| s.len())
-            + msg["content"].as_array().map_or(0, |arr| {
-                arr.iter()
-                    .map(|v| serde_json::to_string(v).map_or(0, |s| s.len()))
-                    .sum()
-            });
-        if char_count + msg_chars > budget_chars {
-            break;
-        }
-        char_count += msg_chars;
-        keep_from_end.push(msg);
-    }
-    keep_from_end.reverse();
-
-    let trimmed_count = messages.len() - 2 - keep_from_end.len();
-    let mut result = vec![first.clone()];
-
-    if trimmed_count > 0 {
-        result.push(json!({
-            "role": "user",
-            "content": format!("[前 {} 条消息已省略]", trimmed_count)
-        }));
-    }
-
-    for msg in keep_from_end {
-        result.push(msg.clone());
-    }
-    result.push(last.clone());
-
-    result
-}
 
 #[derive(serde::Serialize, Clone, Debug)]
 pub struct ToolCallEvent {
@@ -234,6 +23,80 @@ pub struct ToolCallEvent {
     pub tool_input: Value,
     pub tool_output: Option<String>,
     pub status: String, // "started" | "completed" | "error"
+}
+
+fn critical_action_summary(tool_name: &str, input: &Value) -> (String, String, String, bool) {
+    let path = input
+        .get("path")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    match tool_name {
+        "file_delete" => (
+            "删除文件".to_string(),
+            format!(
+                "将删除 {}",
+                if path.is_empty() {
+                    "目标文件或目录"
+                } else {
+                    &path
+                }
+            ),
+            "该操作不可逆，删除后无法自动恢复。".to_string(),
+            true,
+        ),
+        "write_file" => (
+            "写入文件".to_string(),
+            format!(
+                "将写入 {}",
+                if path.is_empty() {
+                    "目标文件"
+                } else {
+                    &path
+                }
+            ),
+            "该操作可能覆盖现有内容，请确认影响范围。".to_string(),
+            false,
+        ),
+        "edit" => (
+            "修改文件".to_string(),
+            format!(
+                "将修改 {}",
+                if path.is_empty() {
+                    "目标文件"
+                } else {
+                    &path
+                }
+            ),
+            "这可能改变现有文件内容，请确认替换目标正确。".to_string(),
+            false,
+        ),
+        "bash" => {
+            let command = input
+                .get("command")
+                .and_then(Value::as_str)
+                .unwrap_or("命令");
+            (
+                "执行高危命令".to_string(),
+                format!("将执行命令：{}", command),
+                "该命令可能删除文件、重置环境或影响系统状态。".to_string(),
+                true,
+            )
+        }
+        "browser_click" | "browser_type" | "browser_press_key" | "browser_evaluate"
+        | "browser_act" => (
+            "提交网页操作".to_string(),
+            "将执行可能触发提交、发送或状态变更的浏览器动作".to_string(),
+            "这可能在外部系统中创建、修改或删除真实数据。".to_string(),
+            true,
+        ),
+        _ => (
+            "高危操作确认".to_string(),
+            format!("将执行工具 {}", tool_name),
+            "该操作具有较高风险，请确认后继续。".to_string(),
+            false,
+        ),
+    }
 }
 
 /// Agent 状态事件，用于前端展示当前执行阶段
@@ -277,20 +140,6 @@ pub fn build_skill_route_event(
         "error_code": error_code,
         "error_message": error_message,
     })
-}
-
-pub fn split_error_code_and_message(text: &str) -> (String, String) {
-    if let Some((code, msg)) = text.split_once(':') {
-        let code = code.trim();
-        if !code.is_empty()
-            && code
-                .chars()
-                .all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit())
-        {
-            return (code.to_string(), msg.trim().to_string());
-        }
-    }
-    ("SKILL_EXECUTION_ERROR".to_string(), text.to_string())
 }
 
 impl AgentExecutor {
@@ -645,8 +494,14 @@ impl AgentExecutor {
                         }
 
                         // 权限确认检查：在执行工具前判断是否需要用户确认
-                        if permission_mode.needs_confirmation(&call.name) {
+                        if permission_mode.needs_confirmation(
+                            &call.name,
+                            &call.input,
+                            tool_ctx.work_dir.as_deref(),
+                        ) {
                             if let (Some(app), Some(sid)) = (app_handle, session_id) {
+                                let (confirm_title, confirm_summary, confirm_impact, irreversible) =
+                                    critical_action_summary(&call.name, &call.input);
                                 // 发射确认请求事件，前端弹出确认对话框
                                 let _ = app.emit(
                                     "tool-confirm-event",
@@ -654,6 +509,10 @@ impl AgentExecutor {
                                         "session_id": sid,
                                         "tool_name": call.name,
                                         "tool_input": call.input,
+                                        "title": confirm_title,
+                                        "summary": confirm_summary,
+                                        "impact": confirm_impact,
+                                        "irreversible": irreversible,
                                     }),
                                 );
 

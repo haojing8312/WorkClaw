@@ -327,6 +327,10 @@ export default function App() {
   async function loadRuntimePreferences() {
     try {
       const prefs = await invoke<RuntimePreferences>("get_runtime_preferences");
+      if (!prefs || typeof prefs !== "object") {
+        setOperationPermissionMode(DEFAULT_OPERATION_PERMISSION_MODE);
+        return;
+      }
       setOperationPermissionMode(
         prefs.operation_permission_mode === "full_access" ? "full_access" : "standard"
       );

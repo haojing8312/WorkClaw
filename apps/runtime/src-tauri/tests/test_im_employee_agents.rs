@@ -2,19 +2,17 @@ mod helpers;
 
 use runtime_lib::commands::employee_agents::{
     cancel_employee_group_run_with_pool, clone_employee_group_template_with_pool,
-    continue_employee_group_run_with_pool, create_employee_group_with_pool, create_employee_team_with_pool,
-    delete_employee_group_with_pool,
+    continue_employee_group_run_with_pool, create_employee_group_with_pool,
+    create_employee_team_with_pool, delete_employee_group_with_pool,
     ensure_employee_sessions_for_event_with_pool, get_employee_group_run_snapshot_with_pool,
-    maybe_handle_team_entry_session_message_with_pool,
     link_inbound_event_to_session_with_pool, list_agent_employees_with_pool,
     list_employee_group_rules_with_pool, list_employee_groups_with_pool,
-    pause_employee_group_run_with_pool, reassign_group_run_step_with_pool,
-    resolve_target_employees_for_event, resume_employee_group_run_with_pool,
-    retry_employee_group_run_failed_steps_with_pool, review_group_run_step_with_pool,
-    run_group_step_with_pool, start_employee_group_run_with_pool, upsert_agent_employee_with_pool,
-    CloneEmployeeGroupTemplateInput, CreateEmployeeGroupInput, CreateEmployeeTeamInput,
-    StartEmployeeGroupRunInput,
-    UpsertAgentEmployeeInput,
+    maybe_handle_team_entry_session_message_with_pool, pause_employee_group_run_with_pool,
+    reassign_group_run_step_with_pool, resolve_target_employees_for_event,
+    resume_employee_group_run_with_pool, retry_employee_group_run_failed_steps_with_pool,
+    review_group_run_step_with_pool, run_group_step_with_pool, start_employee_group_run_with_pool,
+    upsert_agent_employee_with_pool, CloneEmployeeGroupTemplateInput, CreateEmployeeGroupInput,
+    CreateEmployeeTeamInput, StartEmployeeGroupRunInput, UpsertAgentEmployeeInput,
 };
 use runtime_lib::commands::im_routing::{
     upsert_im_routing_binding_with_pool, UpsertImRoutingBindingInput,
@@ -82,14 +80,15 @@ async fn employee_config_and_im_session_mapping_work() {
     assert_eq!(sessions.len(), 1);
     assert_eq!(sessions[0].employee_id, employee_id);
 
-    let (skill_id, work_dir): (String, String) =
-        sqlx::query_as("SELECT skill_id, work_dir FROM sessions WHERE id = ?")
+    let (skill_id, work_dir, permission_mode): (String, String, String) =
+        sqlx::query_as("SELECT skill_id, work_dir, permission_mode FROM sessions WHERE id = ?")
             .bind(&sessions[0].session_id)
             .fetch_one(&pool)
             .await
             .expect("query created session");
     assert_eq!(skill_id, "builtin-general");
     assert_eq!(work_dir, "E:/workspace/pm");
+    assert_eq!(permission_mode, "standard");
 
     link_inbound_event_to_session_with_pool(
         &pool,
@@ -873,7 +872,9 @@ async fn start_employee_group_run_persists_plan_steps_and_events() {
     .fetch_one(&pool)
     .await
     .expect("load step_created event");
-    assert!(step_created_payload_json.contains("\"dispatch_source_employee_id\":\"project_manager\""));
+    assert!(
+        step_created_payload_json.contains("\"dispatch_source_employee_id\":\"project_manager\"")
+    );
 }
 
 #[tokio::test]
@@ -1536,12 +1537,9 @@ async fn continue_group_run_after_reject_restarts_review_before_execute() {
             .count(),
         0
     );
-    assert!(
-        snapshot
-            .steps
-            .iter()
-            .any(|step| step.step_type == "plan" && step.status == "completed" && step.output.contains("缺少回滚方案"))
-    );
+    assert!(snapshot.steps.iter().any(|step| step.step_type == "plan"
+        && step.status == "completed"
+        && step.output.contains("缺少回滚方案")));
 }
 
 #[tokio::test]
@@ -1830,8 +1828,14 @@ async fn group_run_snapshot_exposes_phase_review_and_events() {
         .expect("snapshot exists");
     assert_eq!(snapshot.current_phase, "review");
     assert_eq!(snapshot.review_round, 0);
-    assert!(snapshot.events.iter().any(|event| event.event_type == "run_created"));
-    assert!(snapshot.events.iter().any(|event| event.event_type == "phase_started"));
+    assert!(snapshot
+        .events
+        .iter()
+        .any(|event| event.event_type == "run_created"));
+    assert!(snapshot
+        .events
+        .iter()
+        .any(|event| event.event_type == "phase_started"));
 }
 
 #[tokio::test]
@@ -1895,11 +1899,13 @@ async fn pause_and_resume_group_run_updates_state() {
     .await
     .expect("start run");
 
-    sqlx::query("UPDATE group_runs SET state = 'executing', current_phase = 'execute' WHERE id = ?")
-        .bind(&outcome.run_id)
-        .execute(&pool)
-        .await
-        .expect("force run executing");
+    sqlx::query(
+        "UPDATE group_runs SET state = 'executing', current_phase = 'execute' WHERE id = ?",
+    )
+    .bind(&outcome.run_id)
+    .execute(&pool)
+    .await
+    .expect("force run executing");
 
     pause_employee_group_run_with_pool(&pool, &outcome.run_id, "人工介入")
         .await
@@ -2174,13 +2180,12 @@ async fn reassign_specific_failed_step_keeps_other_failed_steps_blocking_run() {
         .await
         .expect("reassign specific failed step");
 
-    let (bingbu_status,): (String,) = sqlx::query_as(
-        "SELECT status FROM group_run_steps WHERE id = ?",
-    )
-    .bind(&bingbu_step_id)
-    .fetch_one(&pool)
-    .await
-    .expect("reload bingbu step");
+    let (bingbu_status,): (String,) =
+        sqlx::query_as("SELECT status FROM group_run_steps WHERE id = ?")
+            .bind(&bingbu_step_id)
+            .fetch_one(&pool)
+            .await
+            .expect("reload bingbu step");
     assert_eq!(bingbu_status, "failed");
 
     let (libu_assignee, libu_status, libu_output): (String, String, String) = sqlx::query_as(
@@ -2885,7 +2890,7 @@ async fn maybe_handle_team_entry_message_ignores_non_team_entry_sessions() {
         sqlx::query(
             "INSERT INTO sessions (
                 id, skill_id, title, created_at, model_id, permission_mode, work_dir, employee_id, session_mode, team_id
-             ) VALUES (?, 'builtin-general', '普通会话', '2026-03-07T00:00:00Z', 'm1', 'accept_edits', 'E:/workspace/taizi', 'taizi', ?, ?)",
+             ) VALUES (?, 'builtin-general', '普通会话', '2026-03-07T00:00:00Z', 'm1', 'standard', 'E:/workspace/taizi', 'taizi', ?, ?)",
         )
         .bind(session_id)
         .bind(session_mode)
@@ -3101,7 +3106,7 @@ async fn maybe_handle_team_entry_message_reuses_existing_chat_session_for_group_
     sqlx::query(
         "INSERT INTO sessions (
             id, skill_id, title, created_at, model_id, permission_mode, work_dir, employee_id, session_mode, team_id
-         ) VALUES (?, 'builtin-general', '团队入口会话', '2026-03-07T00:00:00Z', 'm1', 'accept_edits', 'E:/workspace/taizi', 'taizi', 'team_entry', ?)",
+         ) VALUES (?, 'builtin-general', '团队入口会话', '2026-03-07T00:00:00Z', 'm1', 'standard', 'E:/workspace/taizi', 'taizi', 'team_entry', ?)",
     )
     .bind(&session_id)
     .bind(&group_id)
@@ -3167,7 +3172,8 @@ async fn maybe_handle_team_entry_message_reuses_existing_chat_session_for_group_
 }
 
 #[tokio::test]
-async fn ensure_employee_sessions_for_event_prefers_team_entry_employee_when_binding_team_id_matches() {
+async fn ensure_employee_sessions_for_event_prefers_team_entry_employee_when_binding_team_id_matches(
+) {
     let (pool, _tmp) = helpers::setup_test_db().await;
     sqlx::query(
         "INSERT INTO model_configs (id, name, api_format, base_url, model_name, is_default, api_key)

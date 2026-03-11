@@ -1,10 +1,8 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { Sidebar } from "../Sidebar";
 
 describe("Sidebar risk flow", () => {
-  test("switching to unrestricted requires confirmation", () => {
-    const onChangeMode = vi.fn();
-
+  test("does not expose permission mode controls in sidebar", () => {
     render(
       <Sidebar
         activeMainView="start-task"
@@ -15,8 +13,6 @@ describe("Sidebar risk flow", () => {
         sessions={[]}
         selectedSessionId={null}
         onSelectSession={() => {}}
-        newSessionPermissionMode="accept_edits"
-        onChangeNewSessionPermissionMode={onChangeMode}
         onDeleteSession={() => {}}
         onSettings={() => {}}
         onSearchSessions={() => {}}
@@ -26,16 +22,8 @@ describe("Sidebar risk flow", () => {
       />
     );
 
-    fireEvent.change(screen.getByRole("combobox"), { target: { value: "unrestricted" } });
-    expect(screen.getByRole("dialog")).toBeInTheDocument();
-    expect(screen.getByText("切换为全自动模式")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "取消" }));
-    expect(onChangeMode).not.toHaveBeenCalled();
-
-    fireEvent.change(screen.getByRole("combobox"), { target: { value: "unrestricted" } });
-    fireEvent.click(screen.getByRole("button", { name: "确认切换" }));
-    expect(onChangeMode).toHaveBeenCalledTimes(1);
-    expect(onChangeMode).toHaveBeenCalledWith("unrestricted");
+    expect(screen.queryByText("操作确认级别")).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    expect(screen.queryByText("切换为全自动模式")).not.toBeInTheDocument();
   });
 });
