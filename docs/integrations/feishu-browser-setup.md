@@ -57,7 +57,7 @@
 当前提供的脚本：
 
 ```bash
-node scripts/install-chrome-native-host.mjs "<Chrome User Data Dir>" "<Native Host Command>" "<Extension Origin>"
+node scripts/install-chrome-native-host.mjs "<Chrome User Data Dir>" "<Command Or Launcher Path>" "<Extension Origin>" [nodePath scriptPath baseUrl]
 ```
 
 当前仓库还提供了 native host 可执行脚本与 Windows launcher 模板：
@@ -67,7 +67,7 @@ node scripts/install-chrome-native-host.mjs "<Chrome User Data Dir>" "<Native Ho
 - launcher 模板函数：
   - `buildWindowsNativeHostLauncher(...)` in `scripts/install-chrome-native-host.mjs`
 
-推荐在 Windows 上用一个 `.cmd` launcher 包住 Node 脚本，再把 manifest 的 `path` 指向这个 launcher。
+推荐在 Windows 上直接让安装脚本生成 `.cmd` launcher，再把 manifest 的 `path` 指向这个 launcher。
 
 示例：
 
@@ -75,16 +75,16 @@ node scripts/install-chrome-native-host.mjs "<Chrome User Data Dir>" "<Native Ho
 node scripts/install-chrome-native-host.mjs ^
   "C:\Users\<用户名>\AppData\Local\Google\Chrome\User Data" ^
   "C:\WorkClaw\native-host.cmd" ^
-  "chrome-extension://abcdefghijklmnop/"
+  "chrome-extension://abcdefghijklmnop/" ^
+  "C:\Program Files\nodejs\node.exe" ^
+  "E:\code\yzpd\workclaw\scripts\workclaw-chrome-native-host.mjs" ^
+  "http://127.0.0.1:4312"
 ```
 
-其中 `C:\WorkClaw\native-host.cmd` 的内容建议类似：
+传入 `nodePath + scriptPath` 时，脚本会同时：
 
-```bat
-@echo off
-set "WORKCLAW_BROWSER_BRIDGE_BASE_URL=http://127.0.0.1:4312"
-"C:\Program Files\nodejs\node.exe" "E:\code\yzpd\workclaw\scripts\workclaw-chrome-native-host.mjs"
-```
+- 写出 `C:\WorkClaw\native-host.cmd`
+- 写出 `<Chrome User Data Dir>\NativeMessagingHosts\dev.workclaw.runtime.json`
 
 脚本会生成：
 

@@ -35,20 +35,63 @@ export function writeNativeHostManifest({ chromeUserDataDir, hostName, command, 
   return manifestPath;
 }
 
+export function writeWindowsNativeHostInstallation({
+  chromeUserDataDir,
+  hostName,
+  extensionOrigin,
+  launcherPath,
+  nodePath,
+  scriptPath,
+  baseUrl,
+}) {
+  mkdirSync(path.dirname(launcherPath), { recursive: true });
+  writeFileSync(
+    launcherPath,
+    buildWindowsNativeHostLauncher({ nodePath, scriptPath, baseUrl }),
+    "utf8",
+  );
+
+  const manifestPath = writeNativeHostManifest({
+    chromeUserDataDir,
+    hostName,
+    command: launcherPath,
+    extensionOrigins: [extensionOrigin],
+  });
+
+  return {
+    launcherPath,
+    manifestPath,
+  };
+}
+
 if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, "/")}`) {
-  const [, , chromeUserDataDir, command, extensionOrigin] = process.argv;
-  if (!chromeUserDataDir || !command || !extensionOrigin) {
+  const [, , chromeUserDataDir, commandOrLauncherPath, extensionOrigin, nodePath, scriptPath, baseUrl] = process.argv;
+  if (!chromeUserDataDir || !commandOrLauncherPath || !extensionOrigin) {
     console.error(
-      "Usage: node scripts/install-chrome-native-host.mjs <chromeUserDataDir> <command> <extensionOrigin>",
+      "Usage: node scripts/install-chrome-native-host.mjs <chromeUserDataDir> <commandOrLauncherPath> <extensionOrigin> [nodePath scriptPath baseUrl]",
     );
     process.exit(1);
   }
 
-  const manifestPath = writeNativeHostManifest({
-    chromeUserDataDir,
-    hostName: "dev.workclaw.runtime",
-    command,
-    extensionOrigins: [extensionOrigin],
-  });
-  console.log(`Native host manifest written to ${manifestPath}`);
+  if (nodePath && scriptPath) {
+    const result = writeWindowsNativeHostInstallation({
+      chromeUserDataDir,
+      hostName: "dev.workclaw.runtime",
+      extensionOrigin,
+      launcherPath: commandOrLauncherPath,
+      nodePath,
+      scriptPath,
+      baseUrl: baseUrl || "http://127.0.0.1:4312",
+    });
+    console.log(`Native host launcher written to ${result.launcherPath}`);
+    console.log(`Native host manifest written to ${result.manifestPath}`);
+  } else {
+    const manifestPath = writeNativeHostManifest({
+      chromeUserDataDir,
+      hostName: "dev.workclaw.runtime",
+      command: commandOrLauncherPath,
+      extensionOrigins: [extensionOrigin],
+    });
+    console.log(`Native host manifest written to ${manifestPath}`);
+  }
 }
