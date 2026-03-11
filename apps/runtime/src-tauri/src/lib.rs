@@ -1,5 +1,6 @@
 mod adapters;
 pub mod agent;
+pub mod browser_bridge_callback;
 mod builtin_skills;
 pub mod commands;
 mod db;
@@ -11,6 +12,7 @@ pub mod team_templates;
 use agent::tools::new_responder;
 use agent::tools::search_providers::cache::SearchCache;
 use agent::{AgentExecutor, ToolRegistry};
+use browser_bridge_callback::BrowserBridgeCallbackServer;
 use commands::chat::{
     AskUserState, CancelFlagState, SearchCacheState, ToolConfirmResponder, ToolConfirmState,
 };
@@ -81,7 +83,22 @@ pub fn run() {
             app.manage(sidecar_manager.clone());
             let feishu_relay_state = commands::feishu_gateway::FeishuEventRelayState::default();
             app.manage(feishu_relay_state.clone());
-            app.manage(commands::feishu_browser_setup::FeishuBrowserSetupState::default());
+            let feishu_browser_setup_state =
+                commands::feishu_browser_setup::FeishuBrowserSetupState::default();
+            app.manage(feishu_browser_setup_state.clone());
+            let browser_bridge_callback = Arc::new(BrowserBridgeCallbackServer::new(
+                pool.clone(),
+                feishu_browser_setup_state.0.clone(),
+            ));
+            let browser_bridge_callback_base = tauri::async_runtime::block_on(
+                browser_bridge_callback.start(),
+            )
+            .expect("failed to start browser bridge callback server");
+            sidecar_manager.set_env_var(
+                "WORKCLAW_BROWSER_BRIDGE_CALLBACK_URL",
+                format!("{}/browser-bridge/callback", browser_bridge_callback_base),
+            );
+            app.manage(browser_bridge_callback);
 
             let startup_prefs = tauri::async_runtime::block_on(
                 commands::runtime_preferences::get_runtime_preferences_with_pool(&pool),

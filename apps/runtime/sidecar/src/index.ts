@@ -88,6 +88,19 @@ function createDefaultDeps(): SidecarDeps {
 async function defaultBrowserBridgeHandler(
   envelope: BrowserBridgeEnvelope,
 ): Promise<BrowserBridgeResponse> {
+  const callbackUrl = String(process.env.WORKCLAW_BROWSER_BRIDGE_CALLBACK_URL || '').trim();
+  if (callbackUrl) {
+    const response = await fetch(callbackUrl, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(envelope),
+    });
+    const payload = await response.json();
+    return payload as BrowserBridgeResponse;
+  }
+
   if (envelope.payload?.type === 'credentials.report') {
     return {
       version: 1,
