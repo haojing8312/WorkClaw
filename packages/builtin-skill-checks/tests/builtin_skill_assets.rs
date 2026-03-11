@@ -78,15 +78,16 @@ fn local_skill_template_includes_non_trigger_and_prompt_example_sections() {
 #[test]
 fn runtime_registry_still_embeds_the_builtin_skill_creator_assets() {
     let rust = read_repo_file("apps/runtime/src-tauri/src/builtin_skills.rs");
+    let core = read_repo_file("packages/runtime-skill-core/src/builtin_skills.rs");
 
     assert!(
-        rust.contains("BUILTIN_SKILL_CREATOR_ID")
-            && rust.contains("builtin-skills/skill-creator/SKILL.md"),
-        "runtime registry should embed the built-in skill creator markdown"
+        rust.contains("pub use runtime_skill_core") && rust.contains("BUILTIN_SKILL_CREATOR_ID"),
+        "runtime registry should re-export builtin skill assets from runtime-skill-core"
     );
     assert!(
-        rust.contains("LOCAL_SKILL_TEMPLATE_MD")
-            && rust.contains("builtin-skills/skill-creator-guide/templates/LOCAL_SKILL_TEMPLATE.md"),
-        "runtime registry should embed the local skill template"
+        core.contains("builtin-skills/skill-creator/SKILL.md")
+            && core
+                .contains("builtin-skills/skill-creator-guide/templates/LOCAL_SKILL_TEMPLATE.md"),
+        "runtime-skill-core should embed the builtin skill markdown and local template assets"
     );
 }

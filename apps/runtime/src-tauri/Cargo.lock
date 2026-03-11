@@ -3644,6 +3644,8 @@ dependencies = [
  "glob",
  "regex",
  "reqwest 0.12.28",
+ "runtime-policy",
+ "runtime-skill-core",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -3662,6 +3664,22 @@ dependencies = [
  "wait-timeout",
  "walkdir",
  "zip 0.6.6",
+]
+
+[[package]]
+name = "runtime-policy"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "runtime-skill-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_yaml",
 ]
 
 [[package]]

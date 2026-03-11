@@ -14,10 +14,219 @@ use agent::{AgentExecutor, ToolRegistry};
 use commands::chat::{
     AskUserState, CancelFlagState, SearchCacheState, ToolConfirmResponder, ToolConfirmState,
 };
+use commands::feishu_gateway::FeishuEventRelayState;
 use commands::skills::DbState;
 use sidecar::SidecarManager;
 use std::sync::Arc;
 use tauri::Manager;
+
+struct ManagedRuntimeHandles {
+    registry: Arc<ToolRegistry>,
+    sidecar_manager: Arc<SidecarManager>,
+    feishu_relay_state: FeishuEventRelayState,
+}
+
+fn initialize_runtime_state(app: &mut tauri::App, pool: sqlx::SqlitePool) -> ManagedRuntimeHandles {
+    app.manage(DbState(pool.clone()));
+
+    let registry = Arc::new(ToolRegistry::with_standard_tools());
+    let agent_executor = Arc::new(AgentExecutor::new(Arc::clone(&registry)));
+    app.manage(agent_executor);
+    app.manage(Arc::clone(&registry));
+
+    let ask_user_responder = new_responder();
+    app.manage(AskUserState(ask_user_responder));
+    let tool_confirm_responder: ToolConfirmResponder =
+        std::sync::Arc::new(std::sync::Mutex::new(None));
+    app.manage(ToolConfirmState(tool_confirm_responder));
+
+    let cancel_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    app.manage(CancelFlagState(cancel_flag));
+
+    let search_cache = Arc::new(SearchCache::new(std::time::Duration::from_secs(900), 100));
+    app.manage(SearchCacheState(search_cache));
+
+    let sidecar_manager = Arc::new(SidecarManager::new());
+    app.manage(sidecar_manager.clone());
+
+    let feishu_relay_state = FeishuEventRelayState::default();
+    app.manage(feishu_relay_state.clone());
+
+    ManagedRuntimeHandles {
+        registry,
+        sidecar_manager,
+        feishu_relay_state,
+    }
+}
+
+fn apply_startup_preferences(app: &mut tauri::App, pool: &sqlx::SqlitePool) {
+    let startup_prefs = tauri::async_runtime::block_on(
+        commands::runtime_preferences::get_runtime_preferences_with_pool(pool),
+    )
+    .ok();
+    if let Some(prefs) = startup_prefs {
+        let _ = commands::runtime_preferences::sync_launch_at_login(
+            app.handle(),
+            prefs.launch_at_login,
+        );
+        if prefs.launch_minimized {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.minimize();
+            }
+        }
+    }
+}
+
+fn spawn_sidecar_bootstrap(sidecar_manager: Arc<SidecarManager>) {
+    std::thread::spawn(move || {
+        tauri::async_runtime::block_on(async move {
+            for i in 0..20 {
+                if sidecar_manager.health_check().await.is_ok() {
+                    break;
+                }
+                if let Err(e) = sidecar_manager.start().await {
+                    eprintln!("[sidecar] start attempt {} failed: {}", i + 1, e);
+                } else {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            }
+        });
+    });
+}
+
+fn restore_saved_mcp_servers(pool: sqlx::SqlitePool, registry: Arc<ToolRegistry>) {
+    tauri::async_runtime::spawn(async move {
+        let servers = sqlx::query_as::<_, (String, String, String, String)>(
+            "SELECT name, command, args, env FROM mcp_servers WHERE enabled = 1",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap_or_default();
+
+        if servers.is_empty() {
+            return;
+        }
+
+        let client = reqwest::Client::new();
+        for (name, command, args_json, env_json) in servers {
+            let args: Vec<String> = serde_json::from_str(&args_json).unwrap_or_default();
+            let env: std::collections::HashMap<String, String> =
+                serde_json::from_str(&env_json).unwrap_or_default();
+
+            let connect_result = client
+                .post("http://localhost:8765/api/mcp/add-server")
+                .json(&serde_json::json!({
+                    "name": name,
+                    "config": { "command": command, "args": args, "env": env }
+                }))
+                .send()
+                .await;
+
+            if connect_result.is_err() {
+                eprintln!("[mcp] 连接 MCP 服务器 {} 失败（Sidecar 可能未启动）", name);
+                continue;
+            }
+
+            if let Ok(resp) = client
+                .post("http://localhost:8765/api/mcp/list-tools")
+                .json(&serde_json::json!({ "serverName": name }))
+                .send()
+                .await
+            {
+                if let Ok(body) = resp.json::<serde_json::Value>().await {
+                    if let Some(tool_list) = body["tools"].as_array() {
+                        for tool in tool_list {
+                            let tool_name = tool["name"].as_str().unwrap_or_default();
+                            let tool_desc = tool["description"].as_str().unwrap_or_default();
+                            let schema = tool
+                                .get("inputSchema")
+                                .cloned()
+                                .unwrap_or(serde_json::json!({"type": "object", "properties": {}}));
+
+                            let full_name = format!("mcp_{}_{}", name, tool_name);
+                            registry.register(Arc::new(agent::tools::SidecarBridgeTool::new_mcp(
+                                "http://localhost:8765".to_string(),
+                                full_name,
+                                tool_desc.to_string(),
+                                schema,
+                                name.clone(),
+                                tool_name.to_string(),
+                            )));
+                        }
+                        eprintln!("[mcp] 已恢复 MCP 服务器 {} 的工具注册", name);
+                    }
+                }
+            }
+        }
+    });
+}
+
+fn spawn_feishu_relay_bootstrap(
+    pool: sqlx::SqlitePool,
+    relay_state: FeishuEventRelayState,
+    app_handle: tauri::AppHandle,
+) {
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        let mut backoff_secs = 2u64;
+        for _ in 0..30 {
+            let has_connections =
+                match commands::feishu_gateway::reconcile_feishu_employee_connections_with_pool(
+                    &pool, None,
+                )
+                .await
+                {
+                    Ok(summary) => !summary.items.is_empty(),
+                    Err(_) => false,
+                };
+            if has_connections {
+                let _ = commands::feishu_gateway::start_feishu_event_relay_with_pool_and_app(
+                    &pool,
+                    relay_state.clone(),
+                    Some(app_handle.clone()),
+                    None,
+                    Some(1500),
+                    Some(50),
+                )
+                .await;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
+            backoff_secs = (backoff_secs * 2).min(60);
+        }
+
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            let summary =
+                match commands::feishu_gateway::reconcile_feishu_employee_connections_with_pool(
+                    &pool, None,
+                )
+                .await
+                {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+            if summary.items.is_empty() {
+                continue;
+            }
+
+            let relay_status =
+                commands::feishu_gateway::start_feishu_event_relay_with_pool_and_app(
+                    &pool,
+                    relay_state.clone(),
+                    Some(app_handle.clone()),
+                    None,
+                    Some(1500),
+                    Some(50),
+                )
+                .await;
+            if relay_status.is_ok() {
+                continue;
+            }
+        }
+    });
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -26,7 +235,9 @@ pub fn run() {
         .on_window_event(|app, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let close_to_tray = tauri::async_runtime::block_on(
-                    commands::runtime_preferences::get_runtime_preferences_with_pool(&app.state::<DbState>().0),
+                    commands::runtime_preferences::get_runtime_preferences_with_pool(
+                        &app.state::<DbState>().0,
+                    ),
                 )
                 .map(|prefs| prefs.close_to_tray)
                 .unwrap_or(false);
@@ -51,202 +262,17 @@ pub fn run() {
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
 
-            // 初始化数据库
             let pool = tauri::async_runtime::block_on(db::init_db(app.handle()))
                 .expect("failed to init db");
-            let pool_for_mcp = pool.clone();
-            app.manage(DbState(pool.clone()));
-
-            // 初始化 AgentExecutor（包含标准工具集）
-            let registry = Arc::new(ToolRegistry::with_standard_tools());
-            let agent_executor = Arc::new(AgentExecutor::new(Arc::clone(&registry)));
-            app.manage(agent_executor);
-            app.manage(Arc::clone(&registry));
-
-            // 创建全局的 AskUser 和 ToolConfirm 响应通道（只创建一次）
-            let ask_user_responder = new_responder();
-            app.manage(AskUserState(ask_user_responder));
-            let tool_confirm_responder: ToolConfirmResponder =
-                std::sync::Arc::new(std::sync::Mutex::new(None));
-            app.manage(ToolConfirmState(tool_confirm_responder));
-
-            // 创建全局取消标志
-            let cancel_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
-            app.manage(CancelFlagState(cancel_flag));
-
-            // 创建全局搜索缓存（15 分钟 TTL，最多 100 条）
-            let search_cache = Arc::new(SearchCache::new(std::time::Duration::from_secs(900), 100));
-            app.manage(SearchCacheState(search_cache));
-            let sidecar_manager = Arc::new(SidecarManager::new());
-            app.manage(sidecar_manager.clone());
-            let feishu_relay_state = commands::feishu_gateway::FeishuEventRelayState::default();
-            app.manage(feishu_relay_state.clone());
-
-            let startup_prefs = tauri::async_runtime::block_on(
-                commands::runtime_preferences::get_runtime_preferences_with_pool(&pool),
-            )
-            .ok();
-            if let Some(prefs) = startup_prefs {
-                let _ = commands::runtime_preferences::sync_launch_at_login(app.handle(), prefs.launch_at_login);
-                if prefs.launch_minimized {
-                    if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.minimize();
-                    }
-                }
-            }
-
-            // 启动 Sidecar（重试），确保后续 Feishu/MCP 调用有可用网关。
-            let sidecar_for_boot = sidecar_manager.clone();
-            std::thread::spawn(move || {
-                tauri::async_runtime::block_on(async move {
-                    for i in 0..20 {
-                        if sidecar_for_boot.health_check().await.is_ok() {
-                            break;
-                        }
-                        if let Err(e) = sidecar_for_boot.start().await {
-                            eprintln!("[sidecar] start attempt {} failed: {}", i + 1, e);
-                        } else {
-                            break;
-                        }
-                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                    }
-                });
-            });
-
-            // 恢复已保存的 MCP 服务器连接
-            let registry_for_mcp = Arc::clone(&registry);
-            tauri::async_runtime::spawn(async move {
-                let servers = sqlx::query_as::<_, (String, String, String, String)>(
-                    "SELECT name, command, args, env FROM mcp_servers WHERE enabled = 1",
-                )
-                .fetch_all(&pool_for_mcp)
-                .await
-                .unwrap_or_default();
-
-                if servers.is_empty() {
-                    return;
-                }
-
-                let client = reqwest::Client::new();
-                for (name, command, args_json, env_json) in servers {
-                    let args: Vec<String> = serde_json::from_str(&args_json).unwrap_or_default();
-                    let env: std::collections::HashMap<String, String> =
-                        serde_json::from_str(&env_json).unwrap_or_default();
-
-                    // 连接 MCP 服务器
-                    let connect_result = client
-                        .post("http://localhost:8765/api/mcp/add-server")
-                        .json(&serde_json::json!({
-                            "name": name,
-                            "config": { "command": command, "args": args, "env": env }
-                        }))
-                        .send()
-                        .await;
-
-                    if connect_result.is_err() {
-                        eprintln!("[mcp] 连接 MCP 服务器 {} 失败（Sidecar 可能未启动）", name);
-                        continue;
-                    }
-
-                    // 获取工具列表并注册
-                    if let Ok(resp) = client
-                        .post("http://localhost:8765/api/mcp/list-tools")
-                        .json(&serde_json::json!({ "serverName": name }))
-                        .send()
-                        .await
-                    {
-                        if let Ok(body) = resp.json::<serde_json::Value>().await {
-                            if let Some(tool_list) = body["tools"].as_array() {
-                                for tool in tool_list {
-                                    let tool_name = tool["name"].as_str().unwrap_or_default();
-                                    let tool_desc =
-                                        tool["description"].as_str().unwrap_or_default();
-                                    let schema = tool.get("inputSchema").cloned().unwrap_or(
-                                        serde_json::json!({"type": "object", "properties": {}}),
-                                    );
-
-                                    let full_name = format!("mcp_{}_{}", name, tool_name);
-                                    registry_for_mcp.register(Arc::new(
-                                        agent::tools::SidecarBridgeTool::new_mcp(
-                                            "http://localhost:8765".to_string(),
-                                            full_name,
-                                            tool_desc.to_string(),
-                                            schema,
-                                            name.clone(),
-                                            tool_name.to_string(),
-                                        ),
-                                    ));
-                                }
-                                eprintln!("[mcp] 已恢复 MCP 服务器 {} 的工具注册", name);
-                            }
-                        }
-                    }
-                }
-            });
-
-            // 自动恢复飞书长连接与事件同步 relay（按员工配置对齐 + 周期健康检查）
-            let pool_for_feishu = pool.clone();
-            let relay_for_feishu = feishu_relay_state.clone();
-            let app_for_feishu = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                let mut backoff_secs = 2u64;
-                for _ in 0..30 {
-                    let has_connections =
-                        match commands::feishu_gateway::reconcile_feishu_employee_connections_with_pool(
-                            &pool_for_feishu,
-                            None,
-                        )
-                        .await
-                        {
-                            Ok(summary) => !summary.items.is_empty(),
-                            Err(_) => false,
-                        };
-                    if has_connections {
-                        let _ = commands::feishu_gateway::start_feishu_event_relay_with_pool_and_app(
-                            &pool_for_feishu,
-                            relay_for_feishu.clone(),
-                            Some(app_for_feishu.clone()),
-                            None,
-                            Some(1500),
-                            Some(50),
-                        )
-                        .await;
-                        break;
-                    }
-                    tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
-                    backoff_secs = (backoff_secs * 2).min(60);
-                }
-
-                loop {
-                    tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-                    let summary = match commands::feishu_gateway::reconcile_feishu_employee_connections_with_pool(
-                        &pool_for_feishu,
-                        None,
-                    )
-                    .await
-                    {
-                        Ok(v) => v,
-                        Err(_) => continue,
-                    };
-                    if summary.items.is_empty() {
-                        continue;
-                    }
-
-                    let relay_status = commands::feishu_gateway::start_feishu_event_relay_with_pool_and_app(
-                        &pool_for_feishu,
-                        relay_for_feishu.clone(),
-                        Some(app_for_feishu.clone()),
-                        None,
-                        Some(1500),
-                        Some(50),
-                    )
-                    .await;
-                    if relay_status.is_ok() {
-                        continue;
-                    }
-                }
-            });
+            let handles = initialize_runtime_state(app, pool.clone());
+            apply_startup_preferences(app, &pool);
+            spawn_sidecar_bootstrap(handles.sidecar_manager.clone());
+            restore_saved_mcp_servers(pool.clone(), Arc::clone(&handles.registry));
+            spawn_feishu_relay_bootstrap(
+                pool,
+                handles.feishu_relay_state.clone(),
+                app.handle().clone(),
+            );
 
             Ok(())
         })

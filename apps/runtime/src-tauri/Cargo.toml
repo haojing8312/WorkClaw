@@ -12,6 +12,8 @@ tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-single-instance = "2"
 skillpack-rs = { path = "../../../packages/skillpack-rs" }
+runtime-skill-core = { path = "../../../packages/runtime-skill-core" }
+runtime-policy = { path = "../../../packages/runtime-policy" }
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio-rustls", "macros"] }
 reqwest = { version = "0.12", features = ["json", "stream", "blocking", "native-tls"], default-features = false }
 tokio = { version = "1", features = ["full"] }
