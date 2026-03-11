@@ -3639,12 +3639,14 @@ name = "runtime"
 version = "0.2.10"
 dependencies = [
  "anyhow",
+ "async-trait",
  "chrono",
  "futures-util",
  "glob",
  "regex",
  "reqwest 0.12.28",
  "runtime-executor-core",
+ "runtime-models-app",
  "runtime-policy",
  "runtime-routing-core",
  "runtime-skill-core",
@@ -3672,6 +3674,17 @@ dependencies = [
 name = "runtime-executor-core"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "runtime-models-app"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "runtime-routing-core",
  "serde",
  "serde_json",
 ]

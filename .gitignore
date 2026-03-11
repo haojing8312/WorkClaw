@@ -19,6 +19,7 @@ temp/
 scripts/sync-codex-skills.mjs
 .pnpm-store/
 .pnpm-store-local/
+.cargo-targets/
 sidecar.log
 .teamseed-launch.log
 app-launch.log
@@ -26,6 +27,7 @@ pnpm-app.log
 .claude/
 .worktrees/
 apps/runtime/src-tauri/target-codex/
+apps/runtime/src-tauri/target-*/
 logs/
 stdout
 apps/runtime/playwright-report/
