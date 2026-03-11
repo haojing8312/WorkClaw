@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import path from "node:path";
 
 import {
+  buildWindowsNativeHostLauncher,
   buildNativeHostManifest,
   resolveNativeHostManifestPath,
 } from "./install-chrome-native-host.mjs";
@@ -37,4 +38,16 @@ test("resolveNativeHostManifestPath uses the Chrome native messaging host direct
       "dev.workclaw.runtime.json",
     ),
   );
+});
+
+test("buildWindowsNativeHostLauncher creates a cmd wrapper for the node native host script", () => {
+  const launcher = buildWindowsNativeHostLauncher({
+    nodePath: "C:\\Program Files\\nodejs\\node.exe",
+    scriptPath: "E:\\code\\yzpd\\workclaw\\scripts\\workclaw-chrome-native-host.mjs",
+    baseUrl: "http://127.0.0.1:4312",
+  });
+
+  assert.match(launcher, /@echo off/i);
+  assert.match(launcher, /set "WORKCLAW_BROWSER_BRIDGE_BASE_URL=http:\/\/127\.0\.0\.1:4312"/i);
+  assert.match(launcher, /"C:\\Program Files\\nodejs\\node\.exe" "E:\\code\\yzpd\\workclaw\\scripts\\workclaw-chrome-native-host\.mjs"/i);
 });

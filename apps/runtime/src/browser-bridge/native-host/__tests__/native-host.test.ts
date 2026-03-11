@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createBridgeClient } from "../client";
-import { decodeNativeMessage, encodeNativeMessage } from "../index";
+import { decodeNativeMessage, encodeNativeMessage, processNativeHostFrame } from "../index";
 
 describe("native messaging framing", () => {
   it("round-trips a bridge envelope", () => {
@@ -48,6 +48,36 @@ describe("native messaging framing", () => {
     expect(response).toMatchObject({
       kind: "response",
       payload: { type: "action.detect_step" },
+    });
+  });
+
+  it("processes a native host frame and returns the encoded bridge response", async () => {
+    const input = encodeNativeMessage({
+      version: 1,
+      sessionId: "sess-2",
+      kind: "request",
+      payload: { type: "credentials.report", appId: "cli_123", appSecret: "sec_456" },
+    });
+
+    const output = await processNativeHostFrame(input, async (envelope) => {
+      expect(envelope).toMatchObject({
+        sessionId: "sess-2",
+        payload: { type: "credentials.report", appId: "cli_123", appSecret: "sec_456" },
+      });
+
+      return {
+        version: 1,
+        sessionId: "sess-2",
+        kind: "response",
+        payload: { type: "action.pause", reason: "saved" },
+      };
+    });
+
+    expect(decodeNativeMessage(output as Buffer)).toMatchObject({
+      version: 1,
+      sessionId: "sess-2",
+      kind: "response",
+      payload: { type: "action.pause", reason: "saved" },
     });
   });
 });

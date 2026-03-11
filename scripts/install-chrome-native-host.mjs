@@ -15,6 +15,15 @@ export function resolveNativeHostManifestPath(chromeUserDataDir, hostName) {
   return path.join(chromeUserDataDir, "NativeMessagingHosts", `${hostName}.json`);
 }
 
+export function buildWindowsNativeHostLauncher({ nodePath, scriptPath, baseUrl }) {
+  return [
+    "@echo off",
+    `set "WORKCLAW_BROWSER_BRIDGE_BASE_URL=${baseUrl}"`,
+    `"${nodePath}" "${scriptPath}"`,
+    "",
+  ].join("\r\n");
+}
+
 export function writeNativeHostManifest({ chromeUserDataDir, hostName, command, extensionOrigins }) {
   const manifestPath = resolveNativeHostManifestPath(chromeUserDataDir, hostName);
   mkdirSync(path.dirname(manifestPath), { recursive: true });

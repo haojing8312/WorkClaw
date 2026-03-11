@@ -9,3 +9,12 @@ export function decodeNativeMessage(buffer: Buffer): unknown {
   const size = buffer.readUInt32LE(0);
   return JSON.parse(buffer.subarray(4, 4 + size).toString("utf8"));
 }
+
+export async function processNativeHostFrame(
+  buffer: Buffer,
+  handler: (message: unknown) => Promise<unknown> | unknown,
+): Promise<Buffer> {
+  const message = decodeNativeMessage(buffer);
+  const response = await handler(message);
+  return encodeNativeMessage(response);
+}
