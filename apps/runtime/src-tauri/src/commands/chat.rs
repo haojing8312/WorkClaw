@@ -998,7 +998,9 @@ pub async fn send_message(
     );
 
     // 从新消息中按顺序提取有序项（文字和工具调用交替排列）
-    let new_messages: Vec<&Value> = final_messages.iter().skip(history.len()).collect();
+    let reconstructed_history_len = messages.len();
+    let new_messages =
+        extract_new_messages_after_reconstructed_history(&final_messages, reconstructed_history_len);
 
     let mut ordered_items: Vec<Value> = Vec::new();
     let mut final_text = String::new();
@@ -1308,6 +1310,16 @@ fn reconstruct_llm_messages(parsed: &Value, api_format: &str) -> Vec<Value> {
     }
 
     result
+}
+
+fn extract_new_messages_after_reconstructed_history<'a>(
+    final_messages: &'a [Value],
+    reconstructed_history_len: usize,
+) -> Vec<&'a Value> {
+    final_messages
+        .iter()
+        .skip(reconstructed_history_len)
+        .collect()
 }
 
 /// 将旧格式扁平 tool_call items 转换为前端期望的嵌套 toolCall 格式
