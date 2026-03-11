@@ -257,6 +257,14 @@ export interface FeishuGatewaySettings {
   sidecar_base_url: string;
 }
 
+export interface FeishuBrowserSetupSession {
+  session_id: string;
+  provider: string;
+  step: string;
+  app_id: string | null;
+  app_secret_present: boolean;
+}
+
 export interface FeishuWsStatus {
   running: boolean;
   started_at?: string | null;
