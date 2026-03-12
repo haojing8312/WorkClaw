@@ -1,4 +1,5 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
+import { useState } from "react";
 import { ChatView } from "../ChatView";
 
 const invokeMock = vi.fn<(command: string, payload?: unknown) => Promise<unknown>>();
@@ -47,6 +48,10 @@ describe("ChatView session resilience", () => {
       if (command === "list_session_runs") return Promise.resolve(sessionRunsResponse);
       return Promise.resolve(null);
     });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   test("clears thinking banner and shows failure card when latest run ends with billing failure", async () => {
@@ -216,5 +221,62 @@ describe("ChatView session resilience", () => {
     const failureCard = screen.getByTestId("run-failure-card-run-2");
 
     expect(assistantMessage.compareDocumentPosition(failureCard) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  test("still sends the initial message after the parent clears the pending value", async () => {
+    vi.useFakeTimers();
+
+    function InitialMessageHarness() {
+      const [initialMessage, setInitialMessage] = useState("请先开始执行");
+
+      return (
+        <ChatView
+          skill={{
+            id: "builtin-general",
+            name: "General",
+            description: "desc",
+            version: "1.0.0",
+            author: "test",
+            recommended_model: "",
+            tags: [],
+            created_at: new Date().toISOString(),
+          }}
+          models={[
+            {
+              id: "m1",
+              name: "model",
+              api_format: "openai",
+              base_url: "https://example.com",
+              model_name: "model",
+              is_default: true,
+            },
+          ]}
+          sessionId="sess-initial"
+          initialMessage={initialMessage}
+          onInitialMessageConsumed={() => setInitialMessage("")}
+        />
+      );
+    }
+
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_messages") return Promise.resolve([]);
+      if (command === "list_sessions") return Promise.resolve([]);
+      if (command === "get_sessions") return Promise.resolve([]);
+      if (command === "list_session_runs") return Promise.resolve([]);
+      if (command === "send_message") return Promise.resolve(null);
+      return Promise.resolve(null);
+    });
+
+    render(<InitialMessageHarness />);
+
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+      await Promise.resolve();
+    });
+
+    expect(invokeMock).toHaveBeenCalledWith("send_message", {
+      sessionId: "sess-initial",
+      userMessage: "请先开始执行",
+    });
   });
 });

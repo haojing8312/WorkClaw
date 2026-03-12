@@ -870,9 +870,9 @@ export function ChatView({
     if (!msg) return;
 
     const timer = setTimeout(() => {
+      onInitialMessageConsumed?.();
       void sendContent(msg);
     }, 0);
-    onInitialMessageConsumed?.();
     return () => clearTimeout(timer);
     // 仅依赖会话与初始消息，避免重复发送
     // eslint-disable-next-line react-hooks/exhaustive-deps
