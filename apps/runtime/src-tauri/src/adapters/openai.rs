@@ -55,6 +55,29 @@ fn build_http_client() -> Result<Client> {
         .map_err(|e| anyhow!("构建 OpenAI HTTP 客户端失败: {}", e))
 }
 
+fn validate_test_connection_response(body: &str) -> Result<bool> {
+    let parsed: Value = serde_json::from_str(body).map_err(|_| {
+        let preview: String = body.chars().take(160).collect();
+        anyhow!("OpenAI 连接测试返回了非 JSON 内容: {}", preview)
+    })?;
+
+    if parsed.get("choices").and_then(Value::as_array).is_some() {
+        return Ok(true);
+    }
+
+    if let Some(error_message) = parsed
+        .get("error")
+        .and_then(|error| error.get("message").or(Some(error)))
+        .and_then(Value::as_str)
+    {
+        return Err(anyhow!("OpenAI 连接测试返回错误: {}", error_message));
+    }
+
+    Err(anyhow!(
+        "OpenAI 连接测试返回了非标准响应，缺少 choices 字段"
+    ))
+}
+
 /// Strip <think>…</think> spans from a streaming token chunk.
 /// `in_think` carries state across chunk boundaries.
 fn filter_thinking(input: &str, in_think: &mut bool) -> String {
@@ -106,6 +129,7 @@ struct OpenAiStreamState {
     tool_calls_map: HashMap<u64, (String, String, String)>,
     finish_reason: Option<String>,
     stop_stream: bool,
+    pending_line: String,
 }
 
 fn process_openai_sse_text(
@@ -113,7 +137,16 @@ fn process_openai_sse_text(
     state: &mut OpenAiStreamState,
     on_token: &mut impl FnMut(String),
 ) -> Result<()> {
-    for line in text.lines() {
+    state.pending_line.push_str(text);
+    let ends_with_newline = state.pending_line.ends_with('\n');
+    let owned = std::mem::take(&mut state.pending_line);
+    let mut lines: Vec<&str> = owned.lines().collect();
+
+    if !ends_with_newline {
+        state.pending_line = lines.pop().unwrap_or_default().to_string();
+    }
+
+    for line in lines {
         if let Some(data) = line.strip_prefix("data: ") {
             if data.trim() == "[DONE]" {
                 state.stop_stream = true;
@@ -311,7 +344,12 @@ pub async fn test_connection(base_url: &str, api_key: &str, model: &str) -> Resu
         .json(&body)
         .send()
         .await?;
-    Ok(resp.status().is_success())
+    let status = resp.status();
+    let text = resp.text().await?;
+    if !status.is_success() {
+        return Err(anyhow!("OpenAI API error: {}", text));
+    }
+    validate_test_connection_response(&text)
 }
 
 #[cfg(test)]
@@ -349,5 +387,48 @@ mod tests {
             LLMResponse::Text(text) => assert_eq!(text, "hello"),
             other => panic!("expected text response, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn done_marker_split_across_chunks_still_stops_stream() {
+        let mut state = OpenAiStreamState::default();
+        let mut sink = Vec::new();
+
+        for chunk in [
+            "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"},\"finish_reason\":null}]}\n",
+            "data: [DO",
+            "NE]\n",
+        ] {
+            process_openai_sse_text(chunk, &mut state, &mut |token| sink.push(token))
+                .expect("parse chunk");
+            if state.stop_stream {
+                break;
+            }
+        }
+
+        assert!(state.stop_stream, "split [DONE] marker should stop stream");
+        match finish_openai_stream(state) {
+            LLMResponse::Text(text) => assert_eq!(text, "hello"),
+            other => panic!("expected text response, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_connection_rejects_html_success_pages() {
+        let result = validate_test_connection_response(
+            "<!doctype html><html><head><title>Gateway</title></head><body>ok</body></html>",
+        );
+
+        assert!(result.is_err(), "HTML 落地页不能被视为模型接口成功响应");
+    }
+
+    #[test]
+    fn test_connection_accepts_openai_chat_completion_json() {
+        let result = validate_test_connection_response(
+            r#"{"id":"chatcmpl-1","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}"#,
+        )
+        .expect("valid openai response");
+
+        assert!(result);
     }
 }
