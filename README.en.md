@@ -290,6 +290,12 @@ workclaw/
 
 - For contributor prerequisites, local Tauri startup, and GitHub-based Windows release, see [docs/development/windows-contributor-guide.md](docs/development/windows-contributor-guide.md).
 
+### Windows Download Guide
+
+- The recommended download for most users is `*-setup.exe`, which is the default path for in-app auto-update.
+- For enterprise or IT-managed deployment, use `*.msi` for managed rollout and manual upgrades.
+- All public installers are published on the [Releases](https://github.com/haojing8312/WorkClaw/releases) page.
+
 ### Development
 
 ```bash

@@ -62,13 +62,13 @@ test("release workflow publishes signed updater artifacts", () => {
 
   assert.match(
     workflow,
-    /tauri-apps\/tauri-action@v1/,
-    "Expected release workflow to use tauri-action@v1",
+    /tauri-apps\/tauri-action@v(?:1|0\.6\.1)/,
+    "Expected release workflow to use a supported tauri-action release",
   );
   assert.match(
     workflow,
-    /uploadUpdaterJson:\s*true/,
-    "Expected release workflow to upload latest.json",
+    /(?:uploadUpdaterJson|includeUpdaterJson):\s*true/,
+    "Expected release workflow to publish latest.json",
   );
   assert.match(
     workflow,

@@ -45,7 +45,7 @@ When a maintainer pushes `vX.Y.Z`:
 
 1. Version consistency is validated.
 2. `.github/workflows/release-windows.yml` builds the Windows bundles.
-3. `tauri-action@v1` uploads release assets, updater signatures, and `latest.json`.
+3. `tauri-apps/tauri-action` uploads release assets, updater signatures, and `latest.json`.
 4. Release notes are loaded from `.github/release-windows-notes.md`.
 
 ## Local Verification

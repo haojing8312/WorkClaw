@@ -287,6 +287,12 @@ workclaw/
 
 - 贡献者前置要求、Tauri 本地启动流程、GitHub 自动 Release 见：[docs/development/windows-contributor-guide.md](docs/development/windows-contributor-guide.md)
 
+### Windows 下载说明
+
+- 普通用户推荐下载 `*-setup.exe`，安装后默认走应用内自动更新。
+- 企业或 IT 统一部署推荐使用 `*.msi`，便于企业环境分发和手工升级。
+- 所有公开安装包都发布在 [Releases](https://github.com/haojing8312/WorkClaw/releases) 页面。
+
 ### 开发
 
 ```bash
