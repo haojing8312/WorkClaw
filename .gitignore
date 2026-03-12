@@ -20,10 +20,7 @@ scripts/sync-codex-skills.mjs
 .pnpm-store/
 .pnpm-store-local/
 .cargo-targets/
-sidecar.log
-.teamseed-launch.log
-app-launch.log
-pnpm-app.log
+*.log
 .claude/
 .worktrees/
 apps/runtime/src-tauri/target-codex/
@@ -35,7 +32,6 @@ apps/runtime/test-results/
 
 # local temporary debug artifacts
 .tmp_*
-.tmp-*.log
 /0
 /x.l.includes('employees')
 apps/runtime/src-tauri/target-tests/
