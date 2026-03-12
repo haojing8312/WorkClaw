@@ -16,6 +16,8 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
 use uuid::Uuid;
 
+const TOOL_CONFIRM_TIMEOUT_SECS: u64 = 15;
+
 #[derive(serde::Serialize, Clone, Debug)]
 pub struct ToolCallEvent {
     pub session_id: String,
@@ -23,6 +25,26 @@ pub struct ToolCallEvent {
     pub tool_input: Value,
     pub tool_output: Option<String>,
     pub status: String, // "started" | "completed" | "error"
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ToolConfirmationDecision {
+    Confirmed,
+    Rejected,
+    TimedOut,
+}
+
+fn wait_for_tool_confirmation(
+    rx: &std::sync::mpsc::Receiver<bool>,
+    timeout: std::time::Duration,
+) -> ToolConfirmationDecision {
+    match rx.recv_timeout(timeout) {
+        Ok(true) => ToolConfirmationDecision::Confirmed,
+        Ok(false) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            ToolConfirmationDecision::Rejected
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => ToolConfirmationDecision::TimedOut,
+    }
 }
 
 fn critical_action_summary(tool_name: &str, input: &Value) -> (String, String, String, bool) {
@@ -542,10 +564,10 @@ impl AgentExecutor {
                                     }
                                 }
 
-                                // 阻塞等待用户确认（最多 300 秒），超时视为拒绝
-                                let confirmed = rx
-                                    .recv_timeout(std::time::Duration::from_secs(300))
-                                    .unwrap_or(false);
+                                let confirmation = wait_for_tool_confirmation(
+                                    &rx,
+                                    std::time::Duration::from_secs(TOOL_CONFIRM_TIMEOUT_SECS),
+                                );
 
                                 // 清理发送端，避免下次误用
                                 if let Some(ref confirm_state) = tool_confirm_tx {
@@ -554,21 +576,29 @@ impl AgentExecutor {
                                     }
                                 }
 
-                                if !confirmed {
-                                    // 用户拒绝 — 记录拒绝事件并跳过此工具
+                                if confirmation != ToolConfirmationDecision::Confirmed {
+                                    let rejection_message = match confirmation {
+                                        ToolConfirmationDecision::TimedOut => {
+                                            "工具确认超时，已取消此操作"
+                                        }
+                                        ToolConfirmationDecision::Rejected => {
+                                            "用户拒绝了此操作"
+                                        }
+                                        ToolConfirmationDecision::Confirmed => unreachable!(),
+                                    };
                                     let _ = app.emit(
                                         "tool-call-event",
                                         ToolCallEvent {
                                             session_id: sid.to_string(),
                                             tool_name: call.name.clone(),
                                             tool_input: call.input.clone(),
-                                            tool_output: Some("用户拒绝了此操作".to_string()),
+                                            tool_output: Some(rejection_message.to_string()),
                                             status: "error".to_string(),
                                         },
                                     );
                                     tool_results.push(ToolResult {
                                         tool_use_id: call.id.clone(),
-                                        content: "用户拒绝了此操作".to_string(),
+                                        content: rejection_message.to_string(),
                                     });
                                     continue;
                                 }
@@ -866,5 +896,28 @@ impl AgentExecutor {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wait_for_tool_confirmation;
+    use super::ToolConfirmationDecision;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    #[test]
+    fn tool_confirmation_timeout_is_treated_as_rejection() {
+        let (_tx, rx) = mpsc::channel::<bool>();
+        let decision = wait_for_tool_confirmation(&rx, Duration::from_millis(5));
+        assert_eq!(decision, ToolConfirmationDecision::TimedOut);
+    }
+
+    #[test]
+    fn tool_confirmation_false_is_rejected() {
+        let (tx, rx) = mpsc::channel::<bool>();
+        tx.send(false).expect("send");
+        let decision = wait_for_tool_confirmation(&rx, Duration::from_millis(5));
+        assert_eq!(decision, ToolConfirmationDecision::Rejected);
     }
 }

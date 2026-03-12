@@ -279,4 +279,50 @@ describe("ChatView session resilience", () => {
       userMessage: "请先开始执行",
     });
   });
+
+  test("auto rejects pending tool confirmation during cleanup", async () => {
+    const { unmount } = render(
+      <ChatView
+        skill={{
+          id: "builtin-general",
+          name: "General",
+          description: "desc",
+          version: "1.0.0",
+          author: "test",
+          recommended_model: "",
+          tags: [],
+          created_at: new Date().toISOString(),
+        }}
+        models={[
+          {
+            id: "m1",
+            name: "model",
+            api_format: "openai",
+            base_url: "https://example.com",
+            model_name: "model",
+            is_default: true,
+          },
+        ]}
+        sessionId="sess-confirm"
+      />
+    );
+
+    act(() => {
+      emit("tool-confirm-event", {
+        session_id: "sess-confirm",
+        tool_name: "bash",
+        tool_input: { command: "rm -rf ." },
+        title: "高危操作确认",
+        summary: "将执行命令",
+      });
+    });
+
+    unmount();
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("confirm_tool_execution", {
+        confirmed: false,
+      });
+    });
+  });
 });

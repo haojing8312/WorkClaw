@@ -157,6 +157,7 @@ export function ChatView({
     iteration: number;
   } | null>(null);
   const [toolConfirm, setToolConfirm] = useState<{
+    requestId: number;
     toolName: string;
     toolInput: Record<string, unknown>;
     title: string;
@@ -190,6 +191,7 @@ export function ChatView({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const subAgentBufferRef = useRef("");
   const mainRoleNameRef = useRef("");
+  const pendingToolConfirmRequestIdRef = useRef<number | null>(null);
   const lastHandledSessionFocusNonceRef = useRef<number | null>(null);
   const messageElementRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const lastHandledGroupRunStepFocusNonceRef = useRef<number | null>(null);
@@ -711,7 +713,10 @@ export function ChatView({
       irreversible?: boolean;
     }>("tool-confirm-event", ({ payload }) => {
       if (payload.session_id !== sessionId) return;
+      const requestId = Date.now();
+      pendingToolConfirmRequestIdRef.current = requestId;
       setToolConfirm({
+        requestId,
         toolName: payload.tool_name,
         toolInput: payload.tool_input,
         title: payload.title || "高危操作确认",
@@ -724,6 +729,20 @@ export function ChatView({
       unlistenPromise.then((fn) => fn());
     };
   }, [sessionId]);
+
+  useEffect(() => {
+    const requestId = toolConfirm?.requestId;
+    if (!requestId) return;
+    return () => {
+      if (pendingToolConfirmRequestIdRef.current !== requestId) {
+        return;
+      }
+      pendingToolConfirmRequestIdRef.current = null;
+      void invoke("confirm_tool_execution", { confirmed: false }).catch((error) => {
+        console.error("自动拒绝工具确认失败:", error);
+      });
+    };
+  }, [sessionId, toolConfirm?.requestId]);
 
   // tool-call-event 事件监听：按顺序插入到 streamItems
   useEffect(() => {
@@ -922,6 +941,7 @@ export function ChatView({
 
   async function handleToolConfirm(confirmed: boolean) {
     try {
+      pendingToolConfirmRequestIdRef.current = null;
       await invoke("confirm_tool_execution", { confirmed });
     } catch (e) {
       console.error("工具确认失败:", e);
