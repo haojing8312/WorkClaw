@@ -9,10 +9,8 @@ fn compose_system_prompt_includes_execution_guidance_and_optional_sections() {
         8,
         &ChatExecutionGuidance {
             effective_work_dir: "E:/workspace/demo".to_string(),
-            imported_mcp_guidance: Some("Prefer MCP for external content".to_string()),
         },
         Some("Collaborate with employee-1 when domain knowledge is required."),
-        Some("Imported MCP server is available."),
         Some("Remember previous delivery constraints."),
     );
 
@@ -22,6 +20,5 @@ fn compose_system_prompt_includes_execution_guidance_and_optional_sections() {
     assert!(prompt.contains("模型: gpt-4.1"));
     assert!(prompt.contains("最大迭代次数: 8"));
     assert!(prompt.contains("Collaborate with employee-1"));
-    assert!(prompt.contains("Imported MCP server is available."));
     assert!(prompt.contains("持久内存:\nRemember previous delivery constraints."));
 }

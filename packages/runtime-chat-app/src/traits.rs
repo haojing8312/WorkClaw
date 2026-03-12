@@ -1,7 +1,6 @@
 use crate::types::{
-    ChatEmployeeSnapshot, ChatRoutePolicySnapshot, ChatRoutingSnapshot,
-    ProviderConnectionSnapshot, RoutingSettingsSnapshot, SessionExecutionContextSnapshot,
-    SessionModelSnapshot,
+    ChatEmployeeSnapshot, ChatRoutePolicySnapshot, ChatRoutingSnapshot, ProviderConnectionSnapshot,
+    RoutingSettingsSnapshot, SessionExecutionContextSnapshot, SessionModelSnapshot,
 };
 use async_trait::async_trait;
 
@@ -21,12 +20,6 @@ pub trait ChatSettingsRepository: Send + Sync {
     ) -> Result<Option<ProviderConnectionSnapshot>, String>;
     async fn load_session_model(&self, model_id: &str) -> Result<SessionModelSnapshot, String>;
     async fn load_default_work_dir(&self) -> Result<Option<String>, String> {
-        Ok(None)
-    }
-    async fn load_imported_mcp_guidance(
-        &self,
-        _imported_mcp_server_ids: &[String],
-    ) -> Result<Option<String>, String> {
         Ok(None)
     }
 }

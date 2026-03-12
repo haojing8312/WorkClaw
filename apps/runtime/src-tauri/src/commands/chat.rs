@@ -386,7 +386,7 @@ pub async fn send_message(
         &session_id,
         &user_message,
     )
-        .await?;
+    .await?;
 
     if chat_io::maybe_handle_team_entry_pre_execution_with_pool(
         &app,
@@ -599,10 +599,6 @@ pub async fn send_message(
     // 获取工具名称列表（在所有工具注册完成后计算，确保列表完整）
     let tool_names = chat_io::resolve_tool_names(&allowed_tools, &agent_executor);
 
-    let imported_external_mcp_guidance = execution_preparation_service
-        .resolve_imported_mcp_guidance(&execution_guidance)
-        .map(str::to_string);
-
     // 如果存在 MEMORY.md，注入到 system prompt
     let memory_content = chat_io::load_memory_content(&memory_dir);
     let system_prompt = compose_system_prompt(
@@ -612,21 +608,14 @@ pub async fn send_message(
         max_iter,
         &execution_guidance,
         employee_collaboration_guidance.as_deref(),
-        imported_external_mcp_guidance.as_deref(),
         Some(&memory_content),
     );
 
     // 使用全局工具确认通道（在 lib.rs 中创建）
     let tool_confirm_responder = app.state::<ToolConfirmState>().0.clone();
     let run_id = Uuid::new_v4().to_string();
-    chat_io::append_run_started_with_pool(
-        &db.0,
-        journal.0.as_ref(),
-        &session_id,
-        &run_id,
-        &msg_id,
-    )
-    .await?;
+    chat_io::append_run_started_with_pool(&db.0, journal.0.as_ref(), &session_id, &run_id, &msg_id)
+        .await?;
 
     // 始终走 Agent 模式；失败时按候选链重试
     let mut final_messages_opt: Option<Vec<Value>> = None;
@@ -792,8 +781,15 @@ pub async fn send_message(
         }
     };
 
-    let (final_text, has_tool_calls, content) =
-        chat_io::build_assistant_content_from_final_messages(&final_messages, messages.len());
+    let streamed_text_snapshot = streamed_text
+        .lock()
+        .map(|buffer| buffer.clone())
+        .unwrap_or_default();
+    let (final_text, has_tool_calls, content) = chat_io::build_assistant_content_with_stream_fallback(
+        &final_messages,
+        messages.len(),
+        &streamed_text_snapshot,
+    );
 
     let finalize_result = chat_io::finalize_run_success_with_pool(
         &db.0,
@@ -1031,15 +1027,16 @@ pub async fn get_sessions(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_group_orchestrator_report_preview, chat_runtime_io,
-        classify_model_route_error, infer_capability_from_user_message,
-        is_supported_protocol, normalize_permission_mode_for_storage,
-        normalize_session_mode_for_storage, normalize_team_id_for_storage,
-        parse_fallback_chain_targets, parse_permission_mode_for_runtime,
-        permission_mode_label_for_display, retry_backoff_ms, retry_budget_for_error,
-        should_retry_same_candidate, ModelRouteErrorKind,
+        build_group_orchestrator_report_preview, classify_model_route_error,
+        infer_capability_from_user_message, is_supported_protocol,
+        model_route_error_kind_key,
+        normalize_permission_mode_for_storage, normalize_session_mode_for_storage,
+        normalize_team_id_for_storage, parse_fallback_chain_targets,
+        parse_permission_mode_for_runtime, permission_mode_label_for_display, retry_backoff_ms,
+        retry_budget_for_error, should_retry_same_candidate, ModelRouteErrorKind,
     };
     use crate::agent::permissions::PermissionMode;
+    use crate::commands::chat_runtime_io;
     use std::collections::HashMap;
     use std::path::Path;
 

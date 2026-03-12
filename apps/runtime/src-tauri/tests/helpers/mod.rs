@@ -125,39 +125,6 @@ pub async fn setup_test_db() -> (SqlitePool, TempDir) {
     .unwrap();
 
     sqlx::query(
-        "CREATE TABLE IF NOT EXISTS external_capability_channels (
-            source_id TEXT NOT NULL,
-            channel TEXT NOT NULL,
-            backend_type TEXT NOT NULL DEFAULT '',
-            backend_name TEXT NOT NULL DEFAULT '',
-            last_status TEXT NOT NULL DEFAULT '',
-            detail TEXT NOT NULL DEFAULT '',
-            last_checked_at TEXT NOT NULL,
-            PRIMARY KEY (source_id, channel)
-        )",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS external_mcp_imports (
-            source_id TEXT NOT NULL,
-            channel TEXT NOT NULL,
-            detected_server_name TEXT NOT NULL,
-            mcp_server_id TEXT NOT NULL DEFAULT '',
-            template_fingerprint TEXT NOT NULL DEFAULT '',
-            import_mode TEXT NOT NULL DEFAULT 'safe_template',
-            imported_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            PRIMARY KEY (source_id, channel)
-        )",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-
-    sqlx::query(
         "CREATE TABLE IF NOT EXISTS app_settings (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL

@@ -178,13 +178,7 @@ pub fn build_im_role_dispatch_request(
     agent_type: &str,
 ) -> ImRoleDispatchRequest {
     build_im_role_dispatch_request_for_channel(
-        session_id,
-        thread_id,
-        role_id,
-        role_name,
-        "app",
-        prompt,
-        agent_type,
+        session_id, thread_id, role_id, role_name, "app", prompt, agent_type,
     )
 }
 

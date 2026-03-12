@@ -108,43 +108,6 @@ export interface ProviderHealthInfo {
   message: string;
 }
 
-export interface ContentProviderStatus {
-  provider_id: string;
-  availability: "not_found" | "partial" | "available";
-  capabilities: Array<"read_url" | "search_content" | "extract_media_context" | string>;
-  detail?: string | null;
-}
-
-export interface ExternalCapabilityChannel {
-  channel: string;
-  status: string;
-  backend_type: "cli" | "mcp" | "http" | string;
-  backend_name: string;
-  detail?: string | null;
-}
-
-export interface ExternalCapabilitySourceStatus {
-  source_id: string;
-  display_name: string;
-  availability: "not_found" | "partial" | "available";
-  summary: string;
-  channels: ExternalCapabilityChannel[];
-  detail?: string | null;
-}
-
-export interface DetectedExternalMcpServer {
-  source_id: string;
-  channel: string;
-  server_name: string;
-  display_name: string;
-  status: string;
-  backend_name: string;
-  command: string;
-  args: string[];
-  env: string[];
-  managed_by_workclaw: boolean;
-}
-
 export interface RouteAttemptLog {
   session_id: string;
   capability: string;
@@ -314,14 +277,6 @@ export interface WecomGatewaySettings {
   agent_id: string;
   agent_secret: string;
   sidecar_base_url: string;
-}
-
-export interface FeishuBrowserSetupSession {
-  session_id: string;
-  provider: string;
-  step: string;
-  app_id: string | null;
-  app_secret_present: boolean;
 }
 
 export interface FeishuWsStatus {
@@ -699,10 +654,6 @@ export interface RuntimePreferences {
   immersive_translation_trigger: "auto" | "manual" | string;
   translation_engine: "model_then_free" | "model_only" | "free_only" | string;
   translation_model_id: string;
-  auto_update_enabled: boolean;
-  update_channel: "stable" | string;
-  dismissed_update_version: string;
-  last_update_check_at: string;
   launch_at_login: boolean;
   launch_minimized: boolean;
   close_to_tray: boolean;

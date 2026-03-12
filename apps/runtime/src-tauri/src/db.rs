@@ -157,37 +157,6 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
     .await?;
 
     sqlx::query(
-        "CREATE TABLE IF NOT EXISTS external_capability_channels (
-            source_id TEXT NOT NULL,
-            channel TEXT NOT NULL,
-            backend_type TEXT NOT NULL DEFAULT '',
-            backend_name TEXT NOT NULL DEFAULT '',
-            last_status TEXT NOT NULL DEFAULT '',
-            detail TEXT NOT NULL DEFAULT '',
-            last_checked_at TEXT NOT NULL,
-            PRIMARY KEY (source_id, channel)
-        )",
-    )
-    .execute(&pool)
-    .await?;
-
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS external_mcp_imports (
-            source_id TEXT NOT NULL,
-            channel TEXT NOT NULL,
-            detected_server_name TEXT NOT NULL,
-            mcp_server_id TEXT NOT NULL DEFAULT '',
-            template_fingerprint TEXT NOT NULL DEFAULT '',
-            import_mode TEXT NOT NULL DEFAULT 'safe_template',
-            imported_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            PRIMARY KEY (source_id, channel)
-        )",
-    )
-    .execute(&pool)
-    .await?;
-
-    sqlx::query(
         "CREATE TABLE IF NOT EXISTS app_settings (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
@@ -876,27 +845,6 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
     )
     .execute(&pool)
     .await;
-    let _ = sqlx::query(
-        "INSERT OR IGNORE INTO app_settings (key, value) VALUES ('runtime_auto_update_enabled', 'true')",
-    )
-    .execute(&pool)
-    .await;
-    let _ = sqlx::query(
-        "INSERT OR IGNORE INTO app_settings (key, value) VALUES ('runtime_update_channel', 'stable')",
-    )
-    .execute(&pool)
-    .await;
-    let _ = sqlx::query(
-        "INSERT OR IGNORE INTO app_settings (key, value) VALUES ('runtime_dismissed_update_version', '')",
-    )
-    .execute(&pool)
-    .await;
-    let _ = sqlx::query(
-        "INSERT OR IGNORE INTO app_settings (key, value) VALUES ('runtime_last_update_check_at', '')",
-    )
-    .execute(&pool)
-    .await;
-
     // 内置 Skill：始终存在，无需用户安装，且每次启动同步最新 metadata
     let _ = sync_builtin_skills(&pool).await;
     crate::team_templates::seed_builtin_team_templates_with_root(&pool, &app_dir).await?;

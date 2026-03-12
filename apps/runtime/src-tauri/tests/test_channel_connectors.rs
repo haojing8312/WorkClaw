@@ -10,7 +10,10 @@ use tokio::net::TcpListener;
 
 async fn spawn_mock_connector_sidecar(
     expected_requests: usize,
-) -> (String, tokio::task::JoinHandle<Vec<(String, serde_json::Value)>>) {
+) -> (
+    String,
+    tokio::task::JoinHandle<Vec<(String, serde_json::Value)>>,
+) {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind mock connector sidecar");
@@ -138,17 +141,18 @@ async fn connector_commands_bridge_catalog_diagnostics_ack_and_replay() {
     assert_eq!(connectors[1].channel, "wecom");
     assert_eq!(connectors[1].capabilities.len(), 4);
 
-    let diagnostics = get_channel_connector_diagnostics_with_pool(
-        &pool,
-        "wecom:wecom-main".to_string(),
-        None,
-    )
-    .await
-    .expect("get diagnostics");
+    let diagnostics =
+        get_channel_connector_diagnostics_with_pool(&pool, "wecom:wecom-main".to_string(), None)
+            .await
+            .expect("get diagnostics");
     assert_eq!(diagnostics.connector.display_name, "企业微信连接器");
     assert_eq!(diagnostics.status, "authentication_error");
     assert_eq!(
-        diagnostics.health.issue.as_ref().map(|issue| issue.user_message.as_str()),
+        diagnostics
+            .health
+            .issue
+            .as_ref()
+            .map(|issue| issue.user_message.as_str()),
         Some("签名校验失败")
     );
 
@@ -162,14 +166,10 @@ async fn connector_commands_bridge_catalog_diagnostics_ack_and_replay() {
     .await
     .expect("ack channel events");
 
-    let replayed = replay_channel_events_with_pool(
-        &pool,
-        "wecom:wecom-main".to_string(),
-        Some(10),
-        None,
-    )
-    .await
-    .expect("replay channel events");
+    let replayed =
+        replay_channel_events_with_pool(&pool, "wecom:wecom-main".to_string(), Some(10), None)
+            .await
+            .expect("replay channel events");
     assert_eq!(replayed.len(), 1);
     assert_eq!(replayed[0].message_id.as_deref(), Some("msg-001"));
 

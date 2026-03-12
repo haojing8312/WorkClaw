@@ -23,7 +23,6 @@ WorkClaw is a beginner-friendly OpenClaw desktop agent distribution that removes
 - Getting started: [Getting Started](#getting-started)
 - Documentation: [docs/](docs/)
 - Operations Manual: [Feishu Wiki](https://my.feishu.cn/wiki/ElrEwHGi7ia78HkKcYXcsVYnnfe)
-- Feishu browser setup guide: [docs/integrations/feishu-browser-setup.md](docs/integrations/feishu-browser-setup.md)
 - Releases: [Releases](https://github.com/haojing8312/WorkClaw/releases)
 - Roadmap: [Roadmap](#roadmap)
 - Contributing & support: [CONTRIBUTING.md](CONTRIBUTING.md) · [SUPPORT.md](SUPPORT.md)
@@ -292,7 +291,7 @@ workclaw/
 
 ### Windows Download Guide
 
-- The recommended download for most users is `*-setup.exe`, which is the default path for in-app auto-update.
+- The recommended download for most users is `*-setup.exe` for direct installation.
 - For enterprise or IT-managed deployment, use `*.msi` for managed rollout and manual upgrades.
 - All public installers are published on the [Releases](https://github.com/haojing8312/WorkClaw/releases) page.
 
@@ -329,7 +328,7 @@ cargo test
 - Increase reliability: regression coverage on critical paths and stronger runtime observability.
 
 ### Next
-- Ship distribution capabilities: auto-update, cross-platform installers, and release channels.
+- Ship distribution capabilities: cross-platform installers and release channels.
 - Strengthen creator workflows: templates, visual editing, and publishing flow.
 - Expand ecosystem connectivity: IM remote control, marketplace compatibility, and mobile collaboration.
 
@@ -374,7 +373,6 @@ The following docs are optional for most end users and mainly target integrators
 - Feishu routing integration (CN): [docs/integrations/feishu-routing.md](docs/integrations/feishu-routing.md)
 - Employee identity and memory model (`employee_id`) (CN): [docs/architecture/employee-identity-model.md](docs/architecture/employee-identity-model.md)
 - OpenClaw upgrade runbook (CN): [docs/maintainers/openclaw-upgrade.md](docs/maintainers/openclaw-upgrade.md)
-- Agent-Reach external capability integration: [docs/integrations/agent-reach-external-capabilities.md](docs/integrations/agent-reach-external-capabilities.md)
 - Skill installation troubleshooting (CN): [docs/troubleshooting/skill-installation.md](docs/troubleshooting/skill-installation.md)
 
 ## License

@@ -25,7 +25,6 @@
   },
   "bundle": {
     "active": true,
-    "createUpdaterArtifacts": true,
     "targets": "all",
     "windows": {
       "nsis": {
@@ -50,16 +49,5 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
-  },
-  "plugins": {
-    "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDc1NjhDNjg4RkVFMkM4Q0UKUldUT3lPTCtpTVpvZGVEVEpoS0cwZ3lmaldCMFZZS05rWDg3c0s0b2piMFRzRTl2OG93dGZmS0oK",
-      "endpoints": [
-        "https://github.com/haojing8312/WorkClaw/releases/latest/download/latest.json"
-      ],
-      "windows": {
-        "installMode": "passive"
-      }
-    }
   }
 }

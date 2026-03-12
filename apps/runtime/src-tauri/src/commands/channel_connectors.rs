@@ -80,7 +80,8 @@ pub async fn list_channel_connectors_with_pool(
         resolved_sidecar_base_url,
     )
     .await?;
-    serde_json::from_value(response).map_err(|e| format!("parse channel connector catalog failed: {}", e))
+    serde_json::from_value(response)
+        .map_err(|e| format!("parse channel connector catalog failed: {}", e))
 }
 
 pub async fn get_channel_connector_diagnostics_with_pool(

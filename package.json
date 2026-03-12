@@ -12,7 +12,6 @@
     "test:release": "node --test scripts/check-release-version.test.mjs",
     "test:installer": "node --test scripts/check-installer-branding.test.mjs",
     "test:local-build-script": "node --test scripts/check-local-build-script.test.mjs",
-    "test:updater": "node --test scripts/check-updater-config.test.mjs",
     "test:release-docs": "node --test scripts/check-release-docs.test.mjs",
     "test:openclaw-vendor-lane": "node --test scripts/check-openclaw-vendor-lane.test.mjs",
     "test:rust-fast": "node scripts/test-rust-fast.mjs",

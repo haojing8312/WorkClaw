@@ -2,14 +2,9 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { SettingsView } from "../SettingsView";
 
 const invokeMock = vi.fn();
-const useAppUpdaterMock = vi.fn();
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
-}));
-
-vi.mock("../../hooks/useAppUpdater", () => ({
-  useAppUpdater: (...args: unknown[]) => useAppUpdaterMock(...args),
 }));
 
 function createRuntimePreferences() {
@@ -21,45 +16,15 @@ function createRuntimePreferences() {
     immersive_translation_trigger: "auto",
     translation_engine: "model_then_free",
     translation_model_id: "",
-    auto_update_enabled: true,
-    update_channel: "stable",
-    dismissed_update_version: "",
-    last_update_check_at: "",
     launch_at_login: false,
     launch_minimized: false,
     close_to_tray: true,
   };
 }
 
-function createUpdaterState() {
-  return {
-    status: "idle",
-    error: "",
-    availableUpdate: null,
-    downloadProgress: {
-      contentLength: null,
-      downloadedBytes: 0,
-      percent: null,
-    },
-    dismissedVersion: "",
-    lastCheckedAt: "",
-    isWorking: false,
-    canDismiss: false,
-    canDownload: false,
-    canInstall: false,
-    checkForUpdates: vi.fn(async () => null),
-    dismissUpdate: vi.fn(),
-    downloadUpdate: vi.fn(async () => undefined),
-    installUpdate: vi.fn(async () => undefined),
-    resetFailure: vi.fn(),
-  };
-}
-
 describe("SettingsView data retention", () => {
   beforeEach(() => {
     invokeMock.mockReset();
-    useAppUpdaterMock.mockReset();
-    useAppUpdaterMock.mockReturnValue(createUpdaterState());
     invokeMock.mockImplementation((command: string) => {
       if (command === "list_model_configs") return Promise.resolve([]);
       if (command === "list_mcp_servers") return Promise.resolve([]);

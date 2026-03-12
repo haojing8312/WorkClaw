@@ -170,7 +170,8 @@ pub(crate) async fn finalize_run_success_with_pool(
     }
 
     if !final_text.is_empty() || has_tool_calls {
-        let msg_id = insert_session_message_with_pool(pool, session_id, "assistant", content).await?;
+        let msg_id =
+            insert_session_message_with_pool(pool, session_id, "assistant", content).await?;
         attach_assistant_message_to_run_with_pool(pool, run_id, &msg_id).await?;
     }
 
@@ -216,9 +217,13 @@ pub(crate) async fn maybe_handle_team_entry_pre_execution_with_pool(
         )
         .await?;
 
-        let assistant_msg_id =
-            insert_session_message_with_pool(pool, session_id, "assistant", &group_run.final_report)
-                .await?;
+        let assistant_msg_id = insert_session_message_with_pool(
+            pool,
+            session_id,
+            "assistant",
+            &group_run.final_report,
+        )
+        .await?;
         attach_assistant_message_to_run_with_pool(pool, &run_id, &assistant_msg_id).await?;
     }
 
@@ -749,4 +754,110 @@ pub(crate) fn build_assistant_content_from_final_messages(
     };
 
     (final_text, has_tool_calls, content)
+}
+
+pub(crate) fn build_assistant_content_with_stream_fallback(
+    final_messages: &[Value],
+    reconstructed_history_len: usize,
+    streamed_text: &str,
+) -> (String, bool, String) {
+    let (mut final_text, has_tool_calls, mut content) =
+        build_assistant_content_from_final_messages(final_messages, reconstructed_history_len);
+    let fallback_text = streamed_text.trim();
+
+    if final_text.trim().is_empty() && !fallback_text.is_empty() {
+        final_text = streamed_text.to_string();
+        content = if has_tool_calls {
+            let parsed = serde_json::from_str::<Value>(&content).unwrap_or_else(|_| {
+                json!({
+                    "text": "",
+                    "items": [],
+                })
+            });
+            let items = parsed
+                .get("items")
+                .and_then(|value| value.as_array())
+                .cloned()
+                .unwrap_or_default();
+            serde_json::to_string(&json!({
+                "text": final_text,
+                "items": items,
+            }))
+            .unwrap_or_else(|_| final_text.clone())
+        } else {
+            final_text.clone()
+        };
+    }
+
+    (final_text, has_tool_calls, content)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        build_assistant_content_from_final_messages, build_assistant_content_with_stream_fallback,
+    };
+    use serde_json::{json, Value};
+
+    #[test]
+    fn stream_fallback_restores_empty_text_response() {
+        let final_messages = vec![json!({
+            "role": "assistant",
+            "content": ""
+        })];
+
+        let (final_text, has_tool_calls, content) =
+            build_assistant_content_with_stream_fallback(&final_messages, 0, "你好，我在。");
+
+        assert_eq!(final_text, "你好，我在。");
+        assert!(!has_tool_calls);
+        assert_eq!(content, "你好，我在。");
+    }
+
+    #[test]
+    fn stream_fallback_preserves_tool_calls_when_text_missing() {
+        let final_messages = vec![
+            json!({
+                "role": "assistant",
+                "content": Value::Null,
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {
+                            "name": "search",
+                            "arguments": "{\"q\":\"minimax\"}"
+                        }
+                    }
+                ]
+            }),
+            json!({
+                "role": "tool",
+                "tool_call_id": "call-1",
+                "content": "ok"
+            }),
+        ];
+
+        let (_, has_tool_calls_before, content_before) =
+            build_assistant_content_from_final_messages(&final_messages, 0);
+        assert!(has_tool_calls_before);
+
+        let (final_text, has_tool_calls, content) =
+            build_assistant_content_with_stream_fallback(&final_messages, 0, "我查到了结果");
+
+        assert_eq!(final_text, "我查到了结果");
+        assert!(has_tool_calls);
+
+        let parsed: Value = serde_json::from_str(&content).expect("structured content");
+        assert_eq!(parsed["text"].as_str(), Some("我查到了结果"));
+        assert_eq!(parsed["items"].as_array().map(|items| items.len()), Some(1));
+        assert_eq!(
+            parsed["items"][0]["toolCall"]["name"].as_str(),
+            Some("search")
+        );
+
+        let parsed_before: Value =
+            serde_json::from_str(&content_before).expect("structured content before fallback");
+        assert_eq!(parsed_before["text"].as_str(), Some(""));
+    }
 }

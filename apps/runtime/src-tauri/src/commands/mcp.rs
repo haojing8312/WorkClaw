@@ -163,11 +163,5 @@ pub async fn remove_mcp_server(
         .await
         .map_err(|e| e.to_string())?;
 
-    // 清理外部来源导入映射，避免设置页残留 Imported 状态
-    let _ = sqlx::query("DELETE FROM external_mcp_imports WHERE mcp_server_id = ?")
-        .bind(&id)
-        .execute(&db.0)
-        .await;
-
     Ok(())
 }

@@ -146,7 +146,6 @@ pub struct SessionExecutionContextSnapshot {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ChatExecutionGuidance {
     pub effective_work_dir: String,
-    pub imported_mcp_guidance: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

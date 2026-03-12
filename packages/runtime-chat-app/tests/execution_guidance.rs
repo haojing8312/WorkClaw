@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use runtime_chat_app::{
     ChatExecutionGuidance, ChatExecutionPreparationRequest, ChatExecutionPreparationService,
-    ChatSettingsRepository, ChatRoutePolicySnapshot, ChatRoutingSnapshot,
+    ChatRoutePolicySnapshot, ChatRoutingSnapshot, ChatSettingsRepository,
     ProviderConnectionSnapshot, RoutingSettingsSnapshot, SessionModelSnapshot,
 };
 
@@ -50,16 +50,6 @@ impl ChatSettingsRepository for FakeGuidanceRepo {
     async fn load_default_work_dir(&self) -> Result<Option<String>, String> {
         Ok(Some("E:/default-workdir".to_string()))
     }
-
-    async fn load_imported_mcp_guidance(
-        &self,
-        imported_mcp_server_ids: &[String],
-    ) -> Result<Option<String>, String> {
-        Ok(Some(format!(
-            "Prefer imported MCPs: {}",
-            imported_mcp_server_ids.join(", ")
-        )))
-    }
 }
 
 #[tokio::test]
@@ -86,7 +76,6 @@ async fn prepare_execution_guidance_uses_request_context() {
         guidance,
         ChatExecutionGuidance {
             effective_work_dir: "E:/request-workdir".to_string(),
-            imported_mcp_guidance: Some("Prefer imported MCPs: mcp-filesystem".to_string()),
         }
     );
 }

@@ -19,7 +19,11 @@ test("Chinese release guidance explains installer choices", () => {
   assert.match(readme, /推荐/, "Expected Chinese README to mark the recommended installer");
   assert.match(readme, /\.msi/, "Expected Chinese README to mention .msi downloads");
   assert.match(readme, /企业/, "Expected Chinese README to describe enterprise deployment");
-  assert.match(readme, /自动更新/, "Expected Chinese README to mention auto-update behavior");
+  assert.doesNotMatch(
+    readme,
+    /自动更新/,
+    "Expected Chinese README not to mention auto-update behavior",
+  );
 });
 
 test("English release guidance explains installer choices", () => {
@@ -29,7 +33,11 @@ test("English release guidance explains installer choices", () => {
   assert.match(readme, /recommended/i, "Expected English README to mark the recommended installer");
   assert.match(readme, /\.msi/, "Expected English README to mention .msi downloads");
   assert.match(readme, /enterprise/i, "Expected English README to describe enterprise deployment");
-  assert.match(readme, /auto-update/i, "Expected English README to mention auto-update behavior");
+  assert.doesNotMatch(
+    readme,
+    /auto-update/i,
+    "Expected English README not to mention auto-update behavior",
+  );
 });
 
 test("release notes template mirrors public download guidance", () => {
@@ -37,5 +45,9 @@ test("release notes template mirrors public download guidance", () => {
 
   assert.match(notes, /\.exe/, "Expected release notes template to mention .exe downloads");
   assert.match(notes, /\.msi/, "Expected release notes template to mention .msi downloads");
-  assert.match(notes, /auto-update/i, "Expected release notes template to mention auto-update");
+  assert.doesNotMatch(
+    notes,
+    /auto-update/i,
+    "Expected release notes template not to mention auto-update",
+  );
 });

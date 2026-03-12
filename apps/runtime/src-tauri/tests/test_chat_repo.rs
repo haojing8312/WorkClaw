@@ -173,33 +173,3 @@ async fn chat_repo_loads_default_work_dir_and_session_execution_context() {
     assert_eq!(session_context.work_dir, "E:/session-workdir");
     assert!(session_context.imported_mcp_server_ids.is_empty());
 }
-
-#[tokio::test]
-async fn chat_repo_loads_imported_mcp_guidance() {
-    let (pool, _tmp) = helpers::setup_test_db().await;
-    sqlx::query(
-        "INSERT INTO mcp_servers (id, name, command, args, env, enabled, created_at)
-         VALUES ('mcp-1', 'linkedin-mcp', 'linkedin-mcp', '[]', '{}', 1, '2026-03-12T00:00:00Z')",
-    )
-    .execute(&pool)
-    .await
-    .expect("insert mcp server");
-    sqlx::query(
-        "INSERT INTO external_mcp_imports (source_id, channel, detected_server_name, mcp_server_id, template_fingerprint, import_mode, imported_at, updated_at)
-         VALUES ('agent-reach', 'linkedin', 'linkedin-mcp', 'mcp-1', 'fp-1', 'safe_template', '2026-03-12T00:00:00Z', '2026-03-12T00:00:00Z')",
-    )
-    .execute(&pool)
-    .await
-    .expect("insert external import");
-
-    let repo = PoolChatSettingsRepository::new(&pool);
-    let guidance = repo
-        .load_imported_mcp_guidance(&[])
-        .await
-        .expect("guidance should load");
-
-    let text = guidance.expect("guidance exists");
-    assert!(text.contains("外部平台能力"));
-    assert!(text.contains("linkedin"));
-    assert!(text.contains("linkedin-mcp"));
-}

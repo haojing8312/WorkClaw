@@ -39,8 +39,7 @@ impl ChatSettingsRepository for FakeExecutionAssemblyRepo {
                 primary_provider_id: "provider-primary".to_string(),
                 primary_model: "vision-primary".to_string(),
                 fallback_chain_json:
-                    r#"[{"provider_id":"provider-fallback","model":"vision-fallback"}]"#
-                        .to_string(),
+                    r#"[{"provider_id":"provider-fallback","model":"vision-fallback"}]"#.to_string(),
                 retry_count: 2,
                 enabled: true,
             }))
@@ -82,16 +81,6 @@ impl ChatSettingsRepository for FakeExecutionAssemblyRepo {
 
     async fn load_default_work_dir(&self) -> Result<Option<String>, String> {
         Ok(Some("E:/default-workdir".to_string()))
-    }
-
-    async fn load_imported_mcp_guidance(
-        &self,
-        imported_mcp_server_ids: &[String],
-    ) -> Result<Option<String>, String> {
-        Ok(Some(format!(
-            "Prefer imported MCPs: {}",
-            imported_mcp_server_ids.join(", ")
-        )))
     }
 }
 
@@ -172,17 +161,11 @@ async fn prepare_execution_assembles_context_guidance_and_routes() {
         prepared.execution_guidance.effective_work_dir,
         "E:/session-workdir".to_string()
     );
-    assert_eq!(
-        prepared.execution_guidance.imported_mcp_guidance.as_deref(),
-        Some("Prefer imported MCPs: imported-mcp")
-    );
-    assert!(
-        prepared
-            .employee_collaboration_guidance
-            .as_deref()
-            .unwrap_or_default()
-            .contains("Other Agent")
-    );
+    assert!(prepared
+        .employee_collaboration_guidance
+        .as_deref()
+        .unwrap_or_default()
+        .contains("Other Agent"));
     assert_eq!(prepared.route_decisions.retry_count_per_candidate, 2);
     assert_eq!(prepared.route_decisions.candidates.len(), 3);
 }

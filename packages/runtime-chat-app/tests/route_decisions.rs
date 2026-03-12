@@ -67,8 +67,8 @@ async fn prepare_route_decisions_prefers_explicit_capability() {
         requested_route: Some(ChatRoutePolicySnapshot {
             primary_provider_id: "provider-vision".to_string(),
             primary_model: "qwen-vl-max".to_string(),
-            fallback_chain_json: r#"[{"provider_id":"provider-fallback","model":"claude-3-5-sonnet"}]"#
-                .to_string(),
+            fallback_chain_json:
+                r#"[{"provider_id":"provider-fallback","model":"claude-3-5-sonnet"}]"#.to_string(),
             retry_count: 2,
             enabled: true,
         }),

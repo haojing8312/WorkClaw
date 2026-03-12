@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use runtime_chat_app::{
-    ChatPreparationRequest, ChatPreparationService, ChatRoutePolicySnapshot, ChatRoutingSnapshot,
-    ChatSettingsRepository, PreparedChatExecution, ProviderConnectionSnapshot,
+    ChatExecutionContext, ChatPreparationRequest, ChatPreparationService, ChatRoutePolicySnapshot,
+    ChatRoutingSnapshot, ChatSettingsRepository, PreparedChatExecution, ProviderConnectionSnapshot,
     RoutingSettingsSnapshot, SessionModelSnapshot,
 };
 
@@ -105,6 +105,14 @@ async fn prepare_chat_execution_normalizes_request_and_settings() {
             fallback_targets: vec![("provider-2".to_string(), "claude-3-5-sonnet".to_string())],
             default_model_id: Some("model-default".to_string()),
             default_usable_model_id: Some("model-usable".to_string()),
+            execution_context: ChatExecutionContext {
+                session_id: String::new(),
+                session_mode_storage: "general".to_string(),
+                normalized_team_id: String::new(),
+                employee_id: String::new(),
+                work_dir: String::new(),
+                imported_mcp_server_ids: Vec::new(),
+            },
         }
     );
 }

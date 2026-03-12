@@ -1,6 +1,4 @@
-use crate::traits::{
-    ChatEmployeeDirectory, ChatSessionContextRepository, ChatSettingsRepository,
-};
+use crate::traits::{ChatEmployeeDirectory, ChatSessionContextRepository, ChatSettingsRepository};
 use crate::types::{
     ChatEmployeeSnapshot, ChatExecutionContext, ChatExecutionGuidance,
     ChatExecutionPreparationRequest, ChatPermissionMode, ChatPreparationRequest,
@@ -199,7 +197,9 @@ impl ChatExecutionPreparationService {
         let execution_guidance = self
             .prepare_execution_guidance(repo, &guidance_request)
             .await?;
-        let route_decisions = self.prepare_route_decisions(repo, model_id, request).await?;
+        let route_decisions = self
+            .prepare_route_decisions(repo, model_id, request)
+            .await?;
 
         Ok(PreparedChatExecutionAssembly {
             chat_preparation,
@@ -251,30 +251,17 @@ impl ChatExecutionPreparationService {
         execution_context.employee_id.as_str()
     }
 
-    pub fn resolve_skill_root_work_dir<'a>(
-        &self,
-        guidance: &'a ChatExecutionGuidance,
-    ) -> &'a str {
+    pub fn resolve_skill_root_work_dir<'a>(&self, guidance: &'a ChatExecutionGuidance) -> &'a str {
         guidance.effective_work_dir.as_str()
     }
 
-    pub fn resolve_executor_work_dir(
-        &self,
-        guidance: &ChatExecutionGuidance,
-    ) -> Option<String> {
+    pub fn resolve_executor_work_dir(&self, guidance: &ChatExecutionGuidance) -> Option<String> {
         let work_dir = guidance.effective_work_dir.trim();
         if work_dir.is_empty() {
             None
         } else {
             Some(work_dir.to_string())
         }
-    }
-
-    pub fn resolve_imported_mcp_guidance<'a>(
-        &self,
-        guidance: &'a ChatExecutionGuidance,
-    ) -> Option<&'a str> {
-        guidance.imported_mcp_guidance.as_deref()
     }
 
     pub async fn prepare_execution_context<R: ChatSessionContextRepository>(
@@ -303,14 +290,7 @@ impl ChatExecutionPreparationService {
             request.work_dir.as_deref().unwrap_or("").trim().to_string()
         };
 
-        let imported_mcp_guidance = repo
-            .load_imported_mcp_guidance(&request.imported_mcp_server_ids)
-            .await?;
-
-        Ok(ChatExecutionGuidance {
-            effective_work_dir,
-            imported_mcp_guidance,
-        })
+        Ok(ChatExecutionGuidance { effective_work_dir })
     }
 
     pub async fn prepare_route_decisions<R: ChatSettingsRepository>(
@@ -609,7 +589,6 @@ pub fn compose_system_prompt(
     max_iter: usize,
     guidance: &ChatExecutionGuidance,
     employee_collaboration_guidance: Option<&str>,
-    imported_external_mcp_guidance: Option<&str>,
     memory_content: Option<&str>,
 ) -> String {
     let mut system_prompt = if guidance.effective_work_dir.trim().is_empty() {
@@ -624,13 +603,10 @@ pub fn compose_system_prompt(
         )
     };
 
-    if let Some(collaboration) = employee_collaboration_guidance.filter(|value| !value.trim().is_empty()) {
-        system_prompt = format!("{}\n\n---\n{}", system_prompt, collaboration);
-    }
-    if let Some(external_mcp_guidance) =
-        imported_external_mcp_guidance.filter(|value| !value.trim().is_empty())
+    if let Some(collaboration) =
+        employee_collaboration_guidance.filter(|value| !value.trim().is_empty())
     {
-        system_prompt = format!("{}\n\n---\n{}", system_prompt, external_mcp_guidance);
+        system_prompt = format!("{}\n\n---\n{}", system_prompt, collaboration);
     }
     if let Some(memory_content) = memory_content.filter(|value| !value.trim().is_empty()) {
         system_prompt = format!("{}\n\n---\n持久内存:\n{}", system_prompt, memory_content);
@@ -716,10 +692,21 @@ fn merge_execution_context(
         normalize_team_id_for_storage(&session_mode_storage, request.team_id.as_deref())
     };
 
-    let employee_id = if request.employee_id.as_deref().unwrap_or("").trim().is_empty() {
+    let employee_id = if request
+        .employee_id
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .is_empty()
+    {
         snapshot.employee_id.trim().to_string()
     } else {
-        request.employee_id.as_deref().unwrap_or("").trim().to_string()
+        request
+            .employee_id
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .to_string()
     };
 
     let work_dir = if request.work_dir.as_deref().unwrap_or("").trim().is_empty() {

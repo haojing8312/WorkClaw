@@ -1,9 +1,9 @@
+use super::employee_agents::list_agent_employees_with_pool;
 use super::models::{
     get_capability_routing_policy_from_pool, get_chat_routing_policy_from_pool,
     load_routing_settings_from_pool,
 };
 use super::runtime_preferences::resolve_default_work_dir_with_pool;
-use super::employee_agents::list_agent_employees_with_pool;
 use async_trait::async_trait;
 use runtime_chat_app::{
     ChatEmployeeDirectory, ChatEmployeeSnapshot, ChatRoutePolicySnapshot, ChatRoutingSnapshot,
@@ -30,25 +30,6 @@ impl<'a> PoolChatEmployeeDirectory<'a> {
     pub fn new(db: &'a SqlitePool) -> Self {
         Self { db }
     }
-}
-
-fn build_imported_mcp_guidance(entries: &[(String, String, String)]) -> Option<String> {
-    if entries.is_empty() {
-        return None;
-    }
-
-    let mut lines = vec![
-        "外部平台能力: 以下平台已通过外部来源导入为 WorkClaw 托管的 MCP。".to_string(),
-        "处理这些平台的内容读取、检索或资料整理请求时，优先使用对应 MCP 工具；仅在其不可用时再回退到通用 web_search / web_fetch。".to_string(),
-    ];
-
-    for (source_id, channel, server_name) in entries {
-        lines.push(format!(
-            "- 平台 `{channel}`: 优先使用对应 MCP 工具（source: `{source_id}`, server: `{server_name}`）"
-        ));
-    }
-
-    Some(lines.join("\n"))
 }
 
 #[async_trait]
@@ -162,25 +143,6 @@ impl ChatSettingsRepository for PoolChatSettingsRepository<'_> {
     async fn load_default_work_dir(&self) -> Result<Option<String>, String> {
         resolve_default_work_dir_with_pool(self.db).await.map(Some)
     }
-
-    async fn load_imported_mcp_guidance(
-        &self,
-        _imported_mcp_server_ids: &[String],
-    ) -> Result<Option<String>, String> {
-        let rows = sqlx::query_as::<_, (String, String, String)>(
-            "SELECT imports.source_id, imports.channel, servers.name
-             FROM external_mcp_imports AS imports
-             INNER JOIN mcp_servers AS servers
-               ON servers.id = imports.mcp_server_id
-             WHERE servers.enabled = 1
-             ORDER BY imports.source_id, imports.channel",
-        )
-        .fetch_all(self.db)
-        .await
-        .map_err(|e| format!("读取导入 MCP 指引失败: {e}"))?;
-
-        Ok(build_imported_mcp_guidance(&rows))
-    }
 }
 
 #[async_trait]
@@ -209,8 +171,14 @@ impl ChatSessionContextRepository for PoolChatSettingsRepository<'_> {
         .await
         .map_err(|e| format!("读取会话执行上下文失败 (session_id={session_id}): {e}"))?;
 
-        let (session_mode, team_id, employee_id, work_dir) =
-            row.unwrap_or_else(|| ("general".to_string(), String::new(), String::new(), String::new()));
+        let (session_mode, team_id, employee_id, work_dir) = row.unwrap_or_else(|| {
+            (
+                "general".to_string(),
+                String::new(),
+                String::new(),
+                String::new(),
+            )
+        });
 
         Ok(SessionExecutionContextSnapshot {
             session_id: session_id.to_string(),

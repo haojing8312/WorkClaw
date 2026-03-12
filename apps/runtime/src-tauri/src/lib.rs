@@ -268,10 +268,6 @@ pub fn run() {
             }
         }))
         .setup(|app| {
-            #[cfg(desktop)]
-            app.handle()
-                .plugin(tauri_plugin_updater::Builder::new().build())?;
-
             let pool = tauri::async_runtime::block_on(db::init_db(app.handle()))
                 .expect("failed to init db");
             let handles = initialize_runtime_state(app, pool.clone());

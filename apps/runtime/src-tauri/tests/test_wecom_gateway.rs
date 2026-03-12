@@ -11,7 +11,10 @@ use tokio::net::TcpListener;
 
 async fn spawn_mock_wecom_sidecar(
     expected_requests: usize,
-) -> (String, tokio::task::JoinHandle<Vec<(String, serde_json::Value)>>) {
+) -> (
+    String,
+    tokio::task::JoinHandle<Vec<(String, serde_json::Value)>>,
+) {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind mock sidecar");
@@ -141,10 +144,14 @@ async fn wecom_connector_flow_uses_channel_neutral_sidecar_endpoints() {
     assert_eq!(status.instance_id, "wecom:wecom-main");
     assert_eq!(status.queue_depth, 3);
 
-    let send_result =
-        send_wecom_text_message_with_pool(&pool, "conversation-1".to_string(), "hello".to_string(), None)
-            .await
-            .expect("send text");
+    let send_result = send_wecom_text_message_with_pool(
+        &pool,
+        "conversation-1".to_string(),
+        "hello".to_string(),
+        None,
+    )
+    .await
+    .expect("send text");
     assert!(send_result.contains("wecom-msg-1"));
 
     let requests = server_task.await.expect("mock sidecar task");
