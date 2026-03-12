@@ -44,6 +44,16 @@ describe("EmployeeHubView browser setup panel", () => {
       if (command === "get_feishu_employee_connection_statuses") {
         return Promise.resolve({ relay: null, sidecar: null });
       }
+      if (command === "get_browser_bridge_install_status") {
+        return Promise.resolve({
+          state: "not_installed",
+          chrome_found: true,
+          native_host_installed: false,
+          extension_dir_ready: false,
+          bridge_connected: false,
+          last_error: null,
+        } satisfies BrowserBridgeInstallStatus);
+      }
       if (command === "start_feishu_browser_setup") {
         expect(payload).toMatchObject({ provider: "feishu" });
         return Promise.resolve({
@@ -83,6 +93,14 @@ describe("EmployeeHubView browser setup panel", () => {
     );
 
     fireEvent.click(screen.getByRole("tab", { name: "设置" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("get_browser_bridge_install_status");
+    });
+
+    expect(screen.getByText("浏览器桥接安装")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "安装浏览器桥接" })).toBeInTheDocument();
+
     fireEvent.click(screen.getByRole("button", { name: "启动飞书浏览器配置" }));
 
     await waitFor(() => {

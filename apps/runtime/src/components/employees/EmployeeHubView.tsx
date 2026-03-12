@@ -8,6 +8,7 @@ import {
   EmployeeGroupRunResult,
   EmployeeGroupRunSummary,
   AgentProfileFilesView,
+  BrowserBridgeInstallStatus,
   EmployeeMemoryExport,
   EmployeeMemoryStats,
   FeishuBrowserSetupSession,
@@ -20,6 +21,7 @@ import {
   WecomGatewaySettings,
 } from "../../types";
 import { RiskConfirmDialog } from "../RiskConfirmDialog";
+import { BrowserBridgeInstallCard } from "./BrowserBridgeInstallCard";
 import { FeishuBrowserSetupView } from "./FeishuBrowserSetupView";
 import {
   EmployeeHubEmployeeFilter,
@@ -129,6 +131,8 @@ export function EmployeeHubView({
   const [feishuStatuses, setFeishuStatuses] = useState<FeishuEmployeeConnectionStatuses | null>(null);
   const [globalDefaultWorkDir, setGlobalDefaultWorkDir] = useState("");
   const [savingGlobalWorkDir, setSavingGlobalWorkDir] = useState(false);
+  const [browserBridgeInstallStatus, setBrowserBridgeInstallStatus] = useState<BrowserBridgeInstallStatus | null>(null);
+  const [installingBrowserBridge, setInstallingBrowserBridge] = useState(false);
   const [startingBrowserSetup, setStartingBrowserSetup] = useState(false);
   const [feishuBrowserSetupSession, setFeishuBrowserSetupSession] =
     useState<FeishuBrowserSetupSession | null>(null);
@@ -228,6 +232,20 @@ export function EmployeeHubView({
   }, []);
 
   useEffect(() => {
+    let disposed = false;
+    invoke<BrowserBridgeInstallStatus>("get_browser_bridge_install_status")
+      .then((status) => {
+        if (!disposed) setBrowserBridgeInstallStatus(status);
+      })
+      .catch(() => {
+        if (!disposed) setBrowserBridgeInstallStatus(null);
+      });
+    return () => {
+      disposed = true;
+    };
+  }, []);
+
+  useEffect(() => {
     const normalized = employees
       .map((item) => (item.employee_id || item.role_id || "").trim())
       .filter((item) => item.length > 0);
@@ -290,6 +308,35 @@ export function EmployeeHubView({
       setMessage(String(error));
     } finally {
       setStartingBrowserSetup(false);
+    }
+  }
+
+  async function installBrowserBridge() {
+    setInstallingBrowserBridge(true);
+    setMessage("");
+    try {
+      const status = await invoke<BrowserBridgeInstallStatus>("install_browser_bridge");
+      setBrowserBridgeInstallStatus(status);
+    } catch (error) {
+      setMessage(String(error));
+    } finally {
+      setInstallingBrowserBridge(false);
+    }
+  }
+
+  async function openBrowserBridgeExtensionPage() {
+    try {
+      await invoke("open_browser_bridge_extension_page");
+    } catch (error) {
+      setMessage(String(error));
+    }
+  }
+
+  async function openBrowserBridgeExtensionDir() {
+    try {
+      await invoke("open_browser_bridge_extension_dir");
+    } catch (error) {
+      setMessage(String(error));
     }
   }
 
@@ -1606,6 +1653,16 @@ export function EmployeeHubView({
           <div className="text-[11px] text-gray-500">默认：C:\Users\&lt;用户名&gt;\WorkClaw\workspace。支持 C/D/E 盘路径，目录不存在会自动创建。</div>
           <button disabled={savingGlobalWorkDir} onClick={saveGlobalDefaultWorkDir} className="h-8 px-3 rounded bg-blue-500 hover:bg-blue-600 disabled:bg-blue-300 text-white text-xs">保存默认目录</button>
         </div>
+        {browserBridgeInstallStatus && (
+          <BrowserBridgeInstallCard
+            status={browserBridgeInstallStatus}
+            installing={installingBrowserBridge}
+            onInstall={installBrowserBridge}
+            onOpenExtensionPage={openBrowserBridgeExtensionPage}
+            onOpenExtensionDir={openBrowserBridgeExtensionDir}
+            onStartFeishuSetup={startFeishuBrowserSetup}
+          />
+        )}
         <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-3">
           <div>
             <div className="text-sm font-medium text-gray-900">飞书浏览器配置向导</div>
