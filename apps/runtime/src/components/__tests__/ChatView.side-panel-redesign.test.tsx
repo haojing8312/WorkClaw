@@ -173,6 +173,49 @@ function renderChat() {
   );
 }
 
+function renderEmptyChat(overrides?: Partial<React.ComponentProps<typeof ChatView>>) {
+  invokeMock.mockImplementation((command: string) => {
+    if (command === "get_messages") return Promise.resolve([]);
+    if (command === "list_sessions") {
+      return Promise.resolve([
+        {
+          id: "session-side-panel-redesign",
+          work_dir: "E:\\workspace\\session-side-panel-redesign",
+        },
+      ]);
+    }
+    if (command === "get_sessions") return Promise.resolve([]);
+    return Promise.resolve(null);
+  });
+
+  return render(
+    <ChatView
+      skill={{
+        id: "builtin-general",
+        name: "General",
+        description: "desc",
+        version: "1.0.0",
+        author: "test",
+        recommended_model: "",
+        tags: [],
+        created_at: new Date().toISOString(),
+      }}
+      models={[
+        {
+          id: "m1",
+          name: "model",
+          api_format: "openai",
+          base_url: "https://example.com",
+          model_name: "model",
+          is_default: true,
+        },
+      ]}
+      sessionId="session-side-panel-redesign"
+      {...overrides}
+    />
+  );
+}
+
 describe("ChatView side panel redesign", () => {
   beforeEach(() => {
     Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
@@ -255,7 +298,7 @@ describe("ChatView side panel redesign", () => {
 
     expect(screen.getByText("总任务数")).toBeInTheDocument();
     expect(screen.getByText("已完成")).toBeInTheDocument();
-    expect(screen.getByText("进行中")).toBeInTheDocument();
+    expect(screen.getAllByText("进行中").length).toBeGreaterThan(0);
     expect(screen.getByText(/本轮生成文件/)).toBeInTheDocument();
     expect(screen.getByText(/本轮 Web 搜索/)).toBeInTheDocument();
   });
@@ -314,52 +357,71 @@ describe("ChatView side panel redesign", () => {
     });
   });
 
-  test("shows main-area task journey and delivery summary without opening side panel", async () => {
+  test("does not show top task journey summary in the main area", async () => {
     renderChat();
 
     await waitFor(() => {
-      expect(screen.getByText("任务进度")).toBeInTheDocument();
-      expect(screen.getByText("创建带动画和时间轴的HTML报告")).toBeInTheDocument();
-      expect(screen.getAllByText("已完成资料搜索").length).toBeGreaterThan(0);
-      expect(screen.getByText("交付结果")).toBeInTheDocument();
-      expect(screen.getAllByText("conflict_brief.docx").length).toBeGreaterThan(0);
-      expect(screen.getAllByText("conflict_report.html").length).toBeGreaterThan(0);
-      expect(screen.getAllByText("write_file 失败 3 次：工具执行错误: 缺少 path 参数").length).toBeGreaterThan(0);
-    });
-  });
-
-  test("offers delivery follow-up actions for files workspace and failed steps", async () => {
-    renderChat();
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "查看文件" })).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "打开工作区" })).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "继续补做失败项" })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: "查看文件" }));
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "文件" })).toHaveClass("bg-blue-100");
-      expect(screen.getByPlaceholderText("搜索文件...")).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: "打开工作区" }));
-
-    await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith("open_external_url", {
-        url: "E:\\workspace\\session-side-panel-redesign",
+      expect(invokeMock).toHaveBeenCalledWith("get_messages", {
+        sessionId: "session-side-panel-redesign",
       });
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "继续补做失败项" }));
+    expect(screen.queryByText("任务进度")).not.toBeInTheDocument();
+    expect(screen.queryByText("交付结果")).not.toBeInTheDocument();
+  });
+
+  test("does not expose delivery follow-up actions in the main area", async () => {
+    renderChat();
 
     await waitFor(() => {
-      const input = screen.getByPlaceholderText("输入消息，Shift+Enter 换行...");
-      const value = String((input as HTMLTextAreaElement).value);
-      expect(value.length).toBeGreaterThan(0);
-      expect(value).toContain("请继续补做失败项");
-      expect(value).toContain("缺少 path 参数");
+      expect(invokeMock).toHaveBeenCalledWith("get_messages", {
+        sessionId: "session-side-panel-redesign",
+      });
     });
+
+    expect(screen.queryByRole("button", { name: "查看文件" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "打开工作区" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "继续补做失败项" })).not.toBeInTheDocument();
+  });
+
+  test("does not show top task journey summary for an empty session", async () => {
+    renderEmptyChat();
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("get_messages", {
+        sessionId: "session-side-panel-redesign",
+      });
+    });
+
+    expect(screen.queryByText("任务进度")).not.toBeInTheDocument();
+    expect(screen.queryByText("交付结果")).not.toBeInTheDocument();
+  });
+
+  test("keeps employee assistant entry in guidance state instead of task progress state", async () => {
+    renderEmptyChat({
+      skill: {
+        id: "builtin-employee-creator",
+        name: "智能体员工助手",
+        description: "desc",
+        version: "1.0.0",
+        author: "test",
+        recommended_model: "",
+        tags: [],
+        created_at: new Date().toISOString(),
+      },
+      employeeAssistantContext: {
+        mode: "create",
+      },
+      initialMessage: "请帮我创建一个新的智能体员工。先问我 1-2 个关键问题，再给出配置草案，确认后再执行创建。",
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("chat-employee-assistant-context")).toHaveTextContent("正在创建：新智能体员工");
+      expect(screen.getByText("我会先问 1-2 个关键问题，再给出配置草案，确认后执行创建。")).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText("任务进度")).not.toBeInTheDocument();
+    expect(screen.queryByText("处理中")).not.toBeInTheDocument();
+    expect(screen.queryByText("已完成")).not.toBeInTheDocument();
   });
 });

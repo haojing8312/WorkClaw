@@ -20,6 +20,9 @@ import {
   ChannelConnectorDiagnostics,
   CapabilityRouteTemplateInfo,
   CapabilityRoutingPolicy,
+  ContentProviderStatus,
+  DetectedExternalMcpServer,
+  ExternalCapabilitySourceStatus,
   FeishuGatewaySettings,
   FeishuWsStatus,
   ImRouteSimulationPayload,
@@ -211,6 +214,13 @@ export function SettingsView({
   const [allHealthResults, setAllHealthResults] = useState<ProviderHealthInfo[]>([]);
   const [healthLoading, setHealthLoading] = useState(false);
   const [healthProviderId, setHealthProviderId] = useState("");
+  const [contentProviders, setContentProviders] = useState<ContentProviderStatus[]>([]);
+  const [contentProviderDiagnostics, setContentProviderDiagnostics] = useState<Record<string, ContentProviderStatus>>(
+    {},
+  );
+  const [contentProviderLoading, setContentProviderLoading] = useState(false);
+  const [externalSources, setExternalSources] = useState<ExternalCapabilitySourceStatus[]>([]);
+  const [detectedExternalMcpServers, setDetectedExternalMcpServers] = useState<DetectedExternalMcpServer[]>([]);
   const [routeLogs, setRouteLogs] = useState<RouteAttemptLog[]>([]);
   const [routeLogsLoading, setRouteLogsLoading] = useState(false);
   const [routeLogsOffset, setRouteLogsOffset] = useState(0);
@@ -374,6 +384,9 @@ export function SettingsView({
     loadSearchConfigs();
     loadRuntimePreferences();
     loadDesktopLifecyclePaths();
+    loadContentProviders();
+    loadExternalCapabilitySources();
+    loadDetectedExternalMcpServers();
     if (SHOW_MCP_SETTINGS) {
       loadMcpServers();
     }
@@ -1276,6 +1289,84 @@ export function SettingsView({
     }
   }
 
+  async function loadContentProviders() {
+    setContentProviderLoading(true);
+    try {
+      const list = await invoke<ContentProviderStatus[]>("list_content_providers");
+      setContentProviders(Array.isArray(list) ? list : []);
+      setContentProviderDiagnostics({});
+    } catch (e) {
+      console.warn("加载内容 Provider 状态失败:", e);
+      setContentProviders([]);
+    } finally {
+      setContentProviderLoading(false);
+    }
+  }
+
+  async function loadExternalCapabilitySources() {
+    try {
+      const list = await invoke<ExternalCapabilitySourceStatus[]>("list_external_capability_sources");
+      setExternalSources(Array.isArray(list) ? list : []);
+    } catch (e) {
+      console.warn("加载外部能力来源失败:", e);
+      setExternalSources([]);
+    }
+  }
+
+  async function loadDetectedExternalMcpServers() {
+    try {
+      const list = await invoke<DetectedExternalMcpServer[]>("list_detected_external_mcp_servers");
+      setDetectedExternalMcpServers(Array.isArray(list) ? list : []);
+    } catch (e) {
+      console.warn("加载外部 MCP 检测结果失败:", e);
+      setDetectedExternalMcpServers([]);
+    }
+  }
+
+  async function handleRunContentProviderDiagnostics(providerId: string) {
+    try {
+      const status = await invoke<ContentProviderStatus>("run_content_provider_diagnostics", {
+        providerId,
+      });
+      setContentProviderDiagnostics((prev) => ({ ...prev, [providerId]: status }));
+      setContentProviders((prev) =>
+        prev.map((item) => (item.provider_id === providerId ? status : item)),
+      );
+    } catch (e) {
+      setContentProviderDiagnostics((prev) => ({
+        ...prev,
+        [providerId]: {
+          provider_id: providerId,
+          availability: "partial",
+          capabilities: [],
+          detail: String(e),
+        },
+      }));
+    }
+  }
+
+  function contentProviderAvailabilityLabel(value: ContentProviderStatus["availability"]) {
+    switch (value) {
+      case "available":
+        return "Available";
+      case "partial":
+        return "Partial";
+      default:
+        return "Not Found";
+    }
+  }
+
+  function contentProviderAvailabilityClass(value: ContentProviderStatus["availability"]) {
+    switch (value) {
+      case "available":
+        return "bg-emerald-50 text-emerald-700 border-emerald-200";
+      case "partial":
+        return "bg-amber-50 text-amber-700 border-amber-200";
+      default:
+        return "bg-gray-100 text-gray-600 border-gray-200";
+    }
+  }
+
   async function handleTest() {
     const validationError = validateModelForm();
     if (validationError) {
@@ -1350,6 +1441,39 @@ export function SettingsView({
       resetModelForm();
     }
     await loadModels();
+  }
+
+  function handleUseDetectedMcpTemplate(server: DetectedExternalMcpServer) {
+    const nextEnv = Object.fromEntries(server.env.map((key) => [key, ""]));
+    setShowMcpEnvJson(server.env.length > 0);
+    setMcpForm({
+      name: server.server_name,
+      command: server.command,
+      args: server.args.join(" "),
+      env: JSON.stringify(nextEnv),
+    });
+  }
+
+  function isKnownSafeDetectedMcpServer(server: DetectedExternalMcpServer) {
+    return (
+      (server.backend_name === "mcporter" && server.command === "mcporter") ||
+      (server.backend_name === "linkedin-mcp" && server.command === "linkedin-mcp")
+    );
+  }
+
+  async function handleImportDetectedMcpServer(server: DetectedExternalMcpServer) {
+    if (!isKnownSafeDetectedMcpServer(server)) {
+      setMcpError("该检测模板暂不支持一键导入，请先使用模板并手动确认。");
+      return;
+    }
+    setMcpError("");
+    try {
+      await invoke("import_detected_external_mcp_server", { server });
+      await loadMcpServers();
+      await loadDetectedExternalMcpServers();
+    } catch (e) {
+      setMcpError(String(e));
+    }
   }
 
   async function handleSetDefaultModel(id: string) {
@@ -1619,6 +1743,7 @@ export function SettingsView({
       )}
 
       {activeTab === "models" && (
+      <>
       <div className="bg-white rounded-lg p-4 space-y-3">
         <div className="flex items-center justify-between mb-2">
           <div className="text-xs font-medium text-gray-500">
@@ -1804,6 +1929,121 @@ export function SettingsView({
           保存后会自动同步到默认路由和健康检查，无需重复配置。
         </div>
       </div>
+      <div className="mt-6 bg-white rounded-lg p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="text-xs font-medium text-gray-500">External Content Providers</div>
+            <div className="mt-1 text-xs text-gray-400">
+              Agent-Reach 仅作为外部内容读取能力源使用，不接管浏览器点击或提交流程。
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => void loadContentProviders()}
+            className="sm-btn rounded-xl border border-gray-200 bg-white px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-100"
+          >
+            {contentProviderLoading ? "刷新中..." : "刷新状态"}
+          </button>
+        </div>
+        <div className="space-y-3" data-testid="settings-content-providers">
+          {contentProviders.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 px-3 py-3 text-xs text-gray-500">
+              暂未检测到外部内容 Provider。
+            </div>
+          ) : (
+            contentProviders.map((provider) => {
+              const diagnostic = contentProviderDiagnostics[provider.provider_id] ?? provider;
+              return (
+                <div
+                  key={provider.provider_id}
+                  className="rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <div className="text-sm font-medium text-gray-800">{provider.provider_id}</div>
+                        <span
+                          className={
+                            "inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium " +
+                            contentProviderAvailabilityClass(diagnostic.availability)
+                          }
+                        >
+                          {contentProviderAvailabilityLabel(diagnostic.availability)}
+                        </span>
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {diagnostic.capabilities.map((capability) => (
+                          <span
+                            key={capability}
+                            className="inline-flex items-center rounded-full bg-white px-2 py-1 text-[11px] text-gray-600"
+                          >
+                            {capability}
+                          </span>
+                        ))}
+                      </div>
+                      {diagnostic.detail ? (
+                        <div className="mt-2 text-xs leading-5 text-gray-500">{diagnostic.detail}</div>
+                      ) : null}
+                    </div>
+                    {provider.provider_id === "agent-reach" ? (
+                      <button
+                        type="button"
+                        onClick={() => void handleRunContentProviderDiagnostics(provider.provider_id)}
+                        className="sm-btn rounded-xl border border-gray-200 bg-white px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-100"
+                      >
+                        Run Diagnostics
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+        {externalSources.map((source) => (
+          <div
+            key={source.source_id}
+            className="rounded-2xl border border-dashed border-gray-200 bg-white px-4 py-3"
+            data-testid={`external-source-${source.source_id}`}
+          >
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-medium text-gray-800">{source.display_name}</div>
+                <div className="mt-1 text-xs text-gray-500">{source.summary}</div>
+              </div>
+              <span
+                className={
+                  "inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium " +
+                  contentProviderAvailabilityClass(source.availability)
+                }
+              >
+                {contentProviderAvailabilityLabel(source.availability)}
+              </span>
+            </div>
+            {source.channels.length > 0 ? (
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                {source.channels.map((channel) => (
+                  <div
+                    key={`${source.source_id}-${channel.channel}`}
+                    className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-2"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-xs font-medium text-gray-700">{channel.channel}</div>
+                      <div className="text-[11px] text-gray-500">
+                        {channel.backend_type} · {channel.backend_name}
+                      </div>
+                    </div>
+                    {channel.detail ? (
+                      <div className="mt-1 text-[11px] leading-4 text-gray-500">{channel.detail}</div>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ))}
+      </div>
+      </>
       )}
       {activeTab === "desktop" && (
       <>
@@ -2754,6 +2994,50 @@ export function SettingsView({
       {/* MCP 服务器管理 */}
       <div className="bg-white rounded-lg p-4 space-y-3">
         <div className="text-xs font-medium text-gray-500 mb-2">MCP 服务器</div>
+
+        {detectedExternalMcpServers.length > 0 && (
+          <div className="space-y-2 mb-3" data-testid="detected-external-mcp-servers">
+            <div className="text-xs font-medium text-gray-500">Detected from Agent-Reach</div>
+            {detectedExternalMcpServers.map((server) => (
+              <div key={`${server.source_id}-${server.server_name}`} className="flex items-center justify-between bg-amber-50 rounded px-3 py-2 text-sm border border-amber-100">
+                <div>
+                  <span className="font-medium">{server.display_name}</span>
+                  <span className="text-gray-500 ml-2 text-xs">
+                    {server.backend_name} · {server.channel} · {server.status}
+                  </span>
+                </div>
+                {(() => {
+                  const imported = server.managed_by_workclaw;
+                  return (
+                <div className="flex items-center gap-3">
+                  <span className="text-[11px] text-amber-700">
+                    {imported ? "Imported" : "Detected only"}
+                  </span>
+                  {!imported && isKnownSafeDetectedMcpServer(server) ? (
+                    <button
+                      type="button"
+                      onClick={() => void handleImportDetectedMcpServer(server)}
+                      className="text-[11px] text-emerald-700 hover:text-emerald-800"
+                    >
+                      Import to WorkClaw
+                    </button>
+                  ) : null}
+                  {!imported ? (
+                    <button
+                      type="button"
+                      onClick={() => handleUseDetectedMcpTemplate(server)}
+                      className="text-[11px] text-blue-600 hover:text-blue-700"
+                    >
+                      Use Template
+                    </button>
+                  ) : null}
+                </div>
+                  );
+                })()}
+              </div>
+            ))}
+          </div>
+        )}
 
         {mcpServers.length > 0 && (
           <div className="space-y-2 mb-3">

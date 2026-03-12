@@ -108,6 +108,43 @@ export interface ProviderHealthInfo {
   message: string;
 }
 
+export interface ContentProviderStatus {
+  provider_id: string;
+  availability: "not_found" | "partial" | "available";
+  capabilities: Array<"read_url" | "search_content" | "extract_media_context" | string>;
+  detail?: string | null;
+}
+
+export interface ExternalCapabilityChannel {
+  channel: string;
+  status: string;
+  backend_type: "cli" | "mcp" | "http" | string;
+  backend_name: string;
+  detail?: string | null;
+}
+
+export interface ExternalCapabilitySourceStatus {
+  source_id: string;
+  display_name: string;
+  availability: "not_found" | "partial" | "available";
+  summary: string;
+  channels: ExternalCapabilityChannel[];
+  detail?: string | null;
+}
+
+export interface DetectedExternalMcpServer {
+  source_id: string;
+  channel: string;
+  server_name: string;
+  display_name: string;
+  status: string;
+  backend_name: string;
+  command: string;
+  args: string[];
+  env: string[];
+  managed_by_workclaw: boolean;
+}
+
 export interface RouteAttemptLog {
   session_id: string;
   capability: string;

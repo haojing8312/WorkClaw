@@ -43,6 +43,95 @@ describe("SettingsView model providers", () => {
       if (command === "list_mcp_servers" || command === "list_provider_configs") {
         return Promise.resolve([]);
       }
+      if (command === "import_detected_external_mcp_server") {
+        return Promise.resolve("mcp-imported-1");
+      }
+      if (command === "list_content_providers") {
+        return Promise.resolve([
+          {
+            provider_id: "builtin-web",
+            availability: "available",
+            capabilities: ["read_url", "search_content"],
+            detail: "Built-in HTTP reader/search fallback",
+          },
+          {
+            provider_id: "agent-reach",
+            availability: "partial",
+            capabilities: ["read_url", "search_content"],
+            detail: "search: ok\nvideo: missing dependency",
+          },
+        ]);
+      }
+      if (command === "list_external_capability_sources") {
+        return Promise.resolve([
+          {
+            source_id: "agent-reach",
+            display_name: "Agent-Reach",
+            availability: "partial",
+            summary: "3 channels detected, 2 MCP-backed",
+            detail: "doctor available",
+            channels: [
+              {
+                channel: "github",
+                status: "available",
+                backend_type: "cli",
+                backend_name: "gh",
+                detail: "github: cli ok via gh",
+              },
+              {
+                channel: "xiaohongshu",
+                status: "available",
+                backend_type: "mcp",
+                backend_name: "mcporter",
+                detail: "xiaohongshu: mcp ok via mcporter",
+              },
+              {
+                channel: "douyin",
+                status: "available",
+                backend_type: "mcp",
+                backend_name: "mcporter",
+                detail: "douyin: mcp ok via mcporter",
+              },
+            ],
+          },
+        ]);
+      }
+      if (command === "list_detected_external_mcp_servers") {
+        return Promise.resolve([
+          {
+            source_id: "agent-reach",
+            channel: "xiaohongshu",
+            server_name: "agent-reach-xiaohongshu",
+            display_name: "xiaohongshu",
+            status: "available",
+            backend_name: "mcporter",
+            command: "mcporter",
+            args: ["serve", "xiaohongshu"],
+            env: [],
+            managed_by_workclaw: false,
+          },
+          {
+            source_id: "agent-reach",
+            channel: "douyin",
+            server_name: "agent-reach-douyin",
+            display_name: "douyin",
+            status: "available",
+            backend_name: "mcporter",
+            command: "mcporter",
+            args: ["serve", "douyin"],
+            env: [],
+            managed_by_workclaw: false,
+          },
+        ]);
+      }
+      if (command === "run_content_provider_diagnostics") {
+        return Promise.resolve({
+          provider_id: payload?.providerId ?? "agent-reach",
+          availability: "available",
+          capabilities: ["read_url", "search_content", "extract_media_context"],
+          detail: "read: ok\nsearch: ok\nmedia: ok",
+        });
+      }
       if (command === "get_model_api_key") {
         return Promise.resolve("sk-existing");
       }
@@ -116,6 +205,138 @@ describe("SettingsView model providers", () => {
     expect(screen.getByTestId("settings-model-provider-custom-guidance")).toHaveTextContent(
       "请向你的中转或代理服务商申请 API Key。",
     );
+  });
+
+  test("shows external content provider status and runs diagnostics", async () => {
+    render(<SettingsView onClose={() => {}} />);
+
+    expect(await screen.findByText("External Content Providers")).toBeInTheDocument();
+    const agentReachCard = screen.getByText("agent-reach").closest("div.rounded-2xl.border.border-gray-200.bg-gray-50");
+    expect(agentReachCard).not.toBeNull();
+    expect(within(agentReachCard!).getByText("Partial")).toBeInTheDocument();
+    expect(within(agentReachCard!).getByText("search: ok video: missing dependency")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Run Diagnostics" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("run_content_provider_diagnostics", {
+        providerId: "agent-reach",
+      });
+    });
+
+    await waitFor(() => {
+      expect(within(agentReachCard!).getByText("Available")).toBeInTheDocument();
+      expect(within(agentReachCard!).getByText("extract_media_context")).toBeInTheDocument();
+    });
+
+    expect(screen.getByText("Agent-Reach")).toBeInTheDocument();
+    expect(screen.getByText("3 channels detected, 2 MCP-backed")).toBeInTheDocument();
+    expect(screen.getByText("github")).toBeInTheDocument();
+    expect(screen.getByText("xiaohongshu")).toBeInTheDocument();
+  });
+
+  test("shows detected external MCP servers in the MCP tab", async () => {
+    render(<SettingsView onClose={() => {}} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "MCP 服务器" }));
+
+    expect(await screen.findByText("Detected from Agent-Reach")).toBeInTheDocument();
+    expect(screen.getByText("xiaohongshu")).toBeInTheDocument();
+    expect(screen.getByText("douyin")).toBeInTheDocument();
+    expect(screen.getAllByText("Detected only")).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: "Import to WorkClaw" })).toHaveLength(2);
+  });
+
+  test("uses detected external MCP template to prefill the MCP form", async () => {
+    render(<SettingsView onClose={() => {}} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "MCP 服务器" }));
+    fireEvent.click(await screen.findAllByRole("button", { name: "Use Template" }).then((items) => items[0]));
+
+    expect(screen.getByDisplayValue("agent-reach-xiaohongshu")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("mcporter")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("serve xiaohongshu")).toBeInTheDocument();
+  });
+
+  test("imports a known safe detected MCP server into WorkClaw", async () => {
+    let imported = false;
+    invokeMock.mockImplementation((command: string, payload?: any) => {
+      if (command === "list_model_configs") return Promise.resolve(mockModels);
+      if (command === "list_search_configs") return Promise.resolve([]);
+      if (command === "get_runtime_preferences") {
+        return Promise.resolve({
+          default_work_dir: "",
+          default_language: "zh-CN",
+          immersive_translation_enabled: true,
+          immersive_translation_display: "translated_only",
+          immersive_translation_trigger: "auto",
+          translation_engine: "model_then_free",
+          translation_model_id: "",
+        });
+      }
+      if (command === "list_provider_configs") return Promise.resolve([]);
+      if (command === "list_content_providers") return Promise.resolve([]);
+      if (command === "list_external_capability_sources") return Promise.resolve([]);
+      if (command === "list_detected_external_mcp_servers") {
+        return Promise.resolve([
+          {
+            source_id: "agent-reach",
+            channel: "xiaohongshu",
+            server_name: "agent-reach-xiaohongshu",
+            display_name: "xiaohongshu",
+            status: "available",
+            backend_name: "mcporter",
+            command: "mcporter",
+            args: ["serve", "xiaohongshu"],
+            env: [],
+            managed_by_workclaw: imported,
+          },
+        ]);
+      }
+      if (command === "list_mcp_servers") {
+        return Promise.resolve(
+          imported
+            ? [
+                {
+                  id: "mcp-imported-1",
+                  name: "agent-reach-xiaohongshu",
+                  command: "mcporter",
+                  args: ["serve", "xiaohongshu"],
+                  env: {},
+                  enabled: true,
+                  created_at: "2026-03-11T00:00:00Z",
+                },
+              ]
+            : [],
+        );
+      }
+      if (command === "import_detected_external_mcp_server") {
+        imported = true;
+        return Promise.resolve("mcp-imported-1");
+      }
+      return Promise.resolve(null);
+    });
+
+    render(<SettingsView onClose={() => {}} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "MCP 服务器" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Import to WorkClaw" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        "import_detected_external_mcp_server",
+        expect.objectContaining({
+          server: expect.objectContaining({
+            server_name: "agent-reach-xiaohongshu",
+            command: "mcporter",
+          }),
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Imported")).toBeInTheDocument();
+    });
   });
 
   test("opens provider docs from settings with explicit desktop command", async () => {

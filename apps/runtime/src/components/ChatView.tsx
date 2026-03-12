@@ -12,12 +12,10 @@ import { RiskConfirmDialog } from "./RiskConfirmDialog";
 import { useImmersiveTranslation } from "../hooks/useImmersiveTranslation";
 import { ChatWorkspaceSidePanel } from "./chat-side-panel/ChatWorkspaceSidePanel";
 import {
-  buildTaskJourneyViewModel,
   buildTaskPanelViewModel,
   buildWebSearchViewModel,
   extractSessionTouchedFiles,
 } from "./chat-side-panel/view-model";
-import { TaskJourneySummary } from "./chat-journey/TaskJourneySummary";
 import { getDefaultModel } from "../lib/default-model";
 
 type ClawhubInstallCandidate = {
@@ -1021,26 +1019,11 @@ export function ChatView({
     ];
   }, [messages, streamItems]);
   const taskPanelModel = useMemo(() => buildTaskPanelViewModel(sidePanelMessages), [sidePanelMessages]);
-  const taskJourneyModel = useMemo(() => buildTaskJourneyViewModel(sidePanelMessages), [sidePanelMessages]);
   const webSearchEntries = useMemo(() => buildWebSearchViewModel(sidePanelMessages), [sidePanelMessages]);
   const touchedFilePaths = useMemo(
     () => extractSessionTouchedFiles(sidePanelMessages).map((item) => item.path),
     [sidePanelMessages]
   );
-  const failedWorkPrompt = useMemo(() => {
-    if (taskJourneyModel.warnings.length === 0) return "";
-    const warningSummary = taskJourneyModel.warnings.join("\n- ");
-    return [
-      `请继续补做失败项，目标任务：${taskJourneyModel.currentTaskTitle || "当前任务"}`,
-      "已生成的文件：",
-      ...(taskJourneyModel.deliverables.length > 0
-        ? taskJourneyModel.deliverables.map((item) => `- ${item.path}`)
-        : ["- 暂无可用产物"]),
-      "待处理问题：",
-      `- ${warningSummary}`,
-      "请直接续做缺失步骤，并在完成后明确说明新增了哪些文件。",
-    ].join("\n");
-  }, [taskJourneyModel]);
   const normalizedSessionMode = (sessionMode || "").trim().toLowerCase();
   const isTeamEntrySession = normalizedSessionMode === "team_entry";
   const isEmployeeDirectSession = normalizedSessionMode === "employee_direct";
@@ -1670,25 +1653,6 @@ export function ChatView({
     return agentState.detail || agentState.state;
   }
 
-  function handleOpenWorkspaceFolder() {
-    if (!workspace) return;
-    void invoke("open_external_url", { url: workspace });
-  }
-
-  function handleViewFilesFromDelivery() {
-    setSidePanelOpen(true);
-    setSidePanelTab("files");
-  }
-
-  function handleResumeFailedWork() {
-    if (!failedWorkPrompt) return;
-    setInput(failedWorkPrompt);
-    requestAnimationFrame(() => {
-      textareaRef.current?.focus();
-      textareaRef.current?.setSelectionRange(failedWorkPrompt.length, failedWorkPrompt.length);
-    });
-  }
-
   return (
     <div className="flex flex-col h-full">
       {/* 头部 */}
@@ -1828,17 +1792,24 @@ export function ChatView({
         {/* 消息列表 */}
         <div className="flex-1 overflow-y-auto p-6 space-y-5">
         {employeeAssistantContext && (
-          <div
-            data-testid="chat-employee-assistant-context"
-            className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-xs text-blue-800"
-          >
-            {employeeAssistantContext.mode === "update"
-              ? `正在修改：${employeeAssistantContext.employeeName || "目标员工"}${
-                  employeeAssistantContext.employeeCode
-                    ? `（${employeeAssistantContext.employeeCode}）`
-                    : ""
-                }`
-              : "正在创建：新智能体员工"}
+          <div className="space-y-3">
+            <div
+              data-testid="chat-employee-assistant-context"
+              className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-xs text-blue-800"
+            >
+              {employeeAssistantContext.mode === "update"
+                ? `正在修改：${employeeAssistantContext.employeeName || "目标员工"}${
+                    employeeAssistantContext.employeeCode
+                      ? `（${employeeAssistantContext.employeeCode}）`
+                      : ""
+                  }`
+                : "正在创建：新智能体员工"}
+            </div>
+            {employeeAssistantContext.mode === "create" && (
+              <div className="max-w-[80%] rounded-2xl border border-blue-100 bg-white px-5 py-4 text-sm text-slate-700 shadow-sm">
+                我会先问 1-2 个关键问题，再给出配置草案，确认后执行创建。
+              </div>
+            )}
           </div>
         )}
         {agentState && (
@@ -2221,13 +2192,6 @@ export function ChatView({
             )}
           </div>
         )}
-        <TaskJourneySummary
-          model={taskJourneyModel}
-          workspace={workspace}
-          onViewFiles={handleViewFilesFromDelivery}
-          onOpenWorkspace={handleOpenWorkspaceFolder}
-          onResumeFailedWork={handleResumeFailedWork}
-        />
         {messages.map((m, i) => {
           const isLatest = i === messages.length - 1;
           const isSessionFocusTarget = highlightedMessageIndex === i;

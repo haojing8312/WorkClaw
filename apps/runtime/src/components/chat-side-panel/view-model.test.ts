@@ -237,6 +237,15 @@ describe("chat side panel view-model", () => {
     ]);
   });
 
+  test("keeps empty journey state free of default processing labels", () => {
+    const model = buildTaskJourneyViewModel([]);
+
+    expect(model.currentTaskTitle).toBe("");
+    expect(model.steps).toEqual([]);
+    expect(model.deliverables).toEqual([]);
+    expect(model.warnings).toEqual([]);
+  });
+
   test("builds fallback task panel summary from tool journey when todo_write is missing", () => {
     const model = buildTaskPanelViewModel([
       {

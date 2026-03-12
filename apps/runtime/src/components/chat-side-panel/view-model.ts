@@ -125,7 +125,7 @@ function inferCurrentTaskTitle(toolCalls: ToolCallInfo[]): string {
   if (latestSearch) {
     return "搜索资料";
   }
-  return "处理中";
+  return "";
 }
 
 function buildRunningToolTitle(toolCall: ToolCallInfo | undefined): string {
