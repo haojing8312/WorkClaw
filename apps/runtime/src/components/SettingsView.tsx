@@ -7,6 +7,7 @@ import {
   buildModelFormFromCatalogItem,
   getModelProviderCatalogItem,
   resolveCatalogItemForConfig,
+  resolveCatalogItemForProviderIdentity,
 } from "../model-provider-catalog";
 import { openExternalUrl } from "../utils/openExternalUrl";
 import { SearchConfigForm } from "./SearchConfigForm";
@@ -349,11 +350,16 @@ export function SettingsView({
     return "openai";
   }
 
-  async function syncConnectionToRouting(model: ModelConfig, apiKey: string) {
+  async function syncConnectionToRouting(
+    model: ModelConfig,
+    apiKey: string,
+    preferredProviderKey?: string,
+  ) {
     await invoke("save_provider_config", {
       config: {
         id: model.id,
-        provider_key: inferConnectionKey(model.base_url, model.api_format),
+        provider_key:
+          preferredProviderKey || inferConnectionKey(model.base_url, model.api_format),
         display_name: model.name || model.model_name || model.id,
         protocol_type: model.api_format === "anthropic" ? "anthropic" : "openai",
         base_url: model.base_url,
@@ -367,11 +373,18 @@ export function SettingsView({
   }
 
   async function syncModelConnections(modelList: ModelConfig[]) {
+    let existingProviders: ProviderConfig[] = [];
+    try {
+      existingProviders = await invoke<ProviderConfig[]>("list_provider_configs");
+    } catch (e) {
+      console.warn("读取已保存 Provider 配置失败:", e);
+    }
     await Promise.all(
       modelList.map(async (model) => {
         try {
           const apiKey = await invoke<string>("get_model_api_key", { modelId: model.id });
-          await syncConnectionToRouting(model, apiKey);
+          const existingProviderKey = existingProviders.find((provider) => provider.id === model.id)?.provider_key;
+          await syncConnectionToRouting(model, apiKey, existingProviderKey);
         } catch (e) {
           console.warn("同步连接配置失败:", model.id, e);
         }
@@ -1210,13 +1223,16 @@ export function SettingsView({
   async function handleEditModel(m: ModelConfig) {
     try {
       const apiKey = await invoke<string>("get_model_api_key", { modelId: m.id });
-      const provider = resolveCatalogItemForConfig({
-        api_format: m.api_format === "anthropic" ? "anthropic" : "openai",
-        base_url: m.base_url,
+      const apiFormat = m.api_format === "anthropic" ? "anthropic" : "openai";
+      const providerConfig = providers.find((item) => item.id === m.id);
+      const provider = resolveCatalogItemForProviderIdentity({
+        providerKey: providerConfig?.provider_key,
+        apiFormat,
+        baseUrl: m.base_url,
       });
       setForm({
         name: m.name,
-        api_format: m.api_format === "anthropic" ? "anthropic" : "openai",
+        api_format: apiFormat,
         base_url: m.base_url,
         model_name: m.model_name,
         api_key: apiKey,
@@ -1277,6 +1293,19 @@ export function SettingsView({
         },
         apiKey: form.api_key.trim(),
       });
+      const preferredProviderKey = getModelProviderCatalogItem(selectedModelProviderId).providerKey;
+      await syncConnectionToRouting(
+        {
+          id: savedModelId,
+          name: form.name.trim(),
+          api_format: form.api_format,
+          base_url: form.base_url.trim(),
+          model_name: form.model_name.trim(),
+          is_default: isCreateMode ? true : models.find((m) => m.id === editingModelId)?.is_default ?? false,
+        },
+        form.api_key.trim(),
+        preferredProviderKey,
+      );
       if (isCreateMode) {
         await invoke("set_default_model", { modelId: savedModelId });
         nextSaveMessage = "已保存，并切换为默认模型";

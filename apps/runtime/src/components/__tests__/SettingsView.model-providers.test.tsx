@@ -572,4 +572,38 @@ describe("SettingsView model providers", () => {
     expect(await screen.findByText("已保存")).toBeInTheDocument();
     expect(screen.queryByText("已保存，并切换为默认模型")).not.toBeInTheDocument();
   });
+
+  test("preserves minimax provider key when saving through a proxy base url", async () => {
+    render(<SettingsView onClose={() => {}} />);
+
+    const providerSelect = await screen.findByTestId("settings-model-provider-preset");
+    fireEvent.change(providerSelect, {
+      target: { value: "minimax-openai" },
+    });
+    fireEvent.change(screen.getByTestId("settings-model-provider-base-url"), {
+      target: { value: "http://111.51.78.135:8060/" },
+    });
+    fireEvent.change(screen.getByTestId("settings-model-provider-model-name"), {
+      target: { value: "MiniMax-M2.5" },
+    });
+    fireEvent.change(screen.getByTestId("settings-model-provider-api-key"), {
+      target: { value: "sk-minimax-proxy-123" },
+    });
+
+    fireEvent.click(screen.getByTestId("settings-model-provider-save"));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        "save_provider_config",
+        expect.objectContaining({
+          config: expect.objectContaining({
+            id: "model-1",
+            provider_key: "minimax",
+            protocol_type: "openai",
+            base_url: "http://111.51.78.135:8060/",
+          }),
+        }),
+      );
+    });
+  });
 });

@@ -4,6 +4,7 @@ import {
   MODEL_PROVIDER_CATALOG,
   buildModelFormFromCatalogItem,
   resolveCatalogItemForConfig,
+  resolveCatalogItemForProviderIdentity,
 } from "../model-provider-catalog";
 
 describe("model provider catalog", () => {
@@ -71,5 +72,16 @@ describe("model provider catalog", () => {
 
     expect(item.id).toBe("custom-anthropic");
     expect(item.isCustom).toBe(true);
+  });
+
+  test("preserves unique official provider identity when base url is proxied", () => {
+    const item = resolveCatalogItemForProviderIdentity({
+      providerKey: "minimax",
+      apiFormat: "openai",
+      baseUrl: "http://111.51.78.135:8060/",
+    });
+
+    expect(item.id).toBe("minimax-openai");
+    expect(item.providerKey).toBe("minimax");
   });
 });

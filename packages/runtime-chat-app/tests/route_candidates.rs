@@ -4,13 +4,15 @@ use runtime_chat_app::{
     ChatSettingsRepository, PreparedRouteCandidate, ProviderConnectionSnapshot,
     RoutingSettingsSnapshot, SessionModelSnapshot,
 };
+use std::collections::HashMap;
 
 struct FakeRouteRepo {
     routing: RoutingSettingsSnapshot,
     requested_route: Option<ChatRoutePolicySnapshot>,
     chat_route: Option<ChatRoutePolicySnapshot>,
     providers: Vec<ProviderConnectionSnapshot>,
-    session_model: SessionModelSnapshot,
+    session_models: HashMap<String, SessionModelSnapshot>,
+    default_usable_model_id: Option<String>,
 }
 
 #[async_trait]
@@ -30,7 +32,7 @@ impl ChatSettingsRepository for FakeRouteRepo {
     }
 
     async fn resolve_default_usable_model_id(&self) -> Result<Option<String>, String> {
-        Ok(None)
+        Ok(self.default_usable_model_id.clone())
     }
 
     async fn load_route_policy(
@@ -55,8 +57,11 @@ impl ChatSettingsRepository for FakeRouteRepo {
             .cloned())
     }
 
-    async fn load_session_model(&self, _model_id: &str) -> Result<SessionModelSnapshot, String> {
-        Ok(self.session_model.clone())
+    async fn load_session_model(&self, model_id: &str) -> Result<SessionModelSnapshot, String> {
+        self.session_models
+            .get(model_id)
+            .cloned()
+            .ok_or_else(|| format!("模型配置不存在 (model_id={model_id})"))
     }
 }
 
@@ -97,13 +102,17 @@ async fn prepare_route_candidates_prefers_requested_capability_route() {
                 api_key: "sk-anthropic".to_string(),
             },
         ],
-        session_model: SessionModelSnapshot {
-            model_id: "model-1".to_string(),
-            api_format: "openai".to_string(),
-            base_url: "https://fallback.example.com".to_string(),
-            model_name: "session-model".to_string(),
-            api_key: "sk-session".to_string(),
-        },
+        session_models: HashMap::from([(
+            "model-1".to_string(),
+            SessionModelSnapshot {
+                model_id: "model-1".to_string(),
+                api_format: "openai".to_string(),
+                base_url: "https://fallback.example.com".to_string(),
+                model_name: "session-model".to_string(),
+                api_key: "sk-session".to_string(),
+            },
+        )]),
+        default_usable_model_id: None,
     };
 
     let prepared = ChatPreparationService::new()
@@ -168,13 +177,17 @@ async fn prepare_route_candidates_falls_back_to_chat_route_when_capability_missi
             base_url: "https://chat.example.com/v1".to_string(),
             api_key: "sk-chat".to_string(),
         }],
-        session_model: SessionModelSnapshot {
-            model_id: "model-1".to_string(),
-            api_format: "openai".to_string(),
-            base_url: "https://fallback.example.com".to_string(),
-            model_name: "session-model".to_string(),
-            api_key: "sk-session".to_string(),
-        },
+        session_models: HashMap::from([(
+            "model-1".to_string(),
+            SessionModelSnapshot {
+                model_id: "model-1".to_string(),
+                api_format: "openai".to_string(),
+                base_url: "https://fallback.example.com".to_string(),
+                model_name: "session-model".to_string(),
+                api_key: "sk-session".to_string(),
+            },
+        )]),
+        default_usable_model_id: None,
     };
 
     let prepared = ChatPreparationService::new()
@@ -193,4 +206,54 @@ async fn prepare_route_candidates_falls_back_to_chat_route_when_capability_missi
 
     assert_eq!(prepared.retry_count_per_candidate, 1);
     assert_eq!(prepared.candidates[0].model_name, "session-model");
+}
+
+#[tokio::test]
+async fn stale_model_id_falls_back_to_default_usable_model() {
+    let repo = FakeRouteRepo {
+        routing: RoutingSettingsSnapshot {
+            max_call_depth: 4,
+            node_timeout_seconds: 60,
+            retry_count: 0,
+        },
+        requested_route: None,
+        chat_route: None,
+        providers: vec![],
+        session_models: HashMap::from([(
+            "model-live".to_string(),
+            SessionModelSnapshot {
+                model_id: "model-live".to_string(),
+                api_format: "openai".to_string(),
+                base_url: "https://proxy.example.com/v1".to_string(),
+                model_name: "MiniMax-M2.5".to_string(),
+                api_key: "sk-live".to_string(),
+            },
+        )]),
+        default_usable_model_id: Some("model-live".to_string()),
+    };
+
+    let prepared = ChatPreparationService::new()
+        .prepare_route_candidates(
+            &repo,
+            "model-stale",
+            &ChatPreparationRequest {
+                user_message: "你好".to_string(),
+                permission_mode: None,
+                session_mode: None,
+                team_id: None,
+            },
+        )
+        .await
+        .expect("fallback candidates");
+
+    assert_eq!(prepared.retry_count_per_candidate, 0);
+    assert_eq!(
+        prepared.candidates,
+        vec![PreparedRouteCandidate {
+            protocol_type: "openai".to_string(),
+            base_url: "https://proxy.example.com/v1".to_string(),
+            model_name: "MiniMax-M2.5".to_string(),
+            api_key: "sk-live".to_string(),
+        }]
+    );
 }

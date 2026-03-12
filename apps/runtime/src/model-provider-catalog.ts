@@ -326,3 +326,34 @@ export function resolveCatalogItemForConfig(
 
   return getModelProviderCatalogItem("custom-openai");
 }
+
+export function resolveCatalogItemForProviderIdentity(input: {
+  providerKey?: string;
+  apiFormat: string;
+  baseUrl: string;
+}): ModelProviderCatalogItem {
+  const exactMatch = resolveCatalogItemForConfig({
+    api_format: input.apiFormat,
+    base_url: input.baseUrl,
+  });
+
+  if (!exactMatch.isCustom) {
+    return exactMatch;
+  }
+
+  const normalizedProviderKey = (input.providerKey || "").trim().toLowerCase();
+  if (normalizedProviderKey) {
+    const providerMatches = MODEL_PROVIDER_CATALOG.filter(
+      (item) =>
+        !item.isCustom &&
+        item.providerKey === normalizedProviderKey &&
+        item.apiFormat === input.apiFormat,
+    );
+
+    if (providerMatches.length === 1) {
+      return providerMatches[0];
+    }
+  }
+
+  return exactMatch;
+}
