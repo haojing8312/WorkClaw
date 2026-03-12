@@ -2,6 +2,7 @@ pub mod agent_profile;
 pub mod browser_bridge_install;
 pub mod channel_connectors;
 pub mod chat;
+pub(crate) mod chat_compaction;
 pub mod chat_repo;
 pub(crate) mod chat_route_execution;
 pub(crate) mod chat_runtime_io;

@@ -1,8 +1,8 @@
+use super::chat_compaction;
 use super::chat_runtime_io as chat_io;
 use super::chat_send_message_flow::{self, PrepareSendMessageParams};
 use super::chat_session_io;
 use super::skills::DbState;
-use crate::agent::compactor;
 use crate::agent::permissions::PermissionMode;
 use crate::agent::tools::search_providers::cache::SearchCache;
 use crate::agent::tools::AskUserResponder;
@@ -10,7 +10,6 @@ use crate::agent::AgentExecutor;
 use crate::session_journal::{
     SessionJournalStateHandle, SessionJournalStore,
 };
-use runtime_executor_core::estimate_tokens;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -864,13 +863,7 @@ pub async fn cancel_agent(cancel_flag: State<'_, CancelFlagState>) -> Result<(),
     Ok(())
 }
 
-/// 压缩结果
-#[derive(serde::Serialize)]
-pub struct CompactionResult {
-    original_tokens: usize,
-    new_tokens: usize,
-    summary: String,
-}
+pub use super::chat_compaction::CompactionResult;
 
 /// 手动触发上下文压缩
 #[tauri::command]
@@ -879,48 +872,6 @@ pub async fn compact_context(
     db: State<'_, DbState>,
     app: AppHandle,
 ) -> Result<CompactionResult, String> {
-    let (messages, api_format, base_url, api_key, model_name) =
-        chat_session_io::load_compaction_inputs_with_pool(&db.0, &session_id).await?;
-
-    // 2. 估算原始 token 数
-    let original_tokens = estimate_tokens(&messages);
-
-    // 4. 创建 transcript 目录
     let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let transcript_dir = app_data_dir.join("transcripts");
-    std::fs::create_dir_all(&transcript_dir).map_err(|e| e.to_string())?;
-
-    // 5. 保存完整记录并压缩
-    let transcript_path = compactor::save_transcript(&transcript_dir, &session_id, &messages)
-        .map_err(|e| e.to_string())?;
-
-    let compacted = compactor::auto_compact(
-        &api_format,
-        &base_url,
-        &api_key,
-        &model_name,
-        &messages,
-        &transcript_path.to_string_lossy(),
-    )
-    .await
-    .map_err(|e| e.to_string())?;
-
-    // 6. 更新会话消息（删除旧消息，插入压缩后的消息）
-    chat_session_io::replace_messages_with_compacted_with_pool(&db.0, &session_id, &compacted)
-        .await?;
-
-    // 7. 返回结果
-    let new_tokens = estimate_tokens(&compacted);
-    let summary = compacted
-        .iter()
-        .find(|m| m["role"] == "user")
-        .and_then(|m| m["content"].as_str())
-        .unwrap_or("")
-        .to_string();
-
-    Ok(CompactionResult {
-        original_tokens,
-        new_tokens,
-        summary,
-    })
+    chat_compaction::compact_context_with_pool(&db.0, &session_id, &app_data_dir).await
 }
