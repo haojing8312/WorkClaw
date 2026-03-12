@@ -269,31 +269,6 @@ mod tests {
 
 pub use super::chat_session_commands::export_session_markdown_with_pool;
 
-#[cfg(test)]
-mod session_source_tests {
-    use super::chat_session_io::resolve_im_session_source;
-
-    #[test]
-    fn resolve_im_session_source_maps_wecom_and_feishu_labels() {
-        assert_eq!(
-            resolve_im_session_source(Some("wecom")),
-            ("wecom".to_string(), "企业微信".to_string())
-        );
-        assert_eq!(
-            resolve_im_session_source(Some("feishu")),
-            ("feishu".to_string(), "飞书".to_string())
-        );
-        assert_eq!(
-            resolve_im_session_source(Some("")),
-            ("local".to_string(), String::new())
-        );
-        assert_eq!(
-            resolve_im_session_source(None),
-            ("local".to_string(), String::new())
-        );
-    }
-}
-
 pub use super::chat_compaction::CompactionResult;
 
 /// 手动触发上下文压缩
