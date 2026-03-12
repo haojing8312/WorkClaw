@@ -12,7 +12,7 @@
 
 ## 当前状态
 
-截至 `2026-03-11`，本仓库已完成以下基础能力：
+截至 `2026-03-12`，本仓库已完成以下基础能力：
 
 - 浏览器桥共享协议与 Feishu setup 状态模型
 - Tauri 侧 Feishu setup session store
@@ -24,14 +24,16 @@
 - native-host framing 与本地 HTTP bridge client
 - sidecar 已提供 `/api/browser-bridge/native-message` 真实接收路由
 - 桌面端会启动本地 Rust callback server，并通过环境变量把 callback URL 注入 sidecar
-- 员工中心设置页中的“飞书浏览器配置向导”入口
+- 设置页中的“浏览器桥接安装”与“飞书浏览器配置向导”入口
+- 设置页可读取浏览器桥接安装状态，并在“等待启用”阶段自动轮询
+- 扩展启用后会发送最小 `bridge.hello` 握手，用于把安装状态切换为 `connected`
 - Windows 下 Chrome native host manifest 生成脚本
 
 尚未完全接通的部分：
 
 - 飞书后台真实页面的稳定 selector/step detector
+- Windows 安装命令的真实文件写入与扩展目录准备仍是 stub
 - native host 可执行入口与安装后的真实浏览器端到端联调
-- callback server 已能完成本地 session 推进，但还没做桌面 UI 的自动刷新订阅
 
 ## 目录结构
 
@@ -44,7 +46,14 @@
 - 安装脚本：
   - `scripts/install-chrome-native-host.mjs`
 
-## 安装链路（当前设计）
+## 一键安装链路（当前设计）
+
+产品入口位于现有 `设置` 页签，分成两段：
+
+1. `安装浏览器桥接`
+2. `启动飞书浏览器配置`
+
+第一段负责自动准备本地桥接环境，并把用户带到 Chrome 的最后一步启用；第二段负责真正进入飞书后台配置流程。
 
 ### 1. 安装 Chrome 扩展
 
@@ -53,6 +62,19 @@
 - `apps/runtime/src/browser-bridge/chrome-extension/manifest.json`
 
 后续需要把这套代码打包为实际扩展产物，再在 Chrome 中加载。
+
+普通用户版的一键安装目标是：
+
+- 自动安装 native host
+- 自动准备 WorkClaw 扩展目录
+- 自动打开 Chrome 扩展页
+- 在桌面端持续显示 `未安装 -> 等待启用 -> 已连接`
+
+第一版仍然保留最后一步人工确认：
+
+- 用户需要在 Chrome 中开启开发者模式
+- 用户需要手动点击“加载已解压的扩展程序”
+- 用户需要选择 WorkClaw 已准备好的扩展目录
 
 ### 2. 安装 Native Messaging Host Manifest
 
@@ -103,27 +125,35 @@ manifest 内容包含：
 
 ## 预期用户路径
 
-1. 用户在 WorkClaw 员工中心设置页点击“启动飞书浏览器配置”
-2. WorkClaw 创建本地 setup session
-3. 用户默认 Chrome 打开 `https://open.feishu.cn/`
+1. 用户在 WorkClaw 设置页点击“安装浏览器桥接”
+2. WorkClaw 安装 native host，并准备扩展目录
+3. WorkClaw 打开 Chrome 扩展页和扩展目录
+4. 用户在 Chrome 中开启开发者模式并加载 WorkClaw 扩展
+5. 扩展 background 启动后发送 `bridge.hello`
+6. sidecar / callback server 标记本地浏览器桥接为 `connected`
+7. 设置页显示“浏览器桥接已启用，可以开始飞书配置”
+8. 用户点击“启动飞书浏览器配置”
+9. WorkClaw 创建本地 setup session
+10. 用户默认 Chrome 打开 `https://open.feishu.cn/`
    - 实际 URL 现会带上 `?workclaw_session_id=<session_id>`
-4. 扩展识别当前页面：
+11. 扩展识别当前页面：
    - 未登录：提示用户先登录
    - 凭证页：读取 `App ID / App Secret`
-5. content script 通过扩展 runtime 把凭据发送给 background
-6. background 优先通过 `chrome.runtime.connectNative` 把凭据发送到本地；若不可用，则回退到 sidecar 的 `/api/browser-bridge/native-message`
-7. sidecar 在配置了 `WORKCLAW_BROWSER_BRIDGE_CALLBACK_URL` 时，会把 envelope 转发到桌面端 callback server
-8. 桌面端 callback server 调用 `FeishuBrowserSetupStore::report_credentials_and_bind(...)`
-9. WorkClaw 写入现有飞书设置键：
+12. content script 通过扩展 runtime 把凭据发送给 background
+13. background 优先通过 `chrome.runtime.connectNative` 把凭据发送到本地；若不可用，则回退到 sidecar 的 `/api/browser-bridge/native-message`
+14. sidecar 在配置了 `WORKCLAW_BROWSER_BRIDGE_CALLBACK_URL` 时，会把 envelope 转发到桌面端 callback server
+15. 桌面端 callback server 调用 `FeishuBrowserSetupStore::report_credentials_and_bind(...)`
+16. WorkClaw 写入现有飞书设置键：
    - `feishu_app_id`
    - `feishu_app_secret`
-10. UI 状态推进到 `ENABLE_LONG_CONNECTION`
+17. UI 状态推进到 `ENABLE_LONG_CONNECTION`
 
 ## 当前限制
 
 - 凭证提取当前同时支持测试用 `data-field` 与简单的标签/相邻文本模式，但还没覆盖真实飞书后台全部 DOM 变体
 - native host transport 已有 runner 脚本、launcher 安装能力、sidecar 接收端和 Rust callback server，但尚未做真实 Chrome 扩展安装后的端到端联调
-- UI 当前仍靠手动重试/重新查询 session，尚未在 callback 成功后自动推送刷新
+- 当前 `install_browser_bridge` 仍是命令面 stub，Windows 真正写 manifest / launcher / 扩展目录准备将在后续任务补齐
+- 浏览器桥接“已连接”基于最近一次 hello 心跳判断，不是完整的健康探针
 - Windows 环境下 Rust 验证仍建议使用独立 `CARGO_HOME`，以避开系统 Cargo cache 锁争用
 
 ## 安全边界
@@ -138,7 +168,7 @@ manifest 内容包含：
 前端测试：
 
 ```bash
-pnpm --dir apps/runtime test src/browser-bridge/shared/__tests__/protocol.test.ts src/browser-bridge/shared/__tests__/feishu-setup.test.ts src/browser-bridge/native-host/__tests__/native-host.test.ts src/browser-bridge/chrome-extension/__tests__/feishu-detector.test.ts src/browser-bridge/chrome-extension/__tests__/content.test.ts src/browser-bridge/chrome-extension/__tests__/background.test.ts src/components/employees/__tests__/FeishuBrowserSetupView.test.tsx src/components/employees/__tests__/EmployeeHubView.browser-setup.test.tsx
+CI=1 pnpm --dir apps/runtime test src/browser-bridge/shared/__tests__/protocol.test.ts src/browser-bridge/shared/__tests__/feishu-setup.test.ts src/browser-bridge/native-host/__tests__/native-host.test.ts src/browser-bridge/chrome-extension/__tests__/feishu-detector.test.ts src/browser-bridge/chrome-extension/__tests__/content.test.ts src/browser-bridge/chrome-extension/__tests__/background.test.ts src/components/employees/__tests__/BrowserBridgeInstallCard.test.tsx src/components/employees/__tests__/FeishuBrowserSetupView.test.tsx src/components/employees/__tests__/EmployeeHubView.browser-setup.test.tsx
 ```
 
 脚本测试：
@@ -153,6 +183,11 @@ Rust 测试：
 cd apps/runtime/src-tauri
 cargo test --test test_feishu_browser_setup --test test_feishu_browser_setup_binding -- --nocapture
 ```
+
+已知本机环境说明：
+
+- 这台 Windows 开发机上，Vitest 需要显式设置 `CI=1` 才会稳定退出
+- `apps/runtime/sidecar/test/browser-bridge-endpoints.test.ts` 当前可能受到本机 `tsx + playwright-core` 环境异常影响，需和代码断言失败区分开
 
 ## 后续优先事项
 

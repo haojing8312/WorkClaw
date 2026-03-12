@@ -24,6 +24,7 @@ WorkClaw is a beginner-friendly OpenClaw desktop agent distribution that removes
 - Documentation: [docs/](docs/)
 - Operations Manual: [Feishu Wiki](https://my.feishu.cn/wiki/ElrEwHGi7ia78HkKcYXcsVYnnfe)
 - Feishu browser setup guide: [docs/integrations/feishu-browser-setup.md](docs/integrations/feishu-browser-setup.md)
+  - Includes the ordinary-user one-click browser bridge install flow, with the final enable step confirmed in Chrome
 - Releases: [Releases](https://github.com/haojing8312/WorkClaw/releases)
 - Roadmap: [Roadmap](#roadmap)
 - Contributing & support: [CONTRIBUTING.md](CONTRIBUTING.md) · [SUPPORT.md](SUPPORT.md)
