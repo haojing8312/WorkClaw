@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "WorkClaw Feishu Bridge",
+  "version": "0.0.1",
+  "permissions": ["nativeMessaging", "tabs"],
+  "host_permissions": ["https://open.feishu.cn/*"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://open.feishu.cn/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

@@ -1,5 +1,6 @@
 mod adapters;
 pub mod agent;
+pub mod browser_bridge_callback;
 mod builtin_skills;
 pub mod commands;
 pub mod content_providers;
@@ -12,6 +13,7 @@ pub mod team_templates;
 use agent::tools::new_responder;
 use agent::tools::search_providers::cache::SearchCache;
 use agent::{AgentExecutor, ToolRegistry};
+use browser_bridge_callback::BrowserBridgeCallbackServer;
 use commands::chat::{
     AskUserState, CancelFlagState, SearchCacheState, ToolConfirmResponder, ToolConfirmState,
 };
@@ -266,6 +268,21 @@ pub fn run() {
             let pool = tauri::async_runtime::block_on(db::init_db(app.handle()))
                 .expect("failed to init db");
             let handles = initialize_runtime_state(app, pool.clone());
+            let feishu_browser_setup_state =
+                commands::feishu_browser_setup::FeishuBrowserSetupState::default();
+            app.manage(feishu_browser_setup_state.clone());
+            let browser_bridge_callback = Arc::new(BrowserBridgeCallbackServer::new(
+                pool.clone(),
+                feishu_browser_setup_state.0.clone(),
+            ));
+            let browser_bridge_callback_base =
+                tauri::async_runtime::block_on(browser_bridge_callback.start())
+                    .expect("failed to start browser bridge callback server");
+            handles.sidecar_manager.set_env_var(
+                "WORKCLAW_BROWSER_BRIDGE_CALLBACK_URL",
+                format!("{}/browser-bridge/callback", browser_bridge_callback_base),
+            );
+            app.manage(browser_bridge_callback);
             apply_startup_preferences(app, &pool);
             spawn_sidecar_bootstrap(handles.sidecar_manager.clone());
             restore_saved_mcp_servers(pool.clone(), Arc::clone(&handles.registry));
@@ -353,6 +370,9 @@ pub fn run() {
             commands::chat::cancel_agent,
             commands::chat::compact_context,
             commands::feishu_gateway::handle_feishu_event,
+            commands::feishu_browser_setup::start_feishu_browser_setup,
+            commands::feishu_browser_setup::get_feishu_browser_setup_session,
+            commands::feishu_browser_setup::apply_feishu_browser_setup_event,
             commands::feishu_gateway::send_feishu_text_message,
             commands::feishu_gateway::list_feishu_chats,
             commands::feishu_gateway::push_role_summary_to_feishu,

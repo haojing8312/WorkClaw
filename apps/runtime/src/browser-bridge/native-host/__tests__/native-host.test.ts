@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { decodeNativeMessage, encodeNativeMessage } from "../index";
+import { createBridgeClient } from "../client";
+import { decodeNativeMessage, encodeNativeMessage, processNativeHostFrame } from "../index";
 
 describe("native messaging framing", () => {
   it("round-trips a bridge envelope", () => {
@@ -10,10 +12,73 @@ describe("native messaging framing", () => {
       payload: { type: "session.start", provider: "feishu" },
     });
 
-    expect(decodeNativeMessage(encoded)).toMatchObject({
+  expect(decodeNativeMessage(encoded)).toMatchObject({
       sessionId: "sess-1",
       kind: "request",
       payload: { type: "session.start", provider: "feishu" },
+    });
+  });
+
+  it("posts the decoded envelope to the local bridge endpoint", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const client = createBridgeClient("http://127.0.0.1:4312", async (url, init) => {
+      calls.push({ url: String(url), init });
+      return new Response(
+        JSON.stringify({
+          version: 1,
+          sessionId: "sess-1",
+          kind: "response",
+          payload: { type: "action.detect_step" },
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    });
+
+    const response = await client.send({
+      version: 1,
+      sessionId: "sess-1",
+      kind: "request",
+      payload: { type: "session.start", provider: "feishu" },
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toBe("http://127.0.0.1:4312/api/browser-bridge/native-message");
+    expect(response).toMatchObject({
+      kind: "response",
+      payload: { type: "action.detect_step" },
+    });
+  });
+
+  it("processes a native host frame and returns the encoded bridge response", async () => {
+    const input = encodeNativeMessage({
+      version: 1,
+      sessionId: "sess-2",
+      kind: "request",
+      payload: { type: "credentials.report", appId: "cli_123", appSecret: "sec_456" },
+    });
+
+    const output = await processNativeHostFrame(input, async (envelope) => {
+      expect(envelope).toMatchObject({
+        sessionId: "sess-2",
+        payload: { type: "credentials.report", appId: "cli_123", appSecret: "sec_456" },
+      });
+
+      return {
+        version: 1,
+        sessionId: "sess-2",
+        kind: "response",
+        payload: { type: "action.pause", reason: "saved" },
+      };
+    });
+
+    expect(decodeNativeMessage(output as Buffer)).toMatchObject({
+      version: 1,
+      sessionId: "sess-2",
+      kind: "response",
+      payload: { type: "action.pause", reason: "saved" },
     });
   });
 });

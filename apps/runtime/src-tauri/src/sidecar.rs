@@ -1,4 +1,5 @@
 use anyhow::Result;
+use std::collections::HashMap;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 
@@ -7,6 +8,7 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 pub struct SidecarManager {
     process: Arc<Mutex<Option<Child>>>,
+    env_vars: Arc<Mutex<HashMap<String, String>>>,
     url: String,
 }
 
@@ -14,6 +16,7 @@ impl SidecarManager {
     pub fn new() -> Self {
         Self {
             process: Arc::new(Mutex::new(None)),
+            env_vars: Arc::new(Mutex::new(HashMap::new())),
             url: "http://localhost:8765".to_string(),
         }
     }
@@ -41,6 +44,9 @@ impl SidecarManager {
             .arg(&sidecar_script)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        for (key, value) in self.env_vars.lock().unwrap().iter() {
+            command.env(key, value);
+        }
 
         #[cfg(target_os = "windows")]
         {
@@ -86,6 +92,13 @@ impl SidecarManager {
 
     pub fn url(&self) -> &str {
         &self.url
+    }
+
+    pub fn set_env_var(&self, key: impl Into<String>, value: impl Into<String>) {
+        self.env_vars
+            .lock()
+            .unwrap()
+            .insert(key.into(), value.into());
     }
 }
 

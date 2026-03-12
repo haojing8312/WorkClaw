@@ -39,4 +39,5 @@ apps/runtime/test-results/
 /x.l.includes('employees')
 apps/runtime/src-tauri/target-tests/
 apps/runtime/src-tauri/target-verify/
+.cargo-local/
 .learnings/

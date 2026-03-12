@@ -10,6 +10,7 @@ import {
   AgentProfileFilesView,
   EmployeeMemoryExport,
   EmployeeMemoryStats,
+  FeishuBrowserSetupSession,
   FeishuEmployeeConnectionStatuses,
   FeishuEmployeeWsStatus,
   RuntimePreferences,
@@ -19,6 +20,7 @@ import {
   WecomGatewaySettings,
 } from "../../types";
 import { RiskConfirmDialog } from "../RiskConfirmDialog";
+import { FeishuBrowserSetupView } from "./FeishuBrowserSetupView";
 import {
   EmployeeHubEmployeeFilter,
   EmployeeHubRunFilter,
@@ -60,6 +62,12 @@ type GroupTemplateConfig = {
 };
 
 type EmployeeHubTab = "overview" | "employees" | "teams" | "runs" | "settings";
+
+const FEISHU_BROWSER_SETUP_POLL_INTERVAL_MS = 5000;
+
+function isFeishuBrowserSetupTerminalStep(step: string): boolean {
+  return step === "ENABLE_LONG_CONNECTION" || step === "FAILED";
+}
 
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
@@ -121,6 +129,9 @@ export function EmployeeHubView({
   const [feishuStatuses, setFeishuStatuses] = useState<FeishuEmployeeConnectionStatuses | null>(null);
   const [globalDefaultWorkDir, setGlobalDefaultWorkDir] = useState("");
   const [savingGlobalWorkDir, setSavingGlobalWorkDir] = useState(false);
+  const [startingBrowserSetup, setStartingBrowserSetup] = useState(false);
+  const [feishuBrowserSetupSession, setFeishuBrowserSetupSession] =
+    useState<FeishuBrowserSetupSession | null>(null);
   const [pendingDeleteEmployee, setPendingDeleteEmployee] = useState<{ id: string; name: string } | null>(null);
   const [memoryScopeSkillId, setMemoryScopeSkillId] = useState("__all__");
   const [memoryStats, setMemoryStats] = useState<EmployeeMemoryStats | null>(null);
@@ -260,6 +271,79 @@ export function EmployeeHubView({
       setRecentRuns([]);
     }
   }
+
+  async function startFeishuBrowserSetup() {
+    setStartingBrowserSetup(true);
+    setMessage("");
+    try {
+      const session = await invoke<FeishuBrowserSetupSession>("start_feishu_browser_setup", {
+        provider: "feishu",
+      });
+      setFeishuBrowserSetupSession(session);
+      const query = session.session_id
+        ? `?workclaw_session_id=${encodeURIComponent(session.session_id)}`
+        : "";
+      await invoke("open_external_url", {
+        url: `https://open.feishu.cn/${query}`,
+      });
+    } catch (error) {
+      setMessage(String(error));
+    } finally {
+      setStartingBrowserSetup(false);
+    }
+  }
+
+  async function retryFeishuBrowserSetup() {
+    if (!feishuBrowserSetupSession) return;
+    try {
+      const session = await invoke<FeishuBrowserSetupSession>("get_feishu_browser_setup_session", {
+        sessionId: feishuBrowserSetupSession.session_id,
+      });
+      setFeishuBrowserSetupSession(session);
+    } catch (error) {
+      setMessage(String(error));
+    }
+  }
+
+  async function openFeishuBrowserSetupPage() {
+    const query = feishuBrowserSetupSession?.session_id
+      ? `?workclaw_session_id=${encodeURIComponent(feishuBrowserSetupSession.session_id)}`
+      : "";
+    try {
+      await invoke("open_external_url", {
+        url: `https://open.feishu.cn/${query}`,
+      });
+    } catch (error) {
+      setMessage(String(error));
+    }
+  }
+
+  async function cancelFeishuBrowserSetup() {
+    setFeishuBrowserSetupSession(null);
+  }
+
+  useEffect(() => {
+    if (!feishuBrowserSetupSession) return;
+    if (isFeishuBrowserSetupTerminalStep(feishuBrowserSetupSession.step)) return;
+
+    let disposed = false;
+    const timer = setInterval(() => {
+      void invoke<FeishuBrowserSetupSession>("get_feishu_browser_setup_session", {
+        sessionId: feishuBrowserSetupSession.session_id,
+      })
+        .then((session) => {
+          if (!disposed) setFeishuBrowserSetupSession(session);
+        })
+        .catch((error) => {
+          if (!disposed) setMessage(String(error));
+        });
+    }, FEISHU_BROWSER_SETUP_POLL_INTERVAL_MS);
+
+    return () => {
+      disposed = true;
+      clearInterval(timer);
+    };
+  }, [feishuBrowserSetupSession]);
 
   useEffect(() => {
     void loadEmployeeGroups();
@@ -1521,6 +1605,29 @@ export function EmployeeHubView({
           <input className="w-full border border-gray-200 rounded px-2 py-1.5 text-sm" placeholder="例如 D:\\workspace\\workclaw" value={globalDefaultWorkDir} onChange={(e) => setGlobalDefaultWorkDir(e.target.value)} />
           <div className="text-[11px] text-gray-500">默认：C:\Users\&lt;用户名&gt;\WorkClaw\workspace。支持 C/D/E 盘路径，目录不存在会自动创建。</div>
           <button disabled={savingGlobalWorkDir} onClick={saveGlobalDefaultWorkDir} className="h-8 px-3 rounded bg-blue-500 hover:bg-blue-600 disabled:bg-blue-300 text-white text-xs">保存默认目录</button>
+        </div>
+        <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-3">
+          <div>
+            <div className="text-sm font-medium text-gray-900">飞书浏览器配置向导</div>
+            <div className="text-xs text-gray-500 mt-1">在默认浏览器中打开飞书开放平台，按步骤完成企业自建应用配置。</div>
+          </div>
+          {!feishuBrowserSetupSession ? (
+            <button
+              type="button"
+              disabled={startingBrowserSetup}
+              onClick={() => void startFeishuBrowserSetup()}
+              className="h-8 px-3 rounded bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white text-xs"
+            >
+              {startingBrowserSetup ? "启动中..." : "启动飞书浏览器配置"}
+            </button>
+          ) : (
+            <FeishuBrowserSetupView
+              session={feishuBrowserSetupSession}
+              onRetry={retryFeishuBrowserSetup}
+              onOpenBrowser={openFeishuBrowserSetupPage}
+              onCancel={cancelFeishuBrowserSetup}
+            />
+          )}
         </div>
           </div>
         )}
