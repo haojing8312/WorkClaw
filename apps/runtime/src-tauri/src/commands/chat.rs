@@ -197,7 +197,8 @@ pub async fn send_message(
 
 #[cfg(test)]
 mod tests {
-    use super::{build_group_orchestrator_report_preview, chat_runtime_io};
+    use super::build_group_orchestrator_report_preview;
+    use crate::commands::chat_runtime_io;
     use std::collections::HashMap;
     use std::path::Path;
 
