@@ -1,4 +1,5 @@
-use super::chat::{ModelRouteErrorKind, StreamToken, ToolConfirmResponder};
+use super::chat::{StreamToken, ToolConfirmResponder};
+use super::chat_policy::ModelRouteErrorKind;
 use super::chat_runtime_io as chat_io;
 use crate::agent::permissions::PermissionMode;
 use crate::agent::AgentExecutor;

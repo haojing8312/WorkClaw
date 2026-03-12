@@ -1,9 +1,9 @@
 use super::chat_compaction;
+use super::chat_policy;
 use super::chat_runtime_io as chat_io;
 use super::chat_send_message_flow::{self, PrepareSendMessageParams};
 use super::chat_session_io;
 use super::skills::DbState;
-use crate::agent::permissions::PermissionMode;
 use crate::agent::tools::search_providers::cache::SearchCache;
 use crate::agent::tools::AskUserResponder;
 use crate::agent::AgentExecutor;
@@ -28,216 +28,6 @@ pub struct SearchCacheState(pub Arc<SearchCache>);
 
 /// Agent 取消标志（用于 cancel_agent command 停止正在执行的 Agent）
 pub struct CancelFlagState(pub Arc<AtomicBool>);
-
-#[cfg(test)]
-fn normalize_permission_mode_for_storage(permission_mode: Option<&str>) -> &'static str {
-    match permission_mode.unwrap_or("").trim() {
-        "standard" | "default" | "accept_edits" => "standard",
-        "full_access" | "unrestricted" => "full_access",
-        _ => "standard",
-    }
-}
-
-#[cfg(test)]
-fn normalize_session_mode_for_storage(session_mode: Option<&str>) -> &'static str {
-    match session_mode.unwrap_or("").trim() {
-        "employee_direct" => "employee_direct",
-        "team_entry" => "team_entry",
-        "general" => "general",
-        _ => "general",
-    }
-}
-
-#[cfg(test)]
-fn normalize_team_id_for_storage(session_mode: &str, team_id: Option<&str>) -> String {
-    if session_mode == "team_entry" {
-        team_id.unwrap_or("").trim().to_string()
-    } else {
-        String::new()
-    }
-}
-
-pub(crate) fn parse_permission_mode_for_runtime(permission_mode: &str) -> PermissionMode {
-    match permission_mode {
-        "standard" | "default" | "accept_edits" => PermissionMode::AcceptEdits,
-        "full_access" | "unrestricted" => PermissionMode::Unrestricted,
-        _ => PermissionMode::AcceptEdits,
-    }
-}
-
-fn permission_mode_label_for_display(permission_mode: &str) -> &'static str {
-    match permission_mode {
-        "standard" => "标准模式",
-        "full_access" => "全自动模式",
-        "default" => "标准模式",
-        "unrestricted" => "全自动模式",
-        _ => "标准模式",
-    }
-}
-
-#[cfg(test)]
-fn is_supported_protocol(protocol: &str) -> bool {
-    matches!(protocol, "openai" | "anthropic")
-}
-
-#[cfg(test)]
-fn infer_capability_from_user_message(message: &str) -> &'static str {
-    let m = message.to_ascii_lowercase();
-    if m.contains("识图")
-        || m.contains("看图")
-        || m.contains("图片理解")
-        || m.contains("vision")
-        || m.contains("analyze image")
-    {
-        return "vision";
-    }
-    if m.contains("生图")
-        || m.contains("画图")
-        || m.contains("生成图片")
-        || m.contains("image generation")
-        || m.contains("generate image")
-    {
-        return "image_gen";
-    }
-    if m.contains("语音转文字")
-        || m.contains("语音识别")
-        || m.contains("stt")
-        || m.contains("transcribe")
-        || m.contains("speech to text")
-    {
-        return "audio_stt";
-    }
-    if m.contains("文字转语音")
-        || m.contains("tts")
-        || m.contains("text to speech")
-        || m.contains("语音合成")
-    {
-        return "audio_tts";
-    }
-    "chat"
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ModelRouteErrorKind {
-    Billing,
-    Auth,
-    RateLimit,
-    Timeout,
-    Network,
-    Unknown,
-}
-
-pub(crate) fn classify_model_route_error(error_message: &str) -> ModelRouteErrorKind {
-    let lower = error_message.to_ascii_lowercase();
-    if lower.contains("insufficient_balance")
-        || lower.contains("insufficient balance")
-        || lower.contains("balance too low")
-        || lower.contains("account balance too low")
-        || lower.contains("insufficient_quota")
-        || lower.contains("insufficient quota")
-        || lower.contains("billing")
-        || lower.contains("payment required")
-        || lower.contains("credit balance")
-        || lower.contains("余额不足")
-        || lower.contains("欠费")
-    {
-        return ModelRouteErrorKind::Billing;
-    }
-    if lower.contains("api key")
-        || lower.contains("unauthorized")
-        || lower.contains("invalid_api_key")
-        || lower.contains("authentication")
-        || lower.contains("permission denied")
-        || lower.contains("forbidden")
-    {
-        return ModelRouteErrorKind::Auth;
-    }
-    if lower.contains("rate limit")
-        || lower.contains("too many requests")
-        || lower.contains("429")
-        || lower.contains("quota")
-    {
-        return ModelRouteErrorKind::RateLimit;
-    }
-    if lower.contains("timeout") || lower.contains("timed out") || lower.contains("deadline") {
-        return ModelRouteErrorKind::Timeout;
-    }
-    if lower.contains("connection")
-        || lower.contains("network")
-        || lower.contains("dns")
-        || lower.contains("connect")
-        || lower.contains("socket")
-        || lower.contains("error sending request for url")
-        || lower.contains("sending request for url")
-    {
-        return ModelRouteErrorKind::Network;
-    }
-    ModelRouteErrorKind::Unknown
-}
-
-pub(crate) fn should_retry_same_candidate(kind: ModelRouteErrorKind) -> bool {
-    matches!(
-        kind,
-        ModelRouteErrorKind::RateLimit
-            | ModelRouteErrorKind::Timeout
-            | ModelRouteErrorKind::Network
-    )
-}
-
-pub(crate) fn retry_budget_for_error(
-    kind: ModelRouteErrorKind,
-    configured_retry_count: usize,
-) -> usize {
-    if kind == ModelRouteErrorKind::Network {
-        configured_retry_count.max(1)
-    } else {
-        configured_retry_count
-    }
-}
-
-pub(crate) fn retry_backoff_ms(kind: ModelRouteErrorKind, attempt_idx: usize) -> u64 {
-    let base_ms = match kind {
-        ModelRouteErrorKind::RateLimit => 1200u64,
-        ModelRouteErrorKind::Timeout => 700u64,
-        ModelRouteErrorKind::Network => 400u64,
-        _ => 0u64,
-    };
-    if base_ms == 0 {
-        return 0;
-    }
-    let exp = attempt_idx.min(3) as u32;
-    base_ms.saturating_mul(1u64 << exp).min(5000)
-}
-
-pub(crate) fn model_route_error_kind_key(kind: ModelRouteErrorKind) -> &'static str {
-    match kind {
-        ModelRouteErrorKind::Billing => "billing",
-        ModelRouteErrorKind::Auth => "auth",
-        ModelRouteErrorKind::RateLimit => "rate_limit",
-        ModelRouteErrorKind::Timeout => "timeout",
-        ModelRouteErrorKind::Network => "network",
-        ModelRouteErrorKind::Unknown => "unknown",
-    }
-}
-
-#[cfg(test)]
-fn parse_fallback_chain_targets(raw: &str) -> Vec<(String, String)> {
-    serde_json::from_str::<Value>(raw)
-        .ok()
-        .and_then(|v| v.as_array().cloned())
-        .unwrap_or_default()
-        .iter()
-        .filter_map(|item| {
-            let provider_id = item.get("provider_id")?.as_str()?.to_string();
-            let model = item
-                .get("model")
-                .and_then(|m| m.as_str())
-                .unwrap_or("")
-                .to_string();
-            Some((provider_id, model))
-        })
-        .collect()
-}
 
 #[cfg(test)]
 pub(crate) fn build_group_orchestrator_report_preview(
@@ -418,7 +208,8 @@ pub async fn get_messages(
 
 #[tauri::command]
 pub async fn list_sessions(db: State<'_, DbState>) -> Result<Vec<serde_json::Value>, String> {
-    chat_session_io::list_sessions_with_pool(&db.0, permission_mode_label_for_display).await
+    chat_session_io::list_sessions_with_pool(&db.0, chat_policy::permission_mode_label_for_display)
+        .await
 }
 
 #[tauri::command]
@@ -433,25 +224,17 @@ pub async fn get_sessions(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        build_group_orchestrator_report_preview, chat_runtime_io,
-        classify_model_route_error, infer_capability_from_user_message,
-        is_supported_protocol, normalize_permission_mode_for_storage,
-        normalize_session_mode_for_storage, normalize_team_id_for_storage,
-        parse_fallback_chain_targets, parse_permission_mode_for_runtime,
-        permission_mode_label_for_display, retry_backoff_ms, retry_budget_for_error,
-        should_retry_same_candidate, ModelRouteErrorKind,
-    };
+    use super::{build_group_orchestrator_report_preview, chat_policy, chat_runtime_io};
     use crate::agent::permissions::PermissionMode;
     use std::collections::HashMap;
     use std::path::Path;
 
     #[test]
     fn normalize_permission_mode_defaults_to_standard() {
-        assert_eq!(normalize_permission_mode_for_storage(None), "standard");
-        assert_eq!(normalize_permission_mode_for_storage(Some("")), "standard");
+        assert_eq!(chat_policy::normalize_permission_mode_for_storage(None), "standard");
+        assert_eq!(chat_policy::normalize_permission_mode_for_storage(Some("")), "standard");
         assert_eq!(
-            normalize_permission_mode_for_storage(Some("invalid")),
+            chat_policy::normalize_permission_mode_for_storage(Some("invalid")),
             "standard"
         );
     }
@@ -459,33 +242,33 @@ mod tests {
     #[test]
     fn normalize_permission_mode_maps_legacy_values_to_modern_storage() {
         assert_eq!(
-            normalize_permission_mode_for_storage(Some("standard")),
+            chat_policy::normalize_permission_mode_for_storage(Some("standard")),
             "standard"
         );
         assert_eq!(
-            normalize_permission_mode_for_storage(Some("full_access")),
+            chat_policy::normalize_permission_mode_for_storage(Some("full_access")),
             "full_access"
         );
         assert_eq!(
-            normalize_permission_mode_for_storage(Some("default")),
+            chat_policy::normalize_permission_mode_for_storage(Some("default")),
             "standard"
         );
         assert_eq!(
-            normalize_permission_mode_for_storage(Some("accept_edits")),
+            chat_policy::normalize_permission_mode_for_storage(Some("accept_edits")),
             "standard"
         );
         assert_eq!(
-            normalize_permission_mode_for_storage(Some("unrestricted")),
+            chat_policy::normalize_permission_mode_for_storage(Some("unrestricted")),
             "full_access"
         );
     }
 
     #[test]
     fn normalize_session_mode_defaults_to_general() {
-        assert_eq!(normalize_session_mode_for_storage(None), "general");
-        assert_eq!(normalize_session_mode_for_storage(Some("")), "general");
+        assert_eq!(chat_policy::normalize_session_mode_for_storage(None), "general");
+        assert_eq!(chat_policy::normalize_session_mode_for_storage(Some("")), "general");
         assert_eq!(
-            normalize_session_mode_for_storage(Some("invalid")),
+            chat_policy::normalize_session_mode_for_storage(Some("invalid")),
             "general"
         );
     }
@@ -493,15 +276,15 @@ mod tests {
     #[test]
     fn normalize_session_mode_keeps_supported_values() {
         assert_eq!(
-            normalize_session_mode_for_storage(Some("general")),
+            chat_policy::normalize_session_mode_for_storage(Some("general")),
             "general"
         );
         assert_eq!(
-            normalize_session_mode_for_storage(Some("employee_direct")),
+            chat_policy::normalize_session_mode_for_storage(Some("employee_direct")),
             "employee_direct"
         );
         assert_eq!(
-            normalize_session_mode_for_storage(Some("team_entry")),
+            chat_policy::normalize_session_mode_for_storage(Some("team_entry")),
             "team_entry"
         );
     }
@@ -509,15 +292,15 @@ mod tests {
     #[test]
     fn normalize_team_id_only_keeps_team_entry_values() {
         assert_eq!(
-            normalize_team_id_for_storage("general", Some("group-1")),
+            chat_policy::normalize_team_id_for_storage("general", Some("group-1")),
             ""
         );
         assert_eq!(
-            normalize_team_id_for_storage("employee_direct", Some("group-1")),
+            chat_policy::normalize_team_id_for_storage("employee_direct", Some("group-1")),
             ""
         );
         assert_eq!(
-            normalize_team_id_for_storage("team_entry", Some(" group-1 ")),
+            chat_policy::normalize_team_id_for_storage("team_entry", Some(" group-1 ")),
             "group-1"
         );
     }
@@ -525,11 +308,11 @@ mod tests {
     #[test]
     fn parse_permission_mode_for_runtime_defaults_to_standard_behavior() {
         assert_eq!(
-            parse_permission_mode_for_runtime(""),
+            chat_policy::parse_permission_mode_for_runtime(""),
             PermissionMode::AcceptEdits
         );
         assert_eq!(
-            parse_permission_mode_for_runtime("invalid"),
+            chat_policy::parse_permission_mode_for_runtime("invalid"),
             PermissionMode::AcceptEdits
         );
     }
@@ -537,57 +320,57 @@ mod tests {
     #[test]
     fn parse_permission_mode_for_runtime_supports_modern_and_legacy_values() {
         assert_eq!(
-            parse_permission_mode_for_runtime("standard"),
+            chat_policy::parse_permission_mode_for_runtime("standard"),
             PermissionMode::AcceptEdits
         );
         assert_eq!(
-            parse_permission_mode_for_runtime("full_access"),
+            chat_policy::parse_permission_mode_for_runtime("full_access"),
             PermissionMode::Unrestricted
         );
         assert_eq!(
-            parse_permission_mode_for_runtime("default"),
+            chat_policy::parse_permission_mode_for_runtime("default"),
             PermissionMode::AcceptEdits
         );
         assert_eq!(
-            parse_permission_mode_for_runtime("accept_edits"),
+            chat_policy::parse_permission_mode_for_runtime("accept_edits"),
             PermissionMode::AcceptEdits
         );
         assert_eq!(
-            parse_permission_mode_for_runtime("unrestricted"),
+            chat_policy::parse_permission_mode_for_runtime("unrestricted"),
             PermissionMode::Unrestricted
         );
     }
 
     #[test]
     fn permission_mode_label_is_user_friendly() {
-        assert_eq!(permission_mode_label_for_display("standard"), "标准模式");
+        assert_eq!(chat_policy::permission_mode_label_for_display("standard"), "标准模式");
         assert_eq!(
-            permission_mode_label_for_display("full_access"),
+            chat_policy::permission_mode_label_for_display("full_access"),
             "全自动模式"
         );
         assert_eq!(
-            permission_mode_label_for_display("accept_edits"),
+            chat_policy::permission_mode_label_for_display("accept_edits"),
             "标准模式"
         );
-        assert_eq!(permission_mode_label_for_display("default"), "标准模式");
+        assert_eq!(chat_policy::permission_mode_label_for_display("default"), "标准模式");
         assert_eq!(
-            permission_mode_label_for_display("unrestricted"),
+            chat_policy::permission_mode_label_for_display("unrestricted"),
             "全自动模式"
         );
     }
 
     #[test]
     fn supported_protocols_are_openai_and_anthropic_only() {
-        assert!(is_supported_protocol("openai"));
-        assert!(is_supported_protocol("anthropic"));
-        assert!(!is_supported_protocol("gemini"));
-        assert!(!is_supported_protocol(""));
+        assert!(chat_policy::is_supported_protocol("openai"));
+        assert!(chat_policy::is_supported_protocol("anthropic"));
+        assert!(!chat_policy::is_supported_protocol("gemini"));
+        assert!(!chat_policy::is_supported_protocol(""));
     }
 
     #[test]
     fn parse_fallback_chain_targets_handles_json_array() {
         let raw = r#"[{"provider_id":"p1","model":"m1"},{"provider_id":"p2","model":"m2"}]"#;
-        let parsed = parse_fallback_chain_targets(raw);
+        let parsed = chat_policy::parse_fallback_chain_targets(raw);
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed[0].0, "p1");
         assert_eq!(parsed[0].1, "m1");
@@ -597,71 +380,71 @@ mod tests {
 
     #[test]
     fn classify_model_route_error_detects_auth() {
-        let kind = classify_model_route_error("Unauthorized: invalid_api_key");
-        assert_eq!(kind, ModelRouteErrorKind::Auth);
-        assert!(!should_retry_same_candidate(kind));
+        let kind = chat_policy::classify_model_route_error("Unauthorized: invalid_api_key");
+        assert_eq!(kind, chat_policy::ModelRouteErrorKind::Auth);
+        assert!(!chat_policy::should_retry_same_candidate(kind));
     }
 
     #[test]
     fn classify_model_route_error_detects_billing() {
-        let kind = classify_model_route_error("insufficient_balance: account balance too low");
-        assert_eq!(kind, ModelRouteErrorKind::Billing);
-        assert_eq!(model_route_error_kind_key(kind), "billing");
-        assert!(!should_retry_same_candidate(kind));
+        let kind = chat_policy::classify_model_route_error("insufficient_balance: account balance too low");
+        assert_eq!(kind, chat_policy::ModelRouteErrorKind::Billing);
+        assert_eq!(chat_policy::model_route_error_kind_key(kind), "billing");
+        assert!(!chat_policy::should_retry_same_candidate(kind));
     }
 
     #[test]
     fn classify_model_route_error_detects_retryable_kinds() {
-        let rate = classify_model_route_error("429 Too Many Requests");
-        let timeout = classify_model_route_error("request timeout while calling provider");
-        let network = classify_model_route_error("network connection reset");
-        assert_eq!(rate, ModelRouteErrorKind::RateLimit);
-        assert_eq!(timeout, ModelRouteErrorKind::Timeout);
-        assert_eq!(network, ModelRouteErrorKind::Network);
-        assert!(should_retry_same_candidate(rate));
-        assert!(should_retry_same_candidate(timeout));
-        assert!(should_retry_same_candidate(network));
+        let rate = chat_policy::classify_model_route_error("429 Too Many Requests");
+        let timeout = chat_policy::classify_model_route_error("request timeout while calling provider");
+        let network = chat_policy::classify_model_route_error("network connection reset");
+        assert_eq!(rate, chat_policy::ModelRouteErrorKind::RateLimit);
+        assert_eq!(timeout, chat_policy::ModelRouteErrorKind::Timeout);
+        assert_eq!(network, chat_policy::ModelRouteErrorKind::Network);
+        assert!(chat_policy::should_retry_same_candidate(rate));
+        assert!(chat_policy::should_retry_same_candidate(timeout));
+        assert!(chat_policy::should_retry_same_candidate(network));
     }
 
     #[test]
     fn classify_model_route_error_detects_transport_send_failures_as_network() {
-        let kind = classify_model_route_error(
+        let kind = chat_policy::classify_model_route_error(
             "error sending request for url (https://api.minimax.io/anthropic/v1/messages)",
         );
-        assert_eq!(kind, ModelRouteErrorKind::Network);
+        assert_eq!(kind, chat_policy::ModelRouteErrorKind::Network);
     }
 
     #[test]
     fn retry_budget_for_error_guarantees_one_retry_for_network() {
-        assert_eq!(retry_budget_for_error(ModelRouteErrorKind::Network, 0), 1);
-        assert_eq!(retry_budget_for_error(ModelRouteErrorKind::Network, 2), 2);
-        assert_eq!(retry_budget_for_error(ModelRouteErrorKind::RateLimit, 0), 0);
+        assert_eq!(chat_policy::retry_budget_for_error(chat_policy::ModelRouteErrorKind::Network, 0), 1);
+        assert_eq!(chat_policy::retry_budget_for_error(chat_policy::ModelRouteErrorKind::Network, 2), 2);
+        assert_eq!(chat_policy::retry_budget_for_error(chat_policy::ModelRouteErrorKind::RateLimit, 0), 0);
     }
 
     #[test]
     fn retry_backoff_is_exponential_and_capped() {
-        assert_eq!(retry_backoff_ms(ModelRouteErrorKind::Network, 0), 400);
-        assert_eq!(retry_backoff_ms(ModelRouteErrorKind::Network, 2), 1600);
-        assert_eq!(retry_backoff_ms(ModelRouteErrorKind::RateLimit, 3), 5000);
-        assert_eq!(retry_backoff_ms(ModelRouteErrorKind::Unknown, 1), 0);
+        assert_eq!(chat_policy::retry_backoff_ms(chat_policy::ModelRouteErrorKind::Network, 0), 400);
+        assert_eq!(chat_policy::retry_backoff_ms(chat_policy::ModelRouteErrorKind::Network, 2), 1600);
+        assert_eq!(chat_policy::retry_backoff_ms(chat_policy::ModelRouteErrorKind::RateLimit, 3), 5000);
+        assert_eq!(chat_policy::retry_backoff_ms(chat_policy::ModelRouteErrorKind::Unknown, 1), 0);
     }
 
     #[test]
     fn infer_capability_from_user_message_detects_modalities() {
-        assert_eq!(infer_capability_from_user_message("请帮我识图"), "vision");
+        assert_eq!(chat_policy::infer_capability_from_user_message("请帮我识图"), "vision");
         assert_eq!(
-            infer_capability_from_user_message("帮我生成图片"),
+            chat_policy::infer_capability_from_user_message("帮我生成图片"),
             "image_gen"
         );
         assert_eq!(
-            infer_capability_from_user_message("这段音频做语音转文字"),
+            chat_policy::infer_capability_from_user_message("这段音频做语音转文字"),
             "audio_stt"
         );
         assert_eq!(
-            infer_capability_from_user_message("这段文案做文字转语音"),
+            chat_policy::infer_capability_from_user_message("这段文案做文字转语音"),
             "audio_tts"
         );
-        assert_eq!(infer_capability_from_user_message("解释这个报错"), "chat");
+        assert_eq!(chat_policy::infer_capability_from_user_message("解释这个报错"), "chat");
     }
 
     #[test]
@@ -826,3 +609,4 @@ pub async fn compact_context(
     let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     chat_compaction::compact_context_with_pool(&db.0, &session_id, &app_data_dir).await
 }
+
