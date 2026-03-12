@@ -55,6 +55,7 @@ struct AnthropicStreamState {
     current_tool_call: Option<ToolCall>,
     current_tool_input: String,
     stop_stream: bool,
+    pending_line: String,
 }
 
 fn process_anthropic_sse_text(
@@ -62,7 +63,16 @@ fn process_anthropic_sse_text(
     state: &mut AnthropicStreamState,
     on_token: &mut impl FnMut(String),
 ) -> Result<()> {
-    for line in text.lines() {
+    state.pending_line.push_str(text);
+    let ends_with_newline = state.pending_line.ends_with('\n');
+    let owned = std::mem::take(&mut state.pending_line);
+    let mut lines: Vec<&str> = owned.lines().collect();
+
+    if !ends_with_newline {
+        state.pending_line = lines.pop().unwrap_or_default().to_string();
+    }
+
+    for line in lines {
         if let Some(data) = line.strip_prefix("data: ") {
             if data.trim().is_empty() {
                 continue;
@@ -243,6 +253,30 @@ mod tests {
         .expect("parse chunks");
 
         match response {
+            LLMResponse::Text(text) => assert_eq!(text, "hello"),
+            other => panic!("expected text response, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn anthropic_message_stop_split_across_chunks_still_stops_stream() {
+        let mut state = AnthropicStreamState::default();
+        let mut sink = Vec::new();
+
+        for chunk in [
+            "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n",
+            "data: {\"type\":\"message_",
+            "stop\"}\n",
+        ] {
+            process_anthropic_sse_text(chunk, &mut state, &mut |token| sink.push(token))
+                .expect("parse chunk");
+            if state.stop_stream {
+                break;
+            }
+        }
+
+        assert!(state.stop_stream, "split message_stop event should stop stream");
+        match finish_anthropic_stream(state) {
             LLMResponse::Text(text) => assert_eq!(text, "hello"),
             other => panic!("expected text response, got {other:?}"),
         }
