@@ -2,10 +2,13 @@ use super::models::{
     get_capability_routing_policy_from_pool, get_chat_routing_policy_from_pool,
     load_routing_settings_from_pool,
 };
+use super::runtime_preferences::resolve_default_work_dir_with_pool;
+use super::employee_agents::list_agent_employees_with_pool;
 use async_trait::async_trait;
 use runtime_chat_app::{
-    ChatRoutePolicySnapshot, ChatRoutingSnapshot, ChatSettingsRepository,
-    ProviderConnectionSnapshot, RoutingSettingsSnapshot, SessionModelSnapshot,
+    ChatEmployeeDirectory, ChatEmployeeSnapshot, ChatRoutePolicySnapshot, ChatRoutingSnapshot,
+    ChatSessionContextRepository, ChatSettingsRepository, ProviderConnectionSnapshot,
+    RoutingSettingsSnapshot, SessionExecutionContextSnapshot, SessionModelSnapshot,
 };
 use sqlx::SqlitePool;
 
@@ -13,10 +16,39 @@ pub struct PoolChatSettingsRepository<'a> {
     db: &'a SqlitePool,
 }
 
+pub struct PoolChatEmployeeDirectory<'a> {
+    db: &'a SqlitePool,
+}
+
 impl<'a> PoolChatSettingsRepository<'a> {
     pub fn new(db: &'a SqlitePool) -> Self {
         Self { db }
     }
+}
+
+impl<'a> PoolChatEmployeeDirectory<'a> {
+    pub fn new(db: &'a SqlitePool) -> Self {
+        Self { db }
+    }
+}
+
+fn build_imported_mcp_guidance(entries: &[(String, String, String)]) -> Option<String> {
+    if entries.is_empty() {
+        return None;
+    }
+
+    let mut lines = vec![
+        "外部平台能力: 以下平台已通过外部来源导入为 WorkClaw 托管的 MCP。".to_string(),
+        "处理这些平台的内容读取、检索或资料整理请求时，优先使用对应 MCP 工具；仅在其不可用时再回退到通用 web_search / web_fetch。".to_string(),
+    ];
+
+    for (source_id, channel, server_name) in entries {
+        lines.push(format!(
+            "- 平台 `{channel}`: 优先使用对应 MCP 工具（source: `{source_id}`, server: `{server_name}`）"
+        ));
+    }
+
+    Some(lines.join("\n"))
 }
 
 #[async_trait]
@@ -125,5 +157,86 @@ impl ChatSettingsRepository for PoolChatSettingsRepository<'_> {
             model_name,
             api_key,
         })
+    }
+
+    async fn load_default_work_dir(&self) -> Result<Option<String>, String> {
+        resolve_default_work_dir_with_pool(self.db).await.map(Some)
+    }
+
+    async fn load_imported_mcp_guidance(
+        &self,
+        _imported_mcp_server_ids: &[String],
+    ) -> Result<Option<String>, String> {
+        let rows = sqlx::query_as::<_, (String, String, String)>(
+            "SELECT imports.source_id, imports.channel, servers.name
+             FROM external_mcp_imports AS imports
+             INNER JOIN mcp_servers AS servers
+               ON servers.id = imports.mcp_server_id
+             WHERE servers.enabled = 1
+             ORDER BY imports.source_id, imports.channel",
+        )
+        .fetch_all(self.db)
+        .await
+        .map_err(|e| format!("读取导入 MCP 指引失败: {e}"))?;
+
+        Ok(build_imported_mcp_guidance(&rows))
+    }
+}
+
+#[async_trait]
+impl ChatSessionContextRepository for PoolChatSettingsRepository<'_> {
+    async fn load_session_execution_context(
+        &self,
+        session_id: Option<&str>,
+    ) -> Result<SessionExecutionContextSnapshot, String> {
+        let Some(session_id) = session_id.filter(|value| !value.trim().is_empty()) else {
+            return Ok(SessionExecutionContextSnapshot {
+                session_id: String::new(),
+                session_mode: "general".to_string(),
+                team_id: String::new(),
+                employee_id: String::new(),
+                work_dir: String::new(),
+                imported_mcp_server_ids: Vec::new(),
+            });
+        };
+
+        let row = sqlx::query_as::<_, (String, String, String, String)>(
+            "SELECT COALESCE(session_mode, 'general'), COALESCE(team_id, ''), COALESCE(employee_id, ''), COALESCE(work_dir, '')
+             FROM sessions WHERE id = ?",
+        )
+        .bind(session_id)
+        .fetch_optional(self.db)
+        .await
+        .map_err(|e| format!("读取会话执行上下文失败 (session_id={session_id}): {e}"))?;
+
+        let (session_mode, team_id, employee_id, work_dir) =
+            row.unwrap_or_else(|| ("general".to_string(), String::new(), String::new(), String::new()));
+
+        Ok(SessionExecutionContextSnapshot {
+            session_id: session_id.to_string(),
+            session_mode,
+            team_id,
+            employee_id,
+            work_dir,
+            imported_mcp_server_ids: Vec::new(),
+        })
+    }
+}
+
+#[async_trait]
+impl ChatEmployeeDirectory for PoolChatEmployeeDirectory<'_> {
+    async fn list_collaboration_candidates(&self) -> Result<Vec<ChatEmployeeSnapshot>, String> {
+        let employees = list_agent_employees_with_pool(self.db).await?;
+        Ok(employees
+            .into_iter()
+            .map(|employee| ChatEmployeeSnapshot {
+                id: employee.id,
+                employee_id: employee.employee_id,
+                name: employee.name,
+                role_id: employee.role_id,
+                feishu_open_id: employee.feishu_open_id,
+                enabled: employee.enabled,
+            })
+            .collect())
     }
 }

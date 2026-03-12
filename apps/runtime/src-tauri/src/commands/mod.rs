@@ -3,6 +3,7 @@ pub mod browser_bridge_install;
 pub mod channel_connectors;
 pub mod chat;
 pub mod chat_repo;
+pub(crate) mod chat_runtime_io;
 pub mod clawhub;
 pub mod content_providers;
 pub mod desktop_lifecycle;

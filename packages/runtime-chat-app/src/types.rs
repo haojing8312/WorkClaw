@@ -59,6 +59,16 @@ pub struct SessionModelSnapshot {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChatEmployeeSnapshot {
+    pub id: String,
+    pub employee_id: String,
+    pub name: String,
+    pub role_id: String,
+    pub feishu_open_id: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PreparedRouteCandidate {
     pub protocol_type: String,
     pub base_url: String,
@@ -78,6 +88,19 @@ pub struct ChatPreparationRequest {
     pub permission_mode: Option<String>,
     pub session_mode: Option<String>,
     pub team_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChatExecutionPreparationRequest {
+    pub user_message: String,
+    pub session_id: Option<String>,
+    pub permission_mode: Option<String>,
+    pub session_mode: Option<String>,
+    pub team_id: Option<String>,
+    pub employee_id: Option<String>,
+    pub requested_capability: Option<String>,
+    pub work_dir: Option<String>,
+    pub imported_mcp_server_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -101,6 +124,41 @@ pub struct PreparedSessionCreation {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ChatExecutionContext {
+    pub session_id: String,
+    pub session_mode_storage: String,
+    pub normalized_team_id: String,
+    pub employee_id: String,
+    pub work_dir: String,
+    pub imported_mcp_server_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionExecutionContextSnapshot {
+    pub session_id: String,
+    pub session_mode: String,
+    pub team_id: String,
+    pub employee_id: String,
+    pub work_dir: String,
+    pub imported_mcp_server_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ChatExecutionGuidance {
+    pub effective_work_dir: String,
+    pub imported_mcp_guidance: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PreparedChatExecutionAssembly {
+    pub chat_preparation: PreparedChatExecution,
+    pub execution_context: ChatExecutionContext,
+    pub execution_guidance: ChatExecutionGuidance,
+    pub route_decisions: PreparedRouteCandidates,
+    pub employee_collaboration_guidance: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PreparedChatExecution {
     pub capability: String,
     pub permission_mode_storage: String,
@@ -115,6 +173,7 @@ pub struct PreparedChatExecution {
     pub fallback_targets: Vec<(String, String)>,
     pub default_model_id: Option<String>,
     pub default_usable_model_id: Option<String>,
+    pub execution_context: ChatExecutionContext,
 }
 
 impl Default for PreparedChatExecution {
@@ -133,6 +192,14 @@ impl Default for PreparedChatExecution {
             fallback_targets: Vec::new(),
             default_model_id: None,
             default_usable_model_id: None,
+            execution_context: ChatExecutionContext {
+                session_id: String::new(),
+                session_mode_storage: "general".to_string(),
+                normalized_team_id: String::new(),
+                employee_id: String::new(),
+                work_dir: String::new(),
+                imported_mcp_server_ids: Vec::new(),
+            },
         }
     }
 }
