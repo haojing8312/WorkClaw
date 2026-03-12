@@ -321,7 +321,7 @@ impl AgentExecutor {
             let trimmed = trim_messages(&compacted, DEFAULT_TOKEN_BUDGET);
 
             // 调用 LLM（使用组合后的系统 prompt）
-            let response = if api_format == "anthropic" {
+            let response_result = if api_format == "anthropic" {
                 adapters::anthropic::chat_stream_with_tools(
                     base_url,
                     api_key,
@@ -331,7 +331,7 @@ impl AgentExecutor {
                     tools,
                     on_token.clone(),
                 )
-                .await?
+                .await
             } else {
                 // OpenAI 兼容格式
                 adapters::openai::chat_stream_with_tools(
@@ -343,7 +343,25 @@ impl AgentExecutor {
                     tools,
                     on_token.clone(),
                 )
-                .await?
+                .await
+            };
+
+            let response = match response_result {
+                Ok(response) => response,
+                Err(err) => {
+                    if let (Some(app), Some(sid)) = (app_handle, session_id) {
+                        let _ = app.emit(
+                            "agent-state-event",
+                            AgentStateEvent {
+                                session_id: sid.to_string(),
+                                state: "error".to_string(),
+                                detail: Some(err.to_string()),
+                                iteration,
+                            },
+                        );
+                    }
+                    return Err(err);
+                }
             };
 
             // 处理响应

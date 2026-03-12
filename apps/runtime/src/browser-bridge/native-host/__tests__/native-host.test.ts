@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { decodeNativeMessage, encodeNativeMessage } from "../index";
 import { createBridgeClient } from "../client";
 import { decodeNativeMessage, encodeNativeMessage, processNativeHostFrame } from "../index";
 
@@ -12,7 +11,7 @@ describe("native messaging framing", () => {
       payload: { type: "session.start", provider: "feishu" },
     });
 
-  expect(decodeNativeMessage(encoded)).toMatchObject({
+    expect(decodeNativeMessage(encoded)).toMatchObject({
       sessionId: "sess-1",
       kind: "request",
       payload: { type: "session.start", provider: "feishu" },
@@ -74,7 +73,7 @@ describe("native messaging framing", () => {
       };
     });
 
-    expect(decodeNativeMessage(output as Buffer)).toMatchObject({
+    expect(decodeNativeMessage(output)).toMatchObject({
       version: 1,
       sessionId: "sess-2",
       kind: "response",

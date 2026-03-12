@@ -99,6 +99,36 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
     .await?;
 
     sqlx::query(
+        "CREATE TABLE IF NOT EXISTS session_runs (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            user_message_id TEXT NOT NULL DEFAULT '',
+            assistant_message_id TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'queued',
+            buffered_text TEXT NOT NULL DEFAULT '',
+            error_kind TEXT NOT NULL DEFAULT '',
+            error_message TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )",
+    )
+    .execute(&pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS session_run_events (
+            id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )",
+    )
+    .execute(&pool)
+    .await?;
+
+    sqlx::query(
         "CREATE TABLE IF NOT EXISTS model_configs (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
@@ -600,6 +630,11 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
     let _ = sqlx::query("ALTER TABLE sessions ADD COLUMN team_id TEXT NOT NULL DEFAULT ''")
         .execute(&pool)
         .await;
+    let _ = sqlx::query(
+        "ALTER TABLE session_runs ADD COLUMN assistant_message_id TEXT NOT NULL DEFAULT ''",
+    )
+    .execute(&pool)
+    .await;
 
     // Migration: employee-level Feishu credentials
     let _ = sqlx::query(

@@ -1,3 +1,4 @@
+use crate::agent::types::{LLMResponse, ToolCall};
 use anyhow::{anyhow, Result};
 use futures_util::StreamExt;
 use reqwest::Client;
@@ -40,6 +41,101 @@ fn parse_tool_call_arguments(args_str: &str) -> Result<Value> {
         .map_err(|e| anyhow!("工具参数 JSON 解析失败: {}; raw={}", e, trimmed))
 }
 
+fn build_http_client() -> Result<Client> {
+    Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(|e| anyhow!("构建 Anthropic HTTP 客户端失败: {}", e))
+}
+
+#[derive(Default)]
+struct AnthropicStreamState {
+    tool_calls: Vec<ToolCall>,
+    text_content: String,
+    current_tool_call: Option<ToolCall>,
+    current_tool_input: String,
+    stop_stream: bool,
+}
+
+fn process_anthropic_sse_text(
+    text: &str,
+    state: &mut AnthropicStreamState,
+    on_token: &mut impl FnMut(String),
+) -> Result<()> {
+    for line in text.lines() {
+        if let Some(data) = line.strip_prefix("data: ") {
+            if data.trim().is_empty() {
+                continue;
+            }
+
+            if let Ok(v) = serde_json::from_str::<Value>(data) {
+                let event_type = v["type"].as_str().unwrap_or("");
+
+                match event_type {
+                    "content_block_start" => {
+                        if v["content_block"]["type"] == "tool_use" {
+                            state.current_tool_call = Some(ToolCall {
+                                id: v["content_block"]["id"].as_str().unwrap_or("").to_string(),
+                                name: v["content_block"]["name"]
+                                    .as_str()
+                                    .unwrap_or("")
+                                    .to_string(),
+                                input: json!({}),
+                            });
+                            state.current_tool_input.clear();
+                        }
+                    }
+                    "content_block_delta" => {
+                        if v["delta"]["type"] == "text_delta" {
+                            let token = v["delta"]["text"].as_str().unwrap_or("");
+                            state.text_content.push_str(token);
+                            on_token(token.to_string());
+                        } else if v["delta"]["type"] == "input_json_delta" {
+                            state
+                                .current_tool_input
+                                .push_str(v["delta"]["partial_json"].as_str().unwrap_or(""));
+                        }
+                    }
+                    "content_block_stop" => {
+                        if let Some(mut call) = state.current_tool_call.take() {
+                            if !state.current_tool_input.is_empty() {
+                                call.input =
+                                    match parse_tool_call_arguments(&state.current_tool_input) {
+                                        Ok(value) => value,
+                                        Err(err) => json!({
+                                            "__tool_call_parse_error": err.to_string(),
+                                            "__raw_arguments": state.current_tool_input.clone(),
+                                        }),
+                                    };
+                            }
+                            state.tool_calls.push(call);
+                        }
+                    }
+                    "message_stop" => {
+                        state.stop_stream = true;
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn finish_anthropic_stream(state: AnthropicStreamState) -> LLMResponse {
+    if !state.tool_calls.is_empty() {
+        if !state.text_content.is_empty() {
+            LLMResponse::TextWithToolCalls(state.text_content, state.tool_calls)
+        } else {
+            LLMResponse::ToolCalls(state.tool_calls)
+        }
+    } else {
+        LLMResponse::Text(state.text_content)
+    }
+}
+
 pub async fn chat_stream_with_tools(
     base_url: &str,
     api_key: &str,
@@ -49,8 +145,6 @@ pub async fn chat_stream_with_tools(
     tools: Vec<Value>,
     mut on_token: impl FnMut(String) + Send,
 ) -> Result<crate::agent::types::LLMResponse> {
-    use crate::agent::types::{LLMResponse, ToolCall};
-
     if is_mock_text_base_url(base_url) {
         let mock_text = mock_response_text(model, &messages);
         on_token(mock_text.clone());
@@ -60,7 +154,7 @@ pub async fn chat_stream_with_tools(
         return Err(anyhow!("达到最大迭代次数 8"));
     }
 
-    let client = Client::new();
+    let client = build_http_client()?;
     let url = format!("{}/messages", base_url.trim_end_matches('/'));
 
     let body = json!({
@@ -87,89 +181,25 @@ pub async fn chat_stream_with_tools(
     }
 
     let mut stream = resp.bytes_stream();
-    let mut tool_calls: Vec<ToolCall> = vec![];
-    let mut text_content = String::new();
-    let mut current_tool_call: Option<ToolCall> = None;
-    let mut current_tool_input = String::new();
+    let mut state = AnthropicStreamState::default();
 
     while let Some(chunk) = stream.next().await {
         let chunk = chunk?;
         let text = String::from_utf8_lossy(&chunk);
-
-        for line in text.lines() {
-            if let Some(data) = line.strip_prefix("data: ") {
-                if data.trim().is_empty() {
-                    continue;
-                }
-
-                if let Ok(v) = serde_json::from_str::<Value>(data) {
-                    let event_type = v["type"].as_str().unwrap_or("");
-
-                    match event_type {
-                        "content_block_start" => {
-                            if v["content_block"]["type"] == "tool_use" {
-                                current_tool_call = Some(ToolCall {
-                                    id: v["content_block"]["id"].as_str().unwrap_or("").to_string(),
-                                    name: v["content_block"]["name"]
-                                        .as_str()
-                                        .unwrap_or("")
-                                        .to_string(),
-                                    input: json!({}),
-                                });
-                                current_tool_input.clear();
-                            }
-                        }
-                        "content_block_delta" => {
-                            if v["delta"]["type"] == "text_delta" {
-                                let token = v["delta"]["text"].as_str().unwrap_or("");
-                                text_content.push_str(token);
-                                on_token(token.to_string());
-                            } else if v["delta"]["type"] == "input_json_delta" {
-                                current_tool_input
-                                    .push_str(v["delta"]["partial_json"].as_str().unwrap_or(""));
-                            }
-                        }
-                        "content_block_stop" => {
-                            if let Some(mut call) = current_tool_call.take() {
-                                if !current_tool_input.is_empty() {
-                                    call.input =
-                                        match parse_tool_call_arguments(&current_tool_input) {
-                                            Ok(value) => value,
-                                            Err(err) => json!({
-                                                "__tool_call_parse_error": err.to_string(),
-                                                "__raw_arguments": current_tool_input,
-                                            }),
-                                        };
-                                }
-                                tool_calls.push(call);
-                            }
-                        }
-                        "message_stop" => {
-                            break;
-                        }
-                        _ => {}
-                    }
-                }
-            }
+        process_anthropic_sse_text(&text, &mut state, &mut on_token)?;
+        if state.stop_stream {
+            break;
         }
     }
 
-    if !tool_calls.is_empty() {
-        if !text_content.is_empty() {
-            Ok(LLMResponse::TextWithToolCalls(text_content, tool_calls))
-        } else {
-            Ok(LLMResponse::ToolCalls(tool_calls))
-        }
-    } else {
-        Ok(LLMResponse::Text(text_content))
-    }
+    Ok(finish_anthropic_stream(state))
 }
 
 pub async fn test_connection(base_url: &str, api_key: &str, model: &str) -> Result<bool> {
     if is_mock_text_base_url(base_url) || is_mock_tool_loop_base_url(base_url) {
         return Ok(true);
     }
-    let client = Client::new();
+    let client = build_http_client()?;
     let body = json!({
         "model": model,
         "max_tokens": 10,
@@ -185,4 +215,36 @@ pub async fn test_connection(base_url: &str, api_key: &str, model: &str) -> Resu
         .send()
         .await?;
     Ok(resp.status().is_success())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse_anthropic_chunks_for_test(chunks: &[&str]) -> Result<LLMResponse> {
+        let mut state = AnthropicStreamState::default();
+        let mut sink = Vec::new();
+        for chunk in chunks {
+            process_anthropic_sse_text(chunk, &mut state, &mut |token| sink.push(token))?;
+            if state.stop_stream {
+                break;
+            }
+        }
+        Ok(finish_anthropic_stream(state))
+    }
+
+    #[test]
+    fn anthropic_message_stop_stops_processing_later_chunks() {
+        let response = parse_anthropic_chunks_for_test(&[
+            "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n",
+            "data: {\"type\":\"message_stop\"}\n",
+            "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"ignored\"}}\n",
+        ])
+        .expect("parse chunks");
+
+        match response {
+            LLMResponse::Text(text) => assert_eq!(text, "hello"),
+            other => panic!("expected text response, got {other:?}"),
+        }
+    }
 }

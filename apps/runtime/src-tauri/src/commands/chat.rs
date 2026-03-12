@@ -4,6 +4,9 @@ use super::employee_agents::{
     AgentEmployee,
 };
 use super::runtime_preferences::resolve_default_work_dir_with_pool;
+use super::session_runs::{
+    append_session_run_event_with_pool, attach_assistant_message_to_run_with_pool,
+};
 use super::skills::DbState;
 use crate::agent::compactor;
 use crate::agent::permissions::PermissionMode;
@@ -15,6 +18,10 @@ use crate::agent::tools::{
     TaskTool, WebSearchTool,
 };
 use crate::agent::AgentExecutor;
+use crate::session_journal::{
+    SessionJournalState, SessionJournalStateHandle, SessionJournalStore, SessionRunEvent,
+    SessionRunStatus,
+};
 use chrono::Utc;
 use runtime_chat_app::{ChatPreparationRequest, ChatPreparationService, SessionCreationRequest};
 use runtime_executor_core::estimate_tokens;
@@ -183,6 +190,7 @@ async fn load_imported_external_mcp_guidance(
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ModelRouteErrorKind {
+    Billing,
     Auth,
     RateLimit,
     Timeout,
@@ -192,6 +200,20 @@ enum ModelRouteErrorKind {
 
 fn classify_model_route_error(error_message: &str) -> ModelRouteErrorKind {
     let lower = error_message.to_ascii_lowercase();
+    if lower.contains("insufficient_balance")
+        || lower.contains("insufficient balance")
+        || lower.contains("balance too low")
+        || lower.contains("account balance too low")
+        || lower.contains("insufficient_quota")
+        || lower.contains("insufficient quota")
+        || lower.contains("billing")
+        || lower.contains("payment required")
+        || lower.contains("credit balance")
+        || lower.contains("余额不足")
+        || lower.contains("欠费")
+    {
+        return ModelRouteErrorKind::Billing;
+    }
     if lower.contains("api key")
         || lower.contains("unauthorized")
         || lower.contains("invalid_api_key")
@@ -253,6 +275,17 @@ fn retry_backoff_ms(kind: ModelRouteErrorKind, attempt_idx: usize) -> u64 {
     }
     let exp = attempt_idx.min(3) as u32;
     base_ms.saturating_mul(1u64 << exp).min(5000)
+}
+
+fn model_route_error_kind_key(kind: ModelRouteErrorKind) -> &'static str {
+    match kind {
+        ModelRouteErrorKind::Billing => "billing",
+        ModelRouteErrorKind::Auth => "auth",
+        ModelRouteErrorKind::RateLimit => "rate_limit",
+        ModelRouteErrorKind::Timeout => "timeout",
+        ModelRouteErrorKind::Network => "network",
+        ModelRouteErrorKind::Unknown => "unknown",
+    }
 }
 
 #[cfg(test)]
@@ -498,6 +531,7 @@ pub async fn send_message(
     user_message: String,
     db: State<'_, DbState>,
     agent_executor: State<'_, Arc<AgentExecutor>>,
+    journal: State<'_, SessionJournalStateHandle>,
     cancel_flag: State<'_, CancelFlagState>,
 ) -> Result<(), String> {
     // 重置取消标志
@@ -541,6 +575,52 @@ pub async fn send_message(
     if let Some(group_run) =
         maybe_handle_team_entry_session_message_with_pool(&db.0, &session_id, &user_message).await?
     {
+        let run_id = Uuid::new_v4().to_string();
+        append_session_run_event_with_pool(
+            &db.0,
+            journal.0.as_ref(),
+            &session_id,
+            SessionRunEvent::RunStarted {
+                run_id: run_id.clone(),
+                user_message_id: msg_id.clone(),
+            },
+        )
+        .await?;
+        if !group_run.final_report.is_empty() {
+            append_session_run_event_with_pool(
+                &db.0,
+                journal.0.as_ref(),
+                &session_id,
+                SessionRunEvent::AssistantChunkAppended {
+                    run_id: run_id.clone(),
+                    chunk: group_run.final_report.clone(),
+                },
+            )
+            .await?;
+
+            let assistant_msg_id = Uuid::new_v4().to_string();
+            let assistant_now = Utc::now().to_rfc3339();
+            sqlx::query(
+                "INSERT INTO messages (id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)",
+            )
+            .bind(&assistant_msg_id)
+            .bind(&session_id)
+            .bind("assistant")
+            .bind(&group_run.final_report)
+            .bind(&assistant_now)
+            .execute(&db.0)
+            .await
+            .map_err(|e| e.to_string())?;
+
+            attach_assistant_message_to_run_with_pool(&db.0, &run_id, &assistant_msg_id).await?;
+        }
+        append_session_run_event_with_pool(
+            &db.0,
+            journal.0.as_ref(),
+            &session_id,
+            SessionRunEvent::RunCompleted { run_id },
+        )
+        .await?;
         let _ = app.emit(
             "stream-token",
             StreamToken {
@@ -884,17 +964,34 @@ pub async fn send_message(
 
     // 使用全局工具确认通道（在 lib.rs 中创建）
     let tool_confirm_responder = app.state::<ToolConfirmState>().0.clone();
+    let run_id = Uuid::new_v4().to_string();
+    append_session_run_event_with_pool(
+        &db.0,
+        journal.0.as_ref(),
+        &session_id,
+        SessionRunEvent::RunStarted {
+            run_id: run_id.clone(),
+            user_message_id: msg_id.clone(),
+        },
+    )
+    .await?;
 
     // 始终走 Agent 模式；失败时按候选链重试
     let mut final_messages_opt: Option<Vec<Value>> = None;
     let mut last_error: Option<String> = None;
+    let mut last_error_kind: Option<String> = None;
+    let streamed_text = Arc::new(std::sync::Mutex::new(String::new()));
     for (candidate_api_format, candidate_base_url, candidate_model_name, candidate_api_key) in
         &route_candidates
     {
         let mut attempt_idx = 0usize;
         loop {
+            if let Ok(mut buffer) = streamed_text.lock() {
+                buffer.clear();
+            }
             let app_clone = app.clone();
             let session_id_clone = session_id.clone();
+            let streamed_text_clone = Arc::clone(&streamed_text);
             let attempt = agent_executor
                 .execute_turn(
                     candidate_api_format,
@@ -904,6 +1001,9 @@ pub async fn send_message(
                     &system_prompt,
                     messages.clone(),
                     move |token: String| {
+                        if let Ok(mut buffer) = streamed_text_clone.lock() {
+                            buffer.push_str(&token);
+                        }
                         let _ = app_clone.emit(
                             "stream-token",
                             StreamToken {
@@ -954,13 +1054,7 @@ pub async fn send_message(
                 Err(err) => {
                     let err_text = err.to_string();
                     let kind = classify_model_route_error(&err_text);
-                    let kind_text = match kind {
-                        ModelRouteErrorKind::Auth => "auth",
-                        ModelRouteErrorKind::RateLimit => "rate_limit",
-                        ModelRouteErrorKind::Timeout => "timeout",
-                        ModelRouteErrorKind::Network => "network",
-                        ModelRouteErrorKind::Unknown => "unknown",
-                    };
+                    let kind_text = model_route_error_kind_key(kind);
                     let _ = sqlx::query(
                         "INSERT INTO route_attempt_logs (id, session_id, capability, api_format, model_name, attempt_index, retry_index, error_kind, success, error_message, created_at)
                          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)",
@@ -978,6 +1072,7 @@ pub async fn send_message(
                     .execute(&db.0)
                     .await;
                     last_error = Some(err_text.clone());
+                    last_error_kind = Some(kind_text.to_string());
                     eprintln!(
                         "[routing] 候选模型执行失败: format={}, model={}, attempt={}, kind={:?}, err={}",
                         candidate_api_format,
@@ -1012,19 +1107,51 @@ pub async fn send_message(
         }
     }
 
-    let final_messages = final_messages_opt
-        .ok_or_else(|| last_error.unwrap_or_else(|| "所有候选模型执行失败".to_string()))?;
+    let final_messages = match final_messages_opt {
+        Some(messages) => messages,
+        None => {
+            let partial_text = streamed_text
+                .lock()
+                .map(|buffer| buffer.clone())
+                .unwrap_or_default();
+            if !partial_text.is_empty() {
+                let _ = append_session_run_event_with_pool(
+                    &db.0,
+                    journal.0.as_ref(),
+                    &session_id,
+                    SessionRunEvent::AssistantChunkAppended {
+                        run_id: run_id.clone(),
+                        chunk: partial_text,
+                    },
+                )
+                .await;
+            }
 
-    // 发送结束事件
-    let _ = app.emit(
-        "stream-token",
-        StreamToken {
-            session_id: session_id.clone(),
-            token: String::new(),
-            done: true,
-            sub_agent: false,
-        },
-    );
+            let error_message = last_error.unwrap_or_else(|| "所有候选模型执行失败".to_string());
+            let error_kind = last_error_kind.unwrap_or_else(|| "unknown".to_string());
+            let _ = append_session_run_event_with_pool(
+                &db.0,
+                journal.0.as_ref(),
+                &session_id,
+                SessionRunEvent::RunFailed {
+                    run_id: run_id.clone(),
+                    error_kind,
+                    error_message: error_message.clone(),
+                },
+            )
+            .await;
+            let _ = app.emit(
+                "stream-token",
+                StreamToken {
+                    session_id: session_id.clone(),
+                    token: String::new(),
+                    done: true,
+                    sub_agent: false,
+                },
+            );
+            return Err(error_message);
+        }
+    };
 
     // 从新消息中按顺序提取有序项（文字和工具调用交替排列）
     let reconstructed_history_len = messages.len();
@@ -1157,22 +1284,85 @@ pub async fn send_message(
         final_text.clone()
     };
 
-    // 只有存在 assistant 回复时才保存
-    if !final_text.is_empty() || has_tool_calls {
-        let msg_id = Uuid::new_v4().to_string();
-        let now = Utc::now().to_rfc3339();
-        sqlx::query(
-            "INSERT INTO messages (id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)"
+    let finalize_result: Result<(), String> = async {
+        if !final_text.is_empty() {
+            append_session_run_event_with_pool(
+                &db.0,
+                journal.0.as_ref(),
+                &session_id,
+                SessionRunEvent::AssistantChunkAppended {
+                    run_id: run_id.clone(),
+                    chunk: final_text.clone(),
+                },
+            )
+            .await?;
+        }
+
+        if !final_text.is_empty() || has_tool_calls {
+            let msg_id = Uuid::new_v4().to_string();
+            let now = Utc::now().to_rfc3339();
+            sqlx::query(
+                "INSERT INTO messages (id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)"
+            )
+            .bind(&msg_id)
+            .bind(&session_id)
+            .bind("assistant")
+            .bind(&content)
+            .bind(&now)
+            .execute(&db.0)
+            .await
+            .map_err(|e| e.to_string())?;
+
+            attach_assistant_message_to_run_with_pool(&db.0, &run_id, &msg_id).await?;
+        }
+
+        append_session_run_event_with_pool(
+            &db.0,
+            journal.0.as_ref(),
+            &session_id,
+            SessionRunEvent::RunCompleted {
+                run_id: run_id.clone(),
+            },
         )
-        .bind(&msg_id)
-        .bind(&session_id)
-        .bind("assistant")
-        .bind(&content)
-        .bind(&now)
-        .execute(&db.0)
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
+
+        Ok(())
     }
+    .await;
+
+    if let Err(err) = finalize_result {
+        let _ = append_session_run_event_with_pool(
+            &db.0,
+            journal.0.as_ref(),
+            &session_id,
+            SessionRunEvent::RunFailed {
+                run_id,
+                error_kind: "persistence".to_string(),
+                error_message: err.clone(),
+            },
+        )
+        .await;
+        let _ = app.emit(
+            "stream-token",
+            StreamToken {
+                session_id: session_id.clone(),
+                token: String::new(),
+                done: true,
+                sub_agent: false,
+            },
+        );
+        return Err(err);
+    }
+
+    let _ = app.emit(
+        "stream-token",
+        StreamToken {
+            session_id: session_id.clone(),
+            token: String::new(),
+            done: true,
+            sub_agent: false,
+        },
+    );
 
     Ok(())
 }
@@ -1389,8 +1579,17 @@ pub async fn get_messages(
     session_id: String,
     db: State<'_, DbState>,
 ) -> Result<Vec<serde_json::Value>, String> {
-    let rows = sqlx::query_as::<_, (String, String, String)>(
-        "SELECT role, content, created_at FROM messages WHERE session_id = ? ORDER BY created_at ASC"
+    let rows = sqlx::query_as::<_, (String, String, String, String, Option<String>)>(
+        "SELECT
+            m.id,
+            m.role,
+            m.content,
+            m.created_at,
+            NULLIF(sr.id, '') AS run_id
+         FROM messages m
+         LEFT JOIN session_runs sr ON sr.assistant_message_id = m.id
+         WHERE m.session_id = ?
+         ORDER BY m.created_at ASC",
     )
     .bind(&session_id)
     .fetch_all(&db.0)
@@ -1399,7 +1598,7 @@ pub async fn get_messages(
 
     Ok(rows
         .iter()
-        .map(|(role, content, created_at)| {
+        .map(|(id, role, content, created_at, run_id)| {
             // 对 assistant 消息尝试解析结构化 content
             if role == "assistant" {
                 if let Ok(parsed) = serde_json::from_str::<Value>(content) {
@@ -1409,25 +1608,35 @@ pub async fn get_messages(
                             // 向后兼容：将旧格式扁平 tool_call 转换为嵌套 toolCall 格式
                             let normalized = normalize_stream_items(items);
                             return json!({
+                                "id": id,
                                 "role": role,
                                 "content": text,
                                 "created_at": created_at,
+                                "runId": run_id,
                                 "streamItems": normalized,
                             });
                         }
                         // 旧格式：包含 tool_calls 列表（向后兼容）
                         let tool_calls = parsed.get("tool_calls").cloned().unwrap_or(Value::Null);
                         return json!({
+                            "id": id,
                             "role": role,
                             "content": text,
                             "created_at": created_at,
+                            "runId": run_id,
                             "tool_calls": tool_calls,
                         });
                     }
                 }
             }
             // 其他情况直接返回原始 content
-            json!({"role": role, "content": content, "created_at": created_at})
+            json!({
+                "id": id,
+                "role": role,
+                "content": content,
+                "created_at": created_at,
+                "runId": run_id,
+            })
         })
         .collect())
 }
@@ -1673,6 +1882,14 @@ mod tests {
     fn classify_model_route_error_detects_auth() {
         let kind = classify_model_route_error("Unauthorized: invalid_api_key");
         assert_eq!(kind, ModelRouteErrorKind::Auth);
+        assert!(!should_retry_same_candidate(kind));
+    }
+
+    #[test]
+    fn classify_model_route_error_detects_billing() {
+        let kind = classify_model_route_error("insufficient_balance: account balance too low");
+        assert_eq!(kind, ModelRouteErrorKind::Billing);
+        assert_eq!(model_route_error_kind_key(kind), "billing");
         assert!(!should_retry_same_candidate(kind));
     }
 
@@ -1929,29 +2146,53 @@ pub async fn search_sessions(
 
 /// 将会话消息导出为 Markdown 字符串
 #[tauri::command]
-pub async fn export_session(session_id: String, db: State<'_, DbState>) -> Result<String, String> {
+pub async fn export_session(
+    session_id: String,
+    db: State<'_, DbState>,
+    journal: State<'_, SessionJournalStateHandle>,
+) -> Result<String, String> {
+    export_session_markdown_with_pool(&db.0, &session_id, Some(journal.0.as_ref())).await
+}
+
+pub async fn export_session_markdown_with_pool(
+    pool: &sqlx::SqlitePool,
+    session_id: &str,
+    journal: Option<&SessionJournalStore>,
+) -> Result<String, String> {
     let (title,): (String,) = sqlx::query_as("SELECT title FROM sessions WHERE id = ?")
-        .bind(&session_id)
-        .fetch_one(&db.0)
+        .bind(session_id)
+        .fetch_one(pool)
         .await
         .map_err(|e| e.to_string())?;
 
     let messages = sqlx::query_as::<_, (String, String, String)>(
         "SELECT role, content, created_at FROM messages WHERE session_id = ? ORDER BY created_at ASC"
     )
-    .bind(&session_id)
-    .fetch_all(&db.0)
+    .bind(session_id)
+    .fetch_all(pool)
     .await
     .map_err(|e| e.to_string())?;
 
     let mut md = format!("# {}\n\n", title);
     for (role, content, created_at) in &messages {
         let label = if role == "user" { "用户" } else { "助手" };
+        let rendered_content = render_export_message_content(role, content);
         md.push_str(&format!(
             "## {} ({})\n\n{}\n\n---\n\n",
-            label, created_at, content
+            label, created_at, rendered_content
         ));
     }
+
+    if let Some(journal_store) = journal {
+        if let Ok(state) = journal_store.read_state(session_id).await {
+            let recovered = render_recovered_run_sections(&messages, &state);
+            if !recovered.is_empty() {
+                md.push_str("## 恢复的运行记录\n\n");
+                md.push_str(&recovered);
+            }
+        }
+    }
+
     Ok(md)
 }
 
@@ -1977,6 +2218,118 @@ mod session_source_tests {
             resolve_im_session_source(None),
             ("local".to_string(), String::new())
         );
+    }
+}
+
+fn render_export_message_content(role: &str, content: &str) -> String {
+    if role != "assistant" {
+        return content.to_string();
+    }
+
+    let Ok(parsed) = serde_json::from_str::<Value>(content) else {
+        return content.to_string();
+    };
+
+    let mut sections: Vec<String> = Vec::new();
+    let final_text = parsed["text"].as_str().unwrap_or("").trim();
+    if !final_text.is_empty() {
+        sections.push(final_text.to_string());
+    }
+
+    if let Some(items) = parsed["items"].as_array() {
+        let item_text = items
+            .iter()
+            .filter_map(|item| {
+                if item["type"].as_str() == Some("text") {
+                    return item["content"]
+                        .as_str()
+                        .map(str::trim)
+                        .filter(|text| !text.is_empty())
+                        .map(str::to_string);
+                }
+                None
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !item_text.is_empty() && !sections.iter().any(|section| section.contains(&item_text)) {
+            sections.push(item_text);
+        }
+    }
+
+    if sections.is_empty() {
+        content.to_string()
+    } else {
+        sections.join("\n\n")
+    }
+}
+
+fn render_recovered_run_sections(
+    messages: &[(String, String, String)],
+    state: &SessionJournalState,
+) -> String {
+    let assistant_contents: Vec<&str> = messages
+        .iter()
+        .filter_map(|(role, content, _)| (role == "assistant").then_some(content.as_str()))
+        .collect();
+
+    let mut sections = Vec::new();
+    for run in &state.runs {
+        let buffered = run.buffered_text.trim();
+        let error_message = run.last_error_message.as_deref().unwrap_or("").trim();
+        let buffered_already_exported = !buffered.is_empty()
+            && assistant_contents
+                .iter()
+                .any(|content| content.contains(buffered));
+        let error_already_exported = !error_message.is_empty()
+            && assistant_contents
+                .iter()
+                .any(|content| content.contains(error_message));
+        let should_recover = (!buffered.is_empty() && !buffered_already_exported)
+            || (!error_message.is_empty() && !error_already_exported)
+            || matches!(
+                &run.status,
+                SessionRunStatus::Failed | SessionRunStatus::Cancelled
+            );
+
+        if !should_recover {
+            continue;
+        }
+
+        sections.push(format!(
+            "### Run {} ({})",
+            run.run_id,
+            export_status_label(&run.status)
+        ));
+        sections.push(String::new());
+        if !buffered.is_empty() && !buffered_already_exported {
+            sections.push("#### 已保留的部分输出".to_string());
+            sections.push(String::new());
+            sections.push(buffered.to_string());
+            sections.push(String::new());
+        }
+        if let Some(error_kind) = &run.last_error_kind {
+            if !error_kind.trim().is_empty() {
+                sections.push(format!("- error_kind: {}", error_kind));
+            }
+        }
+        if !error_message.is_empty() && !error_already_exported {
+            sections.push(format!("- error_message: {}", error_message));
+        }
+        sections.push("\n---\n".to_string());
+    }
+
+    sections.join("\n")
+}
+
+fn export_status_label(status: &SessionRunStatus) -> &'static str {
+    match status {
+        SessionRunStatus::Queued => "queued",
+        SessionRunStatus::Thinking => "thinking",
+        SessionRunStatus::ToolCalling => "tool_calling",
+        SessionRunStatus::WaitingUser => "waiting_user",
+        SessionRunStatus::Completed => "completed",
+        SessionRunStatus::Failed => "failed",
+        SessionRunStatus::Cancelled => "cancelled",
     }
 }
 

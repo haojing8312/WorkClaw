@@ -69,12 +69,24 @@ export function ToolIsland({ toolCalls, isRunning, subAgentBuffer }: ToolIslandP
     ? `${getToolStatusLabel(current)}${getParamSummary(current) ? ` · ${getParamSummary(current)}` : ""}`
     : null;
 
-  const allDone = !isRunning && total > 0;
-  const summaryLabel = isRunning
-    ? currentLabel || "正在处理步骤"
-    : errorCount > 0
-    ? `已完成 ${completed} 个步骤，${errorCount} 个待处理`
-    : `已完成 ${total} 个步骤`;
+  const summaryTitle = isRunning ? "正在处理" : "执行记录";
+  const summarySegments: string[] = [];
+  if (isRunning) {
+    if (total > 1) {
+      summarySegments.push(`${completed}/${total} 步`);
+    } else if (total === 1) {
+      summarySegments.push("1 个步骤");
+    }
+    if (currentLabel) {
+      summarySegments.push(currentLabel);
+    }
+  } else if (total > 0) {
+    summarySegments.push(`${total} 个步骤`);
+    if (errorCount > 0) {
+      summarySegments.push(`${errorCount} 个异常`);
+    }
+  }
+  const summaryLabel = summarySegments.join(" · ");
 
   return (
     <motion.div
@@ -85,6 +97,7 @@ export function ToolIsland({ toolCalls, isRunning, subAgentBuffer }: ToolIslandP
       {/* 胶囊主体 */}
       <motion.div
         layout
+        data-testid="tool-island-summary"
         className={
           "rounded-2xl overflow-hidden cursor-pointer select-none " +
           (expanded
@@ -108,9 +121,10 @@ export function ToolIsland({ toolCalls, isRunning, subAgentBuffer }: ToolIslandP
           )}
 
           {/* 描述文字 */}
-          <span className="flex-1 text-xs font-medium text-gray-700 truncate">
-            {summaryLabel}
-          </span>
+          <div className="flex-1 min-w-0">
+            <div className="text-xs font-medium text-gray-700 truncate">{summaryTitle}</div>
+            {summaryLabel && <div className="text-[11px] text-gray-400 truncate mt-0.5">{summaryLabel}</div>}
+          </div>
 
           {/* 进度计数 */}
           {isRunning && total > 1 && (
@@ -157,6 +171,7 @@ export function ToolIsland({ toolCalls, isRunning, subAgentBuffer }: ToolIslandP
                 {toolCalls.map((tc, i) => (
                   <div key={tc.id}>
                     <button
+                      data-testid={`tool-island-step-${tc.id}`}
                       onClick={(e) => {
                         e.stopPropagation();
                         setDetailIndex(detailIndex === i ? null : i);

@@ -213,8 +213,9 @@ describe("SettingsView model providers", () => {
     expect(await screen.findByText("External Content Providers")).toBeInTheDocument();
     const agentReachCard = screen.getByText("agent-reach").closest("div.rounded-2xl.border.border-gray-200.bg-gray-50");
     expect(agentReachCard).not.toBeNull();
-    expect(within(agentReachCard!).getByText("Partial")).toBeInTheDocument();
-    expect(within(agentReachCard!).getByText("search: ok video: missing dependency")).toBeInTheDocument();
+    const agentReachCardElement = agentReachCard as HTMLElement;
+    expect(within(agentReachCardElement).getByText("Partial")).toBeInTheDocument();
+    expect(within(agentReachCardElement).getByText("search: ok video: missing dependency")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Run Diagnostics" }));
 
@@ -225,8 +226,8 @@ describe("SettingsView model providers", () => {
     });
 
     await waitFor(() => {
-      expect(within(agentReachCard!).getByText("Available")).toBeInTheDocument();
-      expect(within(agentReachCard!).getByText("extract_media_context")).toBeInTheDocument();
+      expect(within(agentReachCardElement).getByText("Available")).toBeInTheDocument();
+      expect(within(agentReachCardElement).getByText("extract_media_context")).toBeInTheDocument();
     });
 
     expect(screen.getByText("Agent-Reach")).toBeInTheDocument();

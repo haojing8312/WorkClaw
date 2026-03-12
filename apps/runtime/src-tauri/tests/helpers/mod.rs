@@ -63,6 +63,38 @@ pub async fn setup_test_db() -> (SqlitePool, TempDir) {
     .unwrap();
 
     sqlx::query(
+        "CREATE TABLE IF NOT EXISTS session_runs (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            user_message_id TEXT NOT NULL DEFAULT '',
+            assistant_message_id TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL,
+            buffered_text TEXT NOT NULL DEFAULT '',
+            error_kind TEXT NOT NULL DEFAULT '',
+            error_message TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS session_run_events (
+            id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    sqlx::query(
         "CREATE TABLE IF NOT EXISTS model_configs (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,

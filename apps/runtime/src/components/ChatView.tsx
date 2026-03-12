@@ -1,21 +1,24 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { Fragment, useState, useEffect, useRef, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
-import { SkillManifest, ModelConfig, Message, StreamItem, FileAttachment, ImRoleTimelineEvent, ImRoleDispatchRequest, EmployeeGroupRunSnapshot, EmployeeGroup, EmployeeGroupRule } from "../types";
+import { SkillManifest, ModelConfig, Message, StreamItem, FileAttachment, ImRoleTimelineEvent, ImRoleDispatchRequest, EmployeeGroupRunSnapshot, EmployeeGroup, EmployeeGroupRule, SessionRunProjection } from "../types";
 import { motion } from "framer-motion";
 import { ToolIsland } from "./ToolIsland";
 import { RiskConfirmDialog } from "./RiskConfirmDialog";
 import { useImmersiveTranslation } from "../hooks/useImmersiveTranslation";
 import { ChatWorkspaceSidePanel } from "./chat-side-panel/ChatWorkspaceSidePanel";
 import {
+  buildTaskJourneyViewModel,
   buildTaskPanelViewModel,
   buildWebSearchViewModel,
   extractSessionTouchedFiles,
 } from "./chat-side-panel/view-model";
+import type { TaskJourneyViewModel } from "./chat-side-panel/view-model";
+import { TaskJourneySummary } from "./chat-journey/TaskJourneySummary";
 import { getDefaultModel } from "../lib/default-model";
 
 type ClawhubInstallCandidate = {
@@ -83,6 +86,25 @@ interface Props {
   operationPermissionMode?: "standard" | "full_access" | string;
 }
 
+function hasTaskJourneyContent(model: TaskJourneyViewModel) {
+  return model.steps.length > 0 || model.deliverables.length > 0 || model.warnings.length > 0;
+}
+
+function buildFailedWorkPrompt(model: TaskJourneyViewModel): string {
+  if (model.warnings.length === 0) return "";
+  const warningSummary = model.warnings.join("\n- ");
+  return [
+    `请继续补做失败项，目标任务：${model.currentTaskTitle || "当前任务"}`,
+    "已生成的文件：",
+    ...(model.deliverables.length > 0
+      ? model.deliverables.map((item) => `- ${item.path}`)
+      : ["- 暂无可用产物"]),
+    "待处理问题：",
+    `- ${warningSummary}`,
+    "请直接续做缺失步骤，并在完成后明确说明新增了哪些文件。",
+  ].join("\n");
+}
+
 export function ChatView({
   skill,
   models,
@@ -120,6 +142,7 @@ export function ChatView({
     return message.split(prefix)[1]?.trim() || null;
   };
   const [messages, setMessages] = useState<Message[]>([]);
+  const [sessionRuns, setSessionRuns] = useState<SessionRunProjection[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   // 有序的流式输出项：文字和工具调用按时间顺序排列
@@ -273,6 +296,7 @@ export function ChatView({
     } else {
       setMessages([]);
     }
+    loadSessionRuns(sessionId);
     loadWorkspace(sessionId);
     // 切换会话时重置流式状态
     setStreaming(false);
@@ -301,6 +325,7 @@ export function ChatView({
     setHighlightedMessageIndex(null);
     setHighlightedGroupRunStepId(null);
     setHighlightedGroupRunStepEventId(null);
+    setSessionRuns([]);
     lastHandledGroupRunStepFocusNonceRef.current = null;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
@@ -432,6 +457,9 @@ export function ChatView({
           setSubAgentBuffer("");
           setSubAgentRoleName("");
           setStreaming(false);
+          if (currentSessionId) {
+            void Promise.all([loadMessages(currentSessionId), loadSessionRuns(currentSessionId)]);
+          }
         } else if (payload.sub_agent) {
           // 子 Agent 的 token 单独缓冲
           const delegatedRole = (payload.role_name || payload.role_id || "").trim();
@@ -761,6 +789,22 @@ export function ChatView({
     }
   }
 
+  async function loadSessionRuns(sid: string) {
+    if (!sid) {
+      setSessionRuns([]);
+      return;
+    }
+    try {
+      const runs = await invoke<SessionRunProjection[]>("list_session_runs", {
+        sessionId: sid,
+      });
+      setSessionRuns(Array.isArray(runs) ? runs : []);
+    } catch (e) {
+      console.error("加载会话运行记录失败:", e);
+      setSessionRuns([]);
+    }
+  }
+
   async function handleSend() {
     if (!input.trim() && attachedFiles.length === 0) return;
     if (streaming || !sessionId) return;
@@ -815,6 +859,7 @@ export function ChatView({
           created_at: new Date().toISOString(),
         },
       ]);
+      await Promise.all([loadMessages(sessionId), loadSessionRuns(sessionId)]);
     } finally {
       setStreaming(false);
     }
@@ -1020,6 +1065,54 @@ export function ChatView({
   }, [messages, streamItems]);
   const taskPanelModel = useMemo(() => buildTaskPanelViewModel(sidePanelMessages), [sidePanelMessages]);
   const webSearchEntries = useMemo(() => buildWebSearchViewModel(sidePanelMessages), [sidePanelMessages]);
+  const failedSessionRuns = useMemo(
+    () => sessionRuns.filter((run) => run.status === "failed" || run.status === "cancelled"),
+    [sessionRuns]
+  );
+  const failedRunsByAssistantMessageId = useMemo(() => {
+    const mapping = new Map<string, SessionRunProjection[]>();
+    for (const run of failedSessionRuns) {
+      const messageId = (run.assistant_message_id || "").trim();
+      if (!messageId) continue;
+      const current = mapping.get(messageId) ?? [];
+      current.push(run);
+      mapping.set(messageId, current);
+    }
+    return mapping;
+  }, [failedSessionRuns]);
+  const failedRunsByUserMessageId = useMemo(() => {
+    const mapping = new Map<string, SessionRunProjection[]>();
+    for (const run of failedSessionRuns) {
+      if ((run.assistant_message_id || "").trim()) continue;
+      const messageId = (run.user_message_id || "").trim();
+      if (!messageId) continue;
+      const current = mapping.get(messageId) ?? [];
+      current.push(run);
+      mapping.set(messageId, current);
+    }
+    return mapping;
+  }, [failedSessionRuns]);
+  const orphanFailedRuns = useMemo(() => {
+    const anchoredMessageIds = new Set(
+      messages
+        .flatMap((message) => {
+          const ids: string[] = [];
+          const messageId = (message.id || "").trim();
+          if (!messageId) return ids;
+          ids.push(messageId);
+          if ((message.runId || "").trim()) ids.push((message.runId || "").trim());
+          return ids;
+        })
+    );
+    return failedSessionRuns.filter((run) => {
+      const userMessageId = (run.user_message_id || "").trim();
+      const assistantMessageId = (run.assistant_message_id || "").trim();
+      return (
+        (!userMessageId || !anchoredMessageIds.has(userMessageId)) &&
+        (!assistantMessageId || !anchoredMessageIds.has(assistantMessageId))
+      );
+    });
+  }, [failedSessionRuns, messages]);
   const touchedFilePaths = useMemo(
     () => extractSessionTouchedFiles(sidePanelMessages).map((item) => item.path),
     [sidePanelMessages]
@@ -1653,6 +1746,54 @@ export function ChatView({
     return agentState.detail || agentState.state;
   }
 
+  function handleOpenWorkspaceFolder() {
+    if (!workspace) return;
+    void invoke("open_external_url", { url: workspace });
+  }
+
+  function handleViewFilesFromDelivery() {
+    setSidePanelOpen(true);
+    setSidePanelTab("files");
+  }
+
+  function handleResumeFailedWork(prompt: string) {
+    if (!prompt) return;
+    setInput(prompt);
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(prompt.length, prompt.length);
+    });
+  }
+
+  function getRunFailureTitle(run: SessionRunProjection) {
+    if (run.error_kind === "billing") return "模型余额不足";
+    if (run.error_kind === "cancelled") return "任务已取消";
+    return run.error_message || "本轮执行失败";
+  }
+
+  function renderRunFailureCard(run: SessionRunProjection) {
+    return (
+      <motion.div
+        key={`run-failure-${run.id}`}
+        data-testid={`run-failure-card-${run.id}`}
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="mr-auto max-w-[80%] rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-900 shadow-sm"
+      >
+        <div className="text-xs font-medium tracking-wide text-amber-700">本轮执行结果</div>
+        <div className="mt-1 text-lg font-semibold">{getRunFailureTitle(run)}</div>
+        {run.error_message && run.error_message !== getRunFailureTitle(run) && (
+          <div className="mt-2 whitespace-pre-wrap text-sm text-amber-800">{run.error_message}</div>
+        )}
+        {run.buffered_text && (
+          <div className="mt-3 rounded-xl border border-white/70 bg-white/70 px-4 py-3 text-sm text-gray-700">
+            <div className="mb-1 text-xs font-medium tracking-wide text-gray-500">已保留的部分输出</div>
+            <div className="whitespace-pre-wrap">{run.buffered_text}</div>
+          </div>
+        )}
+      </motion.div>
+    );
+  }
   return (
     <div className="flex flex-col h-full">
       {/* 头部 */}
@@ -2195,49 +2336,80 @@ export function ChatView({
         {messages.map((m, i) => {
           const isLatest = i === messages.length - 1;
           const isSessionFocusTarget = highlightedMessageIndex === i;
+          const messageJourneyModel = m.role === "assistant" ? buildTaskJourneyViewModel([m]) : null;
+          const shouldRenderJourneySummary =
+            messageJourneyModel !== null && hasTaskJourneyContent(messageJourneyModel);
+          const messageSummaryKey = (m.runId || m.id || `message-${i}`).trim();
+          const failedWorkPromptForMessage = messageJourneyModel
+            ? buildFailedWorkPrompt(messageJourneyModel)
+            : "";
+          const inlineFailedRuns =
+            m.role === "assistant" && (m.id || "").trim()
+              ? failedRunsByAssistantMessageId.get((m.id || "").trim()) ?? []
+              : m.role === "user" && (m.id || "").trim()
+              ? failedRunsByUserMessageId.get((m.id || "").trim()) ?? []
+              : [];
           return (
-            <motion.div
-              key={i}
-              ref={(node) => {
-                messageElementRefs.current[i] = node;
-              }}
-              data-testid={`chat-message-${i}`}
-              data-session-focus-highlighted={isSessionFocusTarget ? "true" : "false"}
-              initial={isLatest ? { opacity: 0, x: m.role === "user" ? 20 : -20 } : false}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ type: "spring", stiffness: 300, damping: 24 }}
-              className={"flex " + (m.role === "user" ? "justify-end" : "justify-start")}
-            >
-              <div
-                className={
-                  "max-w-[80%] rounded-2xl px-5 py-3 text-sm transition-all " +
-                  (isSessionFocusTarget ? "ring-2 ring-amber-300 bg-amber-50/80 " : "") +
-                  (m.role === "user"
-                    ? "bg-blue-500 text-white"
-                    : "bg-white text-gray-800 shadow-sm border border-gray-100")
-                }
+            <Fragment key={m.id || `${i}-${m.created_at}`}>
+              <motion.div
+                ref={(node) => {
+                  messageElementRefs.current[i] = node;
+                }}
+                data-testid={`chat-message-${i}`}
+                data-session-focus-highlighted={isSessionFocusTarget ? "true" : "false"}
+                initial={isLatest ? { opacity: 0, x: m.role === "user" ? 20 : -20 } : false}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ type: "spring", stiffness: 300, damping: 24 }}
+                className={"flex " + (m.role === "user" ? "justify-end" : "justify-start")}
               >
-                {m.role === "assistant" && m.streamItems ? (
-                  <>
-                    {renderStreamItems(m.streamItems, false)}
-                    {renderInstallCandidates(extractInstallCandidates(m.streamItems, m.content))}
-                  </>
-                ) : m.role === "assistant" && m.toolCalls ? (
-                  <>
-                    <ToolIsland toolCalls={m.toolCalls} isRunning={false} />
-                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{m.content}</ReactMarkdown>
-                  </>
-                ) : m.role === "assistant" ? (
-                  <>
-                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{m.content}</ReactMarkdown>
-                  </>
-                ) : (
-                  m.content
-                )}
-              </div>
-            </motion.div>
+                <div
+                  className={
+                    "max-w-[80%] rounded-2xl px-5 py-3 text-sm transition-all " +
+                    (isSessionFocusTarget ? "ring-2 ring-amber-300 bg-amber-50/80 " : "") +
+                    (m.role === "user"
+                      ? "bg-blue-500 text-white"
+                      : "bg-white text-gray-800 shadow-sm border border-gray-100")
+                  }
+                >
+                  {m.role === "assistant" && m.streamItems ? (
+                    <>
+                      {renderStreamItems(m.streamItems, false)}
+                      {renderInstallCandidates(extractInstallCandidates(m.streamItems, m.content))}
+                    </>
+                  ) : m.role === "assistant" && m.toolCalls ? (
+                    <>
+                      <ToolIsland toolCalls={m.toolCalls} isRunning={false} />
+                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{m.content}</ReactMarkdown>
+                    </>
+                  ) : m.role === "assistant" ? (
+                    <>
+                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{m.content}</ReactMarkdown>
+                    </>
+                  ) : (
+                    m.content
+                  )}
+                </div>
+              </motion.div>
+              {shouldRenderJourneySummary && messageJourneyModel && (
+                <div data-testid={`task-journey-summary-${messageSummaryKey}`}>
+                  <TaskJourneySummary
+                    model={messageJourneyModel}
+                    workspace={workspace}
+                    onViewFiles={handleViewFilesFromDelivery}
+                    onOpenWorkspace={handleOpenWorkspaceFolder}
+                    onResumeFailedWork={
+                      failedWorkPromptForMessage
+                        ? () => handleResumeFailedWork(failedWorkPromptForMessage)
+                        : undefined
+                    }
+                  />
+                </div>
+              )}
+              {inlineFailedRuns.map((run) => renderRunFailureCard(run))}
+            </Fragment>
           );
         })}
+        {orphanFailedRuns.map((run) => renderRunFailureCard(run))}
         {/* 流式输出区域：按时间顺序渲染 */}
         {(streamItems.length > 0 || subAgentBuffer.length > 0) && (
           <motion.div

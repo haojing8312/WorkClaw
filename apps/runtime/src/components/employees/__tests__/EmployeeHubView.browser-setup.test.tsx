@@ -45,7 +45,9 @@ describe("EmployeeHubView browser setup panel", () => {
       }
       if (command === "get_feishu_browser_setup_session") {
         expect(payload).toMatchObject({ sessionId: "sess-1" });
-        return Promise.resolve(sessionSnapshots.shift() ?? sessionSnapshots.at(-1));
+        return Promise.resolve(
+          sessionSnapshots.shift() ?? sessionSnapshots[sessionSnapshots.length - 1],
+        );
       }
       return Promise.resolve(null);
     });

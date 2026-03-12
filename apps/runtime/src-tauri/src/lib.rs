@@ -7,6 +7,7 @@ pub mod content_providers;
 mod db;
 pub mod im;
 pub mod providers;
+pub mod session_journal;
 pub mod sidecar;
 pub mod team_templates;
 
@@ -19,6 +20,7 @@ use commands::chat::{
 };
 use commands::feishu_gateway::FeishuEventRelayState;
 use commands::skills::DbState;
+use session_journal::{SessionJournalStateHandle, SessionJournalStore};
 use sidecar::SidecarManager;
 use std::sync::Arc;
 use tauri::Manager;
@@ -48,6 +50,14 @@ fn initialize_runtime_state(app: &mut tauri::App, pool: sqlx::SqlitePool) -> Man
 
     let search_cache = Arc::new(SearchCache::new(std::time::Duration::from_secs(900), 100));
     app.manage(SearchCacheState(search_cache));
+
+    let journal_root = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::env::temp_dir().join("workclaw"))
+        .join("sessions");
+    let journal_store = Arc::new(SessionJournalStore::new(journal_root));
+    app.manage(SessionJournalStateHandle(journal_store));
 
     let sidecar_manager = Arc::new(SidecarManager::new());
     app.manage(sidecar_manager.clone());
@@ -365,6 +375,7 @@ pub fn run() {
             commands::chat::search_sessions,
             commands::chat::export_session,
             commands::chat::write_export_file,
+            commands::session_runs::list_session_runs,
             commands::chat::answer_user_question,
             commands::chat::confirm_tool_execution,
             commands::chat::cancel_agent,

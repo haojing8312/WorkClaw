@@ -192,9 +192,11 @@ export interface StreamItem {
 }
 
 export interface Message {
+  id?: string;
   role: "user" | "assistant" | "system";
   content: string;
   created_at: string;
+  runId?: string | null;
   toolCalls?: ToolCallInfo[];
   /// 有序的展示项（新格式），优先使用此字段渲染
   streamItems?: StreamItem[];
@@ -206,6 +208,19 @@ export interface ToolCallInfo {
   input: Record<string, unknown>;
   output?: string;
   status: "running" | "completed" | "error";
+}
+
+export interface SessionRunProjection {
+  id: string;
+  session_id: string;
+  user_message_id: string;
+  assistant_message_id?: string | null;
+  status: string;
+  buffered_text: string;
+  error_kind?: string | null;
+  error_message?: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface SessionInfo {
