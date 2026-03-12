@@ -1,5 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime};
+use tauri::State;
+
+const BROWSER_BRIDGE_CONNECTED_TTL: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BrowserBridgeInstallStatus {
@@ -17,6 +22,24 @@ pub struct BrowserBridgeInstallEnv {
     pub user_profile: Option<PathBuf>,
     pub repo_root: PathBuf,
 }
+
+#[derive(Clone, Default)]
+pub struct BrowserBridgeInstallStore {
+    last_heartbeat_at: Arc<Mutex<Option<SystemTime>>>,
+}
+
+impl BrowserBridgeInstallStore {
+    pub fn mark_connected_now(&self) {
+        *self.last_heartbeat_at.lock().unwrap() = Some(SystemTime::now());
+    }
+
+    pub fn last_heartbeat_at(&self) -> Option<SystemTime> {
+        *self.last_heartbeat_at.lock().unwrap()
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct BrowserBridgeInstallState(pub BrowserBridgeInstallStore);
 
 impl BrowserBridgeInstallEnv {
     pub fn from_process() -> Self {
@@ -70,14 +93,21 @@ fn native_host_manifest_path(chrome_user_data_dir: &Path) -> PathBuf {
 
 pub fn get_browser_bridge_install_status_with_env(
     env: &BrowserBridgeInstallEnv,
+    last_heartbeat_at: Option<SystemTime>,
 ) -> BrowserBridgeInstallStatus {
     match resolve_chrome_user_data_dir(env) {
         Ok(chrome_user_data_dir) => {
             let native_host_installed = native_host_manifest_path(&chrome_user_data_dir).exists();
             let extension_dir_ready = browser_bridge_extension_dir(env).exists();
+            let bridge_connected = last_heartbeat_at
+                .and_then(|timestamp| SystemTime::now().duration_since(timestamp).ok())
+                .map(|elapsed| elapsed <= BROWSER_BRIDGE_CONNECTED_TTL)
+                .unwrap_or(false);
 
             BrowserBridgeInstallStatus {
-                state: if native_host_installed && extension_dir_ready {
+                state: if bridge_connected {
+                    "connected".to_string()
+                } else if native_host_installed && extension_dir_ready {
                     "waiting_for_enable".to_string()
                 } else {
                     "not_installed".to_string()
@@ -85,7 +115,7 @@ pub fn get_browser_bridge_install_status_with_env(
                 chrome_found: true,
                 native_host_installed,
                 extension_dir_ready,
-                bridge_connected: false,
+                bridge_connected,
                 last_error: None,
             }
         }
@@ -140,9 +170,12 @@ fn open_path(path: &Path) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn get_browser_bridge_install_status() -> Result<BrowserBridgeInstallStatus, String> {
+pub async fn get_browser_bridge_install_status(
+    state: State<'_, BrowserBridgeInstallState>,
+) -> Result<BrowserBridgeInstallStatus, String> {
     Ok(get_browser_bridge_install_status_with_env(
         &BrowserBridgeInstallEnv::from_process(),
+        state.0.last_heartbeat_at(),
     ))
 }
 

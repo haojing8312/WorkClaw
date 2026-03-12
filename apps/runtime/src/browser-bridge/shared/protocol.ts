@@ -1,4 +1,5 @@
 export type BridgeRequest =
+  | { type: "bridge.hello" }
   | { type: "session.start"; provider: "feishu" }
   | { type: "session.resume"; sessionId: string }
   | { type: "page.report"; page: string }

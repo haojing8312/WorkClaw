@@ -48,6 +48,14 @@ export function getFeishuBrowserSetupSessionId(href: string = window.location.hr
   return url.searchParams.get("workclaw_session_id");
 }
 
+export async function notifyBrowserBridgeReady(
+  chromeLike: ChromeLike = globalThis as ChromeLike,
+): Promise<void> {
+  await chromeLike.runtime?.sendMessage?.({
+    type: "workclaw.browser-bridge-ready",
+  });
+}
+
 export async function maybeReportFeishuCredentialsToExtension(
   locationLike: Pick<Location, "href"> = window.location,
   doc: Document = document,
@@ -126,6 +134,7 @@ export async function initializeFeishuContentScript(
   doc: Document = document,
   chromeLike: ChromeLike = globalThis as ChromeLike,
 ): Promise<boolean> {
+  await notifyBrowserBridgeReady(chromeLike);
   installFeishuCredentialReporter(locationLike, doc, chromeLike);
   installFeishuInstructionListener(doc, chromeLike);
   return false;

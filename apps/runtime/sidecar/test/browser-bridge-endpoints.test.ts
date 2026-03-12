@@ -40,6 +40,36 @@ test('browser bridge endpoint accepts credentials report envelopes', async () =>
   });
 });
 
+test('browser bridge endpoint accepts hello envelopes', async () => {
+  const app = createSidecarApp();
+
+  const res = await app.fetch(
+    new Request('http://localhost/api/browser-bridge/native-message', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        version: 1,
+        sessionId: 'browser-bridge-install',
+        kind: 'request',
+        payload: {
+          type: 'bridge.hello',
+        },
+      }),
+    }),
+  );
+
+  assert.equal(res.status, 200);
+  const json = await res.json();
+  assert.deepEqual(json, {
+    version: 1,
+    sessionId: 'browser-bridge-install',
+    kind: 'response',
+    payload: {
+      type: 'action.detect_step',
+    },
+  });
+});
+
 test('browser bridge endpoint rejects invalid envelopes', async () => {
   const app = createSidecarApp();
 

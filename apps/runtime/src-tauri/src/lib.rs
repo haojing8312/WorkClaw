@@ -18,6 +18,7 @@ use browser_bridge_callback::BrowserBridgeCallbackServer;
 use commands::chat::{
     AskUserState, CancelFlagState, SearchCacheState, ToolConfirmResponder, ToolConfirmState,
 };
+use commands::browser_bridge_install::BrowserBridgeInstallState;
 use commands::feishu_gateway::FeishuEventRelayState;
 use commands::skills::DbState;
 use session_journal::{SessionJournalStateHandle, SessionJournalStore};
@@ -278,12 +279,15 @@ pub fn run() {
             let pool = tauri::async_runtime::block_on(db::init_db(app.handle()))
                 .expect("failed to init db");
             let handles = initialize_runtime_state(app, pool.clone());
+            let browser_bridge_install_state = BrowserBridgeInstallState::default();
+            app.manage(browser_bridge_install_state.clone());
             let feishu_browser_setup_state =
                 commands::feishu_browser_setup::FeishuBrowserSetupState::default();
             app.manage(feishu_browser_setup_state.clone());
             let browser_bridge_callback = Arc::new(BrowserBridgeCallbackServer::new(
                 pool.clone(),
                 feishu_browser_setup_state.0.clone(),
+                browser_bridge_install_state.0.clone(),
             ));
             let browser_bridge_callback_base =
                 tauri::async_runtime::block_on(browser_bridge_callback.start())

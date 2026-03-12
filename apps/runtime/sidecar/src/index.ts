@@ -119,6 +119,17 @@ async function defaultBrowserBridgeHandler(
     };
   }
 
+  if (envelope.payload?.type === 'bridge.hello') {
+    return {
+      version: 1,
+      sessionId: envelope.sessionId,
+      kind: 'response',
+      payload: {
+        type: 'action.detect_step',
+      },
+    };
+  }
+
   return {
     version: 1,
     sessionId: envelope.sessionId,

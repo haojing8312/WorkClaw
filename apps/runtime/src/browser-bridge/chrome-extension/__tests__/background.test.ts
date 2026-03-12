@@ -1,10 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  announceBrowserBridgeReady,
   forwardCredentialsToLocalBridge,
   forwardCredentialsViaNativeHost,
   getNativeHostName,
   handleFeishuExtensionMessage,
   maybeBroadcastBridgeInstruction,
+  sendBrowserBridgeHelloToLocalBridge,
+  sendBrowserBridgeHelloViaNativeHost,
   registerFeishuBackgroundMessageHandler,
   reportFeishuCredentialsFromDocument,
 } from "../background";
@@ -101,6 +104,106 @@ describe("chrome extension background bridge", () => {
       payload: { type: "action.pause", reason: "saved" },
     });
     expect(disconnect).toHaveBeenCalled();
+  });
+
+  it("announces browser bridge readiness through the local bridge", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+
+    const response = await sendBrowserBridgeHelloToLocalBridge(
+      "http://127.0.0.1:4312",
+      async (url, init) => {
+        calls.push({ url: String(url), init });
+        return new Response(
+          JSON.stringify({
+            version: 1,
+            sessionId: "browser-bridge-install",
+            kind: "response",
+            payload: { type: "action.detect_step" },
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      },
+    );
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toBe("http://127.0.0.1:4312/api/browser-bridge/native-message");
+    expect(response).toMatchObject({
+      sessionId: "browser-bridge-install",
+      kind: "response",
+      payload: { type: "action.detect_step" },
+    });
+  });
+
+  it("announces browser bridge readiness via chrome.runtime.connectNative when available", async () => {
+    const postMessage = vi.fn();
+    const disconnect = vi.fn();
+    const listeners: Array<(message: unknown) => void> = [];
+
+    const chromeLike = {
+      runtime: {
+        connectNative: vi.fn(() => ({
+          postMessage,
+          disconnect,
+          onMessage: {
+            addListener(listener: (message: unknown) => void) {
+              listeners.push(listener);
+            },
+          },
+        })),
+      },
+    };
+
+    const pending = sendBrowserBridgeHelloViaNativeHost(chromeLike);
+
+    expect(postMessage).toHaveBeenCalledWith({
+      version: 1,
+      sessionId: "browser-bridge-install",
+      kind: "request",
+      payload: {
+        type: "bridge.hello",
+      },
+    });
+
+    listeners[0]?.({
+      version: 1,
+      sessionId: "browser-bridge-install",
+      kind: "response",
+      payload: { type: "action.detect_step" },
+    });
+
+    await expect(pending).resolves.toMatchObject({
+      sessionId: "browser-bridge-install",
+      kind: "response",
+      payload: { type: "action.detect_step" },
+    });
+    expect(disconnect).toHaveBeenCalled();
+  });
+
+  it("falls back to the local bridge when startup handshake cannot reach native host", async () => {
+    const sendViaNativeHost = vi.fn(async () => {
+      throw new Error("native host unavailable");
+    });
+    const sendViaLocalBridge = vi.fn(async () => ({
+      version: 1 as const,
+      sessionId: "browser-bridge-install",
+      kind: "response" as const,
+      payload: { type: "action.detect_step" as const },
+    }));
+
+    const response = await announceBrowserBridgeReady("http://127.0.0.1:4312", {
+      sendViaNativeHost,
+      sendViaLocalBridge,
+    });
+
+    expect(sendViaNativeHost).toHaveBeenCalledTimes(1);
+    expect(sendViaLocalBridge).toHaveBeenCalledWith("http://127.0.0.1:4312");
+    expect(response).toMatchObject({
+      sessionId: "browser-bridge-install",
+      payload: { type: "action.detect_step" },
+    });
   });
 
   it("detects and reports credentials from the current page via native host", async () => {
@@ -283,6 +386,40 @@ describe("chrome extension background bridge", () => {
       kind: "response",
       payload: { type: "action.pause", reason: "saved-from-listener" },
     });
+  });
+
+  it("registers a runtime message listener that handles bridge-ready notifications", async () => {
+    const listeners: Array<(message: unknown) => unknown> = [];
+    const chromeLike = {
+      runtime: {
+        onMessage: {
+          addListener(listener: (message: unknown) => unknown) {
+            listeners.push(listener);
+          },
+        },
+      },
+    };
+    const sendHelloViaNativeHost = vi.fn(async () => ({
+      version: 1 as const,
+      sessionId: "browser-bridge-install",
+      kind: "response" as const,
+      payload: { type: "action.detect_step" as const },
+    }));
+
+    registerFeishuBackgroundMessageHandler(chromeLike, {
+      bridgeBaseUrl: "http://127.0.0.1:4312",
+      sendHelloViaNativeHost,
+    });
+
+    await expect(
+      listeners[0]?.({
+        type: "workclaw.browser-bridge-ready",
+      }),
+    ).resolves.toMatchObject({
+      sessionId: "browser-bridge-install",
+      payload: { type: "action.detect_step" },
+    });
+    expect(sendHelloViaNativeHost).toHaveBeenCalledTimes(1);
   });
 
   it("broadcasts pause instructions to the active Feishu tab", async () => {
