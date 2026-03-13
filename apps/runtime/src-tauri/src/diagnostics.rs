@@ -377,7 +377,7 @@ mod tests {
             "runtime",
             "startup",
             "startup complete",
-            Some(json!({"version":"0.2.11"})),
+            Some(json!({"version":"0.2.12"})),
         )
         .expect("write log record");
 

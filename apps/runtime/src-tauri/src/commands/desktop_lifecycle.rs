@@ -529,7 +529,7 @@ mod tests {
         };
 
         let summary = build_desktop_environment_summary(
-            "0.2.11",
+            "0.2.12",
             "windows",
             "C:\\Users\\me\\AppData\\Roaming\\WorkClaw",
             "C:\\Users\\me\\AppData\\Local\\WorkClaw\\cache",
