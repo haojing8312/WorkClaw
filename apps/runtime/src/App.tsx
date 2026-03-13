@@ -12,7 +12,6 @@ import {
   Eye,
   EyeOff,
   KeyRound,
-  Settings2,
   Sparkles,
   Wand2,
   X,
@@ -1811,7 +1810,7 @@ export default function App() {
                       推荐先用快速配置
                     </div>
                     <div className="mt-1 text-xs leading-5 text-[var(--sm-text-muted)]">
-                      默认模板会自动带出常用参数，先跑通连接，再到设置里做高级调整。
+                      默认模板会自动带出常用参数，建议先跑通连接；高级参数可在完成后再从侧边栏进入设置调整。
                     </div>
                   </div>
                   <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
@@ -1821,13 +1820,6 @@ export default function App() {
                       className="sm-btn sm-btn-primary min-h-11 flex-1 rounded-xl px-4 text-sm"
                     >
                       快速配置（1分钟）
-                    </button>
-                    <button
-                      data-testid="model-setup-hint-open-settings"
-                      onClick={openSettingsForModelSetup}
-                      className="sm-btn sm-btn-secondary min-h-11 rounded-xl px-4 text-sm"
-                    >
-                      打开设置
                     </button>
                     <button
                       data-testid="model-setup-hint-dismiss"
@@ -1913,16 +1905,16 @@ export default function App() {
                           : "补齐搜索配置后，智能体即可在首次使用时直接联网检索。"}
                       </div>
                     </div>
-                    <button
-                      type="button"
-                      data-testid="quick-model-setup-close"
-                      onClick={closeQuickModelSetup}
-                      disabled={!canDismissQuickModelSetup}
-                      aria-label="关闭快速配置"
-                      className="sm-btn sm-btn-ghost h-10 w-10 rounded-xl disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
+                      <button
+                        type="button"
+                        data-testid="quick-model-setup-close"
+                        onClick={closeQuickModelSetup}
+                        disabled={!canDismissQuickModelSetup}
+                        aria-label="关闭引导"
+                        className="sm-btn sm-btn-ghost h-10 w-10 rounded-xl disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
                   </div>
 
                   <div
@@ -1949,9 +1941,9 @@ export default function App() {
                         onSave={saveQuickSearchSetup}
                         panelClassName="space-y-3"
                         actionClassName="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-3"
-                        saveLabel="保存搜索配置"
+                        saveLabel="完成配置"
                         onSecondaryAction={!isBlockingInitialModelSetup ? skipQuickSearchSetup : undefined}
-                        secondaryActionLabel={!isBlockingInitialModelSetup ? "稍后配置搜索" : undefined}
+                        secondaryActionLabel={!isBlockingInitialModelSetup ? "跳过搜索，稍后再配" : undefined}
                       />
                     </div>
                   )}
@@ -1969,6 +1961,7 @@ export default function App() {
                           <button
                             key={provider.id}
                             type="button"
+                            data-testid={`quick-model-setup-provider-${provider.id}`}
                             onClick={() => applyQuickModelPreset(provider.id)}
                             className={`text-left rounded-2xl border px-3 py-3 transition-colors ${
                               isActive
@@ -1993,21 +1986,6 @@ export default function App() {
                   </div>
 
                   <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    <div>
-                      <label className="sm-field-label">服务商</label>
-                      <select
-                        data-testid="quick-model-setup-preset"
-                        value={quickModelPresetKey}
-                        onChange={(e) => applyQuickModelPreset(e.target.value)}
-                        className="sm-select h-11 bg-white px-3 text-sm"
-                      >
-                        {MODEL_PROVIDER_CATALOG.map((provider) => (
-                          <option key={provider.id} value={provider.id}>
-                            {provider.label}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
                     <div>
                       <label className="sm-field-label">连接名称</label>
                       <input
@@ -2143,7 +2121,7 @@ export default function App() {
                     </div>
                     <div className="mt-2 flex items-start gap-2 rounded-2xl border border-[var(--sm-border)] bg-[var(--sm-surface-muted)] px-3 py-3 text-[12px] leading-5 text-[var(--sm-text-muted)]">
                       <KeyRound className="mt-0.5 h-4 w-4 flex-shrink-0 text-[var(--sm-primary)]" />
-                      API Key 仅用于当前模型连接。若你更熟悉高级配置，也可以直接进入设置页调整更多参数。
+                      API Key 仅用于当前模型连接。先完成这里的配置并验证连接，后续再按需去设置页调整高级参数。
                     </div>
                   </div>
 
@@ -2178,8 +2156,8 @@ export default function App() {
                   <div className="mt-6 border-t border-[var(--sm-border)] pt-4">
                     <div className="text-xs leading-5 text-[var(--sm-text-muted)]">
                       {isBlockingInitialModelSetup
-                        ? "首次使用至少完成模型与搜索配置后，才能关闭这个向导。"
-                        : "按 Esc 或点击遮罩可以关闭此弹窗。"}
+                        ? "首次使用至少完成模型与搜索配置后，才能关闭这个引导。"
+                        : "按 Esc 或点击遮罩可直接关闭引导。"}
                     </div>
                     <div data-testid="quick-model-setup-actions" className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
                       <button
@@ -2189,16 +2167,7 @@ export default function App() {
                         disabled={!canDismissQuickModelSetup}
                         className="sm-btn sm-btn-ghost min-h-11 rounded-xl px-4 text-sm disabled:cursor-not-allowed disabled:opacity-50"
                       >
-                        {isBlockingInitialModelSetup ? "完成后可关闭" : "取消"}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={openSettingsForModelSetup}
-                        disabled={isQuickSetupBusy}
-                        className="sm-btn sm-btn-secondary min-h-11 rounded-xl px-4 text-sm disabled:opacity-60"
-                      >
-                        <Settings2 className="h-4 w-4" />
-                        打开设置
+                        {isBlockingInitialModelSetup ? "完成配置后可关闭" : "关闭引导"}
                       </button>
                       {quickSetupStep === "model" && (
                         <>
@@ -2264,13 +2233,6 @@ export default function App() {
                       className="sm-btn sm-btn-primary min-h-12 rounded-xl px-5 text-sm"
                     >
                       快速配置（1分钟）
-                    </button>
-                    <button
-                      data-testid="model-setup-gate-open-settings"
-                      onClick={openSettingsForModelSetup}
-                      className="sm-btn sm-btn-secondary min-h-12 rounded-xl px-5 text-sm"
-                    >
-                      打开设置
                     </button>
                   </div>
                 </div>

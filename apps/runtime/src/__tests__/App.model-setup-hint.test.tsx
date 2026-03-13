@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import App from "../App";
 import { MODEL_PROVIDER_CATALOG } from "../model-provider-catalog";
 
@@ -166,7 +166,7 @@ describe("App model setup hint", () => {
     });
   });
 
-  test("shows dismissible hint and opens settings from hint action", async () => {
+  test("shows dismissible hint and still allows opening settings from the sidebar entry", async () => {
     window.localStorage.setItem(INITIAL_MODEL_SETUP_COMPLETED_KEY, "1");
     render(<App />);
 
@@ -177,7 +177,7 @@ describe("App model setup hint", () => {
       screen.getByText("只需 1 分钟完成配置。配置后就能创建会话、执行技能和驱动智能体员工协作。"),
     ).toBeInTheDocument();
 
-    fireEvent.click(screen.getByTestId("model-setup-hint-open-settings"));
+    fireEvent.click(screen.getByText("open-settings"));
 
     await waitFor(() => {
       expect(screen.getByTestId("settings-view")).toBeInTheDocument();
@@ -328,11 +328,11 @@ describe("App model setup hint", () => {
       expect(screen.getByTestId("quick-model-setup-dialog")).toBeInTheDocument();
     });
 
-    const options = screen.getAllByRole("option");
-    expect(options).toHaveLength(MODEL_PROVIDER_CATALOG.length);
+    const providerCards = screen.getAllByTestId(/^quick-model-setup-provider-/);
+    expect(providerCards).toHaveLength(MODEL_PROVIDER_CATALOG.length);
 
     for (const provider of MODEL_PROVIDER_CATALOG) {
-      expect(screen.getByRole("option", { name: provider.label })).toBeInTheDocument();
+      expect(screen.getByTestId(`quick-model-setup-provider-${provider.id}`)).toBeInTheDocument();
     }
   });
 
@@ -361,9 +361,7 @@ describe("App model setup hint", () => {
       });
     });
 
-    fireEvent.change(screen.getByTestId("quick-model-setup-preset"), {
-      target: { value: "custom-openai" },
-    });
+    fireEvent.click(screen.getByTestId("quick-model-setup-provider-custom-openai"));
 
     expect(screen.queryByRole("button", { name: "获取 API Key" })).not.toBeInTheDocument();
     expect(screen.getByTestId("quick-model-setup-custom-guidance")).toHaveTextContent(
@@ -408,9 +406,7 @@ describe("App model setup hint", () => {
       expect(screen.getByTestId("quick-model-setup-dialog")).toBeInTheDocument();
     });
 
-    fireEvent.change(screen.getByTestId("quick-model-setup-preset"), {
-      target: { value: "custom-anthropic" },
-    });
+    fireEvent.click(screen.getByTestId("quick-model-setup-provider-custom-anthropic"));
     fireEvent.change(screen.getByTestId("quick-model-setup-base-url"), {
       target: { value: "https://claude-proxy.example.com/v1" },
     });
@@ -461,6 +457,55 @@ describe("App model setup hint", () => {
     expect(apiKeyInput).toHaveAttribute("type", "password");
   });
 
+  test("does not show a settings shortcut inside quick setup", async () => {
+    window.localStorage.setItem(INITIAL_MODEL_SETUP_COMPLETED_KEY, "1");
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("model-setup-hint")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId("model-setup-hint-open-quick-setup"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("quick-model-setup-dialog")).toBeInTheDocument();
+    });
+
+    expect(
+      within(screen.getByTestId("quick-model-setup-actions")).queryByRole("button", { name: "打开设置" }),
+    ).not.toBeInTheDocument();
+  });
+
+  test("uses provider cards as the only provider picker in quick setup", async () => {
+    window.localStorage.setItem(INITIAL_MODEL_SETUP_COMPLETED_KEY, "1");
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("model-setup-hint")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId("model-setup-hint-open-quick-setup"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("quick-model-setup-dialog")).toBeInTheDocument();
+    });
+
+    expect(screen.queryByTestId("quick-model-setup-preset")).not.toBeInTheDocument();
+    expect(screen.getByTestId("quick-model-setup-provider-zhipu")).toBeInTheDocument();
+    expect(screen.getByTestId("quick-model-setup-provider-custom-openai")).toBeInTheDocument();
+  });
+
+  test("does not show a settings shortcut on the non-blocking hint", async () => {
+    window.localStorage.setItem(INITIAL_MODEL_SETUP_COMPLETED_KEY, "1");
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("model-setup-hint")).toBeInTheDocument();
+    });
+
+    expect(screen.queryByTestId("model-setup-hint-open-settings")).not.toBeInTheDocument();
+  });
+
   test("allows dismissing quick setup with Escape after opening it from the hint", async () => {
     window.localStorage.setItem(INITIAL_MODEL_SETUP_COMPLETED_KEY, "1");
     render(<App />);
@@ -489,6 +534,7 @@ describe("App model setup hint", () => {
     await waitFor(() => {
       expect(screen.getByTestId("model-setup-gate")).toBeInTheDocument();
     });
+    expect(screen.queryByTestId("model-setup-gate-open-settings")).not.toBeInTheDocument();
     expect(screen.queryByTestId("model-setup-hint")).not.toBeInTheDocument();
     expect(
       screen.getByText("完成模型配置后，才能开始任务、创建会话并驱动智能体员工执行技能。现在只需 1 分钟。"),
@@ -530,7 +576,7 @@ describe("App model setup hint", () => {
     fireEvent.change(screen.getByLabelText("API Key"), {
       target: { value: "bs-test-first-launch-gate" },
     });
-    fireEvent.click(screen.getByText("保存搜索配置"));
+    fireEvent.click(screen.getByText("完成配置"));
 
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith(
@@ -573,7 +619,7 @@ describe("App model setup hint", () => {
       expect(screen.getByText("快速选择搜索引擎")).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByText("稍后配置搜索"));
+    fireEvent.click(screen.getByText("跳过搜索，稍后再配"));
 
     await waitFor(() => {
       expect(screen.queryByTestId("quick-model-setup-dialog")).not.toBeInTheDocument();
@@ -671,7 +717,7 @@ describe("App model setup hint", () => {
       expect(screen.getByTestId("model-setup-hint")).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByTestId("model-setup-hint-open-settings"));
+    fireEvent.click(screen.getByText("open-settings"));
 
     await waitFor(() => {
       expect(screen.getByTestId("settings-view")).toBeInTheDocument();
