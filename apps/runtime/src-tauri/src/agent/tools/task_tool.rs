@@ -1,5 +1,5 @@
 use crate::agent::permissions::PermissionMode;
-use crate::agent::types::{Tool, ToolContext};
+use crate::agent::types::{StreamDelta, Tool, ToolContext};
 use crate::agent::{AgentExecutor, ToolRegistry};
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
@@ -198,7 +198,11 @@ impl Tool for TaskTool {
                         _ => Arc::new(|_| {}),
                     };
                 // 将 Arc 包装成满足 Clone 的普通闭包
-                let on_token = move |token: String| on_token_arc(token);
+                let on_token = move |delta: StreamDelta| {
+                    if let StreamDelta::Text(token) = delta {
+                        on_token_arc(token);
+                    }
+                };
 
                 sub_executor
                     .execute_turn(

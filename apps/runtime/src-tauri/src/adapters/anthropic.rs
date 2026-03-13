@@ -1,4 +1,4 @@
-use crate::agent::types::{LLMResponse, ToolCall};
+use crate::agent::types::{LLMResponse, StreamDelta, ToolCall};
 use anyhow::{anyhow, Result};
 use futures_util::StreamExt;
 use reqwest::Client;
@@ -61,7 +61,7 @@ struct AnthropicStreamState {
 fn process_anthropic_sse_text(
     text: &str,
     state: &mut AnthropicStreamState,
-    on_token: &mut impl FnMut(String),
+    on_token: &mut impl FnMut(StreamDelta),
 ) -> Result<()> {
     state.pending_line.push_str(text);
     let ends_with_newline = state.pending_line.ends_with('\n');
@@ -99,7 +99,7 @@ fn process_anthropic_sse_text(
                         if v["delta"]["type"] == "text_delta" {
                             let token = v["delta"]["text"].as_str().unwrap_or("");
                             state.text_content.push_str(token);
-                            on_token(token.to_string());
+                            on_token(StreamDelta::Text(token.to_string()));
                         } else if v["delta"]["type"] == "input_json_delta" {
                             state
                                 .current_tool_input
@@ -153,11 +153,11 @@ pub async fn chat_stream_with_tools(
     system_prompt: &str,
     messages: Vec<Value>,
     tools: Vec<Value>,
-    mut on_token: impl FnMut(String) + Send,
+    mut on_token: impl FnMut(StreamDelta) + Send,
 ) -> Result<crate::agent::types::LLMResponse> {
     if is_mock_text_base_url(base_url) {
         let mock_text = mock_response_text(model, &messages);
-        on_token(mock_text.clone());
+        on_token(StreamDelta::Text(mock_text.clone()));
         return Ok(LLMResponse::Text(mock_text));
     }
     if is_mock_tool_loop_base_url(base_url) {

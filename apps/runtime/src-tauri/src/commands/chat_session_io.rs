@@ -1,4 +1,5 @@
 use super::runtime_preferences::resolve_default_work_dir_with_pool;
+use crate::commands::chat_runtime_io::extract_assistant_text_content;
 use crate::session_journal::{SessionJournalState, SessionJournalStore, SessionRunStatus};
 use chrono::Utc;
 use runtime_chat_app::{ChatPreparationService, SessionCreationRequest};
@@ -77,6 +78,7 @@ pub(crate) async fn get_messages_with_pool(
             if role == "assistant" {
                 if let Ok(parsed) = serde_json::from_str::<Value>(content) {
                     if let Some(text) = parsed.get("text") {
+                        let reasoning = parsed.get("reasoning").cloned().unwrap_or(Value::Null);
                         if let Some(items) = parsed.get("items") {
                             let normalized = normalize_stream_items(items);
                             return json!({
@@ -85,6 +87,7 @@ pub(crate) async fn get_messages_with_pool(
                                 "content": text,
                                 "created_at": created_at,
                                 "runId": run_id,
+                                "reasoning": reasoning,
                                 "streamItems": normalized,
                             });
                         }
@@ -95,6 +98,7 @@ pub(crate) async fn get_messages_with_pool(
                             "content": text,
                             "created_at": created_at,
                             "runId": run_id,
+                            "reasoning": reasoning,
                             "tool_calls": tool_calls,
                         });
                     }
@@ -340,7 +344,14 @@ pub(crate) async fn load_compaction_inputs_with_pool(
 
     let messages: Vec<Value> = rows
         .iter()
-        .map(|(role, content)| json!({ "role": role, "content": content }))
+        .map(|(role, content)| {
+            let normalized_content = if role == "assistant" {
+                extract_assistant_text_content(content)
+            } else {
+                content.clone()
+            };
+            json!({ "role": role, "content": normalized_content })
+        })
         .collect();
 
     let (model_id,): (String,) = sqlx::query_as("SELECT model_id FROM sessions WHERE id = ?")

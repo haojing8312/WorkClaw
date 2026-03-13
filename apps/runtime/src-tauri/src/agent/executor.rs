@@ -1,7 +1,7 @@
 use super::permissions::PermissionMode;
 use super::registry::ToolRegistry;
 use super::system_prompts::SystemPromptBuilder;
-use super::types::{LLMResponse, ToolContext, ToolResult};
+use super::types::{LLMResponse, StreamDelta, ToolContext, ToolResult};
 use crate::adapters;
 use anyhow::{anyhow, Result};
 use runtime_executor_core::{
@@ -213,7 +213,7 @@ impl AgentExecutor {
         model: &str,
         skill_system_prompt: &str,
         mut messages: Vec<Value>,
-        on_token: impl Fn(String) + Send + Clone,
+        on_token: impl Fn(StreamDelta) + Send + Clone,
         app_handle: Option<&AppHandle>,
         session_id: Option<&str>,
         allowed_tools: Option<&[String]>,

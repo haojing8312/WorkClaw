@@ -222,6 +222,8 @@ pub(crate) async fn finalize_send_message_execution(
         &final_text,
         has_tool_calls,
         &content,
+        &route_execution.reasoning_text,
+        route_execution.reasoning_duration_ms,
     )
     .await;
 

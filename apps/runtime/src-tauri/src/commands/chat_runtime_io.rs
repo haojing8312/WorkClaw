@@ -155,6 +155,8 @@ pub(crate) async fn finalize_run_success_with_pool(
     final_text: &str,
     has_tool_calls: bool,
     content: &str,
+    reasoning_text: &str,
+    reasoning_duration_ms: Option<u64>,
 ) -> Result<(), String> {
     if !final_text.is_empty() {
         append_session_run_event_with_pool(
@@ -170,8 +172,9 @@ pub(crate) async fn finalize_run_success_with_pool(
     }
 
     if !final_text.is_empty() || has_tool_calls {
+        let persisted_content = attach_reasoning_to_content(content, final_text, has_tool_calls, reasoning_text, reasoning_duration_ms);
         let msg_id =
-            insert_session_message_with_pool(pool, session_id, "assistant", content).await?;
+            insert_session_message_with_pool(pool, session_id, "assistant", &persisted_content).await?;
         attach_assistant_message_to_run_with_pool(pool, run_id, &msg_id).await?;
     }
 
@@ -186,6 +189,42 @@ pub(crate) async fn finalize_run_success_with_pool(
     .await?;
 
     Ok(())
+}
+
+fn attach_reasoning_to_content(
+    content: &str,
+    final_text: &str,
+    has_tool_calls: bool,
+    reasoning_text: &str,
+    reasoning_duration_ms: Option<u64>,
+) -> String {
+    if reasoning_text.trim().is_empty() {
+        return content.to_string();
+    }
+
+    let base = if has_tool_calls {
+        serde_json::from_str::<Value>(content).unwrap_or_else(|_| {
+            json!({
+                "text": final_text,
+                "items": [],
+            })
+        })
+    } else {
+        json!({
+            "text": final_text,
+        })
+    };
+
+    let mut obj = base.as_object().cloned().unwrap_or_default();
+    obj.insert(
+        "reasoning".to_string(),
+        json!({
+            "status": "completed",
+            "duration_ms": reasoning_duration_ms,
+            "content": reasoning_text,
+        }),
+    );
+    serde_json::to_string(&Value::Object(obj)).unwrap_or_else(|_| content.to_string())
 }
 
 pub(crate) async fn maybe_handle_team_entry_pre_execution_with_pool(
@@ -287,13 +326,24 @@ pub(crate) async fn load_session_history_with_pool(
     pool: &sqlx::SqlitePool,
     session_id: &str,
 ) -> Result<Vec<(String, String)>, String> {
-    sqlx::query_as::<_, (String, String)>(
+    let rows = sqlx::query_as::<_, (String, String)>(
         "SELECT role, content FROM messages WHERE session_id = ? ORDER BY created_at ASC",
     )
     .bind(session_id)
     .fetch_all(pool)
     .await
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+
+    Ok(rows
+        .into_iter()
+        .map(|(role, content)| {
+            if role == "assistant" {
+                (role, extract_assistant_text_content(&content))
+            } else {
+                (role, content)
+            }
+        })
+        .collect())
 }
 
 pub(crate) async fn load_default_search_provider_config_with_pool(
@@ -358,6 +408,18 @@ pub(crate) fn read_local_skill_prompt(pack_path: &str) -> Option<String> {
     }
 
     None
+}
+
+pub(crate) fn extract_assistant_text_content(content: &str) -> String {
+    let Ok(parsed) = serde_json::from_str::<Value>(content) else {
+        return content.to_string();
+    };
+
+    parsed
+        .get("text")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| content.to_string())
 }
 
 pub(crate) fn load_skill_prompt(
@@ -796,6 +858,7 @@ pub(crate) fn build_assistant_content_with_stream_fallback(
 mod tests {
     use super::{
         build_assistant_content_from_final_messages, build_assistant_content_with_stream_fallback,
+        extract_assistant_text_content,
     };
     use serde_json::{json, Value};
 
@@ -859,5 +922,16 @@ mod tests {
         let parsed_before: Value =
             serde_json::from_str(&content_before).expect("structured content before fallback");
         assert_eq!(parsed_before["text"].as_str(), Some(""));
+    }
+
+    #[test]
+    fn extract_assistant_text_content_prefers_text_field() {
+        let content = r#"{"text":"最终答案","reasoning":{"status":"completed","content":"内部思考"}}"#;
+        assert_eq!(extract_assistant_text_content(content), "最终答案");
+    }
+
+    #[test]
+    fn extract_assistant_text_content_falls_back_for_plain_text() {
+        assert_eq!(extract_assistant_text_content("普通文本"), "普通文本");
     }
 }

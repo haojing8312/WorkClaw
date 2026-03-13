@@ -54,7 +54,7 @@ describe("ChatView session resilience", () => {
     vi.useRealTimers();
   });
 
-  test("clears thinking banner and shows failure card when latest run ends with billing failure", async () => {
+  test("clears thinking block and shows failure card when latest run ends with billing failure", async () => {
     messagesResponse = [
       {
         id: "user-1",
@@ -105,7 +105,7 @@ describe("ChatView session resilience", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText("正在分析任务")).toBeInTheDocument();
+      expect(screen.getByText("思考中")).toBeInTheDocument();
     });
 
     sessionRunsResponse = [
@@ -138,7 +138,7 @@ describe("ChatView session resilience", () => {
     });
 
     await waitFor(() => {
-      expect(screen.queryByText("正在分析任务")).not.toBeInTheDocument();
+      expect(screen.queryByText("思考中")).not.toBeInTheDocument();
       expect(screen.getByTestId("run-failure-card-run-1")).toHaveTextContent("模型余额不足");
       expect(screen.getByTestId("run-failure-card-run-1")).toHaveTextContent("已经生成 2 个文件");
     });

@@ -2,6 +2,7 @@ use crate::agent::permissions::PermissionMode;
 use crate::agent::skill_config::SkillConfig;
 use crate::agent::tools::{EmployeeManageTool, MemoryTool};
 use crate::agent::{AgentExecutor, ToolRegistry};
+use crate::commands::chat_runtime_io::extract_assistant_text_content;
 use crate::commands::im_routing::list_im_routing_bindings_with_pool;
 use crate::commands::models::resolve_default_model_id_with_pool;
 use crate::commands::runtime_preferences::resolve_default_work_dir_with_pool;
@@ -2333,7 +2334,14 @@ async fn execute_group_step_in_employee_context_with_pool(
     .map_err(|e| e.to_string())?;
     let messages: Vec<Value> = history_rows
         .into_iter()
-        .map(|(role, content)| json!({ "role": role, "content": content }))
+        .map(|(role, content)| {
+            let normalized_content = if role == "assistant" {
+                extract_assistant_text_content(&content)
+            } else {
+                content
+            };
+            json!({ "role": role, "content": normalized_content })
+        })
         .collect();
 
     let registry = Arc::new(ToolRegistry::with_standard_tools());

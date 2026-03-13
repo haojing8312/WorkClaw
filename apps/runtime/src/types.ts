@@ -161,6 +161,11 @@ export interface Message {
   created_at: string;
   runId?: string | null;
   toolCalls?: ToolCallInfo[];
+  reasoning?: {
+    status: "thinking" | "completed" | "interrupted";
+    duration_ms?: number;
+    content: string;
+  };
   /// 有序的展示项（新格式），优先使用此字段渲染
   streamItems?: StreamItem[];
 }

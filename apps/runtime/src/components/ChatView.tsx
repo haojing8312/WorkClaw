@@ -11,6 +11,7 @@ import { ToolIsland } from "./ToolIsland";
 import { RiskConfirmDialog } from "./RiskConfirmDialog";
 import { useImmersiveTranslation } from "../hooks/useImmersiveTranslation";
 import { ChatWorkspaceSidePanel } from "./chat-side-panel/ChatWorkspaceSidePanel";
+import { ThinkingBlock } from "./ThinkingBlock";
 import {
   buildTaskJourneyViewModel,
   buildTaskPanelViewModel,
@@ -134,6 +135,16 @@ export function ChatView({
   // 有序的流式输出项：文字和工具调用按时间顺序排列
   const [streamItems, setStreamItems] = useState<StreamItem[]>([]);
   const streamItemsRef = useRef<StreamItem[]>([]);
+  const [streamReasoning, setStreamReasoning] = useState<{
+    status: "thinking" | "completed" | "interrupted";
+    content: string;
+    durationMs?: number;
+  } | null>(null);
+  const streamReasoningRef = useRef<{
+    status: "thinking" | "completed" | "interrupted";
+    content: string;
+    durationMs?: number;
+  } | null>(null);
   const [askUserQuestion, setAskUserQuestion] = useState<string | null>(null);
   const [askUserOptions, setAskUserOptions] = useState<string[]>([]);
   const [askUserAnswer, setAskUserAnswer] = useState("");
@@ -201,6 +212,31 @@ export function ChatView({
   const [groupRunActionLoading, setGroupRunActionLoading] = useState<
     "approve" | "reject" | "pause" | "resume" | "retry" | "reassign" | null
   >(null);
+  const [expandedThinkingKeys, setExpandedThinkingKeys] = useState<string[]>([]);
+
+  const toggleThinkingBlock = (key: string) => {
+    setExpandedThinkingKeys((prev) => (prev.includes(key) ? prev.filter((item) => item !== key) : [...prev, key]));
+  };
+
+  const updateStreamReasoning = (
+    updater: (
+      prev: {
+        status: "thinking" | "completed" | "interrupted";
+        content: string;
+        durationMs?: number;
+      } | null,
+    ) => {
+      status: "thinking" | "completed" | "interrupted";
+      content: string;
+      durationMs?: number;
+    } | null,
+  ) => {
+    setStreamReasoning((prev) => {
+      const next = updater(prev);
+      streamReasoningRef.current = next;
+      return next;
+    });
+  };
 
   // File Upload: 读取文件为文本
   const readFileAsText = (file: File): Promise<string> => {
@@ -290,6 +326,8 @@ export function ChatView({
     setStreaming(false);
     setStreamItems([]);
     streamItemsRef.current = [];
+    setStreamReasoning(null);
+    streamReasoningRef.current = null;
     setSubAgentBuffer("");
     setSubAgentRoleName("");
     setMainRoleName("");
@@ -314,13 +352,14 @@ export function ChatView({
     setHighlightedGroupRunStepId(null);
     setHighlightedGroupRunStepEventId(null);
     setSessionRuns([]);
+    setExpandedThinkingKeys([]);
     lastHandledGroupRunStepFocusNonceRef.current = null;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, streamItems, askUserQuestion, toolConfirm]);
+  }, [messages, streamItems, streamReasoning, askUserQuestion, toolConfirm]);
 
   useEffect(() => {
     if (!sessionFocusRequest || !sessionFocusRequest.snippet.trim()) {
@@ -435,12 +474,21 @@ export function ChatView({
                 content: finalText,
                 created_at: new Date().toISOString(),
                 toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+                reasoning: streamReasoningRef.current
+                  ? {
+                      status: streamReasoningRef.current.status,
+                      duration_ms: streamReasoningRef.current.durationMs,
+                      content: streamReasoningRef.current.content,
+                    }
+                  : undefined,
                 streamItems: items.length > 0 ? [...items] : undefined,
               },
             ]);
           }
           streamItemsRef.current = [];
           setStreamItems([]);
+          setStreamReasoning(null);
+          streamReasoningRef.current = null;
           subAgentBufferRef.current = "";
           setSubAgentBuffer("");
           setSubAgentRoleName("");
@@ -717,6 +765,57 @@ export function ChatView({
   }, [sessionId]);
 
   useEffect(() => {
+    const unlisteners = [
+      listen<{ session_id: string }>("assistant-reasoning-started", ({ payload }) => {
+        if (payload.session_id !== sessionId) return;
+        updateStreamReasoning((prev) => ({
+          status: "thinking",
+          content: prev?.content || "",
+          durationMs: prev?.durationMs,
+        }));
+      }),
+      listen<{ session_id: string; text: string }>("assistant-reasoning-delta", ({ payload }) => {
+        if (payload.session_id !== sessionId) return;
+        updateStreamReasoning((prev) => ({
+          status: "thinking",
+          content: `${prev?.content || ""}${payload.text || ""}`,
+          durationMs: prev?.durationMs,
+        }));
+      }),
+      listen<{ session_id: string; duration_ms?: number }>("assistant-reasoning-completed", ({ payload }) => {
+        if (payload.session_id !== sessionId) return;
+        updateStreamReasoning((prev) =>
+          prev
+            ? {
+                ...prev,
+                status: "completed",
+                durationMs: payload.duration_ms,
+              }
+            : {
+                status: "completed",
+                content: "",
+                durationMs: payload.duration_ms,
+              }
+        );
+      }),
+      listen<{ session_id: string }>("assistant-reasoning-interrupted", ({ payload }) => {
+        if (payload.session_id !== sessionId) return;
+        updateStreamReasoning((prev) => ({
+          status: "interrupted",
+          content: prev?.content || "",
+          durationMs: prev?.durationMs,
+        }));
+      }),
+    ];
+
+    return () => {
+      unlisteners.forEach((item) => {
+        void item.then((fn) => fn());
+      });
+    };
+  }, [sessionId]);
+
+  useEffect(() => {
     const requestId = toolConfirm?.requestId;
     if (!requestId) return;
     return () => {
@@ -849,6 +948,8 @@ export function ChatView({
     setStreaming(true);
     streamItemsRef.current = [];
     setStreamItems([]);
+    setStreamReasoning(null);
+    streamReasoningRef.current = null;
     subAgentBufferRef.current = "";
     setSubAgentBuffer("");
     setSubAgentRoleName("");
@@ -892,6 +993,7 @@ export function ChatView({
     // 即时清除状态，不等待后端返回
     setStreaming(false);
     setAgentState(null);
+    updateStreamReasoning((prev) => (prev ? { ...prev, status: "interrupted" } : prev));
     // 将所有 running 状态的工具标记为 error，避免永远转圈
     const items = streamItemsRef.current.map((item) => {
       if (
@@ -1945,7 +2047,7 @@ export function ChatView({
             )}
           </div>
         )}
-        {agentState && (
+        {agentState && agentState.state !== "thinking" && (
           <div className="sticky top-0 z-10 flex items-center gap-2 bg-white/80 backdrop-blur-lg px-4 py-2 rounded-xl text-xs text-gray-600 border border-gray-200 shadow-sm mx-4 mt-2">
             <span className="animate-spin h-3 w-3 border-2 border-blue-400 border-t-transparent rounded-full" />
             <span className={agentState.state === "error" ? "text-red-500" : undefined}>{getAgentStateLabel()}</span>
@@ -2325,6 +2427,25 @@ export function ChatView({
             )}
           </div>
         )}
+        {(agentState?.state === "thinking" || streamReasoning) &&
+          streamItems.length === 0 &&
+          subAgentBuffer.length === 0 && (
+            <div className="flex justify-start">
+              <div className="max-w-[80%] bg-white rounded-2xl px-5 py-3 text-sm text-gray-800 shadow-sm border border-gray-100">
+                <ThinkingBlock
+                  status={streamReasoning?.status || "thinking"}
+                  content={streamReasoning?.content || ""}
+                  durationMs={streamReasoning?.durationMs}
+                  expanded={expandedThinkingKeys.includes("stream")}
+                  onToggle={
+                    (streamReasoning?.content || "").trim()
+                      ? () => toggleThinkingBlock("stream")
+                      : undefined
+                  }
+                />
+              </div>
+            </div>
+          )}
         {messages.map((m, i) => {
           const isLatest = i === messages.length - 1;
           const isSessionFocusTarget = highlightedMessageIndex === i;
@@ -2360,6 +2481,20 @@ export function ChatView({
                       : "bg-white text-gray-800 shadow-sm border border-gray-100")
                   }
                 >
+                  {m.role === "assistant" && m.reasoning && (
+                    <ThinkingBlock
+                      status={m.reasoning.status}
+                      content={m.reasoning.content}
+                      durationMs={m.reasoning.duration_ms}
+                      expanded={expandedThinkingKeys.includes(`message-${m.id || i}`)}
+                      onToggle={
+                        m.reasoning.content.trim()
+                          ? () => toggleThinkingBlock(`message-${m.id || i}`)
+                          : undefined
+                      }
+                      toggleTestId={`thinking-block-toggle-${m.id || i}`}
+                    />
+                  )}
                   {m.role === "assistant" && m.streamItems ? (
                     <>
                       {renderStreamItems(m.streamItems, false)}
@@ -2400,6 +2535,19 @@ export function ChatView({
             className="flex justify-start"
           >
             <div className="max-w-[80%] bg-white rounded-2xl px-5 py-3 text-sm text-gray-800 shadow-sm border border-gray-100">
+              {(streamReasoning || agentState?.state === "thinking") && (
+                <ThinkingBlock
+                  status={streamReasoning?.status || "thinking"}
+                  content={streamReasoning?.content || ""}
+                  durationMs={streamReasoning?.durationMs}
+                  expanded={expandedThinkingKeys.includes("stream")}
+                  onToggle={
+                    (streamReasoning?.content || "").trim()
+                      ? () => toggleThinkingBlock("stream")
+                      : undefined
+                  }
+                />
+              )}
               {streamItems.length > 0 && renderStreamItems(streamItems, true)}
               {subAgentBuffer && (
                 <div

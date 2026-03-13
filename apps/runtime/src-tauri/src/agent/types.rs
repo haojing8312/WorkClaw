@@ -76,6 +76,12 @@ pub enum LLMResponse {
     TextWithToolCalls(String, Vec<ToolCall>),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StreamDelta {
+    Text(String),
+    Reasoning(String),
+}
+
 #[derive(Debug)]
 pub enum AgentState {
     Thinking,
