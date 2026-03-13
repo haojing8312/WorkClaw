@@ -1,4 +1,4 @@
-use crate::agent::types::{LLMResponse, ToolCall};
+use crate::agent::types::{LLMResponse, StreamDelta, ToolCall};
 use anyhow::{anyhow, Result};
 use futures_util::StreamExt;
 use reqwest::Client;
@@ -78,8 +78,35 @@ fn validate_test_connection_response(body: &str) -> Result<bool> {
     ))
 }
 
-/// Strip <think>…</think> spans from a streaming token chunk.
-/// `in_think` carries state across chunk boundaries.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HiddenTag {
+    Think,
+    Thinking,
+}
+
+impl HiddenTag {
+    fn open_tag(self) -> &'static [char] {
+        match self {
+            Self::Think => &['<', 't', 'h', 'i', 'n', 'k', '>'],
+            Self::Thinking => &['<', 't', 'h', 'i', 'n', 'k', 'i', 'n', 'g', '>'],
+        }
+    }
+
+    fn close_tag(self) -> &'static [char] {
+        match self {
+            Self::Think => &['<', '/', 't', 'h', 'i', 'n', 'k', '>'],
+            Self::Thinking => &['<', '/', 't', 'h', 'i', 'n', 'k', 'i', 'n', 'g', '>'],
+        }
+    }
+}
+
+const FINAL_OPEN_TAG: [char; 7] = ['<', 'f', 'i', 'n', 'a', 'l', '>'];
+const FINAL_CLOSE_TAG: [char; 8] = ['<', '/', 'f', 'i', 'n', 'a', 'l', '>'];
+const VISIBLE_TAGS: [&[char]; 2] = [&FINAL_OPEN_TAG, &FINAL_CLOSE_TAG];
+const HIDDEN_TAGS: [HiddenTag; 2] = [HiddenTag::Think, HiddenTag::Thinking];
+
+/// Strip openclaw-compatible hidden/visible scaffold tags from a streaming token chunk.
+/// `hidden_tag` carries state across chunk boundaries for tags whose content should be suppressed.
 fn tag_matches(chars: &[char], start: usize, tag: &[char]) -> bool {
     start + tag.len() <= chars.len() && chars[start..start + tag.len()] == *tag
 }
@@ -89,10 +116,11 @@ fn tag_prefix_at_end(chars: &[char], start: usize, tag: &[char]) -> bool {
     remaining > 0 && remaining < tag.len() && chars[start..] == tag[..remaining]
 }
 
-fn filter_thinking(input: &str, in_think: &mut bool, pending_tag: &mut String) -> String {
-    const OPEN_TAG: [char; 7] = ['<', 't', 'h', 'i', 'n', 'k', '>'];
-    const CLOSE_TAG: [char; 8] = ['<', '/', 't', 'h', 'i', 'n', 'k', '>'];
-
+fn filter_thinking(
+    input: &str,
+    hidden_tag: &mut Option<HiddenTag>,
+    pending_tag: &mut String,
+) -> String {
     let mut combined = String::with_capacity(pending_tag.len() + input.len());
     combined.push_str(pending_tag);
     combined.push_str(input);
@@ -103,14 +131,15 @@ fn filter_thinking(input: &str, in_think: &mut bool, pending_tag: &mut String) -
     let mut index = 0;
 
     while index < chars.len() {
-        if *in_think {
-            if tag_matches(&chars, index, &CLOSE_TAG) {
-                *in_think = false;
-                index += CLOSE_TAG.len();
+        if let Some(current_hidden_tag) = *hidden_tag {
+            let close_tag = current_hidden_tag.close_tag();
+            if tag_matches(&chars, index, close_tag) {
+                *hidden_tag = None;
+                index += close_tag.len();
                 continue;
             }
 
-            if tag_prefix_at_end(&chars, index, &CLOSE_TAG) {
+            if tag_prefix_at_end(&chars, index, close_tag) {
                 pending_tag.extend(chars[index..].iter());
                 break;
             }
@@ -119,15 +148,45 @@ fn filter_thinking(input: &str, in_think: &mut bool, pending_tag: &mut String) -
             continue;
         }
 
-        if tag_matches(&chars, index, &OPEN_TAG) {
-            *in_think = true;
-            index += OPEN_TAG.len();
+        let mut consumed = false;
+        for hidden in HIDDEN_TAGS {
+            let open_tag = hidden.open_tag();
+            if tag_matches(&chars, index, open_tag) {
+                *hidden_tag = Some(hidden);
+                index += open_tag.len();
+                consumed = true;
+                break;
+            }
+            if tag_prefix_at_end(&chars, index, open_tag) {
+                pending_tag.extend(chars[index..].iter());
+                consumed = true;
+                break;
+            }
+        }
+        if consumed {
+            if !pending_tag.is_empty() {
+                break;
+            }
             continue;
         }
 
-        if tag_prefix_at_end(&chars, index, &OPEN_TAG) {
-            pending_tag.extend(chars[index..].iter());
-            break;
+        for visible_tag in VISIBLE_TAGS {
+            if tag_matches(&chars, index, visible_tag) {
+                index += visible_tag.len();
+                consumed = true;
+                break;
+            }
+            if tag_prefix_at_end(&chars, index, visible_tag) {
+                pending_tag.extend(chars[index..].iter());
+                consumed = true;
+                break;
+            }
+        }
+        if consumed {
+            if !pending_tag.is_empty() {
+                break;
+            }
+            continue;
         }
 
         out.push(chars[index]);
@@ -140,7 +199,7 @@ fn filter_thinking(input: &str, in_think: &mut bool, pending_tag: &mut String) -
 #[derive(Default)]
 struct OpenAiStreamState {
     text_content: String,
-    in_think: bool,
+    hidden_tag: Option<HiddenTag>,
     pending_think_tag: String,
     tool_calls_map: HashMap<u64, (String, String, String)>,
     finish_reason: Option<String>,
@@ -151,7 +210,7 @@ struct OpenAiStreamState {
 fn process_openai_sse_text(
     text: &str,
     state: &mut OpenAiStreamState,
-    on_token: &mut impl FnMut(String),
+    on_token: &mut impl FnMut(StreamDelta),
 ) -> Result<()> {
     state.pending_line.push_str(text);
     let ends_with_newline = state.pending_line.ends_with('\n');
@@ -182,15 +241,18 @@ fn process_openai_sse_text(
                     .map(|s| !s.is_empty())
                     .unwrap_or(false)
                 {
+                    on_token(StreamDelta::Reasoning(
+                        delta["reasoning_content"].as_str().unwrap_or_default().to_string(),
+                    ));
                     continue;
                 }
 
                 if let Some(token) = delta["content"].as_str() {
                     let filtered =
-                        filter_thinking(token, &mut state.in_think, &mut state.pending_think_tag);
+                        filter_thinking(token, &mut state.hidden_tag, &mut state.pending_think_tag);
                     if !filtered.is_empty() {
                         state.text_content.push_str(&filtered);
-                        on_token(filtered);
+                        on_token(StreamDelta::Text(filtered));
                     }
                 }
 
@@ -223,7 +285,7 @@ fn process_openai_sse_text(
 }
 
 fn finish_openai_stream(mut state: OpenAiStreamState) -> LLMResponse {
-    if !state.in_think && !state.pending_think_tag.is_empty() {
+    if state.hidden_tag.is_none() && !state.pending_think_tag.is_empty() {
         state.text_content.push_str(&state.pending_think_tag);
     }
 
@@ -270,11 +332,11 @@ pub async fn chat_stream_with_tools(
     system_prompt: &str,
     messages: Vec<Value>,
     tools: Vec<Value>,
-    mut on_token: impl FnMut(String) + Send,
+    mut on_token: impl FnMut(StreamDelta) + Send,
 ) -> Result<crate::agent::types::LLMResponse> {
     if is_mock_text_base_url(base_url) {
         let mock_text = mock_response_text(model, &messages);
-        on_token(mock_text.clone());
+        on_token(StreamDelta::Text(mock_text.clone()));
         return Ok(LLMResponse::Text(mock_text));
     }
     if is_mock_tool_loop_base_url(base_url) {
@@ -456,43 +518,43 @@ mod tests {
 
     #[test]
     fn filter_thinking_keeps_multibyte_text_without_panicking() {
-        let mut in_think = false;
+        let mut hidden_tag = None;
         let mut pending_tag = String::new();
         let result = catch_unwind(AssertUnwindSafe(|| {
-            filter_thinking("有什么", &mut in_think, &mut pending_tag)
+            filter_thinking("有什么", &mut hidden_tag, &mut pending_tag)
         }));
 
         assert!(result.is_ok(), "多字节文本不应触发 panic");
         assert_eq!(result.unwrap(), "有什么");
-        assert!(!in_think);
+        assert!(hidden_tag.is_none());
         assert!(pending_tag.is_empty());
     }
 
     #[test]
     fn filter_thinking_hides_cross_chunk_think_blocks() {
-        let mut in_think = false;
+        let mut hidden_tag = None;
         let mut pending_tag = String::new();
 
-        let first = filter_thinking("<think>推理中", &mut in_think, &mut pending_tag);
-        let second = filter_thinking("</think>你好", &mut in_think, &mut pending_tag);
+        let first = filter_thinking("<think>推理中", &mut hidden_tag, &mut pending_tag);
+        let second = filter_thinking("</think>你好", &mut hidden_tag, &mut pending_tag);
 
         assert_eq!(first, "");
         assert_eq!(second, "你好");
-        assert!(!in_think);
+        assert!(hidden_tag.is_none());
         assert!(pending_tag.is_empty());
     }
 
     #[test]
     fn filter_thinking_handles_split_open_tag_across_chunks() {
-        let mut in_think = false;
+        let mut hidden_tag = None;
         let mut pending_tag = String::new();
 
-        let first = filter_thinking("<thi", &mut in_think, &mut pending_tag);
-        let second = filter_thinking("nk>内部</think>结果", &mut in_think, &mut pending_tag);
+        let first = filter_thinking("<thi", &mut hidden_tag, &mut pending_tag);
+        let second = filter_thinking("nk>内部</think>结果", &mut hidden_tag, &mut pending_tag);
 
         assert_eq!(first, "");
         assert_eq!(second, "结果");
-        assert!(!in_think);
+        assert!(hidden_tag.is_none());
         assert!(pending_tag.is_empty());
     }
 
@@ -507,6 +569,79 @@ mod tests {
 
         match response {
             LLMResponse::Text(text) => assert_eq!(text, "有什么文件夹"),
+            other => panic!("expected text response, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn openai_tag_compatibility_strips_thinking_tags() {
+        let response = parse_openai_chunks_for_test(&[
+            "data: {\"choices\":[{\"delta\":{\"content\":\"<thinking>内部推理</thinking>你好\"},\"finish_reason\":null}]}\n",
+            "data: [DONE]\n",
+        ])
+        .expect("parse chunks");
+
+        match response {
+            LLMResponse::Text(text) => assert_eq!(text, "你好"),
+            other => panic!("expected text response, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn openai_tag_compatibility_keeps_final_block_text() {
+        let response = parse_openai_chunks_for_test(&[
+            "data: {\"choices\":[{\"delta\":{\"content\":\"<think>内部</think><final>可见结果</final>\"},\"finish_reason\":null}]}\n",
+            "data: [DONE]\n",
+        ])
+        .expect("parse chunks");
+
+        match response {
+            LLMResponse::Text(text) => assert_eq!(text, "可见结果"),
+            other => panic!("expected text response, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn openai_tag_compatibility_handles_split_final_tags() {
+        let response = parse_openai_chunks_for_test(&[
+            "data: {\"choices\":[{\"delta\":{\"content\":\"<fi\"},\"finish_reason\":null}]}\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"nal>分片\"},\"finish_reason\":null}]}\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"结果</fi\"},\"finish_reason\":null}]}\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"nal>\"},\"finish_reason\":null}]}\n",
+            "data: [DONE]\n",
+        ])
+        .expect("parse chunks");
+
+        match response {
+            LLMResponse::Text(text) => assert_eq!(text, "分片结果"),
+            other => panic!("expected text response, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn reasoning_content_is_emitted_separately_from_answer_text() {
+        let mut state = OpenAiStreamState::default();
+        let mut deltas = Vec::new();
+
+        process_openai_sse_text(
+            "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"先分析问题\"},\"finish_reason\":null}]}\n\
+             data: {\"choices\":[{\"delta\":{\"content\":\"最终答案\"},\"finish_reason\":null}]}\n\
+             data: [DONE]\n",
+            &mut state,
+            &mut |delta| deltas.push(delta),
+        )
+        .expect("parse chunk");
+
+        assert_eq!(
+            deltas,
+            vec![
+                StreamDelta::Reasoning("先分析问题".to_string()),
+                StreamDelta::Text("最终答案".to_string()),
+            ]
+        );
+
+        match finish_openai_stream(state) {
+            LLMResponse::Text(text) => assert_eq!(text, "最终答案"),
             other => panic!("expected text response, got {other:?}"),
         }
     }
