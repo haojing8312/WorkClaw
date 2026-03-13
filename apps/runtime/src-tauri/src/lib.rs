@@ -3,6 +3,7 @@ pub mod agent;
 mod builtin_skills;
 pub mod commands;
 mod db;
+mod diagnostics;
 pub mod im;
 pub mod providers;
 pub mod session_journal;
@@ -17,10 +18,19 @@ use commands::chat::{
 };
 use commands::feishu_gateway::FeishuEventRelayState;
 use commands::skills::DbState;
+use diagnostics::{DiagnosticsState, ManagedDiagnosticsState};
 use session_journal::{SessionJournalStateHandle, SessionJournalStore};
 use sidecar::SidecarManager;
 use std::sync::Arc;
 use tauri::Manager;
+
+struct DiagnosticsStateHandle(Arc<DiagnosticsState>);
+
+impl Drop for DiagnosticsStateHandle {
+    fn drop(&mut self) {
+        let _ = diagnostics::mark_clean_exit(self.0.as_ref());
+    }
+}
 
 struct ManagedRuntimeHandles {
     registry: Arc<ToolRegistry>,
@@ -268,8 +278,29 @@ pub fn run() {
             }
         }))
         .setup(|app| {
-            let pool = tauri::async_runtime::block_on(db::init_db(app.handle()))
-                .expect("failed to init db");
+            let diagnostics_state = diagnostics::initialize_for_app(
+                app.handle(),
+                app.package_info().version.to_string(),
+            )
+            .expect("failed to init diagnostics");
+            let diagnostics_state = Arc::new(diagnostics_state);
+            app.manage(DiagnosticsStateHandle(Arc::clone(&diagnostics_state)));
+            app.manage(ManagedDiagnosticsState(Arc::clone(&diagnostics_state)));
+
+            let pool = match tauri::async_runtime::block_on(db::init_db(app.handle())) {
+                Ok(pool) => pool,
+                Err(error) => {
+                    let _ = diagnostics::write_log_record(
+                        &diagnostics_state.paths,
+                        diagnostics::LogLevel::Error,
+                        "runtime",
+                        "db_init_failed",
+                        &error.to_string(),
+                        None,
+                    );
+                    panic!("failed to init db: {error}");
+                }
+            };
             let handles = initialize_runtime_state(app, pool.clone());
             apply_startup_preferences(app, &pool);
             spawn_sidecar_bootstrap(handles.sidecar_manager.clone());
@@ -334,9 +365,13 @@ pub fn run() {
             commands::runtime_preferences::set_runtime_preferences,
             commands::runtime_preferences::resolve_default_work_dir,
             commands::desktop_lifecycle::get_desktop_lifecycle_paths,
+            commands::desktop_lifecycle::get_desktop_diagnostics_status,
             commands::desktop_lifecycle::open_desktop_path,
+            commands::desktop_lifecycle::open_desktop_diagnostics_dir,
             commands::desktop_lifecycle::clear_desktop_cache_and_logs,
             commands::desktop_lifecycle::export_desktop_environment_summary,
+            commands::desktop_lifecycle::export_desktop_diagnostics_bundle,
+            commands::desktop_lifecycle::record_frontend_diagnostic_event,
             commands::chat::create_session,
             commands::chat::send_message,
             commands::chat_session_commands::get_messages,

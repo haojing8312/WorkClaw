@@ -19,6 +19,7 @@ function createRuntimePreferences() {
     launch_at_login: false,
     launch_minimized: false,
     close_to_tray: true,
+    operation_permission_mode: "standard",
   };
 }
 
@@ -38,7 +39,24 @@ describe("SettingsView data retention", () => {
           app_data_dir: "C:\\Users\\me\\AppData\\Roaming\\WorkClaw",
           cache_dir: "C:\\Users\\me\\AppData\\Local\\WorkClaw\\cache",
           log_dir: "C:\\Users\\me\\AppData\\Local\\WorkClaw\\logs",
+          diagnostics_dir: "C:\\Users\\me\\AppData\\Roaming\\WorkClaw\\diagnostics",
           default_work_dir: "E:\\workspace",
+        });
+      }
+      if (command === "get_desktop_diagnostics_status") {
+        return Promise.resolve({
+          diagnostics_dir: "C:\\Users\\me\\AppData\\Roaming\\WorkClaw\\diagnostics",
+          logs_dir: "C:\\Users\\me\\AppData\\Roaming\\WorkClaw\\diagnostics\\logs",
+          crashes_dir: "C:\\Users\\me\\AppData\\Roaming\\WorkClaw\\diagnostics\\crashes",
+          exports_dir: "C:\\Users\\me\\AppData\\Roaming\\WorkClaw\\diagnostics\\exports",
+          current_run_id: "run-1",
+          abnormal_previous_run: true,
+          last_clean_exit_at: "2026-03-13T09:59:00Z",
+          latest_crash: {
+            timestamp: "2026-03-13T10:00:00Z",
+            message: "panic occurred",
+            run_id: "run-0",
+          },
         });
       }
       if (command === "clear_desktop_cache_and_logs") {
@@ -53,6 +71,14 @@ describe("SettingsView data retention", () => {
       if (command === "open_desktop_path") {
         return Promise.resolve(null);
       }
+      if (command === "open_desktop_diagnostics_dir") {
+        return Promise.resolve(null);
+      }
+      if (command === "export_desktop_diagnostics_bundle") {
+        return Promise.resolve(
+          "C:\\Users\\me\\AppData\\Roaming\\WorkClaw\\diagnostics\\exports\\diagnostics-run-1.zip",
+        );
+      }
       return Promise.resolve(null);
     });
   });
@@ -66,10 +92,22 @@ describe("SettingsView data retention", () => {
     expect(screen.getByText("C:\\Users\\me\\AppData\\Roaming\\WorkClaw")).toBeInTheDocument();
     expect(screen.getByText("C:\\Users\\me\\AppData\\Local\\WorkClaw\\cache")).toBeInTheDocument();
     expect(screen.getByText("E:\\workspace")).toBeInTheDocument();
+    expect(screen.getByText("诊断目录")).toBeInTheDocument();
+    expect(
+      screen.getByText("C:\\Users\\me\\AppData\\Roaming\\WorkClaw\\diagnostics"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("检测到上次运行可能异常退出")).toBeInTheDocument();
+    expect(screen.getByText(/panic occurred/)).toBeInTheDocument();
     expect(screen.getByText("卸载程序不会删除你的工作目录。")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "打开应用数据目录" }));
     fireEvent.click(screen.getByRole("button", { name: "清理缓存与日志" }));
+    fireEvent.click(screen.getByRole("button", { name: "导出诊断包" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("export_desktop_diagnostics_bundle");
+    });
+
     fireEvent.click(screen.getByRole("button", { name: "导出环境摘要" }));
 
     await waitFor(() => {
@@ -78,6 +116,7 @@ describe("SettingsView data retention", () => {
       });
       expect(invokeMock).toHaveBeenCalledWith("clear_desktop_cache_and_logs");
       expect(invokeMock).toHaveBeenCalledWith("export_desktop_environment_summary");
+      expect(invokeMock).toHaveBeenCalledWith("export_desktop_diagnostics_bundle");
     });
   });
 });

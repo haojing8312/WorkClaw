@@ -85,12 +85,28 @@ interface DesktopLifecyclePaths {
   app_data_dir: string;
   cache_dir: string;
   log_dir: string;
+  diagnostics_dir: string;
   default_work_dir: string;
 }
 
 interface DesktopCleanupResult {
   removed_files: number;
   removed_dirs: number;
+}
+
+interface DesktopDiagnosticsStatus {
+  diagnostics_dir: string;
+  logs_dir: string;
+  crashes_dir: string;
+  exports_dir: string;
+  current_run_id: string;
+  abnormal_previous_run: boolean;
+  last_clean_exit_at: string | null;
+  latest_crash: {
+    timestamp: string;
+    message: string;
+    run_id?: string | null;
+  } | null;
 }
 
 const ROUTING_CAPABILITIES = [
@@ -253,6 +269,8 @@ export function SettingsView({
   >("idle");
   const [desktopLifecycleError, setDesktopLifecycleError] = useState("");
   const [desktopLifecycleMessage, setDesktopLifecycleMessage] = useState("");
+  const [desktopDiagnosticsStatus, setDesktopDiagnosticsStatus] =
+    useState<DesktopDiagnosticsStatus | null>(null);
   const selectedModelProvider = getModelProviderCatalogItem(selectedModelProviderId);
 
   async function persistRuntimePreferencesInput(input: Record<string, unknown>) {
@@ -544,8 +562,12 @@ export function SettingsView({
     setDesktopLifecycleLoading(true);
     setDesktopLifecycleError("");
     try {
-      const paths = await invoke<DesktopLifecyclePaths>("get_desktop_lifecycle_paths");
+      const [paths, diagnostics] = await Promise.all([
+        invoke<DesktopLifecyclePaths>("get_desktop_lifecycle_paths"),
+        invoke<DesktopDiagnosticsStatus>("get_desktop_diagnostics_status"),
+      ]);
       setDesktopLifecyclePaths(paths);
+      setDesktopDiagnosticsStatus(diagnostics);
     } catch (e) {
       setDesktopLifecycleError("加载数据目录失败: " + String(e));
     } finally {
@@ -594,6 +616,34 @@ export function SettingsView({
       setDesktopLifecycleMessage("环境摘要已复制到剪贴板");
     } catch (e) {
       setDesktopLifecycleError("导出环境摘要失败: " + String(e));
+    } finally {
+      setDesktopLifecycleActionState("idle");
+    }
+  }
+
+  async function handleOpenDesktopDiagnosticsDir() {
+    setDesktopLifecycleActionState("opening");
+    setDesktopLifecycleError("");
+    setDesktopLifecycleMessage("");
+    try {
+      await invoke("open_desktop_diagnostics_dir");
+    } catch (e) {
+      setDesktopLifecycleError("打开诊断目录失败: " + String(e));
+    } finally {
+      setDesktopLifecycleActionState("idle");
+    }
+  }
+
+  async function handleExportDesktopDiagnosticsBundle() {
+    setDesktopLifecycleActionState("exporting");
+    setDesktopLifecycleError("");
+    setDesktopLifecycleMessage("");
+    try {
+      const bundlePath = await invoke<string>("export_desktop_diagnostics_bundle");
+      setDesktopLifecycleMessage(`诊断包已导出：${bundlePath}`);
+      await loadDesktopLifecyclePaths();
+    } catch (e) {
+      setDesktopLifecycleError("导出诊断包失败: " + String(e));
     } finally {
       setDesktopLifecycleActionState("idle");
     }
@@ -2117,6 +2167,20 @@ export function SettingsView({
                   </button>
                 </div>
                 <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-3">
+                  <div className="text-xs font-medium text-gray-500">诊断目录</div>
+                  <div className="mt-1 break-all text-xs text-gray-700">
+                    {desktopLifecyclePaths.diagnostics_dir}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void handleOpenDesktopDiagnosticsDir()}
+                    disabled={desktopLifecycleActionState === "opening"}
+                    className="mt-2 bg-white hover:bg-gray-100 border border-gray-200 text-gray-700 text-xs px-3 py-1.5 rounded-lg transition-all active:scale-[0.97]"
+                  >
+                    打开诊断目录
+                  </button>
+                </div>
+                <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-3">
                   <div className="text-xs font-medium text-gray-500">默认工作目录</div>
                   <div className="mt-1 break-all text-xs text-gray-700">
                     {desktopLifecyclePaths.default_work_dir ||
@@ -2143,6 +2207,33 @@ export function SettingsView({
                     打开工作目录
                   </button>
                 </div>
+                {desktopDiagnosticsStatus && (
+                  <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-3 space-y-2">
+                    <div className="text-xs font-medium text-blue-700">诊断状态</div>
+                    <div className="text-xs text-blue-700 break-all">
+                      当前运行 ID：{desktopDiagnosticsStatus.current_run_id}
+                    </div>
+                    <div className="text-xs text-blue-700 break-all">
+                      导出目录：{desktopDiagnosticsStatus.exports_dir}
+                    </div>
+                    {desktopDiagnosticsStatus.abnormal_previous_run && (
+                      <div className="text-xs text-amber-700">
+                        检测到上次运行可能异常退出
+                      </div>
+                    )}
+                    {desktopDiagnosticsStatus.last_clean_exit_at && (
+                      <div className="text-xs text-blue-700">
+                        上次正常退出：{desktopDiagnosticsStatus.last_clean_exit_at}
+                      </div>
+                    )}
+                    {desktopDiagnosticsStatus.latest_crash && (
+                      <div className="text-xs text-red-700 break-all">
+                        最近崩溃：{desktopDiagnosticsStatus.latest_crash.timestamp}{" "}
+                        {desktopDiagnosticsStatus.latest_crash.message}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
             <div className="flex gap-2">
@@ -2161,6 +2252,14 @@ export function SettingsView({
                 className="flex-1 bg-gray-100 hover:bg-gray-200 disabled:opacity-50 text-sm py-1.5 rounded-lg transition-all active:scale-[0.97]"
               >
                 {desktopLifecycleActionState === "exporting" ? "导出中..." : "导出环境摘要"}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleExportDesktopDiagnosticsBundle()}
+                disabled={desktopLifecycleActionState === "exporting"}
+                className="flex-1 bg-blue-50 hover:bg-blue-100 disabled:opacity-50 text-sm py-1.5 rounded-lg transition-all active:scale-[0.97] text-blue-700"
+              >
+                {desktopLifecycleActionState === "exporting" ? "导出中..." : "导出诊断包"}
               </button>
             </div>
             <div className="rounded-lg border border-amber-100 bg-amber-50 px-3 py-3 text-xs text-amber-700 space-y-1">

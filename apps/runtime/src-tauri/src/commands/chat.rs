@@ -3,6 +3,7 @@ use super::chat_runtime_io as chat_io;
 use super::chat_send_message_flow::{self, PrepareSendMessageParams};
 use super::chat_session_io;
 use super::skills::DbState;
+use crate::diagnostics::{self, ManagedDiagnosticsState};
 use crate::agent::tools::search_providers::cache::SearchCache;
 use crate::agent::tools::AskUserResponder;
 use crate::agent::AgentExecutor;
@@ -122,6 +123,20 @@ pub async fn send_message(
     journal: State<'_, SessionJournalStateHandle>,
     cancel_flag: State<'_, CancelFlagState>,
 ) -> Result<(), String> {
+    if let Some(diagnostics_state) = app.try_state::<ManagedDiagnosticsState>() {
+        let _ = diagnostics::write_log_record(
+            &diagnostics_state.0.paths,
+            diagnostics::LogLevel::Info,
+            "chat",
+            "send_message",
+            "chat send_message invoked",
+            Some(serde_json::json!({
+                "session_id": session_id,
+                "user_message_preview": user_message.chars().take(80).collect::<String>(),
+            })),
+        );
+    }
+
     // 重置取消标志
     cancel_flag.0.store(false, Ordering::SeqCst);
     let cancel_flag_clone = cancel_flag.0.clone();
@@ -183,7 +198,7 @@ pub async fn send_message(
     )
     .await;
 
-    chat_send_message_flow::finalize_send_message_execution(
+    let finalize_result = chat_send_message_flow::finalize_send_message_execution(
         &app,
         &db.0,
         journal.0.as_ref(),
@@ -192,7 +207,25 @@ pub async fn send_message(
         route_execution,
         prepared_context.messages.len(),
     )
-    .await
+    .await;
+
+    if let Err(error) = &finalize_result {
+        if let Some(diagnostics_state) = app.try_state::<ManagedDiagnosticsState>() {
+            let _ = diagnostics::write_log_record(
+                &diagnostics_state.0.paths,
+                diagnostics::LogLevel::Error,
+                "chat",
+                "send_message_finalize_failed",
+                error,
+                Some(serde_json::json!({
+                    "session_id": session_id,
+                    "run_id": run_id,
+                })),
+            );
+        }
+    }
+
+    finalize_result
 }
 
 #[cfg(test)]
