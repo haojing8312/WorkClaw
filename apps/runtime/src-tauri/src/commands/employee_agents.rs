@@ -59,6 +59,16 @@ pub struct UpsertAgentEmployeeInput {
     pub skill_ids: Vec<String>,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct SaveFeishuEmployeeAssociationInput {
+    pub employee_db_id: String,
+    pub enabled: bool,
+    pub mode: String,
+    pub peer_kind: String,
+    pub peer_id: String,
+    pub priority: i64,
+}
+
 fn default_routing_priority() -> i64 {
     100
 }
@@ -857,6 +867,142 @@ fn normalize_enabled_scopes_for_storage(enabled_scopes: &[String]) -> Vec<String
     } else {
         normalized
     }
+}
+
+pub async fn save_feishu_employee_association_with_pool(
+    pool: &SqlitePool,
+    input: SaveFeishuEmployeeAssociationInput,
+) -> Result<(), String> {
+    let employee_db_id = input.employee_db_id.trim();
+    if employee_db_id.is_empty() {
+        return Err("employee_db_id is required".to_string());
+    }
+
+    let mode = input.mode.trim().to_lowercase();
+    if mode != "default" && mode != "scoped" {
+        return Err("mode must be default or scoped".to_string());
+    }
+
+    let peer_kind = input.peer_kind.trim().to_lowercase();
+    if mode == "scoped" && !matches!(peer_kind.as_str(), "group" | "channel" | "direct") {
+        return Err("peer_kind must be group, channel, or direct".to_string());
+    }
+    if mode == "scoped" && input.peer_id.trim().is_empty() {
+        return Err("peer_id is required for scoped feishu association".to_string());
+    }
+
+    let employee_row = sqlx::query_as::<_, (String, String, String, String)>(
+        "SELECT employee_id, role_id, openclaw_agent_id, enabled_scopes_json
+         FROM agent_employees
+         WHERE id = ?",
+    )
+    .bind(employee_db_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| e.to_string())?
+    .ok_or_else(|| "employee not found".to_string())?;
+
+    let employee_id = employee_row.0.trim().to_string();
+    let role_id = employee_row.1.trim().to_string();
+    let openclaw_agent_id = employee_row.2.trim().to_string();
+    let existing_scopes = serde_json::from_str::<Vec<String>>(&employee_row.3)
+        .unwrap_or_else(|_| vec!["app".to_string()]);
+    let agent_id = if !openclaw_agent_id.is_empty() {
+        openclaw_agent_id
+    } else if !employee_id.is_empty() {
+        employee_id
+    } else if !role_id.is_empty() {
+        role_id
+    } else {
+        return Err("employee is missing agent identity".to_string());
+    };
+
+    let mut next_scopes = existing_scopes;
+    if input.enabled {
+        next_scopes.push("feishu".to_string());
+    } else {
+        next_scopes.retain(|scope| scope.trim().to_lowercase() != "feishu");
+    }
+    let next_scopes = normalize_enabled_scopes_for_storage(&next_scopes);
+    let next_scopes_json = serde_json::to_string(&next_scopes).map_err(|e| e.to_string())?;
+    let now = chrono::Utc::now().to_rfc3339();
+    let scoped_peer_id = input.peer_id.trim().to_string();
+
+    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
+
+    sqlx::query("UPDATE agent_employees SET enabled_scopes_json = ?, updated_at = ? WHERE id = ?")
+        .bind(&next_scopes_json)
+        .bind(&now)
+        .bind(employee_db_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    sqlx::query("DELETE FROM im_routing_bindings WHERE channel = 'feishu' AND lower(agent_id) = lower(?)")
+        .bind(&agent_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if input.enabled {
+        if mode == "default" {
+            sqlx::query(
+                "DELETE FROM im_routing_bindings
+                 WHERE channel = 'feishu'
+                   AND trim(peer_id) = ''
+                   AND lower(agent_id) != lower(?)",
+            )
+            .bind(&agent_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        } else {
+            sqlx::query(
+                "DELETE FROM im_routing_bindings
+                 WHERE channel = 'feishu'
+                   AND lower(agent_id) != lower(?)
+                   AND lower(peer_kind) = ?
+                   AND trim(peer_id) = ?",
+            )
+            .bind(&agent_id)
+            .bind(&peer_kind)
+            .bind(&scoped_peer_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        }
+
+        let binding_id = Uuid::new_v4().to_string();
+        let binding_peer_kind = if mode == "default" { "group" } else { peer_kind.as_str() };
+        let binding_peer_id = if mode == "default" { "" } else { scoped_peer_id.as_str() };
+
+        sqlx::query(
+            "INSERT INTO im_routing_bindings (
+                id, agent_id, channel, account_id, peer_kind, peer_id, guild_id, team_id,
+                role_ids_json, connector_meta_json, priority, enabled, created_at, updated_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&binding_id)
+        .bind(&agent_id)
+        .bind("feishu")
+        .bind("*")
+        .bind(binding_peer_kind)
+        .bind(binding_peer_id)
+        .bind("")
+        .bind("")
+        .bind("[]")
+        .bind(serde_json::to_string(&json!({ "connector_id": "feishu" })).map_err(|e| e.to_string())?)
+        .bind(input.priority)
+        .bind(1_i64)
+        .bind(&now)
+        .bind(&now)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    }
+
+    tx.commit().await.map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 pub async fn upsert_agent_employee_with_pool(
@@ -4495,6 +4641,30 @@ pub async fn upsert_agent_employee(
     )
     .await;
     Ok(id)
+}
+
+#[tauri::command]
+pub async fn save_feishu_employee_association(
+    input: SaveFeishuEmployeeAssociationInput,
+    db: State<'_, DbState>,
+    relay: State<'_, crate::commands::feishu_gateway::FeishuEventRelayState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    save_feishu_employee_association_with_pool(&db.0, input).await?;
+    let _ = crate::commands::feishu_gateway::reconcile_feishu_employee_connections_with_pool(
+        &db.0, None,
+    )
+    .await;
+    let _ = crate::commands::feishu_gateway::start_feishu_event_relay_with_pool_and_app(
+        &db.0,
+        relay.inner().clone(),
+        Some(app),
+        None,
+        Some(1500),
+        Some(50),
+    )
+    .await;
+    Ok(())
 }
 
 #[tauri::command]
