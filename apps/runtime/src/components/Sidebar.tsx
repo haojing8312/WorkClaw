@@ -60,6 +60,10 @@ export function Sidebar({
     onSearchSessions(value);
   }
 
+  function getSessionDisplayTitle(session: SessionInfo): string {
+    return (session.display_title || session.title || "").trim() || "未命名任务";
+  }
+
   if (collapsed) {
     return (
       <div className="sm-surface sm-divider w-12 flex flex-col h-full border-r items-center py-3 gap-3 flex-shrink-0">
@@ -213,7 +217,7 @@ export function Sidebar({
                     >
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 min-w-0">
-                          <div className="truncate text-[13px]">{s.title || "未命名任务"}</div>
+                          <div className="truncate text-[13px]">{getSessionDisplayTitle(s)}</div>
                           {isImSession && (
                             <span
                               title={`来自${badgeText}会话同步`}

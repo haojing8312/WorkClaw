@@ -43,7 +43,9 @@ pub(crate) async fn maybe_update_session_title_from_first_user_message_with_pool
         .map_err(|e| e.to_string())?;
 
     if msg_count.0 <= 1 {
-        let title: String = user_message.chars().take(20).collect();
+        let Some(title) = normalize_candidate_session_title(user_message) else {
+            return Ok(());
+        };
         sqlx::query(
             "UPDATE sessions SET title = ? WHERE id = ? AND (title = 'New Chat' OR title = '')",
         )
@@ -55,6 +57,109 @@ pub(crate) async fn maybe_update_session_title_from_first_user_message_with_pool
     }
 
     Ok(())
+}
+
+const DEFAULT_SESSION_TITLE: &str = "New Chat";
+const MAX_SESSION_TITLE_CHARS: usize = 28;
+const GENERIC_SESSION_TITLE_INPUTS: &[&str] = &[
+    "",
+    "hi",
+    "hello",
+    "hey",
+    "start",
+    "continue",
+    "continueprevious",
+    "continuefrombefore",
+    "helpme",
+    "needhelp",
+    "你好",
+    "您好",
+    "在吗",
+    "继续",
+    "开始",
+    "帮我一下",
+    "帮我处理",
+    "请帮我一下",
+    "继续上次",
+    "继续刚才",
+];
+
+fn canonicalize_session_title_match(value: &str) -> String {
+    value
+        .trim()
+        .chars()
+        .filter(|ch| ch.is_alphanumeric() || ('\u{4e00}'..='\u{9fff}').contains(ch))
+        .flat_map(|ch| ch.to_lowercase())
+        .collect()
+}
+
+fn trim_title_punctuation(value: &str) -> &str {
+    value.trim_matches(|ch: char| {
+        ch.is_whitespace()
+            || matches!(
+                ch,
+                ','
+                    | '.'
+                    | ':'
+                    | ';'
+                    | '!'
+                    | '?'
+                    | '-'
+                    | '，'
+                    | '。'
+                    | '：'
+                    | '；'
+                    | '！'
+                    | '？'
+                    | '、'
+                    | '…'
+                    | '·'
+                    | '|'
+                    | '/'
+                    | '\\'
+                    | '"'
+                    | '\''
+                    | '('
+                    | ')'
+                    | '['
+                    | ']'
+                    | '{'
+                    | '}'
+            )
+    })
+}
+
+pub(crate) fn is_generic_session_title(value: &str) -> bool {
+    let normalized = canonicalize_session_title_match(value);
+    normalized.is_empty()
+        || normalized == canonicalize_session_title_match(DEFAULT_SESSION_TITLE)
+        || GENERIC_SESSION_TITLE_INPUTS
+            .iter()
+            .any(|candidate| normalized == canonicalize_session_title_match(candidate))
+}
+
+pub(crate) fn normalize_candidate_session_title(value: &str) -> Option<String> {
+    let collapsed = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    let trimmed = trim_title_punctuation(&collapsed);
+    if trimmed.is_empty() || is_generic_session_title(trimmed) {
+        return None;
+    }
+    let title: String = trimmed.chars().take(MAX_SESSION_TITLE_CHARS).collect();
+    let title = trim_title_punctuation(&title).trim().to_string();
+    if title.is_empty() || is_generic_session_title(&title) {
+        None
+    } else {
+        Some(title)
+    }
+}
+
+pub(crate) fn derive_meaningful_session_title_from_messages<'a, I>(messages: I) -> Option<String>
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    messages
+        .into_iter()
+        .find_map(normalize_candidate_session_title)
 }
 
 pub(crate) async fn record_route_attempt_log_with_pool(

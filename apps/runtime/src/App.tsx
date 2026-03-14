@@ -170,17 +170,87 @@ function getDefaultSkillId(skillList: SkillManifest[]): string | null {
   return skillList[0]?.id ?? null;
 }
 
+const DEFAULT_SESSION_TITLE = "New Chat";
+const GENERIC_SESSION_TITLES = new Set([
+  "",
+  "newchat",
+  "hi",
+  "hello",
+  "hey",
+  "start",
+  "continue",
+  "continueprevious",
+  "continuefrombefore",
+  "helpme",
+  "needhelp",
+  "你好",
+  "您好",
+  "在吗",
+  "继续",
+  "开始",
+  "帮我一下",
+  "帮我处理",
+  "请帮我一下",
+  "继续上次",
+  "继续刚才",
+]);
+
+function canonicalizeSessionTitle(value: string): string {
+  return (value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, "");
+}
+
+function normalizeCandidateSessionTitle(value?: string): string | null {
+  const collapsed = (value || "").trim().replace(/\s+/g, " ");
+  const normalized = collapsed.replace(/^[\s,.:;!?，。：；！？、…·|/\\'"()[\]{}-]+|[\s,.:;!?，。：；！？、…·|/\\'"()[\]{}-]+$/g, "");
+  if (!normalized) {
+    return null;
+  }
+  if (GENERIC_SESSION_TITLES.has(canonicalizeSessionTitle(normalized))) {
+    return null;
+  }
+  return normalized.slice(0, 28).trim() || null;
+}
+
+function resolveOptimisticDisplayTitle(input: {
+  title?: string;
+  initialUserMessage?: string;
+  sessionMode: SessionLaunchMode;
+}): string {
+  if (input.sessionMode === "team_entry") {
+    return normalizeCandidateSessionTitle(input.title) || input.title?.trim() || DEFAULT_SESSION_TITLE;
+  }
+  const explicitTitle = normalizeCandidateSessionTitle(input.title);
+  if (explicitTitle) {
+    return explicitTitle;
+  }
+  const derivedTitle = normalizeCandidateSessionTitle(input.initialUserMessage);
+  if (derivedTitle) {
+    return derivedTitle;
+  }
+  return input.title?.trim() || DEFAULT_SESSION_TITLE;
+}
+
 function buildOptimisticSession(input: {
   sessionId: string;
   modelId: string;
   title?: string;
+  initialUserMessage?: string;
   employeeId?: string;
   sessionMode: SessionLaunchMode;
   teamId?: string;
 }): SessionInfo {
+  const fallbackTitle = (input.title || "").trim() || DEFAULT_SESSION_TITLE;
   return {
     id: input.sessionId,
-    title: (input.title || "").trim() || "New Chat",
+    title: fallbackTitle,
+    display_title: resolveOptimisticDisplayTitle({
+      title: input.title,
+      initialUserMessage: input.initialUserMessage,
+      sessionMode: input.sessionMode,
+    }),
     created_at: new Date().toISOString(),
     model_id: input.modelId,
     employee_id: input.employeeId || "",
@@ -844,6 +914,7 @@ export default function App() {
           buildOptimisticSession({
             sessionId: id,
             modelId,
+            initialUserMessage: initialMessage,
             sessionMode: "general",
           }),
         ),
@@ -2552,7 +2623,7 @@ export default function App() {
                 }}
                 sessionSourceChannel={selectedSession?.source_channel}
                 sessionSourceLabel={selectedSession?.source_label}
-                sessionTitle={selectedSession?.title}
+                sessionTitle={selectedSession?.display_title || selectedSession?.title}
                 sessionMode={selectedSession?.session_mode}
                 sessionEmployeeName={selectedSessionEmployeeName}
                 operationPermissionMode={operationPermissionMode}

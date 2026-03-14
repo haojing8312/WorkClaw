@@ -1,5 +1,8 @@
 use super::runtime_preferences::resolve_default_work_dir_with_pool;
-use crate::commands::chat_runtime_io::extract_assistant_text_content;
+use crate::commands::chat_runtime_io::{
+    derive_meaningful_session_title_from_messages, extract_assistant_text_content,
+    is_generic_session_title,
+};
 use crate::session_journal::{SessionJournalState, SessionJournalStore, SessionRunStatus};
 use chrono::Utc;
 use runtime_chat_app::{ChatPreparationService, SessionCreationRequest};
@@ -167,53 +170,105 @@ pub(crate) async fn list_sessions_with_pool(
     .await
     .map_err(|e| e.to_string())?;
 
-    Ok(rows
+    let mut employee_name_by_code = std::collections::HashMap::<String, String>::new();
+    let employee_rows = sqlx::query_as::<_, (String, String, String)>(
+        "SELECT COALESCE(employee_id, ''), COALESCE(role_id, ''), COALESCE(name, '') FROM agent_employees",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    for (employee_id, role_id, name) in employee_rows {
+        let trimmed_name = name.trim();
+        if trimmed_name.is_empty() {
+            continue;
+        }
+        let display_name = trimmed_name.to_string();
+        if !employee_id.trim().is_empty() {
+            employee_name_by_code
+                .insert(employee_id.trim().to_string(), display_name.clone());
+        }
+        if !role_id.trim().is_empty() {
+            employee_name_by_code.insert(role_id.trim().to_string(), display_name);
+        }
+    }
+
+    let team_rows = sqlx::query_as::<_, (String, String)>(
+        "SELECT COALESCE(id, ''), COALESCE(name, '') FROM employee_groups",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    let team_name_by_id = team_rows
         .into_iter()
-        .map(
-            |(
-                id,
-                title,
-                created_at,
-                model_id,
-                work_dir,
-                employee_id,
-                permission_mode,
-                session_mode,
-                team_id,
-                im_source_channel,
-            )| {
-                let title = title
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .unwrap_or("New Chat");
-                let created_at = created_at.unwrap_or_default();
-                let model_id = model_id.unwrap_or_default();
-                let work_dir = work_dir.unwrap_or_default();
-                let employee_id = employee_id.unwrap_or_default();
-                let permission_mode = permission_mode.unwrap_or_else(|| "standard".to_string());
-                let session_mode = session_mode.unwrap_or_else(|| "general".to_string());
-                let team_id = team_id.unwrap_or_default();
-                let im_source_channel = im_source_channel.unwrap_or_default();
-                let (source_channel, source_label) =
-                    resolve_im_session_source(Some(&im_source_channel));
-                json!({
-                    "id": id,
-                    "title": title,
-                    "created_at": created_at,
-                    "model_id": model_id,
-                    "work_dir": work_dir,
-                    "employee_id": employee_id,
-                    "permission_mode": permission_mode,
-                    "session_mode": session_mode,
-                    "team_id": team_id,
-                    "permission_mode_label": permission_mode_label_for_display(&permission_mode),
-                    "source_channel": source_channel,
-                    "source_label": source_label,
-                })
-            },
+        .filter_map(|(id, name)| {
+            let id = id.trim().to_string();
+            let name = name.trim().to_string();
+            if id.is_empty() || name.is_empty() {
+                None
+            } else {
+                Some((id, name))
+            }
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+
+    let mut sessions = Vec::with_capacity(rows.len());
+    for (
+        id,
+        title,
+        created_at,
+        model_id,
+        work_dir,
+        employee_id,
+        permission_mode,
+        session_mode,
+        team_id,
+        im_source_channel,
+    ) in rows
+    {
+        let title = title
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("New Chat")
+            .to_string();
+        let created_at = created_at.unwrap_or_default();
+        let model_id = model_id.unwrap_or_default();
+        let work_dir = work_dir.unwrap_or_default();
+        let employee_id = employee_id.unwrap_or_default();
+        let permission_mode = permission_mode.unwrap_or_else(|| "standard".to_string());
+        let session_mode = session_mode.unwrap_or_else(|| "general".to_string());
+        let team_id = team_id.unwrap_or_default();
+        let im_source_channel = im_source_channel.unwrap_or_default();
+        let (source_channel, source_label) = resolve_im_session_source(Some(&im_source_channel));
+        let display_title = derive_session_display_title_with_pool(
+            pool,
+            &id,
+            &title,
+            &session_mode,
+            &employee_id,
+            &team_id,
+            &employee_name_by_code,
+            &team_name_by_id,
         )
-        .collect())
+        .await;
+        sessions.push(json!({
+            "id": id,
+            "title": title,
+            "display_title": display_title,
+            "created_at": created_at,
+            "model_id": model_id,
+            "work_dir": work_dir,
+            "employee_id": employee_id,
+            "permission_mode": permission_mode,
+            "session_mode": session_mode,
+            "team_id": team_id,
+            "permission_mode_label": permission_mode_label_for_display(&permission_mode),
+            "source_channel": source_channel,
+            "source_label": source_label,
+        }));
+    }
+
+    Ok(sessions)
 }
 
 pub(crate) async fn update_session_workspace_with_pool(
@@ -289,6 +344,7 @@ pub(crate) async fn search_sessions_global_with_pool(
                 json!({
                     "id": id,
                     "title": title,
+                    "display_title": title,
                     "created_at": created_at,
                     "model_id": model_id,
                     "work_dir": work_dir,
@@ -299,6 +355,47 @@ pub(crate) async fn search_sessions_global_with_pool(
             },
         )
         .collect())
+}
+
+async fn derive_session_display_title_with_pool(
+    pool: &sqlx::SqlitePool,
+    session_id: &str,
+    persisted_title: &str,
+    session_mode: &str,
+    employee_id: &str,
+    team_id: &str,
+    employee_name_by_code: &std::collections::HashMap<String, String>,
+    team_name_by_id: &std::collections::HashMap<String, String>,
+) -> String {
+    if session_mode == "team_entry" {
+        if let Some(team_name) = team_name_by_id.get(team_id.trim()) {
+            return team_name.clone();
+        }
+    }
+
+    if session_mode == "employee_direct" || !employee_id.trim().is_empty() {
+        if let Some(employee_name) = employee_name_by_code.get(employee_id.trim()) {
+            return employee_name.clone();
+        }
+    }
+
+    if !is_generic_session_title(persisted_title) {
+        return persisted_title.trim().to_string();
+    }
+
+    let user_messages = sqlx::query_as::<_, (String,)>(
+        "SELECT content
+         FROM messages
+         WHERE session_id = ? AND role = 'user'
+         ORDER BY created_at ASC",
+    )
+    .bind(session_id)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    derive_meaningful_session_title_from_messages(user_messages.iter().map(|(content,)| content.as_str()))
+        .unwrap_or_else(|| persisted_title.trim().to_string())
 }
 
 pub(crate) async fn export_session_markdown_with_pool(
@@ -627,6 +724,41 @@ mod tests {
         .expect("create im_thread_sessions table");
 
         sqlx::query(
+            "CREATE TABLE messages (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create messages table");
+
+        sqlx::query(
+            "CREATE TABLE agent_employees (
+                id TEXT PRIMARY KEY,
+                employee_id TEXT NOT NULL DEFAULT '',
+                name TEXT NOT NULL,
+                role_id TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create agent_employees table");
+
+        sqlx::query(
+            "CREATE TABLE employee_groups (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create employee_groups table");
+
+        sqlx::query(
             "INSERT INTO sessions (id, skill_id, title, created_at, model_id, permission_mode, work_dir, employee_id, session_mode, team_id)
              VALUES
              ('session-null-title', 'skill-1', NULL, '2026-03-13T00:00:00Z', 'model-1', 'standard', '', '', 'general', ''),
@@ -645,5 +777,133 @@ mod tests {
         assert_eq!(sessions[0]["title"], "Visible Session");
         assert_eq!(sessions[1]["id"], "session-null-title");
         assert_eq!(sessions[1]["title"], "New Chat");
+    }
+
+    #[tokio::test]
+    async fn list_sessions_with_pool_derives_display_title_for_general_sessions() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("create sqlite memory pool");
+
+        sqlx::query(
+            "CREATE TABLE sessions (
+                id TEXT PRIMARY KEY,
+                skill_id TEXT NOT NULL,
+                title TEXT,
+                created_at TEXT NOT NULL,
+                model_id TEXT NOT NULL,
+                permission_mode TEXT NOT NULL DEFAULT 'standard',
+                work_dir TEXT NOT NULL DEFAULT '',
+                employee_id TEXT NOT NULL DEFAULT '',
+                session_mode TEXT NOT NULL DEFAULT 'general',
+                team_id TEXT NOT NULL DEFAULT ''
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create sessions table");
+
+        sqlx::query(
+            "CREATE TABLE messages (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create messages table");
+
+        sqlx::query(
+            "CREATE TABLE im_thread_sessions (
+                thread_id TEXT NOT NULL,
+                employee_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                route_session_key TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                channel TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY (thread_id, employee_id)
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create im_thread_sessions table");
+
+        sqlx::query(
+            "CREATE TABLE agent_employees (
+                id TEXT PRIMARY KEY,
+                employee_id TEXT NOT NULL DEFAULT '',
+                name TEXT NOT NULL,
+                role_id TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create agent_employees table");
+
+        sqlx::query(
+            "CREATE TABLE employee_groups (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create employee_groups table");
+
+        sqlx::query(
+            "INSERT INTO sessions (id, skill_id, title, created_at, model_id, permission_mode, work_dir, employee_id, session_mode, team_id)
+             VALUES
+             ('session-general', 'skill-1', 'New Chat', '2026-03-14T00:00:00Z', 'model-1', 'standard', '', '', 'general', ''),
+             ('session-general-generic-first', 'skill-1', 'New Chat', '2026-03-14T00:01:00Z', 'model-1', 'standard', '', '', 'general', ''),
+             ('session-team', 'skill-1', 'New Chat', '2026-03-14T00:02:00Z', 'model-1', 'standard', '', '', 'team_entry', 'team-a'),
+             ('session-employee', 'skill-1', 'New Chat', '2026-03-14T00:03:00Z', 'model-1', 'standard', '', 'emp-1', 'employee_direct', '')",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed sessions");
+
+        sqlx::query(
+            "INSERT INTO messages (id, session_id, role, content, created_at)
+             VALUES
+             ('msg-1', 'session-general', 'user', '帮我整理本周销售周报', '2026-03-14T00:00:01Z'),
+             ('msg-2', 'session-general-generic-first', 'user', '你好', '2026-03-14T00:01:01Z'),
+             ('msg-3', 'session-general-generic-first', 'user', '修复登录接口超时问题', '2026-03-14T00:01:02Z')",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed messages");
+
+        sqlx::query(
+            "INSERT INTO employee_groups (id, name) VALUES ('team-a', '市场协作')",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed employee_groups");
+
+        sqlx::query(
+            "INSERT INTO agent_employees (id, employee_id, name, role_id) VALUES ('employee-row-1', 'emp-1', '张三', 'role-1')",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed agent_employees");
+
+        let sessions = list_sessions_with_pool(&pool, permission_mode_label_for_display)
+            .await
+            .expect("list sessions should succeed");
+
+        assert_eq!(sessions[0]["id"], "session-employee");
+        assert_eq!(sessions[0]["display_title"], "张三");
+        assert_eq!(sessions[1]["id"], "session-team");
+        assert_eq!(sessions[1]["display_title"], "市场协作");
+        assert_eq!(sessions[2]["id"], "session-general-generic-first");
+        assert_eq!(sessions[2]["display_title"], "修复登录接口超时问题");
+        assert_eq!(sessions[3]["id"], "session-general");
+        assert_eq!(sessions[3]["display_title"], "帮我整理本周销售周报");
     }
 }

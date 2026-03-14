@@ -194,6 +194,7 @@ export interface SessionRunProjection {
 export interface SessionInfo {
   id: string;
   title: string;
+  display_title?: string;
   created_at: string;
   model_id: string;
   work_dir?: string;

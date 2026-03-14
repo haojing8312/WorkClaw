@@ -85,6 +85,10 @@ function groupRecentSessions(sessions: SessionInfo[]): SessionGroup[] {
   return groups.filter((group) => group.items.length > 0);
 }
 
+function getSessionDisplayTitle(session: SessionInfo): string {
+  return (session.display_title || session.title || "").trim() || "未命名任务";
+}
+
 export function NewSessionLanding({
   sessions,
   teams = [],
@@ -269,9 +273,9 @@ export function NewSessionLanding({
                         key={session.id}
                         onClick={() => onSelectSession(session.id)}
                         className="text-left rounded-xl border border-gray-200 bg-white hover:border-blue-300 hover:bg-blue-50/30 transition-colors px-4 py-3"
-                        aria-label={session.title || "未命名任务"}
+                        aria-label={getSessionDisplayTitle(session)}
                       >
-                        <div className="text-sm text-gray-800 truncate">{session.title || "未命名任务"}</div>
+                        <div className="text-sm text-gray-800 truncate">{getSessionDisplayTitle(session)}</div>
                       </button>
                     ))}
                   </div>
