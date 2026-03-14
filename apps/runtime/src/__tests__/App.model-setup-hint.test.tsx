@@ -312,6 +312,41 @@ describe("App model setup hint", () => {
     expect(screen.getByTestId("quick-model-setup-test-result")).toHaveTextContent(
       "连接成功，可直接保存并开始",
     );
+    expect(screen.getByTestId("quick-model-setup-actions")).toContainElement(
+      screen.getByTestId("quick-model-setup-test-result"),
+    );
+  });
+
+  test("clears quick setup test result after editing base url", async () => {
+    window.localStorage.setItem(INITIAL_MODEL_SETUP_COMPLETED_KEY, "1");
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("model-setup-hint")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId("model-setup-hint-open-quick-setup"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("quick-model-setup-dialog")).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByTestId("quick-model-setup-api-key"), {
+      target: { value: "sk-test-quick-connection" },
+    });
+    fireEvent.click(screen.getByTestId("quick-model-setup-test-connection"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("quick-model-setup-test-result")).toHaveTextContent(
+        "连接成功，可直接保存并开始",
+      );
+    });
+
+    fireEvent.change(screen.getByTestId("quick-model-setup-base-url"), {
+      target: { value: "https://example.com/v2" },
+    });
+
+    expect(screen.queryByTestId("quick-model-setup-test-result")).not.toBeInTheDocument();
   });
 
   test("shows the full shared provider list in quick setup", async () => {

@@ -2286,23 +2286,6 @@ export default function App() {
                     </div>
                   </div>
 
-                  {quickModelTestResult !== null && (
-                    <div
-                      data-testid="quick-model-setup-test-result"
-                      className={`mt-4 flex items-start gap-2 rounded-2xl border px-3 py-3 text-xs ${
-                        quickModelTestResult
-                          ? "border-green-200 bg-green-50 text-green-700"
-                          : "border-orange-200 bg-orange-50 text-orange-700"
-                      }`}
-                    >
-                      {quickModelTestResult ? (
-                        <CheckCircle2 className="mt-0.5 h-4 w-4 flex-shrink-0" />
-                      ) : (
-                        <CircleAlert className="mt-0.5 h-4 w-4 flex-shrink-0" />
-                      )}
-                      <span>{quickModelTestResult ? "连接成功，可直接保存并开始" : "连接失败，请检查后重试"}</span>
-                    </div>
-                  )}
                   {quickModelError && (
                     <div className="mt-4 flex items-start gap-2 rounded-2xl border border-red-200 bg-red-50 px-3 py-3 text-xs text-red-700">
                       <CircleAlert className="mt-0.5 h-4 w-4 flex-shrink-0" />
@@ -2321,6 +2304,23 @@ export default function App() {
                         : "按 Esc 或点击遮罩可直接关闭引导。"}
                     </div>
                     <div data-testid="quick-model-setup-actions" className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      {quickModelTestResult !== null && (
+                        <div
+                          data-testid="quick-model-setup-test-result"
+                          className={`flex items-start gap-2 rounded-2xl border px-3 py-3 text-xs sm:col-span-2 ${
+                            quickModelTestResult
+                              ? "border-green-200 bg-green-50 text-green-700"
+                              : "border-orange-200 bg-orange-50 text-orange-700"
+                          }`}
+                        >
+                          {quickModelTestResult ? (
+                            <CheckCircle2 className="mt-0.5 h-4 w-4 flex-shrink-0" />
+                          ) : (
+                            <CircleAlert className="mt-0.5 h-4 w-4 flex-shrink-0" />
+                          )}
+                          <span>{quickModelTestResult ? "连接成功，可直接保存并开始" : "连接失败，请检查后重试"}</span>
+                        </div>
+                      )}
                       <button
                         type="button"
                         data-testid="quick-model-setup-cancel"
