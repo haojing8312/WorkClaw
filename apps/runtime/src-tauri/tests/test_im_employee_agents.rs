@@ -10,12 +10,14 @@ use runtime_lib::commands::employee_agents::{
     maybe_handle_team_entry_session_message_with_pool, pause_employee_group_run_with_pool,
     reassign_group_run_step_with_pool, resolve_target_employees_for_event,
     resume_employee_group_run_with_pool, retry_employee_group_run_failed_steps_with_pool,
-    review_group_run_step_with_pool, run_group_step_with_pool, start_employee_group_run_with_pool,
-    upsert_agent_employee_with_pool, CloneEmployeeGroupTemplateInput, CreateEmployeeGroupInput,
-    CreateEmployeeTeamInput, StartEmployeeGroupRunInput, UpsertAgentEmployeeInput,
+    review_group_run_step_with_pool, run_group_step_with_pool, save_feishu_employee_association_with_pool,
+    start_employee_group_run_with_pool, upsert_agent_employee_with_pool,
+    CloneEmployeeGroupTemplateInput, CreateEmployeeGroupInput, CreateEmployeeTeamInput,
+    SaveFeishuEmployeeAssociationInput, StartEmployeeGroupRunInput, UpsertAgentEmployeeInput,
 };
 use runtime_lib::commands::im_routing::{
-    upsert_im_routing_binding_with_pool, UpsertImRoutingBindingInput,
+    list_im_routing_bindings_with_pool, upsert_im_routing_binding_with_pool,
+    UpsertImRoutingBindingInput,
 };
 use runtime_lib::im::types::{ImEvent, ImEventType};
 use uuid::Uuid;
@@ -267,6 +269,208 @@ async fn group_message_with_mention_routes_to_target_employee() {
 
     assert_eq!(targets.len(), 1);
     assert_eq!(targets[0].id, dev_id);
+}
+
+#[tokio::test]
+async fn save_feishu_employee_association_replaces_default_binding_and_updates_scope() {
+    let (pool, _tmp) = helpers::setup_test_db().await;
+
+    let pm_id = upsert_agent_employee_with_pool(
+        &pool,
+        UpsertAgentEmployeeInput {
+            id: None,
+            employee_id: "pm".to_string(),
+            name: "项目经理".to_string(),
+            role_id: "pm".to_string(),
+            persona: "".to_string(),
+            feishu_open_id: "".to_string(),
+            feishu_app_id: "".to_string(),
+            feishu_app_secret: "".to_string(),
+            primary_skill_id: "".to_string(),
+            default_work_dir: "".to_string(),
+            openclaw_agent_id: "pm".to_string(),
+            routing_priority: 100,
+            enabled_scopes: vec!["feishu".to_string()],
+            enabled: true,
+            is_default: false,
+            skill_ids: vec![],
+        },
+    )
+    .await
+    .expect("upsert pm");
+
+    let tech_id = upsert_agent_employee_with_pool(
+        &pool,
+        UpsertAgentEmployeeInput {
+            id: None,
+            employee_id: "tech".to_string(),
+            name: "技术负责人".to_string(),
+            role_id: "tech".to_string(),
+            persona: "".to_string(),
+            feishu_open_id: "".to_string(),
+            feishu_app_id: "".to_string(),
+            feishu_app_secret: "".to_string(),
+            primary_skill_id: "".to_string(),
+            default_work_dir: "".to_string(),
+            openclaw_agent_id: "tech".to_string(),
+            routing_priority: 100,
+            enabled_scopes: vec!["app".to_string()],
+            enabled: true,
+            is_default: false,
+            skill_ids: vec![],
+        },
+    )
+    .await
+    .expect("upsert tech");
+
+    upsert_im_routing_binding_with_pool(
+        &pool,
+        UpsertImRoutingBindingInput {
+            id: Some("binding-default-pm".to_string()),
+            agent_id: "pm".to_string(),
+            channel: "feishu".to_string(),
+            account_id: "*".to_string(),
+            peer_kind: "group".to_string(),
+            peer_id: "".to_string(),
+            guild_id: "".to_string(),
+            team_id: "".to_string(),
+            role_ids: vec![],
+            connector_meta: serde_json::json!({ "connector_id": "feishu" }),
+            priority: 100,
+            enabled: true,
+        },
+    )
+    .await
+    .expect("seed default binding");
+
+    save_feishu_employee_association_with_pool(
+        &pool,
+        SaveFeishuEmployeeAssociationInput {
+            employee_db_id: tech_id.clone(),
+            enabled: true,
+            mode: "default".to_string(),
+            peer_kind: "group".to_string(),
+            peer_id: "".to_string(),
+            priority: 66,
+        },
+    )
+    .await
+    .expect("save association");
+
+    let employees = list_agent_employees_with_pool(&pool)
+        .await
+        .expect("list employees");
+    let tech = employees
+        .iter()
+        .find(|employee| employee.id == tech_id)
+        .expect("find tech");
+    assert!(tech.enabled_scopes.iter().any(|scope| scope == "feishu"));
+
+    let bindings = list_im_routing_bindings_with_pool(&pool)
+        .await
+        .expect("list bindings");
+    let feishu_defaults: Vec<_> = bindings
+        .iter()
+        .filter(|binding| binding.channel == "feishu" && binding.peer_id.is_empty())
+        .collect();
+    assert_eq!(feishu_defaults.len(), 1);
+    assert_eq!(feishu_defaults[0].agent_id, "tech");
+    assert_eq!(feishu_defaults[0].priority, 66);
+    assert!(!bindings.iter().any(|binding| binding.id == "binding-default-pm"));
+
+    let pm = employees
+        .iter()
+        .find(|employee| employee.id == pm_id)
+        .expect("find pm");
+    assert!(!pm.enabled_scopes.iter().any(|scope| scope == "feishu"));
+
+    let targets = resolve_target_employees_for_event(
+        &pool,
+        &ImEvent {
+            channel: "feishu".to_string(),
+            event_type: ImEventType::MessageCreated,
+            thread_id: "chat-default".to_string(),
+            event_id: Some("evt_default_001".to_string()),
+            message_id: Some("msg_default_001".to_string()),
+            text: Some("请处理今天的项目进展".to_string()),
+            role_id: None,
+            account_id: None,
+            tenant_id: None,
+        },
+    )
+    .await
+    .expect("resolve targets after default replacement");
+    assert_eq!(targets.len(), 1);
+    assert_eq!(targets[0].id, tech_id);
+}
+
+#[tokio::test]
+async fn save_feishu_employee_association_rolls_back_scope_update_when_binding_insert_fails() {
+    let (pool, _tmp) = helpers::setup_test_db().await;
+
+    let tech_id = upsert_agent_employee_with_pool(
+        &pool,
+        UpsertAgentEmployeeInput {
+            id: None,
+            employee_id: "tech".to_string(),
+            name: "技术负责人".to_string(),
+            role_id: "tech".to_string(),
+            persona: "".to_string(),
+            feishu_open_id: "".to_string(),
+            feishu_app_id: "".to_string(),
+            feishu_app_secret: "".to_string(),
+            primary_skill_id: "".to_string(),
+            default_work_dir: "".to_string(),
+            openclaw_agent_id: "tech".to_string(),
+            routing_priority: 100,
+            enabled_scopes: vec!["app".to_string()],
+            enabled: true,
+            is_default: false,
+            skill_ids: vec![],
+        },
+    )
+    .await
+    .expect("upsert tech");
+
+    sqlx::query(
+        "CREATE TRIGGER fail_feishu_binding_insert
+         BEFORE INSERT ON im_routing_bindings
+         BEGIN
+           SELECT RAISE(ABORT, 'blocked by test trigger');
+         END;",
+    )
+    .execute(&pool)
+    .await
+    .expect("create failing trigger");
+
+    let error = save_feishu_employee_association_with_pool(
+        &pool,
+        SaveFeishuEmployeeAssociationInput {
+            employee_db_id: tech_id.clone(),
+            enabled: true,
+            mode: "default".to_string(),
+            peer_kind: "group".to_string(),
+            peer_id: "".to_string(),
+            priority: 100,
+        },
+    )
+    .await
+    .expect_err("save should fail");
+    assert!(error.contains("blocked by test trigger"));
+
+    let employees = list_agent_employees_with_pool(&pool)
+        .await
+        .expect("list employees after failure");
+    let tech = employees
+        .iter()
+        .find(|employee| employee.id == tech_id)
+        .expect("find tech");
+    assert_eq!(tech.enabled_scopes, vec!["app".to_string()]);
+
+    let bindings = list_im_routing_bindings_with_pool(&pool)
+        .await
+        .expect("list bindings after failure");
+    assert!(bindings.is_empty());
 }
 
 #[tokio::test]

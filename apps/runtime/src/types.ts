@@ -567,6 +567,15 @@ export interface UpsertAgentEmployeeInput {
   skill_ids: string[];
 }
 
+export interface SaveFeishuEmployeeAssociationInput {
+  employee_db_id: string;
+  enabled: boolean;
+  mode: "default" | "scoped";
+  peer_kind: "group" | "channel" | "direct";
+  peer_id: string;
+  priority: number;
+}
+
 export interface AgentProfileAnswerInput {
   key: string;
   question: string;

@@ -438,6 +438,7 @@ pub fn run() {
             commands::employee_agents::resume_employee_group_run,
             commands::employee_agents::reassign_group_run_step,
             commands::employee_agents::upsert_agent_employee,
+            commands::employee_agents::save_feishu_employee_association,
             commands::employee_agents::delete_agent_employee,
             commands::employee_agents::get_employee_memory_stats,
             commands::employee_agents::export_employee_memory,

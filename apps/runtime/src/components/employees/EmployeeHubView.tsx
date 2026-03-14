@@ -14,6 +14,7 @@ import {
   FeishuEmployeeWsStatus,
   ImRoutingBinding,
   RuntimePreferences,
+  SaveFeishuEmployeeAssociationInput,
   SkillManifest,
   UpsertAgentEmployeeInput,
   WecomConnectorStatus,
@@ -40,6 +41,7 @@ interface Props {
   selectedEmployeeId: string | null;
   onSelectEmployee: (id: string) => void;
   onSaveEmployee: (input: UpsertAgentEmployeeInput) => Promise<void>;
+  onRefreshEmployees?: () => Promise<AgentEmployee[] | void> | AgentEmployee[] | void;
   onDeleteEmployee: (employeeId: string) => Promise<void>;
   onSetAsMainAndEnter: (employeeId: string) => void;
   onStartTaskWithEmployee: (employeeId: string) => Promise<void> | void;
@@ -106,7 +108,7 @@ export function EmployeeHubView({
   skills,
   selectedEmployeeId,
   onSelectEmployee,
-  onSaveEmployee,
+  onRefreshEmployees,
   onDeleteEmployee,
   onSetAsMainAndEnter,
   onStartTaskWithEmployee,
@@ -132,6 +134,7 @@ export function EmployeeHubView({
   const [profileView, setProfileView] = useState<AgentProfileFilesView | null>(null);
   const [profileLoading, setProfileLoading] = useState(false);
   const [routingBindings, setRoutingBindings] = useState<ImRoutingBinding[]>([]);
+  const [employeeScopeOverrides, setEmployeeScopeOverrides] = useState<Record<string, string[]>>({});
   const [savingFeishuAssociation, setSavingFeishuAssociation] = useState(false);
   const [savingWecomConfig, setSavingWecomConfig] = useState(false);
   const [retryingWecomConnection, setRetryingWecomConnection] = useState(false);
@@ -163,9 +166,17 @@ export function EmployeeHubView({
   const [groupRulesById, setGroupRulesById] = useState<Record<string, EmployeeGroupRule[]>>({});
   const [cloningGroupId, setCloningGroupId] = useState<string | null>(null);
 
+  const effectiveEmployees = useMemo(
+    () =>
+      employees.map((employee) => {
+        const override = employeeScopeOverrides[employee.id];
+        return override ? { ...employee, enabled_scopes: override } : employee;
+      }),
+    [employeeScopeOverrides, employees],
+  );
   const selectedEmployee = useMemo(
-    () => employees.find((item) => item.id === selectedEmployeeId) ?? null,
-    [employees, selectedEmployeeId],
+    () => effectiveEmployees.find((item) => item.id === selectedEmployeeId) ?? null,
+    [effectiveEmployees, selectedEmployeeId],
   );
   const selectedEmployeeMemoryId = useMemo(
     () => (selectedEmployee?.employee_id || selectedEmployee?.role_id || "").trim(),
@@ -194,13 +205,13 @@ export function EmployeeHubView({
   }, [selectedEmployee, skillNameById]);
   const employeeLabelById = useMemo(() => {
     const map = new Map<string, string>();
-    for (const item of employees) {
+    for (const item of effectiveEmployees) {
       const key = employeeKey(item).toLowerCase();
       if (!key) continue;
       map.set(key, item.name || key);
     }
     return map;
-  }, [employees]);
+  }, [effectiveEmployees]);
 
   useEffect(() => {
     (async () => {
@@ -376,7 +387,14 @@ export function EmployeeHubView({
 
   function resolveFeishuStatus(employee: AgentEmployee): { dotClass: string; label: string; detail: string; error: string } {
     const enabled = !!employee.enabled;
-    const receivesFeishu = employee.enabled_scopes.includes("feishu");
+    const agentId = (employee.openclaw_agent_id || employeeKey(employee)).trim().toLowerCase();
+    const hasFeishuBinding = routingBindings.some(
+      (binding) =>
+        binding.enabled &&
+        binding.channel === "feishu" &&
+        binding.agent_id.trim().toLowerCase() === agentId,
+    );
+    const receivesFeishu = employee.enabled_scopes.includes("feishu") || hasFeishuBinding;
     if (!enabled) {
       return { dotClass: "bg-gray-300", label: "未启用飞书消息", detail: "该员工已停用，不接收飞书事件。", error: "" };
     }
@@ -472,34 +490,6 @@ export function EmployeeHubView({
     }
   }
 
-  async function saveEmployeeWithScopes(nextScopes: string[]) {
-    if (!selectedEmployee) return;
-    const employeeId = employeeKey(selectedEmployee);
-    if (!employeeId) {
-      throw new Error("员工编号缺失，无法保存员工配置");
-    }
-    await onSaveEmployee({
-      id: selectedEmployee.id,
-      employee_id: employeeId,
-      name: selectedEmployee.name,
-      role_id: employeeId,
-      persona: selectedEmployee.persona,
-      feishu_open_id: selectedEmployee.feishu_open_id || "",
-      feishu_app_id: selectedEmployee.feishu_app_id || "",
-      feishu_app_secret: selectedEmployee.feishu_app_secret || "",
-      primary_skill_id: selectedEmployee.primary_skill_id || "",
-      default_work_dir: selectedEmployee.default_work_dir || "",
-      openclaw_agent_id: selectedEmployee.openclaw_agent_id || employeeId,
-      routing_priority: Number.isFinite(selectedEmployee.routing_priority)
-        ? selectedEmployee.routing_priority
-        : 100,
-      enabled_scopes: nextScopes.length > 0 ? nextScopes : ["app"],
-      enabled: selectedEmployee.enabled,
-      is_default: selectedEmployee.is_default,
-      skill_ids: selectedEmployee.skill_ids,
-    });
-  }
-
   async function saveFeishuAssociation(input: {
     enabled: boolean;
     mode: "default" | "scoped";
@@ -508,9 +498,7 @@ export function EmployeeHubView({
     priority: number;
   }) {
     if (!selectedEmployee) return;
-    const employeeId = employeeKey(selectedEmployee);
-    const agentId = (selectedEmployee.openclaw_agent_id || employeeId).trim();
-    if (!agentId) {
+    if (!selectedEmployee.id.trim()) {
       setMessage("员工编号缺失，无法保存飞书接待");
       return;
     }
@@ -526,61 +514,42 @@ export function EmployeeHubView({
       if (scopes.size === 0) {
         scopes.add("app");
       }
-      await saveEmployeeWithScopes(Array.from(scopes.values()));
-
-      const existingBindings = await invoke<ImRoutingBinding[]>("list_im_routing_bindings");
-      const normalizedBindings = Array.isArray(existingBindings) ? existingBindings : [];
-      const ownBindings = normalizedBindings.filter(
-        (binding) => binding.channel === "feishu" && binding.agent_id.trim().toLowerCase() === agentId.toLowerCase(),
-      );
-      for (const binding of ownBindings) {
-        await invoke("delete_im_routing_binding", { id: binding.id });
-      }
-
-      if (input.enabled) {
-        if (input.mode === "default") {
-          const otherDefaultBindings = normalizedBindings.filter(
-            (binding) =>
-              binding.channel === "feishu" &&
-              !binding.peer_id.trim() &&
-              binding.agent_id.trim().toLowerCase() !== agentId.toLowerCase(),
-          );
-          for (const binding of otherDefaultBindings) {
-            await invoke("delete_im_routing_binding", { id: binding.id });
-          }
-        } else {
-          const conflictingScopedBindings = normalizedBindings.filter(
-            (binding) =>
-              binding.channel === "feishu" &&
-              binding.agent_id.trim().toLowerCase() !== agentId.toLowerCase() &&
-              binding.peer_kind.trim().toLowerCase() === input.peerKind &&
-              binding.peer_id.trim() === input.peerId.trim(),
-          );
-          for (const binding of conflictingScopedBindings) {
-            await invoke("delete_im_routing_binding", { id: binding.id });
-          }
-        }
-
-        await invoke<string>("upsert_im_routing_binding", {
-          input: {
-            agent_id: agentId,
-            channel: "feishu",
-            account_id: "*",
-            peer_kind: input.mode === "default" ? "group" : input.peerKind,
-            peer_id: input.mode === "default" ? "" : input.peerId.trim(),
-            guild_id: "",
-            team_id: "",
-            role_ids: [],
-            connector_meta: { connector_id: "feishu" },
-            priority: input.priority,
-            enabled: true,
-          },
-        });
-      }
+      const nextScopes = Array.from(scopes.values());
+      const payload: SaveFeishuEmployeeAssociationInput = {
+        employee_db_id: selectedEmployee.id,
+        enabled: input.enabled,
+        mode: input.mode,
+        peer_kind: input.mode === "default" ? "group" : input.peerKind,
+        peer_id: input.mode === "default" ? "" : input.peerId.trim(),
+        priority: input.priority,
+      };
+      await invoke("save_feishu_employee_association", { input: payload });
 
       const latestBindings = await invoke<ImRoutingBinding[]>("list_im_routing_bindings");
       setRoutingBindings(Array.isArray(latestBindings) ? latestBindings : []);
-      setMessage(input.enabled ? "飞书接待已保存" : "已关闭该员工的飞书接待");
+      setEmployeeScopeOverrides((current) => ({
+        ...current,
+        [selectedEmployee.id]: nextScopes,
+      }));
+      let refreshWarning = "";
+      if (onRefreshEmployees) {
+        try {
+          await onRefreshEmployees();
+          setEmployeeScopeOverrides((current) => {
+            if (!(selectedEmployee.id in current)) return current;
+            const next = { ...current };
+            delete next[selectedEmployee.id];
+            return next;
+          });
+        } catch (refreshError) {
+          refreshWarning = `，员工列表刷新失败: ${String(refreshError)}`;
+        }
+      }
+      setMessage(
+        input.enabled
+          ? `飞书接待已保存${refreshWarning}`
+          : `已关闭该员工的飞书接待${refreshWarning}`,
+      );
     } catch (e) {
       setMessage(`保存飞书接待失败: ${String(e)}`);
     } finally {
@@ -933,19 +902,19 @@ export function EmployeeHubView({
     { id: "settings", label: "设置" },
   ];
   const overviewMetrics = useMemo(
-    () => buildEmployeeHubMetrics({ employees, groups: employeeGroups, runs: recentRuns }),
-    [employeeGroups, employees, recentRuns],
+    () => buildEmployeeHubMetrics({ employees: effectiveEmployees, groups: employeeGroups, runs: recentRuns }),
+    [effectiveEmployees, employeeGroups, recentRuns],
   );
   const pendingItems = useMemo(
-    () => buildEmployeeHubPendingItems({ employees, groups: employeeGroups }),
-    [employeeGroups, employees],
+    () => buildEmployeeHubPendingItems({ employees: effectiveEmployees, groups: employeeGroups }),
+    [effectiveEmployees, employeeGroups],
   );
-  const recentEmployees = employees.slice(0, 5);
+  const recentEmployees = effectiveEmployees.slice(0, 5);
   const recentGroups = employeeGroups.slice(0, 5);
   const recentRunsForOverview = recentRuns.slice(0, 5);
   const filteredEmployees = useMemo(
-    () => employees.filter((employee) => matchesEmployeeHubEmployeeFilter(employee, employeeFilter)),
-    [employeeFilter, employees],
+    () => effectiveEmployees.filter((employee) => matchesEmployeeHubEmployeeFilter(employee, employeeFilter)),
+    [effectiveEmployees, employeeFilter],
   );
   const filteredGroups = useMemo(
     () => employeeGroups.filter((group) => matchesEmployeeHubTeamFilter(group, teamFilter)),

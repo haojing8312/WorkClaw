@@ -208,8 +208,99 @@ describe("EmployeeHubView feishu connection status", () => {
     });
   });
 
+  test("treats legacy feishu bindings as active reception even when scopes are empty", async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_runtime_preferences") {
+        return Promise.resolve({ default_work_dir: "C:\\Users\\test\\WorkClaw\\workspace" });
+      }
+      if (command === "get_feishu_employee_connection_statuses") {
+        return Promise.resolve({
+          relay: {
+            running: true,
+            generation: 1,
+            interval_ms: 1500,
+            total_accepted: 0,
+            last_error: null,
+          },
+          sidecar: {
+            running: true,
+            started_at: "2026-03-04T00:00:00Z",
+            queued_events: 0,
+            running_count: 0,
+            items: [],
+          },
+        });
+      }
+      if (command === "set_runtime_preferences") return Promise.resolve(null);
+      if (command === "list_im_routing_bindings") {
+        return Promise.resolve([
+          {
+            id: "binding-legacy-ops",
+            agent_id: "ops",
+            channel: "feishu",
+            account_id: "*",
+            peer_kind: "group",
+            peer_id: "",
+            guild_id: "",
+            team_id: "",
+            role_ids: [],
+            connector_meta: { connector_id: "feishu" },
+            priority: 100,
+            enabled: true,
+            created_at: "2026-03-11T00:00:00Z",
+            updated_at: "2026-03-11T00:00:00Z",
+          },
+        ]);
+      }
+      if (command === "get_wecom_gateway_settings") {
+        return Promise.resolve({
+          corp_id: "wwcorp",
+          agent_id: "1000002",
+          agent_secret: "secret-x",
+          sidecar_base_url: "",
+        });
+      }
+      if (command === "get_wecom_connector_status") {
+        return Promise.resolve({
+          running: false,
+          started_at: null,
+          last_error: null,
+          reconnect_attempts: 0,
+          queue_depth: 0,
+          instance_id: "wecom:wecom-main",
+        });
+      }
+      if (command === "set_wecom_gateway_settings") return Promise.resolve(null);
+      if (command === "start_wecom_connector") return Promise.resolve("wecom:wecom-main");
+      if (command === "resolve_default_work_dir") return Promise.resolve("C:\\Users\\test\\WorkClaw\\workspace");
+      return Promise.resolve(null);
+    });
+
+    render(
+      <EmployeeHubView
+        employees={[
+          {
+            ...buildEmployee("emp-ops", "ops", true, "cli_ops", "sec_ops"),
+            enabled_scopes: [],
+          },
+        ]}
+        skills={[]}
+        selectedEmployeeId="emp-ops"
+        onSelectEmployee={() => {}}
+        onSaveEmployee={async () => {}}
+        onDeleteEmployee={async () => {}}
+        onSetAsMainAndEnter={() => {}}
+        onStartTaskWithEmployee={() => {}}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("employee-connection-dot-emp-ops")).toHaveClass("bg-red-500");
+    });
+  });
+
   test("saving feishu association preserves app scope when employee scopes are empty", async () => {
-    const onSaveEmployee = vi.fn().mockResolvedValue(undefined);
+    const refreshEmployees = vi.fn().mockResolvedValue(undefined);
     const employee = {
       ...buildEmployee("emp-scope", "scope-user", true, "cli_scope", "sec_scope"),
       enabled_scopes: [],
@@ -232,7 +323,8 @@ describe("EmployeeHubView feishu connection status", () => {
         ]}
         selectedEmployeeId="emp-scope"
         onSelectEmployee={() => {}}
-        onSaveEmployee={onSaveEmployee}
+        onSaveEmployee={async () => {}}
+        onRefreshEmployees={refreshEmployees}
         onDeleteEmployee={async () => {}}
         onSetAsMainAndEnter={() => {}}
         onStartTaskWithEmployee={() => {}}
@@ -247,26 +339,25 @@ describe("EmployeeHubView feishu connection status", () => {
     fireEvent.click(screen.getByRole("button", { name: "保存飞书接待" }));
 
     await waitFor(() => {
-      expect(onSaveEmployee).toHaveBeenCalledWith(
+      expect(invokeMock).toHaveBeenCalledWith(
+        "save_feishu_employee_association",
         expect.objectContaining({
-          enabled_scopes: ["app", "feishu"],
+          input: expect.objectContaining({
+            employee_db_id: "emp-scope",
+            enabled: true,
+            mode: "default",
+            peer_kind: "group",
+            peer_id: "",
+            priority: 100,
+          }),
         }),
       );
     });
-    expect(invokeMock).toHaveBeenCalledWith(
-      "upsert_im_routing_binding",
-      expect.objectContaining({
-        input: expect.objectContaining({
-          channel: "feishu",
-          agent_id: "scope-user",
-        }),
-      }),
-    );
+    expect(refreshEmployees).toHaveBeenCalledTimes(1);
+    expect(invokeMock).not.toHaveBeenCalledWith("upsert_im_routing_binding", expect.anything());
   });
 
   test("supports scoped feishu reception for a specific group", async () => {
-    const onSaveEmployee = vi.fn().mockResolvedValue(undefined);
-
     render(
       <EmployeeHubView
         employees={[buildEmployee("emp-scoped", "ops", true, "cli_ops", "sec_ops")]}
@@ -284,7 +375,7 @@ describe("EmployeeHubView feishu connection status", () => {
         ]}
         selectedEmployeeId="emp-scoped"
         onSelectEmployee={() => {}}
-        onSaveEmployee={onSaveEmployee}
+        onSaveEmployee={async () => {}}
         onDeleteEmployee={async () => {}}
         onSetAsMainAndEnter={() => {}}
         onStartTaskWithEmployee={() => {}}
@@ -306,11 +397,12 @@ describe("EmployeeHubView feishu connection status", () => {
 
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith(
-        "upsert_im_routing_binding",
+        "save_feishu_employee_association",
         expect.objectContaining({
           input: expect.objectContaining({
-            channel: "feishu",
-            agent_id: "ops",
+            employee_db_id: "emp-scoped",
+            enabled: true,
+            mode: "scoped",
             peer_kind: "group",
             peer_id: "chat-delivery-room",
             priority: 66,
@@ -398,12 +490,13 @@ describe("EmployeeHubView feishu connection status", () => {
     fireEvent.click(screen.getByRole("button", { name: "保存飞书接待" }));
 
     await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith("delete_im_routing_binding", { id: "binding-default-pm" });
       expect(invokeMock).toHaveBeenCalledWith(
-        "upsert_im_routing_binding",
+        "save_feishu_employee_association",
         expect.objectContaining({
           input: expect.objectContaining({
-            agent_id: "tech",
+            employee_db_id: "emp-tech",
+            enabled: true,
+            mode: "default",
             peer_id: "",
           }),
         }),
@@ -494,12 +587,13 @@ describe("EmployeeHubView feishu connection status", () => {
     fireEvent.click(screen.getByRole("button", { name: "保存飞书接待" }));
 
     await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith("delete_im_routing_binding", { id: "binding-ops-room" });
       expect(invokeMock).toHaveBeenCalledWith(
-        "upsert_im_routing_binding",
+        "save_feishu_employee_association",
         expect.objectContaining({
           input: expect.objectContaining({
-            agent_id: "tech",
+            employee_db_id: "emp-tech",
+            enabled: true,
+            mode: "scoped",
             peer_id: "chat-delivery-room",
           }),
         }),
