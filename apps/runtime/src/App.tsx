@@ -1858,17 +1858,27 @@ export default function App() {
 
   const selectedSkill = skills.find((s) => s.id === selectedSkillId) ?? null;
   const selectedSession = sessions.find((s) => s.id === selectedSessionId);
+  const findEmployeeBySessionReference = useCallback(
+    (employeeRef?: string) => {
+      const normalizedRef = (employeeRef || "").trim().toLowerCase();
+      if (!normalizedRef) return undefined;
+      return employees.find((item) => {
+        const employeeCode = (item.employee_id || item.role_id || item.id || "").trim().toLowerCase();
+        return employeeCode === normalizedRef || item.id.trim().toLowerCase() === normalizedRef;
+      });
+    },
+    [employees],
+  );
   const selectedSessionEmployeeName = (() => {
+    const projectedEmployeeName = (selectedSession?.employee_name || "").trim();
+    if (projectedEmployeeName) return projectedEmployeeName;
     const sessionEmployeeId = (selectedSession?.employee_id || "").trim();
-    if (!sessionEmployeeId) return undefined;
-    const matchedEmployee = employees.find((item) => {
-      const employeeCode = (item.employee_id || item.role_id || item.id || "").trim();
-      return (
-        employeeCode.toLowerCase() === sessionEmployeeId.toLowerCase() ||
-        item.id.trim().toLowerCase() === sessionEmployeeId.toLowerCase()
-      );
-    });
-    return matchedEmployee?.name;
+    const matchedEmployee = findEmployeeBySessionReference(sessionEmployeeId);
+    if (matchedEmployee?.name) return matchedEmployee.name;
+    if ((selectedSession?.session_mode || "").trim().toLowerCase() !== "employee_direct") {
+      return undefined;
+    }
+    return findEmployeeBySessionReference(selectedEmployeeId)?.name;
   })();
   const selectedEmployeeAssistantContext = (() => {
     if (selectedSkill?.id !== BUILTIN_EMPLOYEE_CREATOR_SKILL_ID || !selectedSessionId) {
@@ -1882,13 +1892,7 @@ export default function App() {
     if (!sessionEmployeeId) {
       return { mode: "create" as const };
     }
-    const matchedEmployee = employees.find((item) => {
-      const employeeCode = (item.employee_id || item.role_id || item.id || "").trim();
-      return (
-        employeeCode.toLowerCase() === sessionEmployeeId.toLowerCase() ||
-        item.id.trim().toLowerCase() === sessionEmployeeId.toLowerCase()
-      );
-    });
+    const matchedEmployee = findEmployeeBySessionReference(sessionEmployeeId);
     return {
       mode: "update" as const,
       employeeName: matchedEmployee?.name,

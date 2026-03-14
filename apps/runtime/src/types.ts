@@ -208,6 +208,7 @@ export interface SessionInfo {
   model_id: string;
   work_dir?: string;
   employee_id?: string;
+  employee_name?: string;
   optimistic?: boolean;
   permission_mode?: "standard" | "full_access" | "default" | "accept_edits" | "unrestricted";
   session_mode?: "general" | "employee_direct" | "team_entry";

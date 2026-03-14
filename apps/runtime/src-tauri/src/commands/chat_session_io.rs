@@ -249,6 +249,10 @@ pub(crate) async fn list_sessions_with_pool(
         let session_mode = session_mode.unwrap_or_else(|| "general".to_string());
         let team_id = team_id.unwrap_or_default();
         let im_source_channel = im_source_channel.unwrap_or_default();
+        let employee_name = employee_name_by_code
+            .get(employee_id.trim())
+            .cloned()
+            .unwrap_or_default();
         let (source_channel, source_label) = resolve_im_session_source(Some(&im_source_channel));
         let display_title = derive_session_display_title_with_pool(
             pool,
@@ -269,6 +273,7 @@ pub(crate) async fn list_sessions_with_pool(
             "model_id": model_id,
             "work_dir": work_dir,
             "employee_id": employee_id,
+            "employee_name": employee_name,
             "permission_mode": permission_mode,
             "session_mode": session_mode,
             "team_id": team_id,
@@ -922,12 +927,16 @@ mod tests {
 
         assert_eq!(sessions[0]["id"], "session-employee");
         assert_eq!(sessions[0]["display_title"], "张三");
+        assert_eq!(sessions[0]["employee_name"], "张三");
         assert_eq!(sessions[1]["id"], "session-team");
         assert_eq!(sessions[1]["display_title"], "市场协作");
+        assert_eq!(sessions[1]["employee_name"], "");
         assert_eq!(sessions[2]["id"], "session-general-generic-first");
         assert_eq!(sessions[2]["display_title"], "修复登录接口超时问题");
+        assert_eq!(sessions[2]["employee_name"], "");
         assert_eq!(sessions[3]["id"], "session-general");
         assert_eq!(sessions[3]["display_title"], "帮我整理本周销售周报");
+        assert_eq!(sessions[3]["employee_name"], "");
     }
 
     #[test]
