@@ -78,24 +78,24 @@ pub(crate) async fn execute_route_candidates(
                     candidate_model_name,
                     params.system_prompt,
                     params.messages.to_vec(),
-                    move |delta: StreamDelta| {
-                        match delta {
-                            StreamDelta::Text(token) => {
-                                if let Ok(mut buffer) = streamed_text_clone.lock() {
-                                    buffer.push_str(&token);
-                                }
-                                let _ = app_clone.emit(
-                                    "stream-token",
-                                    StreamToken {
-                                        session_id: session_id_clone.clone(),
-                                        token,
-                                        done: false,
-                                        sub_agent: false,
-                                    },
-                                );
+                    move |delta: StreamDelta| match delta {
+                        StreamDelta::Text(token) => {
+                            if let Ok(mut buffer) = streamed_text_clone.lock() {
+                                buffer.push_str(&token);
                             }
-                            StreamDelta::Reasoning(text) => {
-                                let emit_started = if let Ok(mut started) = reasoning_started_at_clone.lock() {
+                            let _ = app_clone.emit(
+                                "stream-token",
+                                StreamToken {
+                                    session_id: session_id_clone.clone(),
+                                    token,
+                                    done: false,
+                                    sub_agent: false,
+                                },
+                            );
+                        }
+                        StreamDelta::Reasoning(text) => {
+                            let emit_started =
+                                if let Ok(mut started) = reasoning_started_at_clone.lock() {
                                     if started.is_none() {
                                         *started = Some(std::time::Instant::now());
                                         true
@@ -105,23 +105,22 @@ pub(crate) async fn execute_route_candidates(
                                 } else {
                                     false
                                 };
-                                if emit_started {
-                                    let _ = app_clone.emit(
-                                        "assistant-reasoning-started",
-                                        serde_json::json!({ "session_id": session_id_clone.clone() }),
-                                    );
-                                }
-                                if let Ok(mut buffer) = streamed_reasoning_clone.lock() {
-                                    buffer.push_str(&text);
-                                }
+                            if emit_started {
                                 let _ = app_clone.emit(
-                                    "assistant-reasoning-delta",
-                                    serde_json::json!({
-                                        "session_id": session_id_clone.clone(),
-                                        "text": text,
-                                    }),
+                                    "assistant-reasoning-started",
+                                    serde_json::json!({ "session_id": session_id_clone.clone() }),
                                 );
                             }
+                            if let Ok(mut buffer) = streamed_reasoning_clone.lock() {
+                                buffer.push_str(&text);
+                            }
+                            let _ = app_clone.emit(
+                                "assistant-reasoning-delta",
+                                serde_json::json!({
+                                    "session_id": session_id_clone.clone(),
+                                    "text": text,
+                                }),
+                            );
                         }
                     },
                     Some(params.app),
@@ -134,8 +133,8 @@ pub(crate) async fn execute_route_candidates(
                     Some(params.cancel_flag.clone()),
                     Some(params.node_timeout_seconds),
                     Some(params.route_retry_count),
-                    )
-                    .await;
+                )
+                .await;
 
             match attempt {
                 Ok(messages_out) => {
@@ -152,10 +151,10 @@ pub(crate) async fn execute_route_candidates(
                         "",
                     )
                     .await;
-                    let reasoning_duration_ms = reasoning_started_at
-                        .lock()
-                        .ok()
-                        .and_then(|started| started.map(|instant| instant.elapsed().as_millis() as u64));
+                    let reasoning_duration_ms =
+                        reasoning_started_at.lock().ok().and_then(|started| {
+                            started.map(|instant| instant.elapsed().as_millis() as u64)
+                        });
                     if let Some(duration_ms) = reasoning_duration_ms {
                         let _ = params.app.emit(
                             "assistant-reasoning-completed",

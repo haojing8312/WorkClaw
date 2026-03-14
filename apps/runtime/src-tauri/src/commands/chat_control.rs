@@ -45,7 +45,9 @@ pub async fn confirm_tool_execution(
 /// 取消正在执行的 Agent
 #[tauri::command]
 pub async fn cancel_agent(cancel_flag: State<'_, CancelFlagState>) -> Result<(), String> {
-    cancel_flag.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    cancel_flag
+        .0
+        .store(true, std::sync::atomic::Ordering::SeqCst);
     eprintln!("[agent] 收到取消信号");
     Ok(())
 }

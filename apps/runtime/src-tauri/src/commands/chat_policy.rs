@@ -3,9 +3,7 @@ use crate::agent::permissions::PermissionMode;
 use serde_json::Value;
 
 #[cfg(test)]
-pub(crate) fn normalize_permission_mode_for_storage(
-    permission_mode: Option<&str>,
-) -> &'static str {
+pub(crate) fn normalize_permission_mode_for_storage(permission_mode: Option<&str>) -> &'static str {
     match permission_mode.unwrap_or("").trim() {
         "standard" | "default" | "accept_edits" => "standard",
         "full_access" | "unrestricted" => "full_access",
@@ -223,38 +221,68 @@ mod tests {
     fn normalize_permission_mode_defaults_to_standard() {
         assert_eq!(normalize_permission_mode_for_storage(None), "standard");
         assert_eq!(normalize_permission_mode_for_storage(Some("")), "standard");
-        assert_eq!(normalize_permission_mode_for_storage(Some("invalid")), "standard");
+        assert_eq!(
+            normalize_permission_mode_for_storage(Some("invalid")),
+            "standard"
+        );
     }
 
     #[test]
     fn normalize_permission_mode_maps_legacy_values_to_modern_storage() {
-        assert_eq!(normalize_permission_mode_for_storage(Some("standard")), "standard");
-        assert_eq!(normalize_permission_mode_for_storage(Some("full_access")), "full_access");
-        assert_eq!(normalize_permission_mode_for_storage(Some("default")), "standard");
-        assert_eq!(normalize_permission_mode_for_storage(Some("accept_edits")), "standard");
-        assert_eq!(normalize_permission_mode_for_storage(Some("unrestricted")), "full_access");
+        assert_eq!(
+            normalize_permission_mode_for_storage(Some("standard")),
+            "standard"
+        );
+        assert_eq!(
+            normalize_permission_mode_for_storage(Some("full_access")),
+            "full_access"
+        );
+        assert_eq!(
+            normalize_permission_mode_for_storage(Some("default")),
+            "standard"
+        );
+        assert_eq!(
+            normalize_permission_mode_for_storage(Some("accept_edits")),
+            "standard"
+        );
+        assert_eq!(
+            normalize_permission_mode_for_storage(Some("unrestricted")),
+            "full_access"
+        );
     }
 
     #[test]
     fn normalize_session_mode_defaults_to_general() {
         assert_eq!(normalize_session_mode_for_storage(None), "general");
         assert_eq!(normalize_session_mode_for_storage(Some("")), "general");
-        assert_eq!(normalize_session_mode_for_storage(Some("invalid")), "general");
+        assert_eq!(
+            normalize_session_mode_for_storage(Some("invalid")),
+            "general"
+        );
     }
 
     #[test]
     fn normalize_session_mode_keeps_supported_values() {
-        assert_eq!(normalize_session_mode_for_storage(Some("general")), "general");
+        assert_eq!(
+            normalize_session_mode_for_storage(Some("general")),
+            "general"
+        );
         assert_eq!(
             normalize_session_mode_for_storage(Some("employee_direct")),
             "employee_direct"
         );
-        assert_eq!(normalize_session_mode_for_storage(Some("team_entry")), "team_entry");
+        assert_eq!(
+            normalize_session_mode_for_storage(Some("team_entry")),
+            "team_entry"
+        );
     }
 
     #[test]
     fn normalize_team_id_only_keeps_team_entry_values() {
-        assert_eq!(normalize_team_id_for_storage("general", Some("group-1")), "");
+        assert_eq!(
+            normalize_team_id_for_storage("general", Some("group-1")),
+            ""
+        );
         assert_eq!(
             normalize_team_id_for_storage("employee_direct", Some("group-1")),
             ""
@@ -267,7 +295,10 @@ mod tests {
 
     #[test]
     fn parse_permission_mode_for_runtime_defaults_to_standard_behavior() {
-        assert_eq!(parse_permission_mode_for_runtime(""), PermissionMode::AcceptEdits);
+        assert_eq!(
+            parse_permission_mode_for_runtime(""),
+            PermissionMode::AcceptEdits
+        );
         assert_eq!(
             parse_permission_mode_for_runtime("invalid"),
             PermissionMode::AcceptEdits
@@ -301,10 +332,19 @@ mod tests {
     #[test]
     fn permission_mode_label_is_user_friendly() {
         assert_eq!(permission_mode_label_for_display("standard"), "标准模式");
-        assert_eq!(permission_mode_label_for_display("full_access"), "全自动模式");
-        assert_eq!(permission_mode_label_for_display("accept_edits"), "标准模式");
+        assert_eq!(
+            permission_mode_label_for_display("full_access"),
+            "全自动模式"
+        );
+        assert_eq!(
+            permission_mode_label_for_display("accept_edits"),
+            "标准模式"
+        );
         assert_eq!(permission_mode_label_for_display("default"), "标准模式");
-        assert_eq!(permission_mode_label_for_display("unrestricted"), "全自动模式");
+        assert_eq!(
+            permission_mode_label_for_display("unrestricted"),
+            "全自动模式"
+        );
     }
 
     #[test]
@@ -380,7 +420,10 @@ mod tests {
     #[test]
     fn infer_capability_from_user_message_detects_modalities() {
         assert_eq!(infer_capability_from_user_message("请帮我识图"), "vision");
-        assert_eq!(infer_capability_from_user_message("帮我生成图片"), "image_gen");
+        assert_eq!(
+            infer_capability_from_user_message("帮我生成图片"),
+            "image_gen"
+        );
         assert_eq!(
             infer_capability_from_user_message("这段音频做语音转文字"),
             "audio_stt"

@@ -581,9 +581,7 @@ impl AgentExecutor {
                                         ToolConfirmationDecision::TimedOut => {
                                             "工具确认超时，已取消此操作"
                                         }
-                                        ToolConfirmationDecision::Rejected => {
-                                            "用户拒绝了此操作"
-                                        }
+                                        ToolConfirmationDecision::Rejected => "用户拒绝了此操作",
                                         ToolConfirmationDecision::Confirmed => unreachable!(),
                                     };
                                     let _ = app.emit(

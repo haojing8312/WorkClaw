@@ -36,7 +36,8 @@ pub async fn compact_context_with_pool(
     .await
     .map_err(|e| e.to_string())?;
 
-    chat_session_io::replace_messages_with_compacted_with_pool(pool, session_id, &compacted).await?;
+    chat_session_io::replace_messages_with_compacted_with_pool(pool, session_id, &compacted)
+        .await?;
 
     let new_tokens = estimate_tokens(&compacted);
     let summary = compacted
