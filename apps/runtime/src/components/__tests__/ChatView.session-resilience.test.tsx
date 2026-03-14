@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import { ChatView } from "../ChatView";
 
@@ -39,6 +39,7 @@ describe("ChatView session resilience", () => {
     });
     listeners.clear();
     invokeMock.mockReset();
+    window.localStorage.clear();
     sessionRunsResponse = [];
     messagesResponse = [];
     invokeMock.mockImplementation((command: string) => {
@@ -51,6 +52,8 @@ describe("ChatView session resilience", () => {
   });
 
   afterEach(() => {
+    cleanup();
+    window.localStorage.clear();
     vi.useRealTimers();
   });
 
@@ -275,8 +278,105 @@ describe("ChatView session resilience", () => {
     });
 
     expect(invokeMock).toHaveBeenCalledWith("send_message", {
-      sessionId: "sess-initial",
-      userMessage: "请先开始执行",
+      request: {
+        sessionId: "sess-initial",
+        parts: [{ type: "text", text: "请先开始执行" }],
+      },
+    });
+  });
+
+  test("keeps unsent drafts isolated per session when switching between conversations", async () => {
+    const { rerender } = render(
+      <ChatView
+        skill={{
+          id: "builtin-general",
+          name: "General",
+          description: "desc",
+          version: "1.0.0",
+          author: "test",
+          recommended_model: "",
+          tags: [],
+          created_at: new Date().toISOString(),
+        }}
+        models={[
+          {
+            id: "m1",
+            name: "model",
+            api_format: "openai",
+            base_url: "https://example.com",
+            model_name: "model",
+            is_default: true,
+          },
+        ]}
+        sessionId="sess-a"
+      />
+    );
+
+    const composer = await screen.findByPlaceholderText("输入消息，Shift+Enter 换行...");
+    fireEvent.change(composer, { target: { value: "整理 A 会话草稿" } });
+
+    rerender(
+      <ChatView
+        skill={{
+          id: "builtin-general",
+          name: "General",
+          description: "desc",
+          version: "1.0.0",
+          author: "test",
+          recommended_model: "",
+          tags: [],
+          created_at: new Date().toISOString(),
+        }}
+        models={[
+          {
+            id: "m1",
+            name: "model",
+            api_format: "openai",
+            base_url: "https://example.com",
+            model_name: "model",
+            is_default: true,
+          },
+        ]}
+        sessionId="sess-b"
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText("输入消息，Shift+Enter 换行...")).toHaveValue("");
+    });
+
+    fireEvent.change(screen.getByPlaceholderText("输入消息，Shift+Enter 换行..."), {
+      target: { value: "继续 B 会话草稿" },
+    });
+
+    rerender(
+      <ChatView
+        skill={{
+          id: "builtin-general",
+          name: "General",
+          description: "desc",
+          version: "1.0.0",
+          author: "test",
+          recommended_model: "",
+          tags: [],
+          created_at: new Date().toISOString(),
+        }}
+        models={[
+          {
+            id: "m1",
+            name: "model",
+            api_format: "openai",
+            base_url: "https://example.com",
+            model_name: "model",
+            is_default: true,
+          },
+        ]}
+        sessionId="sess-a"
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText("输入消息，Shift+Enter 换行...")).toHaveValue("整理 A 会话草稿");
     });
   });
 

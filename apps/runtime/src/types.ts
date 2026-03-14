@@ -202,6 +202,7 @@ export interface SessionRunProjection {
 
 export interface SessionInfo {
   id: string;
+  skill_id?: string;
   title: string;
   display_title?: string;
   created_at: string;

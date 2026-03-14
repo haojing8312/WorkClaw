@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import App from "../App";
 
 const invokeMock = vi.fn();
@@ -30,6 +30,7 @@ vi.mock("../components/ChatView", () => ({
     <div data-testid="chat-view">
       chat-view
       {props.initialMessage ? <span data-testid="chat-initial-message">{props.initialMessage}</span> : null}
+      {props.workDir ? <span data-testid="chat-work-dir">{props.workDir}</span> : null}
     </div>
   ),
 }));
@@ -66,6 +67,12 @@ vi.mock("../components/NewSessionLanding", () => ({
 }));
 
 describe("App session create flow", () => {
+  afterEach(() => {
+    cleanup();
+    window.localStorage.clear();
+    window.location.hash = "";
+  });
+
   beforeEach(() => {
     invokeMock.mockReset();
     openMock.mockReset();
@@ -151,6 +158,78 @@ describe("App session create flow", () => {
       expect(screen.getByTestId("chat-view")).toBeInTheDocument();
     });
     expect(screen.getByTestId("chat-initial-message")).toHaveTextContent("整理本地文件");
+  });
+
+  test("creates a general session with the default workdir and passes it into chat view", async () => {
+    invokeMock.mockImplementation((command: string, payload?: any) => {
+      if (command === "list_skills") {
+        return Promise.resolve([
+          {
+            id: "builtin-general",
+            name: "General",
+            description: "desc",
+            version: "1.0.0",
+            author: "test",
+            recommended_model: "model-a",
+            tags: [],
+            created_at: new Date().toISOString(),
+          },
+        ]);
+      }
+      if (command === "list_model_configs") {
+        return Promise.resolve([
+          {
+            id: "model-a",
+            name: "Model A",
+            api_format: "openai",
+            base_url: "https://example.com",
+            model_name: "model-a",
+            is_default: true,
+          },
+        ]);
+      }
+      if (command === "get_sessions") {
+        return Promise.resolve([]);
+      }
+      if (command === "list_agent_employees") {
+        return Promise.resolve([]);
+      }
+      if (command === "get_runtime_preferences") {
+        return Promise.resolve({
+          default_work_dir: "E:\\workspace\\workclaw",
+          operation_permission_mode: "standard",
+        });
+      }
+      if (command === "create_session") {
+        return Promise.resolve("session-new-default-dir");
+      }
+      return Promise.resolve(payload ?? null);
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "create-empty" })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "create-empty" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        "create_session",
+        expect.objectContaining({
+          skillId: "builtin-general",
+          modelId: "model-a",
+          workDir: "E:\\workspace\\workclaw",
+          permissionMode: "standard",
+          sessionMode: "general",
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("chat-work-dir")).toHaveTextContent("E:\\workspace\\workclaw");
+    });
   });
 
   test("creates empty session without sending first message when input is empty", async () => {

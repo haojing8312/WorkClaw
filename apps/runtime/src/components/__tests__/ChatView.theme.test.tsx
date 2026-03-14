@@ -60,6 +60,46 @@ describe("ChatView semantic theme", () => {
     expect(invokeMock.mock.calls.some((call) => call[0] === "get_sessions")).toBe(false);
   });
 
+  test("shows the provided workdir before session hydration completes", async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_messages") return Promise.resolve([]);
+      if (command === "list_sessions") return Promise.resolve([]);
+      if (command === "get_sessions") return Promise.resolve([]);
+      return Promise.resolve(null);
+    });
+
+    render(
+      <ChatView
+        skill={{
+          id: "builtin-general",
+          name: "General",
+          description: "desc",
+          version: "1.0.0",
+          author: "test",
+          recommended_model: "",
+          tags: [],
+          created_at: new Date().toISOString(),
+        }}
+        models={[
+          {
+            id: "m1",
+            name: "model",
+            api_format: "openai",
+            base_url: "https://example.com",
+            model_name: "model",
+            is_default: true,
+          },
+        ]}
+        sessionId="session-a"
+        workDir="E:\\workspace\\workclaw"
+      />,
+    );
+
+    expect(
+      await screen.findByText((content) => content.includes("workspace") && content.includes("workclaw")),
+    ).toBeInTheDocument();
+  });
+
   test("uses semantic classes in composer shell", async () => {
     render(
       <ChatView

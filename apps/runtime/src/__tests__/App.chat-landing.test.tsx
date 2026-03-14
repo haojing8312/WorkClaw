@@ -1,8 +1,9 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import App from "../App";
 
 const invokeMock = vi.fn();
 const chatViewPropsSpy = vi.fn();
+const LAST_SELECTED_SESSION_ID_KEY = "workclaw:last-selected-session-id";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
@@ -31,6 +32,27 @@ vi.mock("../components/Sidebar", () => ({
         }}
       >
         select-team-session
+      </button>
+      <button
+        onClick={() => {
+          props.onSelectSession("session-step-gongbu-1");
+        }}
+      >
+        select-last-session
+      </button>
+      <button
+        onClick={() => {
+          props.onDeleteSession("session-1");
+        }}
+      >
+        delete-first-session
+      </button>
+      <button
+        onClick={() => {
+          props.onDeleteSession("session-step-gongbu-1");
+        }}
+      >
+        delete-last-session
       </button>
       <div data-testid="sidebar-session-count">{props.sessions?.length ?? 0}</div>
       <div data-testid="sidebar-first-session-id">{props.sessions?.[0]?.id ?? ""}</div>
@@ -170,9 +192,16 @@ vi.mock("../components/NewSessionLanding", () => ({
 }));
 
 describe("App chat landing", () => {
+  afterEach(() => {
+    cleanup();
+    window.localStorage.clear();
+    window.location.hash = "";
+  });
+
   beforeEach(() => {
     invokeMock.mockReset();
     chatViewPropsSpy.mockClear();
+    window.localStorage.clear();
     invokeMock.mockImplementation((command: string, payload?: any) => {
       if (command === "list_skills") {
         return Promise.resolve([
@@ -180,6 +209,16 @@ describe("App chat landing", () => {
             id: "builtin-general",
             name: "General",
             description: "desc",
+            version: "1.0.0",
+            author: "test",
+            recommended_model: "model-a",
+            tags: [],
+            created_at: new Date().toISOString(),
+          },
+          {
+            id: "skill-gongbu",
+            name: "工部协作",
+            description: "gongbu",
             version: "1.0.0",
             author: "test",
             recommended_model: "model-a",
@@ -207,6 +246,7 @@ describe("App chat landing", () => {
             title: "Session 1",
             created_at: new Date().toISOString(),
             model_id: "model-a",
+            skill_id: "builtin-general",
             session_mode: "general",
             team_id: "",
           },
@@ -215,6 +255,7 @@ describe("App chat landing", () => {
             title: "默认复杂任务团队",
             created_at: new Date().toISOString(),
             model_id: "model-a",
+            skill_id: "builtin-general",
             session_mode: "team_entry",
             team_id: "group-1",
           },
@@ -223,12 +264,14 @@ describe("App chat landing", () => {
             title: "Group Run Session",
             created_at: new Date().toISOString(),
             model_id: "model-a",
+            skill_id: "builtin-general",
           },
           {
             id: "session-step-gongbu-1",
             title: "工部执行会话",
             created_at: new Date().toISOString(),
             model_id: "model-a",
+            skill_id: "skill-gongbu",
           },
         ]);
       }
@@ -282,6 +325,9 @@ describe("App chat landing", () => {
         }
         return Promise.resolve("session-created-general");
       }
+      if (command === "delete_session") {
+        return Promise.resolve(null);
+      }
       return Promise.resolve(null);
     });
   });
@@ -310,6 +356,23 @@ describe("App chat landing", () => {
     });
   });
 
+  test("restores the last selected session on startup when the session still exists", async () => {
+    window.localStorage.setItem(LAST_SELECTED_SESSION_ID_KEY, "session-step-gongbu-1");
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("chat-view-session-id")).toHaveTextContent("session-step-gongbu-1");
+    });
+
+    expect(chatViewPropsSpy).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        skill: expect.objectContaining({ id: "skill-gongbu" }),
+      }),
+    );
+    expect(screen.queryByTestId("new-session-landing")).not.toBeInTheDocument();
+  });
+
   test("returns to landing when clicking start-task from selected session", async () => {
     render(<App />);
 
@@ -334,6 +397,46 @@ describe("App chat landing", () => {
     render(<App />);
     await waitFor(() => {
       expect(screen.getByTestId("new-session-landing")).toBeInTheDocument();
+    });
+  });
+
+  test("deleting the selected first session focuses the next session", async () => {
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("new-session-landing")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "select-first-session" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("chat-view-session-id")).toHaveTextContent("session-1");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "delete-first-session" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("chat-view-session-id")).toHaveTextContent("session-team-entry-1");
+    });
+  });
+
+  test("deleting the selected last session focuses the previous session", async () => {
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("new-session-landing")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "select-last-session" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("chat-view-session-id")).toHaveTextContent("session-step-gongbu-1");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "delete-last-session" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("chat-view-session-id")).toHaveTextContent("session-run-open-step");
     });
   });
 
@@ -412,6 +515,16 @@ describe("App chat landing", () => {
             id: "builtin-general",
             name: "General",
             description: "desc",
+            version: "1.0.0",
+            author: "test",
+            recommended_model: "model-a",
+            tags: [],
+            created_at: new Date().toISOString(),
+          },
+          {
+            id: "skill-gongbu",
+            name: "工部协作",
+            description: "gongbu",
             version: "1.0.0",
             author: "test",
             recommended_model: "model-a",

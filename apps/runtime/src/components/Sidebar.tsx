@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   BrainCog,
@@ -49,6 +49,7 @@ export function Sidebar({
   collapsed,
 }: Props) {
   const [searchQuery, setSearchQuery] = useState("");
+  const sessionListRef = useRef<HTMLDivElement | null>(null);
 
   const isStartTask = activeMainView === "start-task";
   const isExperts = activeMainView === "experts" || activeMainView === "experts-new";
@@ -63,6 +64,19 @@ export function Sidebar({
   function getSessionDisplayTitle(session: SessionInfo): string {
     return (session.display_title || session.title || "").trim() || "未命名任务";
   }
+
+  useEffect(() => {
+    if (collapsed || !selectedSessionId) {
+      return;
+    }
+    const selectedItem = sessionListRef.current?.querySelector<HTMLElement>(
+      `[data-session-id="${selectedSessionId}"]`
+    );
+    if (!selectedItem) {
+      return;
+    }
+    selectedItem.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [collapsed, selectedSessionId, sessions]);
 
   if (collapsed) {
     return (
@@ -192,7 +206,7 @@ export function Sidebar({
                 />
               </div>
             </div>
-            <div className="flex-1 overflow-y-auto py-1">
+            <div ref={sessionListRef} className="flex-1 overflow-y-auto py-1">
               {sessions.length === 0 && (
                 <div className="px-4 py-3 text-xs sm-text-muted">{searchQuery ? "未找到匹配会话" : "暂无会话"}</div>
               )}
@@ -205,6 +219,7 @@ export function Sidebar({
                   return (
                     <motion.div
                       key={s.id}
+                      data-session-id={s.id}
                       initial={{ opacity: 0, x: -10 }}
                       animate={{ opacity: 1, x: 0 }}
                       exit={{ opacity: 0, x: -20, height: 0 }}

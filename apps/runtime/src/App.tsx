@@ -64,6 +64,7 @@ const BUILTIN_GENERAL_SKILL_ID = "builtin-general";
 const BUILTIN_EMPLOYEE_CREATOR_SKILL_ID = "builtin-employee-creator";
 const MODEL_SETUP_HINT_DISMISSED_KEY = "workclaw:model-setup-hint-dismissed";
 const INITIAL_MODEL_SETUP_COMPLETED_KEY = "workclaw:initial-model-setup-completed";
+const LAST_SELECTED_SESSION_ID_KEY = "workclaw:last-selected-session-id";
 const DEFAULT_OPERATION_PERMISSION_MODE: "standard" | "full_access" = "standard";
 const EMPLOYEE_ASSISTANT_DISPLAY_NAME = "智能体员工助手";
 const EMPLOYEE_CREATOR_STARTER_PROMPT =
@@ -235,16 +236,19 @@ function resolveOptimisticDisplayTitle(input: {
 
 function buildOptimisticSession(input: {
   sessionId: string;
+  skillId: string;
   modelId: string;
   title?: string;
   initialUserMessage?: string;
   employeeId?: string;
   sessionMode: SessionLaunchMode;
   teamId?: string;
+  workDir?: string;
 }): SessionInfo {
   const fallbackTitle = (input.title || "").trim() || DEFAULT_SESSION_TITLE;
   return {
     id: input.sessionId,
+    skill_id: input.skillId,
     title: fallbackTitle,
     display_title: resolveOptimisticDisplayTitle({
       title: input.title,
@@ -261,13 +265,48 @@ function buildOptimisticSession(input: {
     permission_mode_label: "标准模式",
     source_channel: "local",
     source_label: "",
-    work_dir: "",
+    work_dir: (input.workDir || "").trim(),
   };
+}
+
+function readPersistedLastSelectedSessionId(): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    const value = window.localStorage.getItem(LAST_SELECTED_SESSION_ID_KEY);
+    return value?.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+function persistLastSelectedSessionId(sessionId: string | null) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    if (sessionId && sessionId.trim()) {
+      window.localStorage.setItem(LAST_SELECTED_SESSION_ID_KEY, sessionId.trim());
+      return;
+    }
+    window.localStorage.removeItem(LAST_SELECTED_SESSION_ID_KEY);
+  } catch {
+    // ignore localStorage failures
+  }
 }
 
 function mergeSessionInfo(list: SessionInfo[], session: SessionInfo): SessionInfo[] {
   const withoutTarget = list.filter((item) => item.id !== session.id);
   return [session, ...withoutTarget];
+}
+
+function getAdjacentSessionId(list: SessionInfo[], sessionId: string): string | null {
+  const index = list.findIndex((item) => item.id === sessionId);
+  if (index < 0) {
+    return null;
+  }
+  return list[index + 1]?.id ?? list[index - 1]?.id ?? null;
 }
 
 const SHOW_DEV_MODEL_SETUP_TOOLS = import.meta.env.DEV || import.meta.env.MODE === "test";
@@ -281,7 +320,7 @@ export default function App() {
   const [skills, setSkills] = useState<SkillManifest[]>([]);
   const [models, setModels] = useState<ModelConfig[]>([]);
   const [selectedSkillId, setSelectedSkillId] = useState<string | null>(null);
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(() => readPersistedLastSelectedSessionId());
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [showInstall, setShowInstall] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -290,6 +329,7 @@ export default function App() {
   const [operationPermissionMode, setOperationPermissionMode] = useState<"standard" | "full_access">(
     DEFAULT_OPERATION_PERMISSION_MODE
   );
+  const [defaultWorkDir, setDefaultWorkDir] = useState("");
   const [creatingSession, setCreatingSession] = useState(false);
   const [createSessionError, setCreateSessionError] = useState<string | null>(null);
   const [creatingExpertSkill, setCreatingExpertSkill] = useState(false);
@@ -375,6 +415,9 @@ export default function App() {
   >({});
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loadSessionsRequestIdRef = useRef(0);
+  const hasLoadedSessionsRef = useRef(false);
+  const initialPersistedSessionIdRef = useRef<string | null>(selectedSessionId);
+  const hasResolvedInitialPersistedSessionRef = useRef(false);
   const employeesRef = useRef<AgentEmployee[]>([]);
   const quickModelApiKeyInputRef = useRef<HTMLInputElement | null>(null);
   const isBlockingInitialModelSetup = !showSettings && !hasCompletedInitialModelSetup;
@@ -387,6 +430,19 @@ export default function App() {
     setActiveMainView(view);
     if (typeof window !== "undefined") {
       window.location.hash = `/${view}`;
+    }
+  }
+
+  function handleSelectSession(sessionId: string, options?: { openChatView?: boolean }) {
+    const targetSession = sessions.find((item) => item.id === sessionId);
+    const targetSkillId = (targetSession?.skill_id || "").trim();
+    if (targetSkillId && skills.some((item) => item.id === targetSkillId)) {
+      setSelectedSkillId(targetSkillId);
+    }
+    setSelectedSessionId(sessionId);
+    setCreateSessionError(null);
+    if (options?.openChatView !== false) {
+      navigate("start-task");
     }
   }
 
@@ -411,6 +467,31 @@ export default function App() {
     });
   }
 
+  async function resolveSessionLaunchWorkDir(preferredWorkDir?: string): Promise<string> {
+    const normalizedPreferred = (preferredWorkDir || "").trim();
+    if (normalizedPreferred) {
+      return normalizedPreferred;
+    }
+    const normalizedDefault = defaultWorkDir.trim();
+    if (normalizedDefault) {
+      return normalizedDefault;
+    }
+    try {
+      const prefs = await invoke<RuntimePreferences>("get_runtime_preferences");
+      const resolvedDefault =
+        prefs && typeof prefs === "object" && typeof prefs.default_work_dir === "string"
+          ? prefs.default_work_dir.trim()
+          : "";
+      if (resolvedDefault) {
+        setDefaultWorkDir(resolvedDefault);
+      }
+      return resolvedDefault;
+    } catch (error) {
+      console.warn("加载默认工作目录失败:", error);
+      return "";
+    }
+  }
+
   useEffect(() => {
     loadSkills();
     loadModels();
@@ -431,14 +512,17 @@ export default function App() {
     try {
       const prefs = await invoke<RuntimePreferences>("get_runtime_preferences");
       if (!prefs || typeof prefs !== "object") {
+        setDefaultWorkDir("");
         setOperationPermissionMode(DEFAULT_OPERATION_PERMISSION_MODE);
         return;
       }
+      setDefaultWorkDir(typeof prefs.default_work_dir === "string" ? prefs.default_work_dir.trim() : "");
       setOperationPermissionMode(
         prefs.operation_permission_mode === "full_access" ? "full_access" : "standard"
       );
     } catch (error) {
       console.warn("加载运行时偏好失败:", error);
+      setDefaultWorkDir("");
       setOperationPermissionMode(DEFAULT_OPERATION_PERMISSION_MODE);
     }
   }
@@ -826,7 +910,6 @@ export default function App() {
       loadSessions(selectedSkillId);
     } else {
       setSessions([]);
-      setSelectedSessionId(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedSkillId]);
@@ -888,6 +971,7 @@ export default function App() {
       if (requestId !== loadSessionsRequestIdRef.current) {
         return;
       }
+      hasLoadedSessionsRef.current = true;
       setSessions((prev) => {
         let next = Array.isArray(list) ? list : [];
         for (const session of prev) {
@@ -910,6 +994,42 @@ export default function App() {
     }
   }
 
+  useEffect(() => {
+    persistLastSelectedSessionId(selectedSessionId);
+  }, [selectedSessionId]);
+
+  useEffect(() => {
+    if (!selectedSessionId || skills.length === 0) {
+      return;
+    }
+
+    const activeSession = sessions.find((item) => item.id === selectedSessionId);
+    if (activeSession) {
+      if (selectedSessionId === initialPersistedSessionIdRef.current) {
+        hasResolvedInitialPersistedSessionRef.current = true;
+      }
+
+      const targetSkillId = (activeSession.skill_id || "").trim();
+      if (targetSkillId && targetSkillId !== selectedSkillId && skills.some((item) => item.id === targetSkillId)) {
+        setSelectedSkillId(targetSkillId);
+      }
+
+      if (activeMainView !== "start-task") {
+        navigate("start-task");
+      }
+      return;
+    }
+
+    if (
+      hasLoadedSessionsRef.current &&
+      selectedSessionId === initialPersistedSessionIdRef.current &&
+      !hasResolvedInitialPersistedSessionRef.current
+    ) {
+      hasResolvedInitialPersistedSessionRef.current = true;
+      setSelectedSessionId(null);
+    }
+  }, [activeMainView, selectedSessionId, selectedSkillId, sessions, skills]);
+
   async function handleCreateSession(initialMessage = "") {
     const skillId = getDefaultSkillId(skills);
     const modelId = getDefaultModelId(models);
@@ -920,9 +1040,11 @@ export default function App() {
     try {
       setSelectedEmployeeId(null);
       setSelectedSkillId(skillId);
+      const workDir = await resolveSessionLaunchWorkDir();
       const id = await createRuntimeSession({
         skillId,
         modelId,
+        workDir,
         sessionMode: "general",
       });
       setSessions((prev) =>
@@ -930,9 +1052,11 @@ export default function App() {
           prev,
           buildOptimisticSession({
             sessionId: id,
+            skillId,
             modelId,
             initialUserMessage: initialMessage,
             sessionMode: "general",
+            workDir,
           }),
         ),
       );
@@ -977,25 +1101,28 @@ export default function App() {
     try {
       setSelectedEmployeeId(entryEmployee?.id || null);
       setSelectedSkillId(skillId);
+      const workDir = await resolveSessionLaunchWorkDir(entryEmployee?.default_work_dir);
       const sessionId = await createRuntimeSession({
         skillId,
         modelId,
-        workDir: entryEmployee?.default_work_dir || "",
+        workDir,
         employeeId: entryEmployee?.employee_id || entryEmployee?.role_id || "",
         title: group.name || "团队协作",
-                sessionMode: "team_entry",
-                teamId,
-              });
+        sessionMode: "team_entry",
+        teamId,
+      });
       setSessions((prev) =>
         mergeSessionInfo(
           prev,
           buildOptimisticSession({
             sessionId,
+            skillId,
             modelId,
             title: group.name || "团队协作",
             employeeId: entryEmployee?.employee_id || entryEmployee?.role_id || "",
             sessionMode: "team_entry",
             teamId,
+            workDir,
           }),
         ),
       );
@@ -1013,9 +1140,18 @@ export default function App() {
   }
 
   async function handleDeleteSession(sessionId: string) {
+    const deletingSelectedSession = selectedSessionId === sessionId;
+    const fallbackSessionId = deletingSelectedSession ? getAdjacentSessionId(sessions, sessionId) : null;
     try {
       await invoke("delete_session", { sessionId });
-      if (selectedSessionId === sessionId) setSelectedSessionId(null);
+      setSessions((prev) => prev.filter((item) => item.id !== sessionId));
+      if (deletingSelectedSession) {
+        if (fallbackSessionId) {
+          handleSelectSession(fallbackSessionId, { openChatView: activeMainView === "start-task" });
+        } else {
+          setSelectedSessionId(null);
+        }
+      }
       setEmployeeAssistantSessionContexts((prev) => {
         if (!prev[sessionId]) return prev;
         const next = { ...prev };
@@ -1081,9 +1217,11 @@ export default function App() {
     const modelId = getDefaultModelId(models);
     if (modelId) {
       try {
+        const workDir = await resolveSessionLaunchWorkDir();
         const sessionId = await createRuntimeSession({
           skillId,
           modelId,
+          workDir,
           sessionMode: "general",
         });
         await loadSessions(skillId);
@@ -1719,10 +1857,11 @@ export default function App() {
 
     setCreatingSession(true);
     try {
+      const workDir = await resolveSessionLaunchWorkDir(employee.default_work_dir);
       const sessionId = await createRuntimeSession({
         skillId,
         modelId,
-        workDir: employee.default_work_dir || "",
+        workDir,
         employeeId: employee.employee_id || employee.role_id || "",
         title: employee.name,
         sessionMode: "employee_direct",
@@ -1732,10 +1871,12 @@ export default function App() {
           prev,
           buildOptimisticSession({
             sessionId,
+            skillId,
             modelId,
             title: employee.name,
             employeeId: employee.employee_id || employee.role_id || "",
             sessionMode: "employee_direct",
+            workDir,
           }),
         ),
       );
@@ -1797,6 +1938,9 @@ export default function App() {
         launchMode === "update" && targetEmployee
           ? (targetEmployee.employee_id || targetEmployee.role_id || "").trim()
           : "";
+      const workDir = await resolveSessionLaunchWorkDir(
+        launchMode === "update" && targetEmployee ? targetEmployee.default_work_dir : ""
+      );
       const sessionTitle =
         launchMode === "update" && targetEmployee
           ? `调整员工：${targetEmployee.name}`
@@ -1804,10 +1948,7 @@ export default function App() {
       const sessionId = await createRuntimeSession({
         skillId,
         modelId,
-        workDir:
-          launchMode === "update" && targetEmployee
-            ? targetEmployee.default_work_dir || ""
-            : "",
+        workDir,
         employeeId: employeeCode,
         title: sessionTitle,
         sessionMode: employeeCode ? "employee_direct" : "general",
@@ -1923,7 +2064,7 @@ export default function App() {
         selectedSkillId={selectedSkillId}
         sessions={sessions}
         selectedSessionId={selectedSessionId}
-        onSelectSession={setSelectedSessionId}
+        onSelectSession={handleSelectSession}
         onDeleteSession={handleDeleteSession}
         onSettings={() => {
           navigate("start-task");
@@ -2698,7 +2839,7 @@ export default function App() {
                 teams={landingTeams}
                 creating={creatingSession}
                 error={createSessionError}
-                onSelectSession={setSelectedSessionId}
+                onSelectSession={handleSelectSession}
                 onCreateSessionWithInitialMessage={handleCreateSession}
                 onCreateTeamEntrySession={handleCreateTeamEntrySession}
               />

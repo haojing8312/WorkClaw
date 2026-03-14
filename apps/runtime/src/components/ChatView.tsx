@@ -57,6 +57,42 @@ type ChatSessionExecutionContext = {
   sourceStepTimeline?: ChatSessionTimelineItem[];
 };
 
+const SESSION_DRAFT_STORAGE_PREFIX = "workclaw:session-draft:";
+
+function getSessionDraftStorageKey(sessionId: string): string {
+  return `${SESSION_DRAFT_STORAGE_PREFIX}${sessionId}`;
+}
+
+function readSessionDraft(sessionId: string): string {
+  if (typeof window === "undefined" || !sessionId) {
+    return "";
+  }
+  try {
+    return window.localStorage.getItem(getSessionDraftStorageKey(sessionId)) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function persistSessionDraft(sessionId: string, value: string) {
+  if (typeof window === "undefined" || !sessionId) {
+    return;
+  }
+  try {
+    if (value.length > 0) {
+      window.localStorage.setItem(getSessionDraftStorageKey(sessionId), value);
+      return;
+    }
+    window.localStorage.removeItem(getSessionDraftStorageKey(sessionId));
+  } catch {
+    // ignore localStorage failures
+  }
+}
+
+function clearSessionDraft(sessionId: string) {
+  persistSessionDraft(sessionId, "");
+}
+
 interface Props {
   skill: SkillManifest;
   models: ModelConfig[];
@@ -232,6 +268,13 @@ export function ChatView({
     "ps1",
     "sql",
   ]);
+
+  function syncComposerHeight() {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+  }
 
   // 右侧面板状态
   const [sidePanelOpen, setSidePanelOpen] = useState(false);
@@ -480,7 +523,7 @@ export function ChatView({
   };
 
   // Secure Workspace: 工作空间状态
-  const [workspace, setWorkspace] = useState<string>("");
+  const [workspace, setWorkspace] = useState<string>((workDir || "").trim());
 
   // Secure Workspace: 加载会话的工作空间
   const loadWorkspace = async (sid: string) => {
@@ -495,6 +538,10 @@ export function ChatView({
       console.error("加载工作空间失败:", e);
     }
   };
+
+  useEffect(() => {
+    setWorkspace((workDir || "").trim());
+  }, [sessionId, workDir]);
 
   // Secure Workspace: 更新会话的工作空间
   const updateWorkspace = async (newWorkspace: string) => {
@@ -514,8 +561,11 @@ export function ChatView({
     // 新建会话带首条自动消息时，先发送首条，避免历史加载覆盖本地首句显示
     if (!initialMessage?.trim()) {
       loadMessages(sessionId);
+      setInput(readSessionDraft(sessionId));
     } else {
       setMessages([]);
+      clearSessionDraft(sessionId);
+      setInput("");
     }
     loadSessionRuns(sessionId);
     loadWorkspace(sessionId);
@@ -553,6 +603,14 @@ export function ChatView({
     lastHandledGroupRunStepFocusNonceRef.current = null;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
+
+  useEffect(() => {
+    persistSessionDraft(sessionId, input);
+  }, [input]);
+
+  useEffect(() => {
+    syncComposerHeight();
+  }, [input, sessionId]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });

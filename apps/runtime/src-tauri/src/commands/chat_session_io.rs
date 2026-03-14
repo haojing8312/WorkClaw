@@ -145,6 +145,7 @@ pub(crate) async fn list_sessions_with_pool(
         _,
         (
             String,
+            String,
             Option<String>,
             Option<String>,
             Option<String>,
@@ -158,6 +159,7 @@ pub(crate) async fn list_sessions_with_pool(
     >(
         "SELECT
             s.id,
+            COALESCE(s.skill_id, ''),
             s.title,
             s.created_at,
             s.model_id,
@@ -224,6 +226,7 @@ pub(crate) async fn list_sessions_with_pool(
     let mut sessions = Vec::with_capacity(rows.len());
     for (
         id,
+        skill_id,
         title,
         created_at,
         model_id,
@@ -267,6 +270,7 @@ pub(crate) async fn list_sessions_with_pool(
         .await;
         sessions.push(json!({
             "id": id,
+            "skill_id": skill_id,
             "title": title,
             "display_title": display_title,
             "created_at": created_at,
@@ -324,9 +328,10 @@ pub(crate) async fn search_sessions_global_with_pool(
     query: &str,
 ) -> Result<Vec<Value>, String> {
     let pattern = format!("%{}%", query);
-    let rows = sqlx::query_as::<_, (String, String, String, String, String, String, String)>(
+    let rows = sqlx::query_as::<_, (String, String, String, String, String, String, String, String)>(
         "SELECT DISTINCT
             s.id,
+            COALESCE(s.skill_id, ''),
             s.title,
             s.created_at,
             s.model_id,
@@ -353,11 +358,12 @@ pub(crate) async fn search_sessions_global_with_pool(
     Ok(rows
         .iter()
         .map(
-            |(id, title, created_at, model_id, work_dir, employee_id, im_source_channel)| {
+            |(id, skill_id, title, created_at, model_id, work_dir, employee_id, im_source_channel)| {
                 let (source_channel, source_label) =
                     resolve_im_session_source(Some(im_source_channel));
                 json!({
                     "id": id,
+                    "skill_id": skill_id,
                     "title": title,
                     "display_title": title,
                     "created_at": created_at,
