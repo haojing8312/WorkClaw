@@ -1859,7 +1859,7 @@ export default function App() {
   const selectedSkill = skills.find((s) => s.id === selectedSkillId) ?? null;
   const selectedSession = sessions.find((s) => s.id === selectedSessionId);
   const findEmployeeBySessionReference = useCallback(
-    (employeeRef?: string) => {
+    (employeeRef?: string | null) => {
       const normalizedRef = (employeeRef || "").trim().toLowerCase();
       if (!normalizedRef) return undefined;
       return employees.find((item) => {

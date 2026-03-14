@@ -196,7 +196,7 @@ describe("App employee chat entry", () => {
 
   test("keeps the new employee session in the sidebar when an older session list request resolves late", async () => {
     let listSessionsCount = 0;
-    let resolveInitialList: ((value: unknown) => void) | null = null;
+    const resolveInitialListRef: { current: ((value: unknown) => void) | null } = { current: null };
 
     invokeMock.mockImplementation((command: string, payload?: any) => {
       if (command === "list_skills") {
@@ -262,7 +262,7 @@ describe("App employee chat entry", () => {
         listSessionsCount += 1;
         if (listSessionsCount === 1) {
           return new Promise((resolve) => {
-            resolveInitialList = resolve;
+            resolveInitialListRef.current = resolve;
           });
         }
         return Promise.resolve([
@@ -302,7 +302,7 @@ describe("App employee chat entry", () => {
       expect(screen.getByTestId("sidebar-first-session-title")).toHaveTextContent("销售主管");
     });
 
-    resolveInitialList?.([]);
+    resolveInitialListRef.current?.([]);
 
     await waitFor(() => {
       expect(screen.getByTestId("sidebar-first-session-id")).toHaveTextContent("session-sales");
