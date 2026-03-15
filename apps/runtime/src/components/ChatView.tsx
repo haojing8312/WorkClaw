@@ -1786,7 +1786,8 @@ export function ChatView({
   const canResumeGroupRun = !!groupRunSnapshot && groupRunState === "paused";
   const canRetryFailedGroupRunSteps = failedGroupRunSteps.length > 0;
   const canReassignFailedGroupRunStep = failedGroupRunReassignOptions.length > 0;
-  const showStreamingThinkingState = agentState?.state === "thinking" || Boolean(streamReasoning);
+  const showStreamingThinkingState =
+    Boolean(streamReasoning) || (agentState?.state === "thinking" && thinkingSupport.indicator);
   const showStreamingAssistantBubble =
     showStreamingThinkingState || streamItems.length > 0 || subAgentBuffer.length > 0;
   const shouldShowTeamEntryEmptyState =
