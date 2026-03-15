@@ -1,3 +1,4 @@
+use crate::windows_process::hide_console_window;
 #[cfg(target_os = "windows")]
 use std::process::Command;
 use tauri::AppHandle;
@@ -27,9 +28,12 @@ pub async fn open_external_url(url: String) -> Result<(), String> {
     }
 
     #[cfg(target_os = "windows")]
-    let status = Command::new("cmd")
-        .args(["/C", "start", "", trimmed])
-        .status();
+    let status = {
+        let mut command = Command::new("cmd");
+        command.args(["/C", "start", "", trimmed]);
+        hide_console_window(&mut command);
+        command.status()
+    };
 
     #[cfg(target_os = "macos")]
     let status = std::process::Command::new("open").arg(trimmed).status();

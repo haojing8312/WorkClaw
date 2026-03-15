@@ -1,4 +1,5 @@
 use crate::agent::types::{Tool, ToolContext};
+use crate::windows_process::hide_console_window;
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 use std::process::Command;
@@ -78,8 +79,10 @@ fn capture_screenshot(path: &str) -> Result<String> {
         escaped_path
     );
 
-    let output = Command::new("powershell")
-        .args(["-NoProfile", "-Command", &ps_script])
+    let mut command = Command::new("powershell");
+    command.args(["-NoProfile", "-Command", &ps_script]);
+    hide_console_window(&mut command);
+    let output = command
         .output()
         .map_err(|e| anyhow!("启动 PowerShell 失败: {}", e))?;
 

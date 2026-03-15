@@ -1,3 +1,4 @@
+use crate::windows_process::hide_console_window;
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
@@ -74,6 +75,7 @@ impl ProcessManager {
             cmd.current_dir(wd);
         }
 
+        hide_console_window(&mut cmd);
         let mut child = cmd.spawn()?;
         let pid = child.id();
 
@@ -215,9 +217,10 @@ impl ProcessManager {
     #[cfg(target_os = "windows")]
     fn kill_process_by_pid(pid: u32) -> Result<()> {
         // Windows 上使用 taskkill /T 终止整个进程树
-        let output = Command::new("taskkill")
-            .args(["/T", "/F", "/PID", &pid.to_string()])
-            .output();
+        let mut command = Command::new("taskkill");
+        command.args(["/T", "/F", "/PID", &pid.to_string()]);
+        hide_console_window(&mut command);
+        let output = command.output();
         match output {
             Ok(_) => Ok(()),
             Err(e) => Err(anyhow!("终止进程 {} 失败: {}", pid, e)),

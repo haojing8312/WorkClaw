@@ -9,6 +9,7 @@ pub mod providers;
 pub mod session_journal;
 pub mod sidecar;
 pub mod team_templates;
+mod windows_process;
 
 use agent::tools::new_responder;
 use agent::tools::search_providers::cache::SearchCache;

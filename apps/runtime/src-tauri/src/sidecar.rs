@@ -1,10 +1,8 @@
+use crate::windows_process::hide_console_window;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
-
-#[cfg(target_os = "windows")]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 pub struct SidecarManager {
     process: Arc<Mutex<Option<Child>>>,
@@ -48,12 +46,7 @@ impl SidecarManager {
             command.env(key, value);
         }
 
-        #[cfg(target_os = "windows")]
-        {
-            use std::os::windows::process::CommandExt;
-            // Prevent a separate console window when launching the sidecar.
-            command.creation_flags(CREATE_NO_WINDOW);
-        }
+        hide_console_window(&mut command);
 
         let child = command.spawn()?;
 

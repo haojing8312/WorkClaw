@@ -1,5 +1,6 @@
 use crate::agent::tools::process_manager::ProcessManager;
 use crate::agent::types::{Tool, ToolContext};
+use crate::windows_process::hide_console_window;
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 use std::io::Read;
@@ -130,6 +131,7 @@ impl Tool for BashTool {
             cmd.current_dir(wd);
         }
 
+        hide_console_window(&mut cmd);
         let mut child = cmd.spawn()?;
 
         // 等待子进程完成或超时

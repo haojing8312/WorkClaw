@@ -1,4 +1,5 @@
 use crate::commands::skills::DbState;
+use crate::windows_process::hide_console_window;
 use sqlx::SqlitePool;
 use std::env;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -85,18 +86,20 @@ pub fn sync_launch_at_login(_app: &AppHandle, enabled: bool) -> Result<(), Strin
     {
         let quoted = format!("\"{}\"", exe_path.to_string_lossy());
         if enabled {
-            let output = Command::new("reg")
-                .args([
-                    "add",
-                    "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
-                    "/v",
-                    AUTOSTART_NAME,
-                    "/t",
-                    "REG_SZ",
-                    "/d",
-                    quoted.as_str(),
-                    "/f",
-                ])
+            let mut command = Command::new("reg");
+            command.args([
+                "add",
+                "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                "/v",
+                AUTOSTART_NAME,
+                "/t",
+                "REG_SZ",
+                "/d",
+                quoted.as_str(),
+                "/f",
+            ]);
+            hide_console_window(&mut command);
+            let output = command
                 .output()
                 .map_err(|e| format!("设置 Windows 开机启动失败: {e}"))?;
             if !output.status.success() {
@@ -106,25 +109,29 @@ pub fn sync_launch_at_login(_app: &AppHandle, enabled: bool) -> Result<(), Strin
                 ));
             }
         } else {
-            let query_output = Command::new("reg")
-                .args([
-                    "query",
-                    "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
-                    "/v",
-                    AUTOSTART_NAME,
-                ])
+            let mut query_command = Command::new("reg");
+            query_command.args([
+                "query",
+                "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                "/v",
+                AUTOSTART_NAME,
+            ]);
+            hide_console_window(&mut query_command);
+            let query_output = query_command
                 .output()
                 .map_err(|e| format!("查询 Windows 开机启动状态失败: {e}"))?;
 
             if query_output.status.success() {
-                let delete_output = Command::new("reg")
-                    .args([
-                        "delete",
-                        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
-                        "/v",
-                        AUTOSTART_NAME,
-                        "/f",
-                    ])
+                let mut delete_command = Command::new("reg");
+                delete_command.args([
+                    "delete",
+                    "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                    "/v",
+                    AUTOSTART_NAME,
+                    "/f",
+                ]);
+                hide_console_window(&mut delete_command);
+                let delete_output = delete_command
                     .output()
                     .map_err(|e| format!("移除 Windows 开机启动失败: {e}"))?;
                 if !delete_output.status.success() {
