@@ -1978,11 +1978,58 @@ export default function App() {
     }
   }
 
-  function handleStartTaskWithSkill(skillId: string) {
-    setSelectedSkillId(skillId);
+  async function handleStartTaskWithSkill(skillId: string) {
+    if (creatingSession) return;
+
+    const skill = skills.find((item) => item.id === skillId);
+    if (!skill) {
+      setCreateSessionError("未找到可用技能");
+      return;
+    }
+
+    const modelId = getDefaultModelId(models);
+    if (!modelId) {
+      setCreateSessionError("请先在设置中配置模型和 API Key");
+      return;
+    }
+
+    setSelectedEmployeeId(null);
+    setSelectedSkillId(skill.id);
     setSelectedSessionId(null);
     setCreateSessionError(null);
-    navigate("start-task");
+    setCreatingSession(true);
+
+    try {
+      const workDir = await resolveSessionLaunchWorkDir();
+      const sessionId = await createRuntimeSession({
+        skillId: skill.id,
+        modelId,
+        workDir,
+        title: skill.name,
+        sessionMode: "general",
+      });
+      setSessions((prev) =>
+        mergeSessionInfo(
+          prev,
+          buildOptimisticSession({
+            sessionId,
+            skillId: skill.id,
+            modelId,
+            title: skill.name,
+            sessionMode: "general",
+            workDir,
+          }),
+        ),
+      );
+      await loadSessions(skill.id);
+      setSelectedSessionId(sessionId);
+      navigate("start-task");
+    } catch (e) {
+      console.error("从专家技能页创建会话失败:", e);
+      setCreateSessionError("创建会话失败，请稍后重试");
+    } finally {
+      setCreatingSession(false);
+    }
   }
 
   async function handleOpenGroupRunSession(sessionId: string, skillId: string) {
@@ -2644,6 +2691,7 @@ export default function App() {
             >
               <ExpertsView
                 skills={skills}
+                launchError={createSessionError}
                 onInstallSkill={() => setShowInstall(true)}
                 onCreate={() => {
                   setExpertCreateError(null);

@@ -6,6 +6,7 @@ import { RiskConfirmDialog } from "../RiskConfirmDialog";
 
 interface Props {
   skills: SkillManifest[];
+  launchError?: string | null;
   onInstallSkill: () => void;
   onCreate: () => void;
   onOpenPackaging: () => void;
@@ -34,6 +35,7 @@ type PendingExpertsRiskAction =
 
 export function ExpertsView({
   skills,
+  launchError,
   onInstallSkill,
   onCreate,
   onOpenPackaging,
@@ -126,6 +128,11 @@ export function ExpertsView({
             <p className="text-sm text-gray-600 mt-2">
               管理你已安装和创建的技能，通过创建页持续沉淀可复用能力。
             </p>
+            {launchError ? (
+              <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                {launchError}
+              </div>
+            ) : null}
             <div className="flex flex-wrap items-center gap-2 mt-3">
               <span className="inline-flex items-center px-2.5 py-1 rounded-full bg-blue-50 text-blue-700 text-xs border border-blue-100">
                 全部 {totalSkills}

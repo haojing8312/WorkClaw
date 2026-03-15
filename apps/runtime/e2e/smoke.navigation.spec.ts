@@ -89,6 +89,19 @@ async function installTauriMocks(page: Page): Promise<void> {
         extra_json: "{}",
         enabled: true,
       };
+      const searchConfig = {
+        id: "search-a",
+        name: "Brave Search",
+        api_format: "search_brave",
+        base_url: "https://api.search.brave.com",
+        model_name: "",
+        is_default: true,
+      };
+      try {
+        window.localStorage.setItem("workclaw:initial-model-setup-completed", "1");
+      } catch {
+        // ignore
+      }
 
       const invoke = async (cmd: string, args?: Record<string, unknown>) => {
         calls.push({ cmd, args });
@@ -120,7 +133,7 @@ async function installTauriMocks(page: Page): Promise<void> {
             return sessionId;
           }
           case "list_search_configs":
-            return [];
+            return [searchConfig];
           case "get_runtime_preferences":
             return runtimePreferences;
           case "list_mcp_servers":
@@ -213,7 +226,7 @@ test("saves default language and translation preference from settings", async ({
   });
 });
 
-test("can start a task from experts skill card and return to landing", async ({ page }) => {
+test("can start a task from experts skill card and open chat directly", async ({ page }) => {
   await page.getByRole("button", { name: "专家技能" }).first().click();
   await expect(page.getByRole("heading", { name: "专家技能" })).toBeVisible();
 
@@ -224,8 +237,9 @@ test("can start a task from experts skill card and return to landing", async ({ 
   await skillCard.getByRole("button", { name: "开始任务" }).click();
 
   await expect(
-    page.getByRole("heading", { name: "你的电脑任务，交给打工虾们协作完成" }),
+    page.getByTestId("e2e-chat-view"),
   ).toBeVisible();
+  await expect(page.getByTestId("e2e-chat-session-id")).toContainText("session-e2e-");
 });
 
 test("creates a new session from start task composer", async ({ page }) => {
