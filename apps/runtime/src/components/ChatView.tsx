@@ -1786,6 +1786,9 @@ export function ChatView({
   const canResumeGroupRun = !!groupRunSnapshot && groupRunState === "paused";
   const canRetryFailedGroupRunSteps = failedGroupRunSteps.length > 0;
   const canReassignFailedGroupRunStep = failedGroupRunReassignOptions.length > 0;
+  const showStreamingThinkingState = agentState?.state === "thinking" || Boolean(streamReasoning);
+  const showStreamingAssistantBubble =
+    showStreamingThinkingState || streamItems.length > 0 || subAgentBuffer.length > 0;
   const shouldShowTeamEntryEmptyState =
     isTeamEntrySession &&
     !initialMessage?.trim() &&
@@ -2688,25 +2691,6 @@ export function ChatView({
             )}
           </div>
         )}
-        {(agentState?.state === "thinking" || streamReasoning) &&
-          streamItems.length === 0 &&
-          subAgentBuffer.length === 0 && (
-            <div className="flex justify-start">
-              <div className="max-w-[80%] bg-white rounded-2xl px-5 py-3 text-sm text-gray-800 shadow-sm border border-gray-100">
-                <ThinkingBlock
-                  status={streamReasoning?.status || "thinking"}
-                  content={streamReasoning?.content || ""}
-                  durationMs={streamReasoning?.durationMs}
-                  expanded={expandedThinkingKeys.includes("stream")}
-                  onToggle={
-                    (streamReasoning?.content || "").trim()
-                      ? () => toggleThinkingBlock("stream")
-                      : undefined
-                  }
-                />
-              </div>
-            </div>
-          )}
         {messages.map((m, i) => {
           const isLatest = i === messages.length - 1;
           const isSessionFocusTarget = highlightedMessageIndex === i;
@@ -2791,14 +2775,14 @@ export function ChatView({
         })}
         {orphanFailedRuns.map((run) => renderRunFailureCard(run))}
         {/* 流式输出区域：按时间顺序渲染 */}
-        {(streamItems.length > 0 || subAgentBuffer.length > 0) && (
+        {showStreamingAssistantBubble && (
           <motion.div
             initial={{ opacity: 0, x: -20 }}
             animate={{ opacity: 1, x: 0 }}
             className="flex justify-start"
           >
             <div className="max-w-[80%] bg-white rounded-2xl px-5 py-3 text-sm text-gray-800 shadow-sm border border-gray-100">
-              {(streamReasoning || agentState?.state === "thinking") && (
+              {showStreamingThinkingState && (
                 <ThinkingBlock
                   status={streamReasoning?.status || "thinking"}
                   content={streamReasoning?.content || ""}

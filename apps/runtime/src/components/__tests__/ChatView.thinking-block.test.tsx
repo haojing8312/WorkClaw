@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ChatView } from "../ChatView";
 
 const invokeMock = vi.fn<(command: string, payload?: unknown) => Promise<unknown>>();
@@ -73,6 +73,10 @@ describe("ChatView thinking block", () => {
       if (command === "list_session_runs") return Promise.resolve([]);
       return Promise.resolve(null);
     });
+  });
+
+  afterEach(() => {
+    cleanup();
   });
 
   test("shows thinking state immediately but hides expand affordance before reasoning arrives", async () => {
@@ -160,5 +164,58 @@ describe("ChatView thinking block", () => {
     fireEvent.click(screen.getByTestId("thinking-block-toggle-assistant-1"));
 
     expect(screen.getByText("先拆解问题，再汇总答案。")).toBeInTheDocument();
+  });
+
+  test("renders a new thinking state after existing history so it stays near the bottom viewport", async () => {
+    messagesResponse = [
+      {
+        id: "user-1",
+        role: "user",
+        content: "第一轮问题",
+        created_at: "2026-03-15T02:00:00Z",
+      },
+      {
+        id: "assistant-1",
+        role: "assistant",
+        content: "第一轮回答",
+        created_at: "2026-03-15T02:00:01Z",
+      },
+      {
+        id: "user-2",
+        role: "user",
+        content: "第二轮问题",
+        created_at: "2026-03-15T02:00:02Z",
+      },
+      {
+        id: "assistant-2",
+        role: "assistant",
+        content: "第二轮回答",
+        created_at: "2026-03-15T02:00:03Z",
+      },
+    ];
+
+    renderChatView("sess-thinking-history");
+
+    await waitFor(() => {
+      expect(screen.getByText("第二轮回答")).toBeInTheDocument();
+    });
+
+    act(() => {
+      emit("agent-state-event", {
+        session_id: "sess-thinking-history",
+        state: "thinking",
+        detail: null,
+        iteration: 2,
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("思考中")).toBeInTheDocument();
+    });
+
+    const latestHistoryMessage = screen.getByText("第二轮回答");
+    const thinkingLabel = screen.getByText("思考中");
+
+    expect(latestHistoryMessage.compareDocumentPosition(thinkingLabel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });
