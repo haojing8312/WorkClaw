@@ -2,7 +2,17 @@ use runtime_policy::{
     classify_action_risk, narrow_allowed_tools, normalize_tool_name, ActionRisk, PermissionMode,
 };
 use serde_json::json;
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+fn setup_work_dir(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("runtime_policy_{}", name));
+    if dir.exists() {
+        fs::remove_dir_all(&dir).unwrap();
+    }
+    fs::create_dir_all(&dir).unwrap();
+    dir
+}
 
 #[test]
 fn default_mode_is_accept_edits_variant() {
@@ -69,4 +79,26 @@ fn out_of_workspace_write_is_critical() {
         classify_action_risk("write_file", &input, Some(Path::new("E:\\workspace\\proj"))),
         ActionRisk::Critical
     );
+}
+
+#[cfg(windows)]
+#[test]
+fn nested_absolute_write_inside_canonicalized_workspace_is_not_critical() {
+    let work_dir = setup_work_dir("absolute_nested");
+    let canonical_work_dir = work_dir.canonicalize().unwrap();
+    let target = work_dir
+        .join("公众号文章")
+        .join("20251120-WorkClaw企业版介绍")
+        .join("brief.md");
+    let input = json!({
+        "path": target.to_str().unwrap(),
+        "content": "# brief"
+    });
+
+    assert_eq!(
+        classify_action_risk("write_file", &input, Some(canonical_work_dir.as_path())),
+        ActionRisk::Normal
+    );
+
+    fs::remove_dir_all(&work_dir).unwrap();
 }

@@ -2,7 +2,18 @@ use runtime_lib::agent::permissions::PermissionMode;
 use runtime_lib::agent::{AgentExecutor, ToolRegistry};
 use runtime_lib::providers::{route_with_fallback, RouteFailureKind, RouteTarget, RoutingPolicy};
 use serde_json::json;
+use std::fs;
+use std::path::PathBuf;
 use std::sync::Arc;
+
+fn setup_work_dir(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("test_react_loop_{}", name));
+    if dir.exists() {
+        fs::remove_dir_all(&dir).unwrap();
+    }
+    fs::create_dir_all(&dir).unwrap();
+    dir
+}
 
 #[tokio::test]
 async fn test_react_loop_structure() {
@@ -127,6 +138,69 @@ async fn test_react_loop_stops_repeated_invalid_write_file_calls() {
         "应返回针对重复无效工具调用的说明，实际: {}",
         content
     );
+}
+
+#[tokio::test]
+async fn test_react_loop_executes_absolute_nested_write_within_work_dir() {
+    let registry = Arc::new(ToolRegistry::with_file_tools());
+    let executor = AgentExecutor::with_max_iterations(Arc::clone(&registry), 4);
+    let work_dir = setup_work_dir("absolute_nested_write");
+    let target = work_dir
+        .join("公众号文章")
+        .join("20251120-WorkClaw企业版介绍")
+        .join("brief.md");
+    let request = json!({
+        "path": target.to_str().unwrap(),
+        "content": "# brief"
+    })
+    .to_string();
+
+    let messages = vec![json!({
+        "role": "user",
+        "content": request
+    })];
+
+    let result = executor
+        .execute_turn(
+            "openai",
+            "http://mock-write-file-from-user-path",
+            "mock-key",
+            "gpt-4",
+            "You are a helpful assistant.",
+            messages,
+            |_token| {},
+            None,
+            None,
+            None,
+            PermissionMode::AcceptEdits,
+            None,
+            Some(work_dir.to_string_lossy().to_string()),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "executor should finish successfully: {:?}",
+        result
+    );
+    assert_eq!(fs::read_to_string(&target).unwrap(), "# brief");
+
+    let messages = result.unwrap();
+    let last = messages.last().expect("assistant final message");
+    assert!(
+        last["content"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("已完成文件写入"),
+        "unexpected final content: {:?}",
+        last
+    );
+
+    fs::remove_dir_all(&work_dir).unwrap();
 }
 
 #[test]

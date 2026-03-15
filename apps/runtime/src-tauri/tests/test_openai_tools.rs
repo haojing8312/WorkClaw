@@ -65,7 +65,7 @@ async fn test_openai_tool_calling_real() {
             "You are a helpful assistant with file tools.",
             messages,
             |token| {
-                eprint!("{}", token);
+                eprint!("{:?}", token);
             },
             None,
             None,

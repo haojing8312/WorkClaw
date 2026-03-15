@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActionRisk {
@@ -205,6 +205,29 @@ fn extract_path(input: &Value) -> &str {
         .unwrap_or_default()
 }
 
+fn normalize_for_scope_check(path: &Path) -> Option<PathBuf> {
+    if path.exists() {
+        return path.canonicalize().ok();
+    }
+
+    let existing_ancestor = path.ancestors().find(|ancestor| ancestor.exists())?;
+    let mut normalized = existing_ancestor.canonicalize().ok()?;
+    let remainder = path.strip_prefix(existing_ancestor).ok()?;
+
+    for component in remainder.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::Normal(part) => normalized.push(part),
+            Component::Prefix(_) | Component::RootDir => {}
+        }
+    }
+
+    Some(normalized)
+}
+
 fn is_path_outside_work_dir(path: &str, work_dir: Option<&Path>) -> bool {
     let Some(work_dir) = work_dir else {
         return false;
@@ -213,7 +236,17 @@ fn is_path_outside_work_dir(path: &str, work_dir: Option<&Path>) -> bool {
         return false;
     }
     let candidate = Path::new(path);
-    candidate.is_absolute() && !candidate.starts_with(work_dir)
+    if !candidate.is_absolute() {
+        return false;
+    }
+
+    match (
+        normalize_for_scope_check(candidate),
+        normalize_for_scope_check(work_dir),
+    ) {
+        (Some(candidate), Some(work_dir)) => !candidate.starts_with(&work_dir),
+        _ => !candidate.starts_with(work_dir),
+    }
 }
 
 fn is_critical_path(path: &str) -> bool {

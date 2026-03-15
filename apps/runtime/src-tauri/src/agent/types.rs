@@ -1,6 +1,6 @@
 use anyhow::Result;
 use serde_json::Value;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 
 /// 工具执行上下文
 #[derive(Debug, Clone, Default)]
@@ -12,6 +12,35 @@ pub struct ToolContext {
 }
 
 impl ToolContext {
+    fn normalize_for_scope_check(path: &Path) -> anyhow::Result<PathBuf> {
+        if path.exists() {
+            return Ok(path.canonicalize()?);
+        }
+
+        let existing_ancestor = path.ancestors().find(|ancestor| ancestor.exists());
+        let Some(existing_ancestor) = existing_ancestor else {
+            return Ok(path.to_path_buf());
+        };
+
+        let mut normalized = existing_ancestor.canonicalize()?;
+        let remainder = path
+            .strip_prefix(existing_ancestor)
+            .unwrap_or_else(|_| Path::new(""));
+
+        for component in remainder.components() {
+            match component {
+                Component::CurDir => {}
+                Component::ParentDir => {
+                    normalized.pop();
+                }
+                Component::Normal(part) => normalized.push(part),
+                Component::Prefix(_) | Component::RootDir => {}
+            }
+        }
+
+        Ok(normalized)
+    }
+
     /// 检查路径是否在工作目录范围内，返回规范化后的绝对路径
     pub fn check_path(&self, path: &str) -> anyhow::Result<PathBuf> {
         let target = std::path::Path::new(path);
@@ -24,22 +53,8 @@ impl ToolContext {
         };
 
         if let Some(ref wd) = self.work_dir {
-            // 规范化处理 .. 和符号链接
-            let check_path = if canonical.exists() {
-                canonical.canonicalize()?
-            } else if let Some(parent) = canonical.parent() {
-                if parent.exists() {
-                    parent
-                        .canonicalize()?
-                        .join(canonical.file_name().unwrap_or_default())
-                } else {
-                    canonical.clone()
-                }
-            } else {
-                canonical.clone()
-            };
-
-            let wd_canonical = wd.canonicalize().unwrap_or_else(|_| wd.clone());
+            let check_path = Self::normalize_for_scope_check(&canonical)?;
+            let wd_canonical = Self::normalize_for_scope_check(wd)?;
             if !check_path.starts_with(&wd_canonical) {
                 anyhow::bail!("路径 {} 不在工作目录 {} 范围内", path, wd.display());
             }

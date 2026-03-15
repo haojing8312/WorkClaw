@@ -46,6 +46,33 @@ fn is_mock_repeat_invalid_write_file_base_url(base_url: &str) -> bool {
         .eq_ignore_ascii_case("http://mock-repeat-invalid-write-file")
 }
 
+fn is_mock_write_file_from_user_path_base_url(base_url: &str) -> bool {
+    base_url
+        .trim()
+        .eq_ignore_ascii_case("http://mock-write-file-from-user-path")
+}
+
+fn parse_last_user_tool_input(messages: &[Value]) -> Result<Value> {
+    let last_user_content = messages
+        .iter()
+        .rev()
+        .find_map(|message| {
+            if message["role"].as_str() == Some("user") {
+                message["content"]
+                    .as_str()
+                    .map(str::trim)
+                    .map(str::to_string)
+            } else {
+                None
+            }
+        })
+        .filter(|content| !content.is_empty())
+        .ok_or_else(|| anyhow!("mock write_file 缺少用户输入"))?;
+
+    serde_json::from_str(&last_user_content)
+        .map_err(|e| anyhow!("mock write_file 用户输入 JSON 解析失败: {}", e))
+}
+
 fn parse_tool_call_arguments(args_str: &str) -> Result<Value> {
     let trimmed = args_str.trim();
     if trimmed.is_empty() {
@@ -359,6 +386,22 @@ pub async fn chat_stream_with_tools(
             input: json!({}),
         }]));
     }
+    if is_mock_write_file_from_user_path_base_url(base_url) {
+        if messages
+            .iter()
+            .any(|message| message["role"].as_str() == Some("tool"))
+        {
+            let final_text = "已完成文件写入";
+            on_token(StreamDelta::Text(final_text.to_string()));
+            return Ok(LLMResponse::Text(final_text.to_string()));
+        }
+
+        return Ok(LLMResponse::ToolCalls(vec![ToolCall {
+            id: "mock-write-file-from-user-path".to_string(),
+            name: "write_file".to_string(),
+            input: parse_last_user_tool_input(&messages)?,
+        }]));
+    }
 
     let client = build_http_client()?;
 
@@ -421,6 +464,7 @@ pub async fn test_connection(base_url: &str, api_key: &str, model: &str) -> Resu
     if is_mock_text_base_url(base_url)
         || is_mock_tool_loop_base_url(base_url)
         || is_mock_repeat_invalid_write_file_base_url(base_url)
+        || is_mock_write_file_from_user_path_base_url(base_url)
     {
         return Ok(true);
     }
