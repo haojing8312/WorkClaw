@@ -1,7 +1,8 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import App from "../App";
 
 const invokeMock = vi.fn();
+const INITIAL_MODEL_SETUP_COMPLETED_KEY = "workclaw:initial-model-setup-completed";
 let importShouldFailOnce = false;
 let importCallCount = 0;
 let createShouldConflict = false;
@@ -27,7 +28,13 @@ vi.mock("../components/Sidebar", () => ({
 }));
 
 vi.mock("../components/ChatView", () => ({
-  ChatView: () => <div data-testid="chat-view">chat-view</div>,
+  ChatView: (props: any) => (
+    <div data-testid="chat-view">
+      chat-view
+      <div data-testid="chat-session-title">{props.sessionTitle || ""}</div>
+      <div data-testid="chat-work-dir">{props.workDir || ""}</div>
+    </div>
+  ),
 }));
 
 vi.mock("../components/packaging/PackagingView", () => ({
@@ -93,6 +100,9 @@ describe("App experts routing", () => {
     importShouldFailOnce = false;
     importCallCount = 0;
     createShouldConflict = false;
+    window.localStorage.clear();
+    window.localStorage.setItem(INITIAL_MODEL_SETUP_COMPLETED_KEY, "1");
+    window.location.hash = "";
     invokeMock.mockImplementation((command: string) => {
       if (command === "list_skills") {
         return Promise.resolve([
@@ -101,6 +111,16 @@ describe("App experts routing", () => {
             name: "General",
             description: "desc",
             version: "1.0.0",
+            author: "test",
+            recommended_model: "model-a",
+            tags: [],
+            created_at: new Date().toISOString(),
+          },
+          {
+            id: "local-test-skill",
+            name: "Local Test Skill",
+            description: "local expert skill",
+            version: "local",
             author: "test",
             recommended_model: "model-a",
             tags: [],
@@ -120,7 +140,31 @@ describe("App experts routing", () => {
           },
         ]);
       }
+      if (command === "list_search_configs") {
+        return Promise.resolve([
+          {
+            id: "search-a",
+            name: "Brave Search",
+            api_format: "search_brave",
+            base_url: "https://api.search.brave.com",
+            model_name: "",
+            is_default: true,
+          },
+        ]);
+      }
       if (command === "list_sessions") {
+        return Promise.resolve([]);
+      }
+      if (command === "get_runtime_preferences") {
+        return Promise.resolve({
+          default_work_dir: "E:\\workspace\\experts",
+          operation_permission_mode: "standard",
+        });
+      }
+      if (command === "list_agent_employees") {
+        return Promise.resolve([]);
+      }
+      if (command === "list_employee_groups") {
         return Promise.resolve([]);
       }
       if (command === "create_local_skill") {
@@ -148,11 +192,17 @@ describe("App experts routing", () => {
           missing_mcp: [],
         });
       }
+      if (command === "create_session") {
+        return Promise.resolve("session-expert-skill-1");
+      }
       return Promise.resolve(null);
     });
   });
 
   afterEach(() => {
+    cleanup();
+    window.localStorage.clear();
+    window.location.hash = "";
     consoleErrorSpy.mockRestore();
   });
 
@@ -263,7 +313,7 @@ describe("App experts routing", () => {
     });
   });
 
-  test("can start task from experts skill card", async () => {
+  test("starts an expert skill by creating a session and opening chat directly", async () => {
     render(<App />);
     fireEvent.click(screen.getByRole("button", { name: "experts" }));
     await waitFor(() => {
@@ -273,12 +323,26 @@ describe("App experts routing", () => {
     fireEvent.click(screen.getByRole("button", { name: "start-task-local" }));
 
     await waitFor(() => {
-      expect(
-        invokeMock.mock.calls.some(
-          (call) => call[0] === "list_sessions" && call[1] === undefined
-        )
-      ).toBe(true);
+      expect(invokeMock).toHaveBeenCalledWith(
+        "create_session",
+        expect.objectContaining({
+          skillId: "local-test-skill",
+          modelId: "model-a",
+          workDir: "E:\\workspace\\experts",
+          title: "Local Test Skill",
+          employeeId: "",
+          permissionMode: "standard",
+          sessionMode: "general",
+          teamId: "",
+        }),
+      );
     });
+    await waitFor(() => {
+      expect(screen.queryByTestId("new-session-landing")).not.toBeInTheDocument();
+      expect(screen.getByTestId("chat-view")).toBeInTheDocument();
+    });
+    expect(screen.getByTestId("chat-session-title")).toHaveTextContent("Local Test Skill");
+    expect(screen.getByTestId("chat-work-dir")).toHaveTextContent("E:\\workspace\\experts");
   });
 
   test("opens install dialog from experts view", async () => {

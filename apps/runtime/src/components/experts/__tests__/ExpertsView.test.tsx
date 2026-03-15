@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { ExpertsView } from "../ExpertsView";
 import { SkillManifest } from "../../../types";
 
@@ -18,6 +18,10 @@ function buildSkill(partial: Partial<SkillManifest>): SkillManifest {
 }
 
 describe("ExpertsView", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
   test("hides builtin general skill and shows source-specific actions", () => {
     const refreshSpy = vi.fn();
     const deleteSpy = vi.fn();
@@ -87,5 +91,25 @@ describe("ExpertsView", () => {
     expect(startTaskSpy).toHaveBeenCalledWith("local-file-organizer");
     expect(refreshSpy).toHaveBeenCalledWith("local-file-organizer");
     expect(deleteSpy).toHaveBeenCalledWith("local-file-organizer");
+  });
+
+  test("shows launch errors inline when a skill session cannot be created", () => {
+    render(
+      <ExpertsView
+        skills={[buildSkill({ id: "local-file-organizer", name: "文件整理器" })]}
+        onInstallSkill={() => {}}
+        onCreate={() => {}}
+        onOpenPackaging={() => {}}
+        onInstallFromLibrary={async () => {}}
+        onStartTaskWithSkill={() => {}}
+        onRefreshLocalSkill={() => {}}
+        onCheckClawhubUpdate={() => {}}
+        onUpdateClawhubSkill={() => {}}
+        onDeleteSkill={() => {}}
+        launchError="创建会话失败，请稍后重试"
+      />
+    );
+
+    expect(screen.getByText("创建会话失败，请稍后重试")).toBeInTheDocument();
   });
 });
