@@ -1013,10 +1013,6 @@ export default function App() {
       if (targetSkillId && targetSkillId !== selectedSkillId && skills.some((item) => item.id === targetSkillId)) {
         setSelectedSkillId(targetSkillId);
       }
-
-      if (activeMainView !== "start-task") {
-        navigate("start-task");
-      }
       return;
     }
 
@@ -1028,7 +1024,7 @@ export default function App() {
       hasResolvedInitialPersistedSessionRef.current = true;
       setSelectedSessionId(null);
     }
-  }, [activeMainView, selectedSessionId, selectedSkillId, sessions, skills]);
+  }, [selectedSessionId, selectedSkillId, sessions, skills]);
 
   async function handleCreateSession(initialMessage = "") {
     const skillId = getDefaultSkillId(skills);
