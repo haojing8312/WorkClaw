@@ -15,11 +15,14 @@ pub struct WorkspaceFileEntry {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct WorkspaceFilePreview {
     pub path: String,
     pub kind: String,
     pub source: Option<String>,
     pub size: u64,
+    pub truncated: bool,
+    pub preview_error: Option<String>,
 }
 
 fn normalize_relative_path(path: &Path) -> String {
@@ -212,18 +215,24 @@ pub fn read_workspace_file_preview_within(
             kind: "directory".to_string(),
             source: None,
             size: 0,
+            truncated: false,
+            preview_error: None,
         });
     }
 
     let kind = preview_kind_for_path(&canonical);
-    let source = if kind == "binary" {
-        None
+    let (source, truncated) = if kind == "binary" {
+        (None, false)
     } else if kind == "docx" {
-        Some(extract_docx_text(&canonical)?)
+        (Some(extract_docx_text(&canonical)?), false)
     } else {
         let bytes = fs::read(&canonical).map_err(|e| format!("读取文件失败: {}", e))?;
-        let truncated = &bytes[..bytes.len().min(MAX_PREVIEW_BYTES)];
-        Some(String::from_utf8_lossy(truncated).to_string())
+        let is_truncated = bytes.len() > MAX_PREVIEW_BYTES;
+        let preview_bytes = &bytes[..bytes.len().min(MAX_PREVIEW_BYTES)];
+        (
+            Some(String::from_utf8_lossy(preview_bytes).to_string()),
+            is_truncated,
+        )
     };
 
     Ok(WorkspaceFilePreview {
@@ -231,6 +240,8 @@ pub fn read_workspace_file_preview_within(
         kind,
         source,
         size: metadata.len(),
+        truncated,
+        preview_error: None,
     })
 }
 

@@ -48,6 +48,7 @@ fn make_temp_workspace(name: &str) -> PathBuf {
         &root.join("conflict_brief.docx"),
         "美国以色列伊朗冲突 Word 简报",
     );
+    fs::write(root.join("large_preview.md"), "A".repeat(300 * 1024)).unwrap();
     fs::write(root.join("archive.bin"), vec![0u8, 159, 146, 150]).unwrap();
     root
 }
@@ -73,6 +74,9 @@ fn lists_workspace_files_recursively_with_stable_sorting() {
     assert!(entries
         .iter()
         .any(|item| item.path == "archive.bin" && item.kind == "binary"));
+    assert!(entries
+        .iter()
+        .any(|item| item.path == "large_preview.md" && item.kind == "markdown"));
 
     let names: Vec<_> = entries.iter().map(|item| item.path.clone()).collect();
     assert_eq!(
@@ -82,7 +86,8 @@ fn lists_workspace_files_recursively_with_stable_sorting() {
             "archive.bin".to_string(),
             "conflict_brief.docx".to_string(),
             "conflict_brief.md".to_string(),
-            "conflict_report.html".to_string()
+            "conflict_report.html".to_string(),
+            "large_preview.md".to_string(),
         ]
     );
 
@@ -97,11 +102,15 @@ fn returns_text_preview_for_markdown_html_and_docx_files() {
         .expect("markdown preview");
     assert_eq!(markdown.kind, "markdown");
     assert!(markdown.source.unwrap().contains("# Brief"));
+    assert!(!markdown.truncated);
+    assert!(markdown.preview_error.is_none());
 
     let html = read_workspace_file_preview_within(root.to_str().unwrap(), "conflict_report.html")
         .expect("html preview");
     assert_eq!(html.kind, "html");
     assert!(html.source.unwrap().contains("<html>"));
+    assert!(!html.truncated);
+    assert!(html.preview_error.is_none());
 
     let docx = read_workspace_file_preview_within(root.to_str().unwrap(), "conflict_brief.docx")
         .expect("docx preview");
@@ -110,6 +119,22 @@ fn returns_text_preview_for_markdown_html_and_docx_files() {
         .source
         .unwrap()
         .contains("美国以色列伊朗冲突 Word 简报"));
+    assert!(!docx.truncated);
+    assert!(docx.preview_error.is_none());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn marks_large_text_previews_as_truncated() {
+    let root = make_temp_workspace("test_workspace_files_preview_truncated");
+
+    let preview = read_workspace_file_preview_within(root.to_str().unwrap(), "large_preview.md")
+        .expect("large markdown preview");
+    assert_eq!(preview.kind, "markdown");
+    assert!(preview.truncated);
+    assert_eq!(preview.source.unwrap().len(), 256 * 1024);
+    assert!(preview.preview_error.is_none());
 
     fs::remove_dir_all(root).unwrap();
 }
@@ -123,6 +148,8 @@ fn returns_metadata_only_for_binary_files() {
     assert_eq!(preview.kind, "binary");
     assert!(preview.source.is_none());
     assert!(preview.size > 0);
+    assert!(!preview.truncated);
+    assert!(preview.preview_error.is_none());
 
     fs::remove_dir_all(root).unwrap();
 }

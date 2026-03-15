@@ -1,8 +1,17 @@
+import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { TaskPanel } from "./TaskPanel";
 import { WebSearchPanel } from "./WebSearchPanel";
 import { WorkspaceFilesPanel } from "./WorkspaceFilesPanel";
 import type { TaskPanelViewModel, WebSearchEntryView } from "./view-model";
+
+const DEFAULT_DRAWER_WIDTH = 760;
+const MIN_DRAWER_WIDTH = 420;
+const MAX_DRAWER_WIDTH = 1100;
+
+function clampDrawerWidth(width: number): number {
+  return Math.min(MAX_DRAWER_WIDTH, Math.max(MIN_DRAWER_WIDTH, width));
+}
 
 interface ChatWorkspaceSidePanelProps {
   open: boolean;
@@ -27,16 +36,57 @@ export function ChatWorkspaceSidePanel({
   taskModel,
   webSearchEntries,
 }: ChatWorkspaceSidePanelProps) {
+  const [drawerWidth, setDrawerWidth] = useState(DEFAULT_DRAWER_WIDTH);
+  const resizingRef = useRef(false);
+
+  useEffect(() => {
+    if (open) {
+      setDrawerWidth(DEFAULT_DRAWER_WIDTH);
+    }
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const handleMouseMove = (event: MouseEvent) => {
+      if (!resizingRef.current) return;
+      setDrawerWidth(clampDrawerWidth(window.innerWidth - event.clientX));
+    };
+
+    const stopResizing = () => {
+      resizingRef.current = false;
+    };
+
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", stopResizing);
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", stopResizing);
+    };
+  }, [open]);
+
   return (
     <AnimatePresence>
       {open && (
         <motion.div
-          initial={{ width: 0, opacity: 0 }}
-          animate={{ width: 320, opacity: 1 }}
-          exit={{ width: 0, opacity: 0 }}
+          data-testid="chat-workspace-drawer"
+          initial={{ x: 24, opacity: 0 }}
+          animate={{ x: 0, opacity: 1 }}
+          exit={{ x: 24, opacity: 0 }}
           transition={{ type: "spring", stiffness: 300, damping: 30 }}
-          className="h-full bg-gray-50 border-l border-gray-200 overflow-hidden flex flex-col"
+          style={{ width: `${drawerWidth}px` }}
+          className="relative flex h-full flex-col overflow-hidden border-l border-gray-200 bg-gray-50"
         >
+          <button
+            type="button"
+            aria-label="调整面板宽度"
+            data-testid="chat-workspace-drawer-resize-handle"
+            onMouseDown={(event) => {
+              event.preventDefault();
+              resizingRef.current = true;
+            }}
+            className="absolute left-0 top-0 h-full w-2 cursor-col-resize bg-transparent"
+          />
           <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-white/50">
             <div className="flex items-center gap-2">
               <button
@@ -73,7 +123,7 @@ export function ChatWorkspaceSidePanel({
             </button>
           </div>
 
-          <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
+          <div className={`min-h-0 flex-1 p-4 ${tab === "files" ? "overflow-hidden" : "space-y-4 overflow-y-auto"}`}>
             {tab === "tasks" && <TaskPanel model={taskModel} />}
             {tab === "files" && (
               <WorkspaceFilesPanel workspace={workspace} touchedFiles={touchedFiles} active={active && tab === "files"} />

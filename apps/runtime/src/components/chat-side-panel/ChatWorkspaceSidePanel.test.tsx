@@ -28,11 +28,10 @@ const webSearchEntries: WebSearchEntryView[] = [
 ];
 
 describe("ChatWorkspaceSidePanel", () => {
-  test("switches redesigned tabs and closes panel", () => {
+  test("switches redesigned tabs, supports resize, and resets width on reopen", () => {
     const onClose = vi.fn();
     const onTabChange = vi.fn();
-
-    render(
+    const { rerender } = render(
       <ChatWorkspaceSidePanel
         open
         tab="tasks"
@@ -43,10 +42,11 @@ describe("ChatWorkspaceSidePanel", () => {
         active
         taskModel={taskModel}
         webSearchEntries={webSearchEntries}
-      />
+      />,
     );
 
     expect(screen.getByRole("button", { name: "当前任务" })).toHaveClass("bg-blue-100");
+    expect(screen.getByTestId("chat-workspace-drawer")).toHaveStyle({ width: "760px" });
 
     fireEvent.click(screen.getByRole("button", { name: "文件" }));
     expect(onTabChange).toHaveBeenCalledWith("files");
@@ -56,5 +56,46 @@ describe("ChatWorkspaceSidePanel", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "关闭面板" }));
     expect(onClose).toHaveBeenCalled();
+
+    fireEvent.mouseDown(screen.getByTestId("chat-workspace-drawer-resize-handle"));
+    fireEvent.mouseMove(window, { clientX: 300 });
+    expect(screen.getByTestId("chat-workspace-drawer")).toHaveStyle({ width: "724px" });
+
+    fireEvent.mouseMove(window, { clientX: 950 });
+    expect(screen.getByTestId("chat-workspace-drawer")).toHaveStyle({ width: "420px" });
+
+    fireEvent.mouseMove(window, { clientX: -400 });
+    expect(screen.getByTestId("chat-workspace-drawer")).toHaveStyle({ width: "1100px" });
+    fireEvent.mouseUp(window);
+
+    rerender(
+      <ChatWorkspaceSidePanel
+        open={false}
+        tab="tasks"
+        onTabChange={onTabChange}
+        onClose={onClose}
+        workspace="E:\\workspace\\session-side-panel-redesign"
+        touchedFiles={["conflict_report.html"]}
+        active={false}
+        taskModel={taskModel}
+        webSearchEntries={webSearchEntries}
+      />,
+    );
+
+    rerender(
+      <ChatWorkspaceSidePanel
+        open
+        tab="tasks"
+        onTabChange={onTabChange}
+        onClose={onClose}
+        workspace="E:\\workspace\\session-side-panel-redesign"
+        touchedFiles={["conflict_report.html"]}
+        active
+        taskModel={taskModel}
+        webSearchEntries={webSearchEntries}
+      />,
+    );
+
+    expect(screen.getByTestId("chat-workspace-drawer")).toHaveStyle({ width: "760px" });
   });
 });
