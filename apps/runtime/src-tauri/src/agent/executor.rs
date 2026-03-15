@@ -285,11 +285,8 @@ mod delete_confirmation_tests {
         let path_text = file_path.display().to_string();
         fs::write(&file_path, "danger").expect("create temp file");
 
-        let (title, summary, impact, irreversible) = critical_action_summary(
-            "file_delete",
-            &json!({ "path": path_text }),
-            None,
-        );
+        let (title, summary, impact, irreversible) =
+            critical_action_summary("file_delete", &json!({ "path": path_text }), None);
 
         assert_eq!(title, "删除文件");
         assert_eq!(summary, format!("将删除文件 {}", file_path.display()));
@@ -305,11 +302,8 @@ mod delete_confirmation_tests {
         let path_text = dir_path.display().to_string();
         fs::create_dir_all(&dir_path).expect("create temp folder");
 
-        let (title, summary, impact, irreversible) = critical_action_summary(
-            "file_delete",
-            &json!({ "path": path_text }),
-            None,
-        );
+        let (title, summary, impact, irreversible) =
+            critical_action_summary("file_delete", &json!({ "path": path_text }), None);
 
         assert_eq!(title, "删除文件夹");
         assert_eq!(summary, format!("将删除文件夹 {}", dir_path.display()));
@@ -346,11 +340,8 @@ mod delete_confirmation_tests {
         let missing_path = unique_temp_path("missing-target");
         let path_text = missing_path.display().to_string();
 
-        let (title, summary, impact, irreversible) = critical_action_summary(
-            "file_delete",
-            &json!({ "path": path_text }),
-            None,
-        );
+        let (title, summary, impact, irreversible) =
+            critical_action_summary("file_delete", &json!({ "path": path_text }), None);
 
         assert_eq!(title, "删除目标");
         assert_eq!(summary, format!("将删除 {}", missing_path.display()));

@@ -40,24 +40,27 @@ pub(crate) struct PrepareSendMessageParams<'a> {
 fn build_attachment_context_text(parts: &[Value]) -> Option<String> {
     let mut file_blocks = Vec::new();
     for part in parts {
-      if part.get("type").and_then(Value::as_str) != Some("file_text") {
-          continue;
-      }
-      let name = part.get("name").and_then(Value::as_str).unwrap_or("attachment.txt");
-      let mime_type = part
-          .get("mimeType")
-          .and_then(Value::as_str)
-          .unwrap_or("text/plain");
-      let text = part.get("text").and_then(Value::as_str).unwrap_or_default();
-      let truncated = part
-          .get("truncated")
-          .and_then(Value::as_bool)
-          .unwrap_or(false);
-      let ext = name.split('.').last().unwrap_or("txt");
-      let truncated_note = if truncated { "\n[内容已截断]" } else { "" };
-      file_blocks.push(format!(
-          "## {name} ({mime_type})\n```{ext}\n{text}\n```{truncated_note}"
-      ));
+        if part.get("type").and_then(Value::as_str) != Some("file_text") {
+            continue;
+        }
+        let name = part
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("attachment.txt");
+        let mime_type = part
+            .get("mimeType")
+            .and_then(Value::as_str)
+            .unwrap_or("text/plain");
+        let text = part.get("text").and_then(Value::as_str).unwrap_or_default();
+        let truncated = part
+            .get("truncated")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let ext = name.split('.').last().unwrap_or("txt");
+        let truncated_note = if truncated { "\n[内容已截断]" } else { "" };
+        file_blocks.push(format!(
+            "## {name} ({mime_type})\n```{ext}\n{text}\n```{truncated_note}"
+        ));
     }
     if file_blocks.is_empty() {
         None
@@ -83,7 +86,10 @@ pub(crate) fn build_current_turn_message(api_format: &str, parts: &[Value]) -> O
                 }
             }
             "image" => {
-                let mime_type = part.get("mimeType").and_then(Value::as_str).unwrap_or("image/png");
+                let mime_type = part
+                    .get("mimeType")
+                    .and_then(Value::as_str)
+                    .unwrap_or("image/png");
                 let data = part.get("data").and_then(Value::as_str).unwrap_or_default();
                 if data.is_empty() {
                     continue;
@@ -123,9 +129,15 @@ pub(crate) fn build_current_turn_message(api_format: &str, parts: &[Value]) -> O
     let combined_text = combined_text_parts.join("\n\n").trim().to_string();
     if !combined_text.is_empty() {
         if api_format == "anthropic" {
-            content_blocks.insert(0, serde_json::json!({ "type": "text", "text": combined_text }));
+            content_blocks.insert(
+                0,
+                serde_json::json!({ "type": "text", "text": combined_text }),
+            );
         } else {
-            content_blocks.insert(0, serde_json::json!({ "type": "text", "text": combined_text }));
+            content_blocks.insert(
+                0,
+                serde_json::json!({ "type": "text", "text": combined_text }),
+            );
         }
     }
 
@@ -392,7 +404,10 @@ pub(crate) async fn execute_send_message_route(
         per_candidate_retry_count: prepared_context.per_candidate_retry_count,
         system_prompt: &prepared_context.prepared_runtime_tools.system_prompt,
         messages: &prepared_context.messages,
-        allowed_tools: prepared_context.prepared_runtime_tools.allowed_tools.as_deref(),
+        allowed_tools: prepared_context
+            .prepared_runtime_tools
+            .allowed_tools
+            .as_deref(),
         permission_mode: prepared_context.permission_mode,
         tool_confirm_responder,
         executor_work_dir: prepared_context.executor_work_dir.clone(),

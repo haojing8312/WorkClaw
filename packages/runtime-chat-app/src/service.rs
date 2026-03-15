@@ -107,10 +107,8 @@ impl ChatPreparationService {
     ) -> Result<crate::types::PreparedRouteCandidates, String> {
         let session_model = resolve_session_model_with_fallback(repo, model_id).await?;
         let user_message_parts = request.user_message_parts.as_deref().unwrap_or(&[]);
-        let requested_capability = infer_capability_from_message_parts(
-            user_message_parts,
-            &request.user_message,
-        );
+        let requested_capability =
+            infer_capability_from_message_parts(user_message_parts, &request.user_message);
         let requires_explicit_vision_route =
             requested_capability == "vision" && has_image_message_parts(user_message_parts);
 
@@ -119,7 +117,9 @@ impl ChatPreparationService {
             .load_route_policy(requested_capability)
             .await?
             .filter(|policy| policy.enabled);
-        if route_policy.is_none() && requested_capability != "chat" && !requires_explicit_vision_route
+        if route_policy.is_none()
+            && requested_capability != "chat"
+            && !requires_explicit_vision_route
         {
             route_policy = repo
                 .load_route_policy("chat")

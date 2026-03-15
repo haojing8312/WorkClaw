@@ -29,5 +29,8 @@ fn infers_vision_when_message_parts_contain_image() {
         json!({ "type": "image", "name": "screen.png", "mimeType": "image/png", "data": "abcd" }),
     ];
 
-    assert_eq!(infer_capability_from_message_parts(&parts, "普通聊天"), "vision");
+    assert_eq!(
+        infer_capability_from_message_parts(&parts, "普通聊天"),
+        "vision"
+    );
 }

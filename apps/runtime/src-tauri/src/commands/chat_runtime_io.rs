@@ -100,8 +100,7 @@ fn trim_title_punctuation(value: &str) -> &str {
         ch.is_whitespace()
             || matches!(
                 ch,
-                ','
-                    | '.'
+                ',' | '.'
                     | ':'
                     | ';'
                     | '!'
@@ -279,16 +278,21 @@ pub(crate) async fn finalize_run_success_with_pool(
     }
 
     if !final_text.is_empty() || has_tool_calls {
-        let persisted_content = attach_reasoning_to_content(content, final_text, has_tool_calls, reasoning_text, reasoning_duration_ms);
-        let msg_id =
-            insert_session_message_with_pool(
-                pool,
-                session_id,
-                "assistant",
-                &persisted_content,
-                None,
-            )
-            .await?;
+        let persisted_content = attach_reasoning_to_content(
+            content,
+            final_text,
+            has_tool_calls,
+            reasoning_text,
+            reasoning_duration_ms,
+        );
+        let msg_id = insert_session_message_with_pool(
+            pool,
+            session_id,
+            "assistant",
+            &persisted_content,
+            None,
+        )
+        .await?;
         attach_assistant_message_to_run_with_pool(pool, run_id, &msg_id).await?;
     }
 
@@ -669,9 +673,7 @@ fn copy_local_skill_dir_recursive(
         .filter_map(|entry| entry.ok())
     {
         let path = entry.path();
-        let rel = path
-            .strip_prefix(source_dir)
-            .map_err(|e| e.to_string())?;
+        let rel = path.strip_prefix(source_dir).map_err(|e| e.to_string())?;
         if rel.as_os_str().is_empty() {
             continue;
         }
@@ -1053,9 +1055,9 @@ mod workspace_skill_projection_tests {
     };
     use chrono::Utc;
     use skillpack_rs::{pack, PackConfig, SkillManifest};
+    use sqlx::sqlite::SqlitePoolOptions;
     use std::path::Path;
     use tempfile::tempdir;
-    use sqlx::sqlite::SqlitePoolOptions;
 
     #[test]
     fn normalize_workspace_skill_dir_name_uses_skill_id_and_sanitizes() {
@@ -1063,7 +1065,10 @@ mod workspace_skill_projection_tests {
             normalize_workspace_skill_dir_name(" Local Skill/Auto Redbook "),
             "local-skill-auto-redbook"
         );
-        assert_eq!(normalize_workspace_skill_dir_name("builtin.general"), "builtin-general");
+        assert_eq!(
+            normalize_workspace_skill_dir_name("builtin.general"),
+            "builtin-general"
+        );
         assert_eq!(normalize_workspace_skill_dir_name("___"), "skill");
     }
 
@@ -1094,9 +1099,8 @@ mod workspace_skill_projection_tests {
         let prompt = build_workspace_skill_prompt_entry(&entry);
         assert!(prompt.contains("<name>xhs-note-creator</name>"));
         assert!(prompt.contains("<description>Create Xiaohongshu content</description>"));
-        assert!(
-            prompt.contains("<location>E:\\workspace\\skills\\local-auto-redbook\\SKILL.md</location>")
-        );
+        assert!(prompt
+            .contains("<location>E:\\workspace\\skills\\local-auto-redbook\\SKILL.md</location>"));
     }
 
     #[test]
@@ -1109,7 +1113,8 @@ mod workspace_skill_projection_tests {
         }]);
 
         assert!(prompt.starts_with("<available_skills>"));
-        assert!(prompt.contains("<location>E:\\workspace\\skills\\builtin-general\\SKILL.md</location>"));
+        assert!(prompt
+            .contains("<location>E:\\workspace\\skills\\builtin-general\\SKILL.md</location>"));
         assert!(prompt.ends_with("</available_skills>"));
     }
 
@@ -1172,7 +1177,9 @@ mod workspace_skill_projection_tests {
 
         match entry.content {
             WorkspaceSkillContent::FileTree(files) => {
-                let skill_md = files.get("SKILL.md").expect("builtin SKILL.md should exist");
+                let skill_md = files
+                    .get("SKILL.md")
+                    .expect("builtin SKILL.md should exist");
                 let text = String::from_utf8(skill_md.clone()).unwrap();
                 assert!(text.contains("通用助手") || text.contains("通用任务智能体"));
             }
@@ -1244,15 +1251,17 @@ mod workspace_skill_projection_tests {
 
         sync_workspace_skills_to_directory(&work_dir, &[entry]).unwrap();
 
-        assert!(work_dir.join("skills").join("local-skill").join("SKILL.md").exists());
-        assert!(
-            work_dir
-                .join("skills")
-                .join("local-skill")
-                .join("scripts")
-                .join("hello.py")
-                .exists()
-        );
+        assert!(work_dir
+            .join("skills")
+            .join("local-skill")
+            .join("SKILL.md")
+            .exists());
+        assert!(work_dir
+            .join("skills")
+            .join("local-skill")
+            .join("scripts")
+            .join("hello.py")
+            .exists());
     }
 
     #[test]
@@ -1302,21 +1311,17 @@ mod workspace_skill_projection_tests {
 
         sync_workspace_skills_to_directory(&work_dir, &[entry]).unwrap();
 
-        assert!(
-            work_dir
-                .join("skills")
-                .join("builtin-general")
-                .join("SKILL.md")
-                .exists()
-        );
-        assert!(
-            work_dir
-                .join("skills")
-                .join("builtin-general")
-                .join("assets")
-                .join("template.txt")
-                .exists()
-        );
+        assert!(work_dir
+            .join("skills")
+            .join("builtin-general")
+            .join("SKILL.md")
+            .exists());
+        assert!(work_dir
+            .join("skills")
+            .join("builtin-general")
+            .join("assets")
+            .join("template.txt")
+            .exists());
     }
 
     #[test]
@@ -1341,13 +1346,11 @@ mod workspace_skill_projection_tests {
         sync_workspace_skills_to_directory(&work_dir, &[entry]).unwrap();
 
         assert!(!stale_dir.exists());
-        assert!(
-            work_dir
-                .join("skills")
-                .join("fresh-skill")
-                .join("SKILL.md")
-                .exists()
-        );
+        assert!(work_dir
+            .join("skills")
+            .join("fresh-skill")
+            .join("SKILL.md")
+            .exists());
     }
 
     #[test]
@@ -1397,7 +1400,11 @@ mod workspace_skill_projection_tests {
             .to_string_lossy()
             .to_string();
         assert!(prompt.contains(&projected_skill_md));
-        assert!(work_dir.join("skills").join("fresh-skill").join("SKILL.md").exists());
+        assert!(work_dir
+            .join("skills")
+            .join("fresh-skill")
+            .join("SKILL.md")
+            .exists());
     }
 
     #[tokio::test]
@@ -1429,7 +1436,11 @@ mod workspace_skill_projection_tests {
         let local_skill_dir = tmp.path().join("local-skill");
         std::fs::create_dir_all(local_skill_dir.join("scripts")).unwrap();
         std::fs::write(local_skill_dir.join("SKILL.md"), "# Local Skill").unwrap();
-        std::fs::write(local_skill_dir.join("scripts").join("hello.py"), "print('hi')").unwrap();
+        std::fs::write(
+            local_skill_dir.join("scripts").join("hello.py"),
+            "print('hi')",
+        )
+        .unwrap();
 
         let local_manifest = SkillManifest {
             id: "local-auto-redbook".to_string(),
@@ -1512,12 +1523,12 @@ mod workspace_skill_projection_tests {
             "print('publish')",
         )
         .unwrap();
-        std::fs::write(source_dir.join("assets").join("cover.html"), "<html></html>").unwrap();
         std::fs::write(
-            source_dir.join("references").join("params.md"),
-            "# params",
+            source_dir.join("assets").join("cover.html"),
+            "<html></html>",
         )
         .unwrap();
+        std::fs::write(source_dir.join("references").join("params.md"), "# params").unwrap();
 
         let work_dir = tmp.path().join("workspace");
         let entry = super::WorkspaceSkillRuntimeEntry {
@@ -1537,7 +1548,6 @@ mod workspace_skill_projection_tests {
         assert!(projected.join("assets").join("cover.html").exists());
         assert!(projected.join("references").join("params.md").exists());
     }
-
 }
 
 pub(crate) fn extract_new_messages_after_reconstructed_history<'a>(
@@ -1817,7 +1827,8 @@ mod tests {
 
     #[test]
     fn extract_assistant_text_content_prefers_text_field() {
-        let content = r#"{"text":"最终答案","reasoning":{"status":"completed","content":"内部思考"}}"#;
+        let content =
+            r#"{"text":"最终答案","reasoning":{"status":"completed","content":"内部思考"}}"#;
         assert_eq!(extract_assistant_text_content(content), "最终答案");
     }
 

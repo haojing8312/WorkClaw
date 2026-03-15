@@ -7,7 +7,9 @@ use crate::agent::tools::{
     GithubRepoDownloadTool, MemoryTool, ProcessManager, SkillInvokeTool, TaskTool, WebSearchTool,
 };
 use crate::agent::AgentExecutor;
-use runtime_chat_app::{compose_system_prompt, ChatExecutionGuidance, ChatExecutionPreparationService};
+use runtime_chat_app::{
+    compose_system_prompt, ChatExecutionGuidance, ChatExecutionPreparationService,
+};
 use std::sync::Arc;
 use tauri::{AppHandle, Manager};
 
@@ -68,7 +70,10 @@ pub(crate) async fn prepare_runtime_tools(
         params.model_name.to_string(),
     )
     .with_app_handle(params.app.clone(), params.session_id.to_string());
-    params.agent_executor.registry().register(Arc::new(task_tool));
+    params
+        .agent_executor
+        .registry()
+        .register(Arc::new(task_tool));
     params
         .agent_executor
         .registry()
@@ -98,7 +103,10 @@ pub(crate) async fn prepare_runtime_tools(
         ) {
             Ok(provider) => {
                 let web_search = WebSearchTool::with_provider(provider, search_cache);
-                params.agent_executor.registry().register(Arc::new(web_search));
+                params
+                    .agent_executor
+                    .registry()
+                    .register(Arc::new(web_search));
             }
             Err(e) => {
                 eprintln!("[search] 创建搜索 Provider 失败: {}", e);
@@ -129,7 +137,8 @@ pub(crate) async fn prepare_runtime_tools(
         .resolve_executor_work_dir(params.execution_guidance)
         .map(std::path::PathBuf::from)
         .map(|work_dir| async move {
-            let entries = chat_io::load_workspace_skill_runtime_entries_with_pool(params.db).await?;
+            let entries =
+                chat_io::load_workspace_skill_runtime_entries_with_pool(params.db).await?;
             chat_io::prepare_workspace_skills_prompt(&work_dir, &entries)
         });
     let workspace_skills_prompt = match workspace_skills_prompt {
@@ -138,7 +147,10 @@ pub(crate) async fn prepare_runtime_tools(
     };
     let skill_tool = SkillInvokeTool::new(params.session_id.to_string(), skill_roots)
         .with_max_depth(params.max_call_depth);
-    params.agent_executor.registry().register(Arc::new(skill_tool));
+    params
+        .agent_executor
+        .registry()
+        .register(Arc::new(skill_tool));
 
     params
         .agent_executor
@@ -146,11 +158,18 @@ pub(crate) async fn prepare_runtime_tools(
         .register(Arc::new(CompactTool::new()));
 
     let ask_user_responder = params.app.state::<AskUserState>().0.clone();
-    let ask_user_tool =
-        AskUserTool::new(params.app.clone(), params.session_id.to_string(), ask_user_responder);
-    params.agent_executor.registry().register(Arc::new(ask_user_tool));
+    let ask_user_tool = AskUserTool::new(
+        params.app.clone(),
+        params.session_id.to_string(),
+        ask_user_responder,
+    );
+    params
+        .agent_executor
+        .registry()
+        .register(Arc::new(ask_user_tool));
 
-    let tool_names = chat_io::resolve_tool_names(&params.skill_allowed_tools, params.agent_executor);
+    let tool_names =
+        chat_io::resolve_tool_names(&params.skill_allowed_tools, params.agent_executor);
     let memory_content = chat_io::load_memory_content(&memory_dir);
     let system_prompt = compose_system_prompt(
         params.skill_system_prompt,

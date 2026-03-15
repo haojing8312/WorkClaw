@@ -58,8 +58,17 @@ pub(crate) async fn get_messages_with_pool(
     pool: &sqlx::SqlitePool,
     session_id: &str,
 ) -> Result<Vec<Value>, String> {
-    let rows =
-        sqlx::query_as::<_, (String, String, String, Option<String>, String, Option<String>)>(
+    let rows = sqlx::query_as::<
+        _,
+        (
+            String,
+            String,
+            String,
+            Option<String>,
+            String,
+            Option<String>,
+        ),
+    >(
         "SELECT
             m.id,
             m.role,
@@ -196,8 +205,7 @@ pub(crate) async fn list_sessions_with_pool(
         }
         let display_name = trimmed_name.to_string();
         if !employee_id.trim().is_empty() {
-            employee_name_by_code
-                .insert(employee_id.trim().to_string(), display_name.clone());
+            employee_name_by_code.insert(employee_id.trim().to_string(), display_name.clone());
         }
         if !role_id.trim().is_empty() {
             employee_name_by_code.insert(role_id.trim().to_string(), display_name);
@@ -328,7 +336,19 @@ pub(crate) async fn search_sessions_global_with_pool(
     query: &str,
 ) -> Result<Vec<Value>, String> {
     let pattern = format!("%{}%", query);
-    let rows = sqlx::query_as::<_, (String, String, String, String, String, String, String, String)>(
+    let rows = sqlx::query_as::<
+        _,
+        (
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+        ),
+    >(
         "SELECT DISTINCT
             s.id,
             COALESCE(s.skill_id, ''),
@@ -358,7 +378,16 @@ pub(crate) async fn search_sessions_global_with_pool(
     Ok(rows
         .iter()
         .map(
-            |(id, skill_id, title, created_at, model_id, work_dir, employee_id, im_source_channel)| {
+            |(
+                id,
+                skill_id,
+                title,
+                created_at,
+                model_id,
+                work_dir,
+                employee_id,
+                im_source_channel,
+            )| {
                 let (source_channel, source_label) =
                     resolve_im_session_source(Some(im_source_channel));
                 json!({
@@ -415,8 +444,10 @@ async fn derive_session_display_title_with_pool(
     .await
     .unwrap_or_default();
 
-    derive_meaningful_session_title_from_messages(user_messages.iter().map(|(content,)| content.as_str()))
-        .unwrap_or_else(|| persisted_title.trim().to_string())
+    derive_meaningful_session_title_from_messages(
+        user_messages.iter().map(|(content,)| content.as_str()),
+    )
+    .unwrap_or_else(|| persisted_title.trim().to_string())
 }
 
 pub(crate) async fn export_session_markdown_with_pool(
@@ -913,12 +944,10 @@ mod tests {
         .await
         .expect("seed messages");
 
-        sqlx::query(
-            "INSERT INTO employee_groups (id, name) VALUES ('team-a', '市场协作')",
-        )
-        .execute(&pool)
-        .await
-        .expect("seed employee_groups");
+        sqlx::query("INSERT INTO employee_groups (id, name) VALUES ('team-a', '市场协作')")
+            .execute(&pool)
+            .await
+            .expect("seed employee_groups");
 
         sqlx::query(
             "INSERT INTO agent_employees (id, employee_id, name, role_id) VALUES ('employee-row-1', 'emp-1', '张三', 'role-1')",
@@ -978,7 +1007,11 @@ fn render_user_content_parts(content_json: &str) -> Option<String> {
     for part in items {
         match part.get("type").and_then(Value::as_str).unwrap_or_default() {
             "text" => {
-                let text = part.get("text").and_then(Value::as_str).unwrap_or("").trim();
+                let text = part
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim();
                 if !text.is_empty() {
                     sections.push(text.to_string());
                 }
@@ -988,7 +1021,10 @@ fn render_user_content_parts(content_json: &str) -> Option<String> {
                 sections.push(format!("[图片] {name}"));
             }
             "file_text" => {
-                let name = part.get("name").and_then(Value::as_str).unwrap_or("attachment.txt");
+                let name = part
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("attachment.txt");
                 let mime_type = part
                     .get("mimeType")
                     .and_then(Value::as_str)

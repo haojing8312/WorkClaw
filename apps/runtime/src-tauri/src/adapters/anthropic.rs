@@ -13,16 +13,14 @@ fn mock_response_text(model: &str, messages: &[Value]) -> String {
                 if let Some(content) = message["content"].as_str() {
                     return Some(content.trim().to_string()).filter(|content| !content.is_empty());
                 }
-                message["content"]
-                    .as_array()
-                    .and_then(|parts| {
-                        parts
-                            .iter()
-                            .filter_map(|part| part.get("text").and_then(Value::as_str))
-                            .map(str::trim)
-                            .find(|text| !text.is_empty())
-                            .map(str::to_string)
-                    })
+                message["content"].as_array().and_then(|parts| {
+                    parts
+                        .iter()
+                        .filter_map(|part| part.get("text").and_then(Value::as_str))
+                        .map(str::trim)
+                        .find(|text| !text.is_empty())
+                        .map(str::to_string)
+                })
             } else {
                 None
             }
