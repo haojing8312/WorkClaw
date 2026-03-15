@@ -24,6 +24,34 @@ interface WorkspaceFilesPanelProps {
   active: boolean;
 }
 
+function splitFileName(name: string): { baseName: string; extension: string } {
+  const lastDot = name.lastIndexOf(".");
+  if (lastDot <= 0 || lastDot === name.length - 1) {
+    return { baseName: name, extension: "" };
+  }
+
+  return {
+    baseName: name.slice(0, lastDot),
+    extension: name.slice(lastDot),
+  };
+}
+
+function fileKindBadgeLabel(entry: WorkspaceFileItem | undefined, name: string): string {
+  const fallback = name.split(".").pop()?.toUpperCase();
+  switch (entry?.kind) {
+    case "markdown":
+      return "MD";
+    case "html":
+      return "HTML";
+    case "docx":
+      return "DOCX";
+    case "text":
+      return fallback || "TEXT";
+    default:
+      return fallback || (entry?.kind || "FILE").toUpperCase();
+  }
+}
+
 function joinWorkspacePath(workspace: string, relativePath: string): string {
   const separator = workspace.includes("\\") ? "\\" : "/";
   const normalizedWorkspace = workspace.replace(/[\\/]+$/, "");
@@ -146,14 +174,25 @@ function renderTreeNodes({
         key={node.path}
         type="button"
         aria-label={node.name}
+        title={node.path}
         onClick={() => onSelectFile(node.path)}
         className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-left ${
           selectedPath === node.path ? "bg-blue-50" : "hover:bg-gray-50"
         }`}
         style={{ paddingLeft }}
       >
-        <div className="min-w-0">
-          <div className="truncate text-sm text-gray-900">{node.name}</div>
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-2">
+            <div className="flex min-w-0 items-baseline">
+              <span className="truncate text-sm text-gray-900">{splitFileName(node.name).baseName}</span>
+              {splitFileName(node.name).extension && (
+                <span className="shrink-0 text-sm text-gray-500">{splitFileName(node.name).extension}</span>
+              )}
+            </div>
+            <span className="shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-gray-600">
+              {fileKindBadgeLabel(node.entry, node.name)}
+            </span>
+          </div>
           {touched && <div className="mt-1 text-[11px] text-blue-600">本轮生成</div>}
         </div>
         <div className="ml-3 text-xs text-gray-400">{Math.round((node.size || 0) / 102.4) / 10} KB</div>
@@ -235,7 +274,7 @@ export function WorkspaceFilesPanel({ workspace, touchedFiles, active }: Workspa
 
   return (
     <div className="flex h-full min-h-[640px] overflow-hidden rounded-2xl border border-gray-200 bg-white">
-      <div className="flex w-[45%] min-w-[280px] flex-col border-r border-gray-200">
+      <div className="flex w-[300px] min-w-[280px] max-w-[320px] shrink-0 flex-col border-r border-gray-200">
         <div className="flex items-center justify-between px-4 py-4">
           <div className="text-2xl font-semibold text-gray-900">文件</div>
           <button

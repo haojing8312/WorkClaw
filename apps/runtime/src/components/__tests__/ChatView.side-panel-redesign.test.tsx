@@ -511,14 +511,14 @@ describe("ChatView side panel redesign", () => {
     fireEvent.click(await screen.findByRole("button", { name: "文件" }));
 
     await waitFor(() => {
+      expect(screen.getByTestId("chat-workspace-drawer")).toHaveStyle({ width: "760px" });
       expect(screen.getByPlaceholderText("搜索文件...")).toBeInTheDocument();
-      expect(screen.getAllByText("conflict_brief.docx").length).toBeGreaterThan(0);
-      expect(screen.getAllByText("conflict_report.html").length).toBeGreaterThan(0);
+      expect(screen.getByRole("button", { name: "conflict_brief.docx" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "conflict_report.html" })).toBeInTheDocument();
       expect(screen.getByText("选择要查看的文件")).toBeInTheDocument();
     });
 
-    const conflictReportEntries = screen.getAllByText("conflict_report.html");
-    fireEvent.click(conflictReportEntries[conflictReportEntries.length - 1]!);
+    fireEvent.click(screen.getByRole("button", { name: "conflict_report.html" }));
 
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "页面预览" })).toBeInTheDocument();

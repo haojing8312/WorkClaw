@@ -6,6 +6,8 @@ export type WorkspaceFilePreview = {
   kind: "text" | "markdown" | "html" | "binary" | "directory" | "docx";
   source?: string;
   size?: number;
+  truncated?: boolean;
+  previewError?: string;
 };
 
 interface FilePreviewPaneProps {
@@ -19,9 +21,14 @@ interface FilePreviewPaneProps {
 
 function toFileHref(workspace: string, relativePath: string): string {
   const normalizedWorkspace = workspace.replace(/\\/g, "/").replace(/\/+$/, "");
-  const normalizedPath = relativePath.replace(/\\/g, "/");
-  const base = normalizedWorkspace.startsWith("/") ? normalizedWorkspace : `/${normalizedWorkspace}`;
-  return encodeURI(`file://${base.substring(0, base.lastIndexOf("/") + 1)}${normalizedPath.substring(0, normalizedPath.lastIndexOf("/") + 1)}`);
+  const normalizedPath = relativePath.replace(/\\/g, "/").replace(/^\/+/, "");
+  const directoryPath = normalizedPath.includes("/")
+    ? normalizedPath.slice(0, normalizedPath.lastIndexOf("/") + 1)
+    : "";
+  const fullDirectoryPath = `${normalizedWorkspace}/${directoryPath}`.replace(/\/+/g, "/");
+  const withLeadingSlash = fullDirectoryPath.startsWith("/") ? fullDirectoryPath : `/${fullDirectoryPath}`;
+  const withTrailingSlash = withLeadingSlash.endsWith("/") ? withLeadingSlash : `${withLeadingSlash}/`;
+  return encodeURI(`file://${withTrailingSlash}`);
 }
 
 function buildHtmlPreviewSource(workspace: string | undefined, preview: WorkspaceFilePreview): string {
@@ -54,6 +61,7 @@ export function FilePreviewPane({
   const canRender = preview.kind === "markdown" || preview.kind === "html";
   const renderedModeLabel = preview.kind === "html" ? "页面预览" : "渲染预览";
   const htmlSource = buildHtmlPreviewSource(workspace, preview);
+  const shouldFallbackToSource = preview.kind === "html" && mode === "rendered" && Boolean(preview.previewError);
 
   return (
     <div className="flex h-full flex-col">
@@ -99,6 +107,16 @@ export function FilePreviewPane({
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto p-4">
+        {preview.truncated && (
+          <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
+            仅展示前 256 KB 内容
+          </div>
+        )}
+        {preview.previewError && (
+          <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
+            {preview.previewError}
+          </div>
+        )}
         {preview.kind === "binary" ? (
           <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50 p-4 text-sm text-gray-500">
             该文件暂不支持内嵌预览，请使用系统默认应用打开。
@@ -107,8 +125,13 @@ export function FilePreviewPane({
           <div className="prose prose-sm max-w-none">
             <ReactMarkdown remarkPlugins={[remarkGfm]}>{source}</ReactMarkdown>
           </div>
-        ) : preview.kind === "html" && mode === "rendered" ? (
-          <iframe title={preview.path} srcDoc={htmlSource} className="h-full min-h-[480px] w-full rounded-xl border border-gray-200 bg-white" />
+        ) : preview.kind === "html" && mode === "rendered" && !shouldFallbackToSource ? (
+          <iframe
+            title={preview.path}
+            srcDoc={htmlSource}
+            sandbox="allow-same-origin"
+            className="h-full min-h-[480px] w-full rounded-xl border border-gray-200 bg-white"
+          />
         ) : preview.kind === "docx" ? (
           <div className="rounded-2xl border border-gray-200 bg-white p-4">
             <div className="mb-3 text-xs font-medium text-gray-500">文本预览</div>
