@@ -57,6 +57,32 @@ function renderChatView(sessionId = "sess-thinking") {
   );
 }
 
+function renderChatViewWithModels(models: Array<{
+  id: string;
+  name: string;
+  api_format: string;
+  base_url: string;
+  model_name: string;
+  is_default: boolean;
+}>, sessionId = "sess-thinking") {
+  return render(
+    <ChatView
+      skill={{
+        id: "builtin-general",
+        name: "General",
+        description: "desc",
+        version: "1.0.0",
+        author: "test",
+        recommended_model: "",
+        tags: [],
+        created_at: new Date().toISOString(),
+      }}
+      models={models}
+      sessionId={sessionId}
+    />
+  );
+}
+
 describe("ChatView thinking block", () => {
   beforeEach(() => {
     Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
@@ -135,6 +161,35 @@ describe("ChatView thinking block", () => {
     fireEvent.click(screen.getByTestId("thinking-block-toggle"));
 
     expect(screen.getByText("先分析需求，再组织输出。")).toBeInTheDocument();
+  });
+
+  test("does not render thinking block for non-chat protocols", async () => {
+    renderChatViewWithModels(
+      [
+        {
+          id: "m1",
+          name: "search-provider",
+          api_format: "search_tavily",
+          base_url: "https://search.example.com",
+          model_name: "search-model",
+          is_default: true,
+        },
+      ],
+      "sess-no-indicator"
+    );
+
+    act(() => {
+      emit("agent-state-event", {
+        session_id: "sess-no-indicator",
+        state: "thinking",
+        detail: null,
+        iteration: 1,
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText("思考中")).not.toBeInTheDocument();
+    });
   });
 
   test("shows completed duration for persisted historical reasoning", async () => {

@@ -57,6 +57,43 @@ fn build_http_client() -> Result<Client> {
         .map_err(|e| anyhow!("构建 Anthropic HTTP 客户端失败: {}", e))
 }
 
+fn supports_extended_thinking(base_url: &str, model: &str) -> bool {
+    let normalized_base_url = base_url.trim().trim_end_matches('/').to_ascii_lowercase();
+    let normalized_model = model.trim().to_ascii_lowercase();
+
+    let is_direct_anthropic = normalized_base_url.contains("api.anthropic.com/v1");
+    let is_supported_model = normalized_model.starts_with("claude-sonnet-4")
+        || normalized_model.starts_with("claude-opus-4");
+
+    is_direct_anthropic && is_supported_model
+}
+
+fn build_anthropic_request_body(
+    base_url: &str,
+    model: &str,
+    system_prompt: &str,
+    messages: Vec<Value>,
+    tools: Vec<Value>,
+) -> Value {
+    let mut body = json!({
+        "model": model,
+        "system": system_prompt,
+        "messages": messages,
+        "tools": tools,
+        "max_tokens": 4096,
+        "stream": true,
+    });
+
+    if supports_extended_thinking(base_url, model) {
+        body["thinking"] = json!({
+            "type": "enabled",
+            "budget_tokens": 2048,
+        });
+    }
+
+    body
+}
+
 #[derive(Default)]
 struct AnthropicStreamState {
     tool_calls: Vec<ToolCall>,
@@ -109,6 +146,11 @@ fn process_anthropic_sse_text(
                             let token = v["delta"]["text"].as_str().unwrap_or("");
                             state.text_content.push_str(token);
                             on_token(StreamDelta::Text(token.to_string()));
+                        } else if v["delta"]["type"] == "thinking_delta" {
+                            let reasoning = v["delta"]["thinking"].as_str().unwrap_or("");
+                            if !reasoning.is_empty() {
+                                on_token(StreamDelta::Reasoning(reasoning.to_string()));
+                            }
                         } else if v["delta"]["type"] == "input_json_delta" {
                             state
                                 .current_tool_input
@@ -176,14 +218,7 @@ pub async fn chat_stream_with_tools(
     let client = build_http_client()?;
     let url = format!("{}/messages", base_url.trim_end_matches('/'));
 
-    let body = json!({
-        "model": model,
-        "system": system_prompt,
-        "messages": messages,
-        "tools": tools,
-        "max_tokens": 4096,
-        "stream": true,
-    });
+    let body = build_anthropic_request_body(base_url, model, system_prompt, messages, tools);
 
     let resp = client
         .post(&url)
@@ -240,7 +275,7 @@ pub async fn test_connection(base_url: &str, api_key: &str, model: &str) -> Resu
 mod tests {
     use super::*;
 
-    fn parse_anthropic_chunks_for_test(chunks: &[&str]) -> Result<LLMResponse> {
+    fn parse_anthropic_chunks_for_test(chunks: &[&str]) -> Result<(LLMResponse, Vec<StreamDelta>)> {
         let mut state = AnthropicStreamState::default();
         let mut sink = Vec::new();
         for chunk in chunks {
@@ -249,18 +284,19 @@ mod tests {
                 break;
             }
         }
-        Ok(finish_anthropic_stream(state))
+        Ok((finish_anthropic_stream(state), sink))
     }
 
     #[test]
     fn anthropic_message_stop_stops_processing_later_chunks() {
-        let response = parse_anthropic_chunks_for_test(&[
+        let (response, sink) = parse_anthropic_chunks_for_test(&[
             "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n",
             "data: {\"type\":\"message_stop\"}\n",
             "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"ignored\"}}\n",
         ])
         .expect("parse chunks");
 
+        assert_eq!(sink, vec![StreamDelta::Text("hello".to_string())]);
         match response {
             LLMResponse::Text(text) => assert_eq!(text, "hello"),
             other => panic!("expected text response, got {other:?}"),
@@ -292,5 +328,64 @@ mod tests {
             LLMResponse::Text(text) => assert_eq!(text, "hello"),
             other => panic!("expected text response, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn anthropic_thinking_deltas_stream_as_reasoning_without_polluting_text() {
+        let (response, sink) = parse_anthropic_chunks_for_test(&[
+            "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"先分析问题\"}}\n",
+            "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"signature_delta\",\"signature\":\"abc123\"}}\n",
+            "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"最终答案\"}}\n",
+            "data: {\"type\":\"message_stop\"}\n",
+        ])
+        .expect("parse chunks");
+
+        assert_eq!(
+            sink,
+            vec![
+                StreamDelta::Reasoning("先分析问题".to_string()),
+                StreamDelta::Text("最终答案".to_string()),
+            ]
+        );
+        match response {
+            LLMResponse::Text(text) => assert_eq!(text, "最终答案"),
+            other => panic!("expected text response, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn anthropic_request_body_enables_thinking_for_direct_claude_4_models_only() {
+        let direct_body = build_anthropic_request_body(
+            "https://api.anthropic.com/v1",
+            "claude-sonnet-4-5-20250929",
+            "system",
+            vec![],
+            vec![],
+        );
+        assert_eq!(
+            direct_body["thinking"],
+            json!({
+                "type": "enabled",
+                "budget_tokens": 2048,
+            })
+        );
+
+        let third_party_body = build_anthropic_request_body(
+            "https://api.minimax.io/anthropic/v1",
+            "MiniMax-M2.5",
+            "system",
+            vec![],
+            vec![],
+        );
+        assert!(third_party_body.get("thinking").is_none());
+
+        let older_claude_body = build_anthropic_request_body(
+            "https://api.anthropic.com/v1",
+            "claude-3-5-sonnet-20241022",
+            "system",
+            vec![],
+            vec![],
+        );
+        assert!(older_claude_body.get("thinking").is_none());
     }
 }

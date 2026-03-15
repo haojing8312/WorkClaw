@@ -128,6 +128,34 @@ function shouldRenderCompletedJourneySummary(model: TaskJourneyViewModel) {
   return model.status === "completed" || model.status === "partial";
 }
 
+function getThinkingSupport(model: ModelConfig | null): {
+  indicator: boolean;
+  reasoning: boolean;
+} {
+  if (!model) {
+    return { indicator: true, reasoning: false };
+  }
+
+  if (model.api_format === "openai") {
+    return { indicator: true, reasoning: true };
+  }
+
+  if (model.api_format === "anthropic") {
+    const normalizedBaseUrl = model.base_url.trim().toLowerCase();
+    const normalizedModelName = model.model_name.trim().toLowerCase();
+    const supportsExtendedAnthropicReasoning =
+      normalizedBaseUrl.includes("api.anthropic.com/v1") &&
+      (normalizedModelName.startsWith("claude-sonnet-4") || normalizedModelName.startsWith("claude-opus-4"));
+
+    return {
+      indicator: true,
+      reasoning: supportsExtendedAnthropicReasoning,
+    };
+  }
+
+  return { indicator: false, reasoning: false };
+}
+
 export function ChatView({
   skill,
   models,
@@ -1419,6 +1447,7 @@ export function ChatView({
 
   // 从 models 查找当前会话的模型名称
   const currentModel = getDefaultModel(models);
+  const thinkingSupport = useMemo(() => getThinkingSupport(currentModel), [currentModel]);
   const installedSkillSet = new Set(installedSkillIds);
   const sidePanelMessages = useMemo<Message[]>(() => {
     if (streamItems.length === 0) return messages;
