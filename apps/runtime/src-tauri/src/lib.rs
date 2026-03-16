@@ -14,13 +14,12 @@ pub mod team_templates;
 mod windows_process;
 
 use agent::tools::new_responder;
-use approval_bus::ApprovalManager;
 use agent::tools::search_providers::cache::SearchCache;
 use agent::{AgentExecutor, ToolRegistry};
+use approval_bus::ApprovalManager;
 use commands::chat::{
     ApprovalManagerState, AskUserState, CancelFlagState, PendingApprovalBridgeState,
-    SearchCacheState,
-    ToolConfirmResponder, ToolConfirmState,
+    SearchCacheState, ToolConfirmResponder, ToolConfirmState,
 };
 use commands::feishu_gateway::FeishuEventRelayState;
 use commands::skills::DbState;
@@ -192,6 +191,44 @@ fn restore_saved_mcp_servers(pool: sqlx::SqlitePool, registry: Arc<ToolRegistry>
     });
 }
 
+fn spawn_approval_recovery_bootstrap(
+    pool: sqlx::SqlitePool,
+    journal: Arc<SessionJournalStore>,
+    registry: Arc<ToolRegistry>,
+) {
+    tauri::async_runtime::spawn(async move {
+        match approval_bus::approval_bus_rollout_enabled_with_pool(&pool).await {
+            Ok(false) => {
+                eprintln!("[approval] approval_bus_v1=false，跳过审批恢复 bootstrap");
+                return;
+            }
+            Ok(true) => {}
+            Err(error) => {
+                eprintln!(
+                    "[approval] 读取 approval_bus_v1 失败，继续按启用状态恢复: {}",
+                    error
+                );
+            }
+        }
+
+        match approval_bus::recover_approved_pending_work_with_pool(
+            &pool,
+            journal.as_ref(),
+            registry.as_ref(),
+        )
+        .await
+        {
+            Ok(recovered) if recovered > 0 => {
+                eprintln!("[approval] 已恢复 {} 条已批准待续跑审批", recovered);
+            }
+            Ok(_) => {}
+            Err(error) => {
+                eprintln!("[approval] 恢复已批准审批失败: {}", error);
+            }
+        }
+    });
+}
+
 fn spawn_feishu_relay_bootstrap(
     pool: sqlx::SqlitePool,
     relay_state: FeishuEventRelayState,
@@ -312,7 +349,13 @@ pub fn run() {
                 }
             };
             let handles = initialize_runtime_state(app, pool.clone());
+            let journal_store = app.state::<SessionJournalStateHandle>().0.clone();
             apply_startup_preferences(app, &pool);
+            spawn_approval_recovery_bootstrap(
+                pool.clone(),
+                journal_store,
+                Arc::clone(&handles.registry),
+            );
             spawn_sidecar_bootstrap(handles.sidecar_manager.clone());
             restore_saved_mcp_servers(pool.clone(), Arc::clone(&handles.registry));
             spawn_feishu_relay_bootstrap(

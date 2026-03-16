@@ -2,11 +2,11 @@ mod helpers;
 
 use runtime_lib::approval_bus::{ApprovalDecision, ApprovalManager, CreateApprovalRequest};
 use runtime_lib::commands::feishu_gateway::{
-    maybe_handle_feishu_approval_command_with_pool, notify_feishu_approval_requested_with_pool,
-    calculate_feishu_signature, parse_feishu_payload, plan_role_dispatch_requests_for_feishu,
-    plan_role_events_for_feishu, resolve_feishu_app_credentials, resolve_feishu_sidecar_base_url,
-    set_app_setting, validate_feishu_auth_with_pool, validate_feishu_signature_with_pool,
-    ParsedFeishuPayload,
+    calculate_feishu_signature, maybe_handle_feishu_approval_command_with_pool,
+    notify_feishu_approval_requested_with_pool, parse_feishu_payload,
+    plan_role_dispatch_requests_for_feishu, plan_role_events_for_feishu,
+    resolve_feishu_app_credentials, resolve_feishu_sidecar_base_url, set_app_setting,
+    validate_feishu_auth_with_pool, validate_feishu_signature_with_pool, ParsedFeishuPayload,
 };
 use runtime_lib::commands::im_config::bind_thread_roles_with_pool;
 use runtime_lib::im::types::{ImEvent, ImEventType};
@@ -378,6 +378,7 @@ async fn feishu_approve_command_resolves_pending_approval() {
                 summary: "删除目录 C:\\Users\\demo\\danger".to_string(),
                 impact: Some("目录及其全部子文件会被永久删除".to_string()),
                 irreversible: true,
+                work_dir: None,
             },
         )
         .await

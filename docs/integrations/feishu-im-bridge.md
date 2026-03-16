@@ -1,6 +1,6 @@
 # 飞书 IM 闭环桥接（桌面会话 <-> 飞书群）
 
-本文档说明运行时如何把智能体员工在桌面端的执行过程，持续桥接回飞书群，并在飞书侧完成 `ask_user` 闭环。
+本文档说明运行时如何把智能体员工在桌面端的执行过程，持续桥接回飞书群，并在飞书侧完成 `ask_user` 与高风险审批闭环。
 
 ## 事件闭环
 
@@ -13,6 +13,39 @@
 5. 用户在飞书回复后再次进入 `im-role-dispatch-request`，并回填到 `answer_user_question`
 
 对应实现入口：`apps/runtime/src/App.tsx`
+
+## 高风险审批闭环
+
+当桌面运行时启用 `approval_bus_v1` 时，高风险工具不再依赖单次桌面弹窗，而是走统一审批总线：
+
+1. `executor` 创建 pending approval，并把状态写入 `approvals`
+2. 桌面收到 `approval-created` / `approval-resolved` 事件，展示审批队列
+3. 同一条审批会同步转发到飞书线程，消息内包含 `/approve <approvalId> allow_once|allow_always|deny` 指令
+4. 桌面或飞书任一端审批后，`ApprovalManager` 以数据库 CAS 方式终态化该 approval
+5. 当前运行中的 agent 继续执行；若应用已重启，则启动恢复 bootstrap 读取 `approved AND resumed_at IS NULL` 的记录补执行
+
+当前边界：
+
+- 桌面与飞书共享同一个 `approvalId`
+- `allow_once` 只放行当前一次
+- `allow_always` 会生成结构化 `approval_rules`
+- `deny` 会终止当前危险工具调用，但不会生成长期拒绝规则
+
+## Rollout 开关与降级路径
+
+审批总线默认开启；如果需要临时降级到旧的桌面确认路径，可在 `app_settings` 中写入：
+
+```sql
+INSERT OR REPLACE INTO app_settings (key, value) VALUES ('approval_bus_v1', 'false');
+```
+
+关闭后行为如下：
+
+- `executor` 对高风险工具回退到旧的桌面 `tool-confirm-event + confirm_tool_execution` 路径
+- 飞书 `/approve` 与审批通知不再参与新的高风险审批流
+- 启动时不会执行 `approved AND resumed_at IS NULL` 的审批恢复 bootstrap
+
+重新开启可将值改回 `true`，或直接删除该配置项。
 
 ## 流式转发策略（防刷屏 + 保实时）
 

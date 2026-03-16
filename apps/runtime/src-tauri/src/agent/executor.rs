@@ -3,7 +3,10 @@ use super::registry::ToolRegistry;
 use super::system_prompts::SystemPromptBuilder;
 use super::types::{LLMResponse, StreamDelta, ToolContext, ToolResult};
 use crate::adapters;
-use crate::approval_bus::{ApprovalDecision, ApprovalManager, CreateApprovalRequest};
+use crate::approval_bus::{
+    approval_bus_rollout_enabled_with_pool, ApprovalDecision, ApprovalManager,
+    CreateApprovalRequest,
+};
 use crate::approval_rules::find_matching_approval_rule_with_pool;
 use crate::commands::chat::{ApprovalManagerState, PendingApprovalBridgeState};
 use crate::commands::feishu_gateway::notify_feishu_approval_requested_with_pool;
@@ -123,7 +126,9 @@ async fn request_tool_approval_and_wait(
     cancel_flag: Option<Arc<AtomicBool>>,
 ) -> Result<ApprovalDecision> {
     let approval_id = Uuid::new_v4().to_string();
-    let receiver = runtime.approval_manager.register_waiter(approval_id.clone());
+    let receiver = runtime
+        .approval_manager
+        .register_waiter(approval_id.clone());
     let (title, summary, impact, irreversible) =
         critical_action_summary(tool_name, input, work_dir);
 
@@ -142,6 +147,7 @@ async fn request_tool_approval_and_wait(
                 summary: summary.clone(),
                 impact: Some(impact.clone()),
                 irreversible,
+                work_dir: work_dir.map(|dir| dir.to_string_lossy().to_string()),
             },
         )
         .await
@@ -183,13 +189,8 @@ async fn request_tool_approval_and_wait(
         );
     }
 
-    let _ = notify_feishu_approval_requested_with_pool(
-        &runtime.pool,
-        session_id,
-        &record,
-        None,
-    )
-    .await;
+    let _ =
+        notify_feishu_approval_requested_with_pool(&runtime.pool, session_id, &record, None).await;
 
     let resolution = runtime
         .approval_manager
@@ -902,7 +903,9 @@ impl AgentExecutor {
                             &call.input,
                             tool_ctx.work_dir.as_deref(),
                         ) {
-                            let approval_decision = if let (Some(app), Some(sid)) = (app_handle, session_id) {
+                            let approval_decision = if let (Some(app), Some(sid)) =
+                                (app_handle, session_id)
+                            {
                                 let runtime = match resolve_approval_wait_runtime(app) {
                                     Ok(runtime) => runtime,
                                     Err(err) => {
@@ -939,63 +942,106 @@ impl AgentExecutor {
                                         continue;
                                     }
                                 };
+                                let approval_bus_enabled =
+                                    approval_bus_rollout_enabled_with_pool(&runtime.pool)
+                                        .await
+                                        .unwrap_or(true);
 
-                                match find_matching_approval_rule_with_pool(
-                                    &runtime.pool,
-                                    &call.name,
-                                    &call.input,
-                                )
-                                .await
-                                {
-                                    Ok(Some(_)) => Some(ApprovalDecision::AllowAlways),
-                                    Ok(None) | Err(_) => match request_tool_approval_and_wait(
-                                        &runtime,
-                                        Some(app),
-                                        sid,
-                                        persisted_run_id.as_deref(),
+                                if approval_bus_enabled {
+                                    match find_matching_approval_rule_with_pool(
+                                        &runtime.pool,
                                         &call.name,
-                                        &call.id,
                                         &call.input,
-                                        tool_ctx.work_dir.as_deref(),
-                                        cancel_flag.clone(),
                                     )
                                     .await
                                     {
-                                        Ok(decision) => Some(decision),
-                                        Err(err) => {
-                                            let rejection_message = err.to_string();
-                                            let _ = app.emit(
-                                                "tool-call-event",
-                                                ToolCallEvent {
-                                                    session_id: sid.to_string(),
-                                                    tool_name: call.name.clone(),
-                                                    tool_input: call.input.clone(),
-                                                    tool_output: Some(rejection_message.clone()),
-                                                    status: "error".to_string(),
-                                                },
-                                            );
-                                            if let Some(run_id) = persisted_run_id.as_ref() {
-                                                let _ = append_tool_run_event(
-                                                    app,
-                                                    sid,
-                                                    SessionRunEvent::ToolCompleted {
-                                                        run_id: run_id.clone(),
-                                                        tool_name: call.name.clone(),
-                                                        call_id: call.id.clone(),
-                                                        input: call.input.clone(),
-                                                        output: rejection_message.clone(),
-                                                        is_error: true,
-                                                    },
-                                                )
-                                                .await;
+                                        Ok(Some(_)) => Some(ApprovalDecision::AllowAlways),
+                                        Ok(None) | Err(_) => {
+                                            match request_tool_approval_and_wait(
+                                                &runtime,
+                                                Some(app),
+                                                sid,
+                                                persisted_run_id.as_deref(),
+                                                &call.name,
+                                                &call.id,
+                                                &call.input,
+                                                tool_ctx.work_dir.as_deref(),
+                                                cancel_flag.clone(),
+                                            )
+                                            .await
+                                            {
+                                                Ok(decision) => Some(decision),
+                                                Err(err) => {
+                                                    let rejection_message = err.to_string();
+                                                    let _ = app.emit(
+                                                        "tool-call-event",
+                                                        ToolCallEvent {
+                                                            session_id: sid.to_string(),
+                                                            tool_name: call.name.clone(),
+                                                            tool_input: call.input.clone(),
+                                                            tool_output: Some(
+                                                                rejection_message.clone(),
+                                                            ),
+                                                            status: "error".to_string(),
+                                                        },
+                                                    );
+                                                    if let Some(run_id) = persisted_run_id.as_ref()
+                                                    {
+                                                        let _ = append_tool_run_event(
+                                                            app,
+                                                            sid,
+                                                            SessionRunEvent::ToolCompleted {
+                                                                run_id: run_id.clone(),
+                                                                tool_name: call.name.clone(),
+                                                                call_id: call.id.clone(),
+                                                                input: call.input.clone(),
+                                                                output: rejection_message.clone(),
+                                                                is_error: true,
+                                                            },
+                                                        )
+                                                        .await;
+                                                    }
+                                                    tool_results.push(ToolResult {
+                                                        tool_use_id: call.id.clone(),
+                                                        content: rejection_message,
+                                                    });
+                                                    None
+                                                }
                                             }
+                                        }
+                                    }
+                                } else if let Some(ref confirm_state) = tool_confirm_tx {
+                                    let (tx, rx) = std::sync::mpsc::channel::<bool>();
+                                    if let Ok(mut guard) = confirm_state.lock() {
+                                        *guard = Some(tx);
+                                    }
+
+                                    let confirmation = wait_for_tool_confirmation(
+                                        &rx,
+                                        std::time::Duration::from_secs(TOOL_CONFIRM_TIMEOUT_SECS),
+                                    );
+
+                                    if let Ok(mut guard) = confirm_state.lock() {
+                                        *guard = None;
+                                    }
+
+                                    match confirmation {
+                                        ToolConfirmationDecision::Confirmed => {
+                                            Some(ApprovalDecision::AllowOnce)
+                                        }
+                                        ToolConfirmationDecision::Rejected => {
+                                            Some(ApprovalDecision::Deny)
+                                        }
+                                        ToolConfirmationDecision::TimedOut => {
                                             tool_results.push(ToolResult {
                                                 tool_use_id: call.id.clone(),
-                                                content: rejection_message,
+                                                content: "工具确认超时，已取消此操作".to_string(),
                                             });
                                             None
                                         }
                                     }
+                                } else {
+                                    Some(ApprovalDecision::AllowOnce)
                                 }
                             } else if let Some(ref confirm_state) = tool_confirm_tx {
                                 let (tx, rx) = std::sync::mpsc::channel::<bool>();
@@ -1013,8 +1059,12 @@ impl AgentExecutor {
                                 }
 
                                 match confirmation {
-                                    ToolConfirmationDecision::Confirmed => Some(ApprovalDecision::AllowOnce),
-                                    ToolConfirmationDecision::Rejected => Some(ApprovalDecision::Deny),
+                                    ToolConfirmationDecision::Confirmed => {
+                                        Some(ApprovalDecision::AllowOnce)
+                                    }
+                                    ToolConfirmationDecision::Rejected => {
+                                        Some(ApprovalDecision::Deny)
+                                    }
                                     ToolConfirmationDecision::TimedOut => {
                                         tool_results.push(ToolResult {
                                             tool_use_id: call.id.clone(),
@@ -1412,7 +1462,10 @@ mod tests {
     #[tokio::test]
     async fn approval_bus_blocks_file_delete_until_resolved() {
         let db_dir = tempdir().expect("create db dir");
-        let db_url = format!("sqlite://{}?mode=rwc", db_dir.path().join("approval-test.db").to_string_lossy());
+        let db_url = format!(
+            "sqlite://{}?mode=rwc",
+            db_dir.path().join("approval-test.db").to_string_lossy()
+        );
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .connect(&db_url)
@@ -1490,7 +1543,8 @@ mod tests {
         let work_dir = tempdir().expect("create work dir");
         let target_dir = work_dir.path().join("danger");
         std::fs::create_dir_all(target_dir.join("nested")).expect("create target tree");
-        std::fs::write(target_dir.join("nested").join("file.txt"), "danger").expect("write nested file");
+        std::fs::write(target_dir.join("nested").join("file.txt"), "danger")
+            .expect("write nested file");
 
         let input = json!({
             "path": target_dir.to_string_lossy().to_string(),
@@ -1560,8 +1614,14 @@ mod tests {
             .await
             .expect("resolve pending approval");
 
-        let result = handle.await.expect("join task").expect("file delete success");
+        let result = handle
+            .await
+            .expect("join task")
+            .expect("file delete success");
         assert!(result.contains("成功删除"));
-        assert!(!target_dir.exists(), "directory should be removed after approval");
+        assert!(
+            !target_dir.exists(),
+            "directory should be removed after approval"
+        );
     }
 }
