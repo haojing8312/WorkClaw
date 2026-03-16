@@ -29,6 +29,7 @@ logs/
 stdout
 apps/runtime/playwright-report/
 apps/runtime/test-results/
+apps/runtime/src-tauri/resources/sidecar-runtime/
 
 # local temporary debug artifacts
 .tmp_*
