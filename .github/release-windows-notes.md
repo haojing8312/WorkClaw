@@ -1,9 +1,9 @@
 ## WorkClaw Windows Release
 
-- Highlights in `v0.2.18`:
-  - Fixed the brief flashing `cmd` / `PowerShell` console window when WorkClaw executes local commands on Windows.
-  - Unified hidden-window process startup across shell execution, background tasks, screenshots, startup registration, and sidecar launch paths.
-  - Reduced user-facing interruption during command execution and desktop automation flows.
+- Highlights in `v0.3.0`:
+  - Added approval queue, approval persistence, and recovery flow for multi-step guarded agent actions.
+  - Added OpenClaw browser compatibility and refreshed provider default model presets for smoother model/tool integration.
+  - Fixed running-session recovery so in-progress chat output and runtime status remain visible when switching between concurrent tasks.
 
 - Recommended download: `*-setup.exe` for direct install.
 - Enterprise deployment: `*.msi` for IT-managed installation and manual upgrades.
