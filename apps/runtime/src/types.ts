@@ -116,6 +116,16 @@ export interface ProviderHealthInfo {
   message: string;
 }
 
+export type ModelErrorKind = "billing" | "auth" | "rate_limit" | "timeout" | "network" | "unknown";
+
+export interface ModelConnectionTestResult {
+  ok: boolean;
+  kind: ModelErrorKind;
+  title: string;
+  message: string;
+  raw_message?: string | null;
+}
+
 export interface RouteAttemptLog {
   session_id: string;
   capability: string;

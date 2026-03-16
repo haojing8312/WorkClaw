@@ -23,6 +23,7 @@ import {
   FeishuGatewaySettings,
   FeishuWsStatus,
   ModelConfig,
+  ModelConnectionTestResult,
   ProviderConfig,
   ProviderHealthInfo,
   RuntimePreferences,
@@ -31,6 +32,7 @@ import {
   WecomConnectorStatus,
   WecomGatewaySettings,
 } from "../types";
+import { getModelErrorDisplay } from "../lib/model-error-display";
 import { RiskConfirmDialog } from "./RiskConfirmDialog";
 import { ConnectorConfigPanel } from "./connectors/ConnectorConfigPanel";
 import { ConnectorDiagnosticsPanel } from "./connectors/ConnectorDiagnosticsPanel";
@@ -149,7 +151,7 @@ export function SettingsView({
   });
   const [error, setError] = useState("");
   const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<boolean | null>(null);
+  const [testResult, setTestResult] = useState<ModelConnectionTestResult | null>(null);
   const [modelSuggestions, setModelSuggestions] = useState<string[]>(DEFAULT_MODEL_PROVIDER.models);
   const [modelSaveMessage, setModelSaveMessage] = useState("");
 
@@ -267,6 +269,12 @@ export function SettingsView({
   const [desktopDiagnosticsStatus, setDesktopDiagnosticsStatus] =
     useState<DesktopDiagnosticsStatus | null>(null);
   const selectedModelProvider = getModelProviderCatalogItem(selectedModelProviderId);
+  const connectionTestDisplay = testResult ? getModelErrorDisplay(testResult) : null;
+  const shouldShowConnectionRawMessage = Boolean(
+    connectionTestDisplay?.rawMessage &&
+      connectionTestDisplay.rawMessage !== connectionTestDisplay.title &&
+      connectionTestDisplay.rawMessage !== connectionTestDisplay.message,
+  );
 
   async function persistRuntimePreferencesInput(input: Record<string, unknown>) {
     const saved = await invoke<RuntimePreferences>("set_runtime_preferences", { input });
@@ -1269,7 +1277,7 @@ export function SettingsView({
     setTesting(true);
     setTestResult(null);
     try {
-      const ok = await invoke<boolean>("test_connection_cmd", {
+      const result = await invoke<ModelConnectionTestResult>("test_connection_cmd", {
         config: {
           id: "",
           name: form.name.trim(),
@@ -1280,10 +1288,10 @@ export function SettingsView({
         },
         apiKey: form.api_key.trim(),
       });
-      setTestResult(ok);
+      setTestResult(result);
     } catch (e: unknown) {
       setError(String(e));
-      setTestResult(false);
+      setTestResult(null);
     } finally {
       setTesting(false);
     }
@@ -1755,8 +1763,19 @@ export function SettingsView({
         </div>
         {error && <div className="bg-red-50 text-red-600 text-xs px-2 py-1 rounded">{error}</div>}
         {testResult !== null && (
-          <div className={"text-xs " + (testResult ? "bg-green-50 text-green-600 px-2 py-1 rounded" : "bg-red-50 text-red-600 px-2 py-1 rounded")}>
-            {testResult ? "连接成功" : "连接失败，请检查配置"}
+          <div
+            className={
+              "space-y-1 rounded px-2 py-2 text-xs " +
+              (testResult.ok ? "bg-green-50 text-green-600" : "bg-red-50 text-red-600")
+            }
+          >
+            <div className="font-medium">{testResult.ok ? "连接成功" : connectionTestDisplay?.title}</div>
+            {!testResult.ok && connectionTestDisplay?.message ? <div>{connectionTestDisplay.message}</div> : null}
+            {!testResult.ok && shouldShowConnectionRawMessage ? (
+              <div className="whitespace-pre-wrap break-all rounded border border-red-200/80 bg-white/70 px-2 py-2 font-mono text-[11px] text-red-700/90">
+                {connectionTestDisplay?.rawMessage}
+              </div>
+            ) : null}
           </div>
         )}
         {modelSaveMessage && (

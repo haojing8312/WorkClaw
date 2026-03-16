@@ -36,6 +36,7 @@ import {
   EMPTY_SEARCH_CONFIG_FORM,
   validateSearchConfigForm,
 } from "./lib/search-config";
+import { getModelErrorDisplay } from "./lib/model-error-display";
 import { getDefaultModelId } from "./lib/default-model";
 import { openExternalUrl } from "./utils/openExternalUrl";
 import { reportFrontendDiagnostic } from "./diagnostics";
@@ -45,7 +46,19 @@ import {
   ExpertPreviewPayload,
   ExpertPreviewResult,
 } from "./components/experts/ExpertCreateView";
-import { ClawhubInstallRequest, SkillManifest, ModelConfig, SessionInfo, ImRoleDispatchRequest, Message, AgentEmployee, EmployeeGroup, UpsertAgentEmployeeInput, RuntimePreferences } from "./types";
+import {
+  AgentEmployee,
+  ClawhubInstallRequest,
+  EmployeeGroup,
+  ImRoleDispatchRequest,
+  Message,
+  ModelConfig,
+  ModelConnectionTestResult,
+  RuntimePreferences,
+  SessionInfo,
+  SkillManifest,
+  UpsertAgentEmployeeInput,
+} from "./types";
 
 type MainView = "start-task" | "experts" | "experts-new" | "packaging" | "employees";
 type SkillAction = "refresh" | "delete" | "check-update" | "update";
@@ -377,7 +390,7 @@ export default function App() {
   }));
   const [quickModelSaving, setQuickModelSaving] = useState(false);
   const [quickModelTesting, setQuickModelTesting] = useState(false);
-  const [quickModelTestResult, setQuickModelTestResult] = useState<boolean | null>(null);
+  const [quickModelTestResult, setQuickModelTestResult] = useState<ModelConnectionTestResult | null>(null);
   const [quickModelError, setQuickModelError] = useState("");
   const [quickModelApiKeyVisible, setQuickModelApiKeyVisible] = useState(false);
   const [searchConfigs, setSearchConfigs] = useState<ModelConfig[]>([]);
@@ -387,6 +400,12 @@ export default function App() {
   const [quickSearchTestResult, setQuickSearchTestResult] = useState<boolean | null>(null);
   const [quickSearchError, setQuickSearchError] = useState("");
   const [quickSearchApiKeyVisible, setQuickSearchApiKeyVisible] = useState(false);
+  const quickModelTestDisplay = quickModelTestResult ? getModelErrorDisplay(quickModelTestResult) : null;
+  const shouldShowQuickModelRawMessage = Boolean(
+    quickModelTestDisplay?.rawMessage &&
+      quickModelTestDisplay.rawMessage !== quickModelTestDisplay.title &&
+      quickModelTestDisplay.rawMessage !== quickModelTestDisplay.message,
+  );
   const [pendingInitialMessage, setPendingInitialMessage] = useState<{
     sessionId: string;
     message: string;
@@ -1701,17 +1720,14 @@ export default function App() {
     setQuickModelError("");
     setQuickModelTestResult(null);
     try {
-      const ok = await invoke<boolean>("test_connection_cmd", {
+      const result = await invoke<ModelConnectionTestResult>("test_connection_cmd", {
         config: getQuickModelConfig(false),
         apiKey,
       });
-      setQuickModelTestResult(ok);
-      if (!ok) {
-        setQuickModelError("连接失败，请检查配置后重试");
-      }
+      setQuickModelTestResult(result);
     } catch (e) {
-      setQuickModelError(String(e));
-      setQuickModelTestResult(false);
+      setQuickModelError(extractErrorMessage(e, "模型连接测试失败"));
+      setQuickModelTestResult(null);
     } finally {
       setQuickModelTesting(false);
     }
@@ -2492,17 +2508,31 @@ export default function App() {
                         <div
                           data-testid="quick-model-setup-test-result"
                           className={`flex items-start gap-2 rounded-2xl border px-3 py-3 text-xs sm:col-span-2 ${
-                            quickModelTestResult
+                            quickModelTestResult.ok
                               ? "border-green-200 bg-green-50 text-green-700"
                               : "border-orange-200 bg-orange-50 text-orange-700"
                           }`}
                         >
-                          {quickModelTestResult ? (
+                          {quickModelTestResult.ok ? (
                             <CheckCircle2 className="mt-0.5 h-4 w-4 flex-shrink-0" />
                           ) : (
                             <CircleAlert className="mt-0.5 h-4 w-4 flex-shrink-0" />
                           )}
-                          <span>{quickModelTestResult ? "连接成功，可直接保存并开始" : "连接失败，请检查后重试"}</span>
+                          <div className="space-y-1">
+                            <div className="font-medium">
+                              {quickModelTestResult.ok
+                                ? "连接成功，可直接保存并开始"
+                                : quickModelTestDisplay?.title}
+                            </div>
+                            {!quickModelTestResult.ok && quickModelTestDisplay?.message ? (
+                              <div>{quickModelTestDisplay.message}</div>
+                            ) : null}
+                            {!quickModelTestResult.ok && shouldShowQuickModelRawMessage ? (
+                              <div className="whitespace-pre-wrap break-all rounded-xl border border-orange-200/80 bg-white/60 px-2.5 py-2 font-mono text-[11px] text-orange-800/90">
+                                {quickModelTestDisplay?.rawMessage}
+                              </div>
+                            ) : null}
+                          </div>
                         </div>
                       )}
                       <button

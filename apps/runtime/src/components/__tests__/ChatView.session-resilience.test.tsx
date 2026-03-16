@@ -143,6 +143,9 @@ describe("ChatView session resilience", () => {
     await waitFor(() => {
       expect(screen.queryByText("思考中")).not.toBeInTheDocument();
       expect(screen.getByTestId("run-failure-card-run-1")).toHaveTextContent("模型余额不足");
+      expect(screen.getByTestId("run-failure-card-run-1")).toHaveTextContent(
+        "当前模型平台返回余额或额度不足，请到对应服务商控制台充值或检查套餐额度。",
+      );
       expect(screen.getByTestId("run-failure-card-run-1")).toHaveTextContent("已经生成 2 个文件");
     });
   });
@@ -380,7 +383,7 @@ describe("ChatView session resilience", () => {
     });
   });
 
-  test("auto rejects pending tool confirmation during cleanup", async () => {
+  test("auto denies pending approval during cleanup", async () => {
     const { unmount } = render(
       <ChatView
         skill={{
@@ -408,7 +411,8 @@ describe("ChatView session resilience", () => {
     );
 
     act(() => {
-      emit("tool-confirm-event", {
+      emit("approval-created", {
+        approval_id: "approval-cleanup-1",
         session_id: "sess-confirm",
         tool_name: "bash",
         tool_input: { command: "rm -rf ." },
@@ -420,8 +424,10 @@ describe("ChatView session resilience", () => {
     unmount();
 
     await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith("confirm_tool_execution", {
-        confirmed: false,
+      expect(invokeMock).toHaveBeenCalledWith("resolve_approval", {
+        approvalId: "approval-cleanup-1",
+        decision: "deny",
+        source: "desktop_cleanup",
       });
     });
   });

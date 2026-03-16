@@ -21,6 +21,7 @@ import {
 import type { TaskJourneyViewModel } from "./chat-side-panel/view-model";
 import { TaskJourneySummary } from "./chat-journey/TaskJourneySummary";
 import { getDefaultModel } from "../lib/default-model";
+import { getModelErrorDisplay, isModelErrorKind } from "../lib/model-error-display";
 
 type ClawhubInstallCandidate = {
   slug: string;
@@ -256,6 +257,8 @@ export function ChatView({
   >([]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const pendingApprovalsRef = useRef<PendingApprovalView[]>([]);
+  const resolvingApprovalIdRef = useRef<string | null>(null);
   const subAgentBufferRef = useRef("");
   const mainRoleNameRef = useRef("");
   const lastHandledSessionFocusNonceRef = useRef<number | null>(null);
@@ -343,6 +346,11 @@ export function ChatView({
     irreversible: payload.irreversible,
     status: payload.status,
   });
+
+  useEffect(() => {
+    pendingApprovalsRef.current = pendingApprovals;
+    resolvingApprovalIdRef.current = resolvingApprovalId;
+  }, [pendingApprovals, resolvingApprovalId]);
 
   function syncComposerHeight() {
     const el = textareaRef.current;
@@ -1115,6 +1123,27 @@ export function ChatView({
       unlistenCreatedPromise.then((fn) => fn());
       unlistenResolvedPromise.then((fn) => fn());
       unlistenLegacyPromise.then((fn) => fn());
+    };
+  }, [sessionId]);
+
+  useEffect(() => {
+    const cleanupSessionId = sessionId;
+
+    return () => {
+      const resolvingId = resolvingApprovalIdRef.current;
+      const staleApprovals = pendingApprovalsRef.current.filter(
+        (item) => item.sessionId === cleanupSessionId && item.approvalId.trim() && item.approvalId !== resolvingId,
+      );
+
+      for (const approval of staleApprovals) {
+        void invoke("resolve_approval", {
+          approvalId: approval.approvalId,
+          decision: "deny",
+          source: "desktop_cleanup",
+        }).catch((error) => {
+          console.error("自动拒绝待审批操作失败:", error);
+        });
+      }
     };
   }, [sessionId]);
 
@@ -2262,13 +2291,40 @@ export function ChatView({
     setSidePanelTab("files");
   }
 
-  function getRunFailureTitle(run: SessionRunProjection) {
-    if (run.error_kind === "billing") return "模型余额不足";
-    if (run.error_kind === "cancelled") return "任务已取消";
-    return run.error_message || "本轮执行失败";
+  function getRunFailureDisplay(run: SessionRunProjection) {
+    if (run.error_kind === "cancelled") {
+      return {
+        title: "任务已取消",
+        message: run.error_message || "",
+        rawMessage: null as string | null,
+      };
+    }
+
+    if (isModelErrorKind(run.error_kind)) {
+      const display = getModelErrorDisplay(run.error_kind);
+      const rawMessage =
+        run.error_message &&
+        run.error_message !== display.title &&
+        run.error_message !== display.message
+          ? run.error_message
+          : null;
+      return {
+        title: display.title,
+        message: display.message,
+        rawMessage,
+      };
+    }
+
+    return {
+      title: run.error_message || "本轮执行失败",
+      message: "",
+      rawMessage: null as string | null,
+    };
   }
 
   function renderRunFailureCard(run: SessionRunProjection) {
+    const display = getRunFailureDisplay(run);
+
     return (
       <motion.div
         key={`run-failure-${run.id}`}
@@ -2278,10 +2334,15 @@ export function ChatView({
         className="mr-auto max-w-[80%] rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-900 shadow-sm"
       >
         <div className="text-xs font-medium tracking-wide text-amber-700">本轮执行结果</div>
-        <div className="mt-1 text-lg font-semibold">{getRunFailureTitle(run)}</div>
-        {run.error_message && run.error_message !== getRunFailureTitle(run) && (
-          <div className="mt-2 whitespace-pre-wrap text-sm text-amber-800">{run.error_message}</div>
-        )}
+        <div className="mt-1 text-lg font-semibold">{display.title}</div>
+        {display.message ? (
+          <div className="mt-2 whitespace-pre-wrap text-sm text-amber-800">{display.message}</div>
+        ) : null}
+        {display.rawMessage ? (
+          <div className="mt-2 whitespace-pre-wrap break-all rounded-xl border border-white/70 bg-white/70 px-4 py-3 font-mono text-xs text-amber-900/90">
+            {display.rawMessage}
+          </div>
+        ) : null}
         {run.buffered_text && (
           <div className="mt-3 rounded-xl border border-white/70 bg-white/70 px-4 py-3 text-sm text-gray-700">
             <div className="mb-1 text-xs font-medium tracking-wide text-gray-500">已保留的部分输出</div>

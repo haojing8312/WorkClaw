@@ -157,7 +157,13 @@ describe("App model setup hint", () => {
         return Promise.resolve(null);
       }
       if (command === "test_connection_cmd") {
-        return Promise.resolve(true);
+        return Promise.resolve({
+          ok: true,
+          kind: "unknown",
+          title: "连接成功",
+          message: "模型连接测试成功。",
+          raw_message: null,
+        });
       }
       if (command === "test_search_connection") {
         return Promise.resolve(true);
@@ -314,6 +320,68 @@ describe("App model setup hint", () => {
     );
     expect(screen.getByTestId("quick-model-setup-actions")).toContainElement(
       screen.getByTestId("quick-model-setup-test-result"),
+    );
+  });
+
+  test("shows shared billing guidance when quick setup connection fails because of balance", async () => {
+    invokeMock.mockImplementation((command: string, payload?: any) => {
+      if (command === "list_skills") {
+        return Promise.resolve([
+          {
+            id: "builtin-general",
+            name: "General",
+            description: "desc",
+            version: "1.0.0",
+            author: "test",
+            recommended_model: "",
+            tags: [],
+            created_at: new Date().toISOString(),
+          },
+        ]);
+      }
+      if (command === "list_model_configs") return Promise.resolve(mockModels);
+      if (command === "list_search_configs") return Promise.resolve(mockSearchConfigs);
+      if (command === "get_sessions") return Promise.resolve([]);
+      if (command === "list_agent_employees") return Promise.resolve([]);
+      if (command === "test_connection_cmd") {
+        return Promise.resolve({
+          ok: false,
+          kind: "billing",
+          title: "模型余额不足",
+          message: "当前模型平台返回余额或额度不足，请到对应服务商控制台充值或检查套餐额度。",
+          raw_message: "{\"error\":{\"message\":\"insufficient_balance\"}}",
+        });
+      }
+      return Promise.resolve(null);
+    });
+
+    window.localStorage.setItem(INITIAL_MODEL_SETUP_COMPLETED_KEY, "1");
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("model-setup-hint")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId("model-setup-hint-open-quick-setup"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("quick-model-setup-dialog")).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByTestId("quick-model-setup-api-key"), {
+      target: { value: "sk-test-billing" },
+    });
+    fireEvent.click(screen.getByTestId("quick-model-setup-test-connection"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("quick-model-setup-test-result")).toHaveTextContent("模型余额不足");
+    });
+
+    expect(screen.getByTestId("quick-model-setup-test-result")).toHaveTextContent(
+      "当前模型平台返回余额或额度不足，请到对应服务商控制台充值或检查套餐额度。",
+    );
+    expect(screen.getByTestId("quick-model-setup-test-result")).toHaveTextContent(
+      "{\"error\":{\"message\":\"insufficient_balance\"}}",
     );
   });
 

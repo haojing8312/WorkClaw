@@ -3,6 +3,10 @@ use super::models_repo::{
     RuntimeProviderHealthProbe,
 };
 use super::skills::DbState;
+use crate::model_errors::{
+    build_failed_connection_test_result, build_success_connection_test_result,
+    ModelConnectionTestResult,
+};
 use runtime_models_app::ModelsAppService;
 use runtime_routing_core::{
     filter_models_by_capability, recommended_models_for_provider, CapabilityRouteTemplateInfo,
@@ -371,16 +375,25 @@ pub async fn delete_model_config_with_pool(db: &SqlitePool, model_id: &str) -> R
 }
 
 #[tauri::command]
-pub async fn test_connection_cmd(config: ModelConfig, api_key: String) -> Result<bool, String> {
-    if config.api_format == "anthropic" {
+pub async fn test_connection_cmd(
+    config: ModelConfig,
+    api_key: String,
+) -> Result<ModelConnectionTestResult, String> {
+    let connection_result = if config.api_format == "anthropic" {
         crate::adapters::anthropic::test_connection(&config.base_url, &api_key, &config.model_name)
             .await
-            .map_err(|e| e.to_string())
     } else {
         crate::adapters::openai::test_connection(&config.base_url, &api_key, &config.model_name)
             .await
-            .map_err(|e| e.to_string())
-    }
+    };
+
+    let result = match connection_result {
+        Ok(true) => build_success_connection_test_result(),
+        Ok(false) => build_failed_connection_test_result("模型平台拒绝了连接测试请求。"),
+        Err(error) => build_failed_connection_test_result(&error.to_string()),
+    };
+
+    Ok(result)
 }
 
 /// 列出所有搜索 Provider 配置
@@ -475,4 +488,51 @@ pub async fn list_builtin_provider_plugins() -> Result<Vec<ProviderPluginInfo>, 
         BuiltinProviderCatalog::china_first_p0(),
     );
     service.list_provider_plugins()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model_errors::ModelErrorKind;
+
+    #[tokio::test]
+    async fn test_connection_cmd_returns_structured_success_for_mock_provider() {
+        let result = test_connection_cmd(
+            ModelConfig {
+                id: String::new(),
+                name: "Mock".to_string(),
+                api_format: "openai".to_string(),
+                base_url: "http://mock".to_string(),
+                model_name: "gpt-4o-mini".to_string(),
+                is_default: false,
+            },
+            "sk-test".to_string(),
+        )
+        .await
+        .expect("command result");
+
+        assert!(result.ok);
+        assert_eq!(result.title, "连接成功");
+    }
+
+    #[tokio::test]
+    async fn test_connection_cmd_normalizes_network_failures() {
+        let result = test_connection_cmd(
+            ModelConfig {
+                id: String::new(),
+                name: "Broken".to_string(),
+                api_format: "openai".to_string(),
+                base_url: "http://127.0.0.1:9/v1".to_string(),
+                model_name: "gpt-4o-mini".to_string(),
+                is_default: false,
+            },
+            "sk-test".to_string(),
+        )
+        .await
+        .expect("command result");
+
+        assert!(!result.ok);
+        assert_eq!(result.kind, ModelErrorKind::Network);
+        assert_eq!(result.title, "网络连接失败");
+    }
 }

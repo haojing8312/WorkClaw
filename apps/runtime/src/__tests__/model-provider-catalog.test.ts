@@ -44,6 +44,16 @@ describe("model provider catalog", () => {
     });
   });
 
+  test("uses MiniMax domestic defaults for official presets", () => {
+    const openaiItem = MODEL_PROVIDER_CATALOG.find((entry) => entry.id === "minimax-openai");
+    const anthropicItem = MODEL_PROVIDER_CATALOG.find(
+      (entry) => entry.id === "minimax-anthropic",
+    );
+
+    expect(openaiItem?.baseUrl).toBe("https://api.minimaxi.com/v1");
+    expect(anthropicItem?.baseUrl).toBe("https://api.minimaxi.com/anthropic");
+  });
+
   test("resolves official providers from api format and base url", () => {
     const item = resolveCatalogItemForConfig({
       api_format: "anthropic",

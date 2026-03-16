@@ -1,7 +1,10 @@
 use crate::agent::types::{LLMResponse, StreamDelta, ToolCall};
 use anyhow::{anyhow, Result};
 use futures_util::StreamExt;
-use reqwest::Client;
+use reqwest::{
+    header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE},
+    Client, StatusCode,
+};
 use serde_json::{json, Value};
 
 fn mock_response_text(model: &str, messages: &[Value]) -> String {
@@ -53,6 +56,51 @@ fn build_http_client() -> Result<Client> {
         .timeout(std::time::Duration::from_secs(120))
         .build()
         .map_err(|e| anyhow!("构建 Anthropic HTTP 客户端失败: {}", e))
+}
+
+fn anthropic_messages_url(base_url: &str) -> String {
+    let normalized = base_url.trim().trim_end_matches('/');
+    let lower = normalized.to_ascii_lowercase();
+
+    if lower.ends_with("/anthropic") {
+        format!("{normalized}/v1/messages")
+    } else {
+        format!("{normalized}/messages")
+    }
+}
+
+fn build_anthropic_headers(api_key: &str) -> Result<HeaderMap> {
+    let mut headers = HeaderMap::new();
+    headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    headers.insert(
+        "x-api-key",
+        HeaderValue::from_str(api_key)
+            .map_err(|e| anyhow!("Anthropic API Key 无效，无法设置 x-api-key: {e}"))?,
+    );
+    headers.insert(
+        AUTHORIZATION,
+        HeaderValue::from_str(&format!("Bearer {api_key}"))
+            .map_err(|e| anyhow!("Anthropic API Key 无效，无法设置 Authorization: {e}"))?,
+    );
+    Ok(headers)
+}
+
+fn anthropic_error_message(status: StatusCode, body: &str) -> String {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        format!("Anthropic 接口返回空错误响应，HTTP {}", status.as_u16())
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn validate_anthropic_test_connection_response(status: StatusCode, body: &str) -> Result<bool> {
+    if status.is_success() {
+        return Ok(true);
+    }
+
+    Err(anyhow!("{}", anthropic_error_message(status, body)))
 }
 
 fn supports_extended_thinking(base_url: &str, model: &str) -> bool {
@@ -214,22 +262,22 @@ pub async fn chat_stream_with_tools(
     }
 
     let client = build_http_client()?;
-    let url = format!("{}/messages", base_url.trim_end_matches('/'));
+    let url = anthropic_messages_url(base_url);
+    let headers = build_anthropic_headers(api_key)?;
 
     let body = build_anthropic_request_body(base_url, model, system_prompt, messages, tools);
 
     let resp = client
         .post(&url)
-        .bearer_auth(api_key)
-        .header("anthropic-version", "2023-06-01")
-        .header("content-type", "application/json")
+        .headers(headers)
         .json(&body)
         .send()
         .await?;
 
-    if !resp.status().is_success() {
+    let status = resp.status();
+    if !status.is_success() {
         let text = resp.text().await?;
-        return Err(anyhow!("Anthropic API error: {}", text));
+        return Err(anyhow!("{}", anthropic_error_message(status, &text)));
     }
 
     let mut stream = resp.bytes_stream();
@@ -252,21 +300,22 @@ pub async fn test_connection(base_url: &str, api_key: &str, model: &str) -> Resu
         return Ok(true);
     }
     let client = build_http_client()?;
+    let headers = build_anthropic_headers(api_key)?;
     let body = json!({
         "model": model,
         "max_tokens": 10,
         "messages": [{"role": "user", "content": "hi"}]
     });
-    let url = format!("{}/messages", base_url.trim_end_matches('/'));
+    let url = anthropic_messages_url(base_url);
     let resp = client
         .post(&url)
-        .bearer_auth(api_key)
-        .header("anthropic-version", "2023-06-01")
-        .header("content-type", "application/json")
+        .headers(headers)
         .json(&body)
         .send()
         .await?;
-    Ok(resp.status().is_success())
+    let status = resp.status();
+    let text = resp.text().await?;
+    validate_anthropic_test_connection_response(status, &text)
 }
 
 #[cfg(test)]
@@ -369,7 +418,7 @@ mod tests {
         );
 
         let third_party_body = build_anthropic_request_body(
-            "https://api.minimax.io/anthropic/v1",
+            "https://api.minimaxi.com/anthropic",
             "MiniMax-M2.5",
             "system",
             vec![],
@@ -385,5 +434,47 @@ mod tests {
             vec![],
         );
         assert!(older_claude_body.get("thinking").is_none());
+    }
+
+    #[test]
+    fn anthropic_messages_url_supports_minimax_cn_root_path() {
+        assert_eq!(
+            anthropic_messages_url("https://api.minimaxi.com/anthropic"),
+            "https://api.minimaxi.com/anthropic/v1/messages"
+        );
+        assert_eq!(
+            anthropic_messages_url("https://api.minimaxi.com/anthropic/v1"),
+            "https://api.minimaxi.com/anthropic/v1/messages"
+        );
+    }
+
+    #[test]
+    fn anthropic_headers_include_x_api_key_for_sdk_compatible_providers() {
+        let headers = build_anthropic_headers("sk-ant-test").expect("build headers");
+
+        assert_eq!(
+            headers
+                .get("x-api-key")
+                .and_then(|value| value.to_str().ok()),
+            Some("sk-ant-test")
+        );
+        assert_eq!(
+            headers
+                .get("anthropic-version")
+                .and_then(|value| value.to_str().ok()),
+            Some("2023-06-01")
+        );
+    }
+
+    #[test]
+    fn anthropic_test_connection_surfaces_upstream_error_body() {
+        let error = validate_anthropic_test_connection_response(
+            reqwest::StatusCode::PAYMENT_REQUIRED,
+            r#"{"error":{"message":"insufficient_balance"}}"#,
+        )
+        .expect_err("should fail")
+        .to_string();
+
+        assert!(error.contains("insufficient_balance"));
     }
 }

@@ -1,4 +1,5 @@
 use crate::agent::permissions::PermissionMode;
+use crate::model_errors::normalize_model_error;
 #[cfg(test)]
 use serde_json::Value;
 
@@ -90,62 +91,10 @@ pub(crate) fn infer_capability_from_user_message(message: &str) -> &'static str 
     "chat"
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ModelRouteErrorKind {
-    Billing,
-    Auth,
-    RateLimit,
-    Timeout,
-    Network,
-    Unknown,
-}
+pub(crate) use crate::model_errors::ModelErrorKind as ModelRouteErrorKind;
 
 pub(crate) fn classify_model_route_error(error_message: &str) -> ModelRouteErrorKind {
-    let lower = error_message.to_ascii_lowercase();
-    if lower.contains("insufficient_balance")
-        || lower.contains("insufficient balance")
-        || lower.contains("balance too low")
-        || lower.contains("account balance too low")
-        || lower.contains("insufficient_quota")
-        || lower.contains("insufficient quota")
-        || lower.contains("billing")
-        || lower.contains("payment required")
-        || lower.contains("credit balance")
-        || lower.contains("余额不足")
-        || lower.contains("欠费")
-    {
-        return ModelRouteErrorKind::Billing;
-    }
-    if lower.contains("api key")
-        || lower.contains("unauthorized")
-        || lower.contains("invalid_api_key")
-        || lower.contains("authentication")
-        || lower.contains("permission denied")
-        || lower.contains("forbidden")
-    {
-        return ModelRouteErrorKind::Auth;
-    }
-    if lower.contains("rate limit")
-        || lower.contains("too many requests")
-        || lower.contains("429")
-        || lower.contains("quota")
-    {
-        return ModelRouteErrorKind::RateLimit;
-    }
-    if lower.contains("timeout") || lower.contains("timed out") || lower.contains("deadline") {
-        return ModelRouteErrorKind::Timeout;
-    }
-    if lower.contains("connection")
-        || lower.contains("network")
-        || lower.contains("dns")
-        || lower.contains("connect")
-        || lower.contains("socket")
-        || lower.contains("error sending request for url")
-        || lower.contains("sending request for url")
-    {
-        return ModelRouteErrorKind::Network;
-    }
-    ModelRouteErrorKind::Unknown
+    normalize_model_error(error_message).kind
 }
 
 pub(crate) fn should_retry_same_candidate(kind: ModelRouteErrorKind) -> bool {

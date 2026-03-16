@@ -7,6 +7,7 @@ pub mod commands;
 mod db;
 mod diagnostics;
 pub mod im;
+mod model_errors;
 pub mod providers;
 pub mod session_journal;
 pub mod sidecar;
