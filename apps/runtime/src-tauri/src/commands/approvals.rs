@@ -1,4 +1,5 @@
 use super::chat::{ApprovalManagerState, PendingApprovalBridgeState};
+use super::feishu_gateway::notify_feishu_approval_resolved_with_pool;
 use super::skills::DbState;
 use crate::approval_bus::{ApprovalDecision, ApprovalResolveResult, PendingApprovalRecord};
 use serde::{Deserialize, Serialize};
@@ -141,6 +142,9 @@ pub async fn resolve_approval(
 
     if let Some(record) = load_approval_record_with_pool(&db.0, &approval_id).await? {
         let _ = app.emit("approval-resolved", &record);
+    }
+    if matches!(result, ApprovalResolveResult::Applied { .. }) {
+        let _ = notify_feishu_approval_resolved_with_pool(&db.0, &approval_id, None).await;
     }
 
     Ok(result)

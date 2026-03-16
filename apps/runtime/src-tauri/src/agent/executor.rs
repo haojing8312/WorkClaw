@@ -5,6 +5,7 @@ use super::types::{LLMResponse, StreamDelta, ToolContext, ToolResult};
 use crate::adapters;
 use crate::approval_bus::{ApprovalDecision, ApprovalManager, CreateApprovalRequest};
 use crate::commands::chat::{ApprovalManagerState, PendingApprovalBridgeState};
+use crate::commands::feishu_gateway::notify_feishu_approval_requested_with_pool;
 use crate::commands::session_runs::append_session_run_event_with_pool;
 use crate::commands::skills::DbState;
 use crate::session_journal::{SessionJournalStateHandle, SessionJournalStore, SessionRunEvent};
@@ -180,6 +181,14 @@ async fn request_tool_approval_and_wait(
             }),
         );
     }
+
+    let _ = notify_feishu_approval_requested_with_pool(
+        &runtime.pool,
+        session_id,
+        &record,
+        None,
+    )
+    .await;
 
     let resolution = runtime
         .approval_manager
