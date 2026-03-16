@@ -2310,7 +2310,7 @@ export function SettingsView({
               list="chat-primary-models"
               value={chatRoutingPolicy.primary_model}
               onChange={(e) => setChatRoutingPolicy((s) => ({ ...s, primary_model: e.target.value }))}
-              placeholder="例如: deepseek-chat / qwen-max / kimi-k2"
+              placeholder="例如: deepseek-chat / qwen3.5-plus / kimi-k2"
             />
             {chatPrimaryModels.length > 0 && (
               <datalist id="chat-primary-models">

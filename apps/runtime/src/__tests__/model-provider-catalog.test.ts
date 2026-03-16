@@ -44,6 +44,17 @@ describe("model provider catalog", () => {
     });
   });
 
+  test("prefers the current agent-oriented default models for official presets", () => {
+    const byId = (id: string) => MODEL_PROVIDER_CATALOG.find((entry) => entry.id === id);
+
+    expect(byId("zhipu")?.defaultModel).toBe("glm-5-turbo");
+    expect(byId("openai")?.defaultModel).toBe("gpt-5.4");
+    expect(byId("anthropic")?.defaultModel).toBe("claude-sonnet-4-5-20250929");
+    expect(byId("deepseek")?.defaultModel).toBe("deepseek-chat");
+    expect(byId("qwen-intl")?.defaultModel).toBe("qwen3.5-plus");
+    expect(byId("qwen-cn")?.defaultModel).toBe("qwen3.5-plus");
+  });
+
   test("uses MiniMax domestic defaults for official presets", () => {
     const openaiItem = MODEL_PROVIDER_CATALOG.find((entry) => entry.id === "minimax-openai");
     const anthropicItem = MODEL_PROVIDER_CATALOG.find(
@@ -61,7 +72,7 @@ describe("model provider catalog", () => {
     });
 
     expect(item.id).toBe("anthropic");
-    expect(item.models).toContain("claude-3-5-haiku-20241022");
+    expect(item.models).toContain("claude-sonnet-4-5-20250929");
   });
 
   test("falls back unknown openai configs to custom openai", () => {
