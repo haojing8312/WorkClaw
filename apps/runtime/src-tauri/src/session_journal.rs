@@ -1,3 +1,4 @@
+use crate::agent::run_guard::RunStopReason;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -188,6 +189,18 @@ pub enum SessionRunEvent {
     RunCompleted {
         run_id: String,
     },
+    RunGuardWarning {
+        run_id: String,
+        warning_kind: String,
+        title: String,
+        message: String,
+        detail: Option<String>,
+        last_completed_step: Option<String>,
+    },
+    RunStopped {
+        run_id: String,
+        stop_reason: RunStopReason,
+    },
     RunFailed {
         run_id: String,
         error_kind: String,
@@ -215,6 +228,8 @@ fn apply_event(state: &mut SessionJournalState, event: &SessionRunEvent) {
         | SessionRunEvent::ToolCompleted { run_id, .. }
         | SessionRunEvent::ApprovalRequested { run_id, .. }
         | SessionRunEvent::RunCompleted { run_id }
+        | SessionRunEvent::RunGuardWarning { run_id, .. }
+        | SessionRunEvent::RunStopped { run_id, .. }
         | SessionRunEvent::RunFailed { run_id, .. }
         | SessionRunEvent::RunCancelled { run_id, .. } => run_id.clone(),
     };
@@ -257,6 +272,19 @@ fn apply_event(state: &mut SessionJournalState, event: &SessionRunEvent) {
                 state.current_run_id = None;
             }
         }
+        SessionRunEvent::RunGuardWarning { .. } => {}
+        SessionRunEvent::RunStopped {
+            run_id,
+            stop_reason,
+        } => {
+            if state.current_run_id.as_deref() == Some(run_id.as_str()) {
+                state.current_run_id = None;
+            }
+            let run = &mut state.runs[run_index];
+            run.status = SessionRunStatus::Failed;
+            run.last_error_kind = Some(stop_reason.kind.as_key().to_string());
+            run.last_error_message = Some(format_run_stop_message(stop_reason));
+        }
         SessionRunEvent::RunFailed {
             run_id,
             error_kind,
@@ -288,6 +316,15 @@ fn upsert_run_index(state: &mut SessionJournalState, run_id: &str) -> usize {
     }
     state.runs.push(SessionRunSnapshot::new(run_id));
     state.runs.len() - 1
+}
+
+fn format_run_stop_message(stop_reason: &RunStopReason) -> String {
+    match stop_reason.last_completed_step.as_deref() {
+        Some(step) if !step.trim().is_empty() => {
+            format!("{}\n最后完成步骤：{}", stop_reason.message, step)
+        }
+        _ => stop_reason.message.clone(),
+    }
 }
 
 fn render_transcript_markdown(state: &SessionJournalState) -> String {

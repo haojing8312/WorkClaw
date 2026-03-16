@@ -46,7 +46,8 @@ pub async fn find_matching_approval_rule_with_pool(
     input: &Value,
 ) -> Result<Option<ApprovalRuleRecord>, String> {
     let normalized_tool_name = runtime_policy::normalize_tool_name(tool_name);
-    let Some(fingerprint) = runtime_policy::approval_rule_fingerprint(&normalized_tool_name, input) else {
+    let Some(fingerprint) = runtime_policy::approval_rule_fingerprint(&normalized_tool_name, input)
+    else {
         return Ok(None);
     };
 
@@ -91,7 +92,8 @@ pub async fn persist_allow_always_rule_with_tx(
     .bind(approval_id.trim())
     .fetch_optional(&mut **tx)
     .await
-    .map_err(|e| format!("读取 allow_always 来源审批失败: {e}"))? else {
+    .map_err(|e| format!("读取 allow_always 来源审批失败: {e}"))?
+    else {
         return Ok(None);
     };
 

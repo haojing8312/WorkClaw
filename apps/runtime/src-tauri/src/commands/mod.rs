@@ -1,5 +1,5 @@
-pub mod approvals;
 pub mod agent_profile;
+pub mod approvals;
 pub mod channel_connectors;
 pub mod chat;
 pub(crate) mod chat_compaction;

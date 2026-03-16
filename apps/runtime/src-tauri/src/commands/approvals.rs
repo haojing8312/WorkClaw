@@ -38,7 +38,8 @@ impl PendingApprovalProjection {
             },
             call_id: self.call_id,
             tool_name: self.tool_name,
-            input: serde_json::from_str::<Value>(&self.input_json).unwrap_or_else(|_| serde_json::json!({})),
+            input: serde_json::from_str::<Value>(&self.input_json)
+                .unwrap_or_else(|_| serde_json::json!({})),
             summary: self.summary,
             impact: if self.impact.trim().is_empty() {
                 None
@@ -82,7 +83,10 @@ pub async fn list_pending_approvals_with_pool(
         .map_err(|e| format!("读取待审批列表失败: {e}"))?
     };
 
-    Ok(rows.into_iter().map(PendingApprovalProjection::into_record).collect())
+    Ok(rows
+        .into_iter()
+        .map(PendingApprovalProjection::into_record)
+        .collect())
 }
 
 pub async fn load_approval_record_with_pool(

@@ -1,7 +1,8 @@
 use super::chat::{StreamToken, ToolConfirmResponder};
-use super::chat_policy::ModelRouteErrorKind;
+use super::chat_policy::{model_route_error_kind_for_stop_reason_kind, ModelRouteErrorKind};
 use super::chat_runtime_io as chat_io;
 use crate::agent::permissions::PermissionMode;
+use crate::agent::run_guard::{parse_run_stop_reason, RunStopReason};
 use crate::agent::types::StreamDelta;
 use crate::agent::AgentExecutor;
 use serde_json::Value;
@@ -13,6 +14,7 @@ pub(crate) struct RouteExecutionOutcome {
     pub final_messages: Option<Vec<Value>>,
     pub last_error: Option<String>,
     pub last_error_kind: Option<String>,
+    pub last_stop_reason: Option<RunStopReason>,
     pub partial_text: String,
     pub reasoning_text: String,
     pub reasoning_duration_ms: Option<u64>,
@@ -49,6 +51,7 @@ pub(crate) async fn execute_route_candidates(
     let mut final_messages_opt: Option<Vec<Value>> = None;
     let mut last_error: Option<String> = None;
     let mut last_error_kind: Option<String> = None;
+    let mut last_stop_reason: Option<RunStopReason> = None;
     let streamed_text = Arc::new(std::sync::Mutex::new(String::new()));
     let streamed_reasoning = Arc::new(std::sync::Mutex::new(String::new()));
 
@@ -173,6 +176,7 @@ pub(crate) async fn execute_route_candidates(
                         final_messages: final_messages_opt,
                         last_error,
                         last_error_kind,
+                        last_stop_reason,
                         partial_text: streamed_text
                             .lock()
                             .map(|buffer| buffer.clone())
@@ -183,8 +187,22 @@ pub(crate) async fn execute_route_candidates(
                 }
                 Err(err) => {
                     let err_text = err.to_string();
-                    let kind = (params.classify_error)(&err_text);
+                    let parsed_stop_reason = parse_run_stop_reason(&err_text);
+                    let kind = parsed_stop_reason
+                        .as_ref()
+                        .map(|reason| model_route_error_kind_for_stop_reason_kind(reason.kind))
+                        .unwrap_or_else(|| (params.classify_error)(&err_text));
                     let kind_text = (params.error_kind_key)(kind);
+                    let user_facing_error = parsed_stop_reason
+                        .as_ref()
+                        .map(|reason| {
+                            if let Some(step) = reason.last_completed_step.as_deref() {
+                                format!("{}\n最后完成步骤：{}", reason.message, step)
+                            } else {
+                                reason.message.clone()
+                            }
+                        })
+                        .unwrap_or_else(|| err_text.clone());
                     chat_io::record_route_attempt_log_with_pool(
                         params.db,
                         params.session_id,
@@ -195,7 +213,7 @@ pub(crate) async fn execute_route_candidates(
                         attempt_idx,
                         kind_text,
                         false,
-                        &err_text,
+                        &user_facing_error,
                     )
                     .await;
                     if reasoning_started_at
@@ -209,8 +227,9 @@ pub(crate) async fn execute_route_candidates(
                             serde_json::json!({ "session_id": params.session_id }),
                         );
                     }
-                    last_error = Some(err_text.clone());
+                    last_error = Some(user_facing_error.clone());
                     last_error_kind = Some(kind_text.to_string());
+                    last_stop_reason = parsed_stop_reason;
                     eprintln!(
                         "[routing] 候选模型执行失败: format={}, model={}, attempt={}, kind={:?}, err={}",
                         candidate_api_format,
@@ -256,6 +275,7 @@ pub(crate) async fn execute_route_candidates(
         final_messages: final_messages_opt,
         last_error,
         last_error_kind,
+        last_stop_reason,
         partial_text,
         reasoning_text,
         reasoning_duration_ms: None,

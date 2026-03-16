@@ -126,6 +126,7 @@ interface Props {
 
 interface PendingApprovalView {
   approvalId: string;
+  approvalRecordId?: string;
   sessionId: string;
   toolName: string;
   toolInput: Record<string, unknown>;
@@ -134,6 +135,7 @@ interface PendingApprovalView {
   impact?: string;
   irreversible?: boolean;
   status?: string;
+  usesLegacyConfirm?: boolean;
 }
 
 function shouldRenderCompletedJourneySummary(model: TaskJourneyViewModel) {
@@ -229,6 +231,10 @@ export function ChatView({
     state: string;
     detail?: string;
     iteration: number;
+    stopReasonKind?: string;
+    stopReasonTitle?: string;
+    stopReasonMessage?: string;
+    stopReasonLastCompletedStep?: string;
   } | null>(null);
   const [pendingApprovals, setPendingApprovals] = useState<PendingApprovalView[]>([]);
   const [resolvingApprovalId, setResolvingApprovalId] = useState<string | null>(null);
@@ -260,6 +266,7 @@ export function ChatView({
   const pendingApprovalsRef = useRef<PendingApprovalView[]>([]);
   const resolvingApprovalIdRef = useRef<string | null>(null);
   const subAgentBufferRef = useRef("");
+  const sessionIdRef = useRef(sessionId);
   const mainRoleNameRef = useRef("");
   const lastHandledSessionFocusNonceRef = useRef<number | null>(null);
   const messageElementRefs = useRef<Record<number, HTMLDivElement | null>>({});
@@ -337,6 +344,7 @@ export function ChatView({
     status?: string;
   }): PendingApprovalView => ({
     approvalId: payload.approval_id || `${payload.tool_name}-${Date.now()}`,
+    approvalRecordId: payload.approval_id || undefined,
     sessionId: payload.session_id,
     toolName: payload.tool_name,
     toolInput: payload.tool_input || payload.input || {},
@@ -345,12 +353,17 @@ export function ChatView({
     impact: payload.impact || undefined,
     irreversible: payload.irreversible,
     status: payload.status,
+    usesLegacyConfirm: !(payload.approval_id || "").trim(),
   });
 
   useEffect(() => {
     pendingApprovalsRef.current = pendingApprovals;
     resolvingApprovalIdRef.current = resolvingApprovalId;
   }, [pendingApprovals, resolvingApprovalId]);
+
+  useEffect(() => {
+    sessionIdRef.current = sessionId;
+  }, [sessionId]);
 
   function syncComposerHeight() {
     const el = textareaRef.current;
@@ -1058,6 +1071,10 @@ export function ChatView({
       state: string;
       detail: string | null;
       iteration: number;
+      stop_reason_kind?: string | null;
+      stop_reason_title?: string | null;
+      stop_reason_message?: string | null;
+      stop_reason_last_completed_step?: string | null;
     }>("agent-state-event", ({ payload }) => {
       if (payload.session_id !== sessionId) return;
       if (payload.state === "finished") {
@@ -1067,6 +1084,10 @@ export function ChatView({
           state: payload.state,
           detail: payload.detail ?? undefined,
           iteration: payload.iteration,
+          stopReasonKind: payload.stop_reason_kind ?? undefined,
+          stopReasonTitle: payload.stop_reason_title ?? undefined,
+          stopReasonMessage: payload.stop_reason_message ?? undefined,
+          stopReasonLastCompletedStep: payload.stop_reason_last_completed_step ?? undefined,
         });
       }
     });
@@ -1136,13 +1157,23 @@ export function ChatView({
       );
 
       for (const approval of staleApprovals) {
-        void invoke("resolve_approval", {
-          approvalId: approval.approvalId,
-          decision: "deny",
-          source: "desktop_cleanup",
-        }).catch((error) => {
-          console.error("自动拒绝待审批操作失败:", error);
-        });
+        if (approval.approvalRecordId) {
+          void invoke("resolve_approval", {
+            approvalId: approval.approvalRecordId,
+            decision: "deny",
+            source: "desktop_cleanup",
+          }).catch((error) => {
+            console.error("自动拒绝待审批操作失败:", error);
+          });
+          continue;
+        }
+        if (approval.usesLegacyConfirm) {
+          void invoke("confirm_tool_execution", {
+            confirmed: false,
+          }).catch((error) => {
+            console.error("自动拒绝旧版待审批操作失败:", error);
+          });
+        }
       }
     };
   }, [sessionId]);
@@ -2280,10 +2311,35 @@ export function ChatView({
     if (agentState.state === "tool_calling") {
       return agentState.detail ? `正在处理步骤：${agentState.detail}` : "正在处理步骤";
     }
+    if (agentState.state === "stopped") {
+      return agentState.stopReasonTitle || agentState.stopReasonMessage || agentState.detail || "任务已停止";
+    }
     if (agentState.state === "error") {
       return `执行异常：${agentState.detail || "未知错误"}`;
     }
     return agentState.detail || agentState.state;
+  }
+
+  function renderAgentStateIndicator() {
+    if (!agentState) return null;
+    if (agentState.state === "stopped") {
+      return <span className="inline-flex h-3 w-3 rounded-full bg-amber-400" />;
+    }
+    if (agentState.state === "error") {
+      return <span className="inline-flex h-3 w-3 rounded-full bg-red-400" />;
+    }
+    return <span className="animate-spin h-3 w-3 border-2 border-blue-400 border-t-transparent rounded-full" />;
+  }
+
+  function renderAgentStateSecondaryText() {
+    if (!agentState || agentState.state !== "stopped" || !agentState.stopReasonLastCompletedStep) {
+      return null;
+    }
+    return (
+      <span className="text-[11px] text-amber-700">
+        {`最后完成步骤：${agentState.stopReasonLastCompletedStep}`}
+      </span>
+    );
   }
 
   function handleViewFilesFromDelivery() {
@@ -2296,6 +2352,30 @@ export function ChatView({
       return {
         title: "任务已取消",
         message: run.error_message || "",
+        rawMessage: null as string | null,
+      };
+    }
+
+    if (run.error_kind === "max_turns") {
+      return {
+        title: "任务达到执行步数上限",
+        message: run.error_message || "已达到执行步数上限，系统已自动停止。",
+        rawMessage: null as string | null,
+      };
+    }
+
+    if (run.error_kind === "loop_detected") {
+      return {
+        title: "任务疑似卡住，已自动停止",
+        message: run.error_message || "系统检测到重复执行模式，已自动停止本轮任务。",
+        rawMessage: null as string | null,
+      };
+    }
+
+    if (run.error_kind === "no_progress") {
+      return {
+        title: "任务长时间没有进展",
+        message: run.error_message || "系统检测到任务在多轮执行后没有明显进展，已自动停止。",
         rawMessage: null as string | null,
       };
     }
@@ -2512,9 +2592,20 @@ export function ChatView({
           </div>
         )}
         {agentState && agentState.state !== "thinking" && (
-          <div className="sticky top-0 z-10 flex items-center gap-2 bg-white/80 backdrop-blur-lg px-4 py-2 rounded-xl text-xs text-gray-600 border border-gray-200 shadow-sm mx-4 mt-2">
-            <span className="animate-spin h-3 w-3 border-2 border-blue-400 border-t-transparent rounded-full" />
-            <span className={agentState.state === "error" ? "text-red-500" : undefined}>{getAgentStateLabel()}</span>
+          <div
+            className={`sticky top-0 z-10 flex items-center gap-2 bg-white/80 backdrop-blur-lg px-4 py-2 rounded-xl text-xs border shadow-sm mx-4 mt-2 ${
+              agentState.state === "stopped"
+                ? "text-amber-800 border-amber-200"
+                : agentState.state === "error"
+                ? "text-red-700 border-red-200"
+                : "text-gray-600 border-gray-200"
+            }`}
+          >
+            {renderAgentStateIndicator()}
+            <div className="flex min-w-0 flex-col">
+              <span className={agentState.state === "error" ? "text-red-500" : undefined}>{getAgentStateLabel()}</span>
+              {renderAgentStateSecondaryText()}
+            </div>
           </div>
         )}
         {(mainRoleName || primaryDelegationCard) && (

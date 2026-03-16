@@ -1,4 +1,7 @@
 use crate::agent::permissions::PermissionMode;
+use crate::agent::run_guard::{
+    parse_run_stop_reason, RunBudgetPolicy, RunBudgetScope, RunStopReasonKind,
+};
 use crate::agent::skill_config::SkillConfig;
 use crate::agent::tools::{EmployeeManageTool, MemoryTool};
 use crate::agent::{AgentExecutor, ToolRegistry};
@@ -2460,7 +2463,7 @@ fn build_group_step_system_prompt(
     (
         sections.join("\n"),
         Some(default_group_step_allowed_tools()),
-        skill_config.max_iterations.unwrap_or(8),
+        RunBudgetPolicy::resolve(RunBudgetScope::Employee, skill_config.max_iterations).max_turns,
     )
 }
 
@@ -2651,7 +2654,11 @@ async fn execute_group_step_in_employee_context_with_pool(
         Ok(final_messages) => final_messages,
         Err(error) => {
             let error_text = error.to_string();
-            if !error_text.contains("达到最大迭代次数") {
+            let stop_reason = match parse_run_stop_reason(&error_text) {
+                Some(reason) => reason,
+                None => return Err(error_text),
+            };
+            if stop_reason.kind != RunStopReasonKind::MaxTurns {
                 return Err(error_text);
             }
 
@@ -2659,7 +2666,10 @@ async fn execute_group_step_in_employee_context_with_pool(
                 &employee,
                 user_goal,
                 step_input,
-                &error_text,
+                stop_reason
+                    .detail
+                    .as_deref()
+                    .unwrap_or(stop_reason.message.as_str()),
             );
             let finished_at = chrono::Utc::now().to_rfc3339();
             sqlx::query(

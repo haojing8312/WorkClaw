@@ -130,6 +130,11 @@ fn clawhub_base_url() -> String {
         .unwrap_or_else(|| DEFAULT_CLAWHUB_BASE.to_string())
 }
 
+fn prefer_proxy_download_for_github_archives() -> bool {
+    let base = clawhub_base_url();
+    !base.eq_ignore_ascii_case(DEFAULT_CLAWHUB_BASE)
+}
+
 fn skillhub_catalog_url() -> String {
     std::env::var("SKILLHUB_CATALOG_URL")
         .ok()
@@ -732,6 +737,26 @@ fn extract_skill_md_from_zip_bytes(bytes: &[u8]) -> Result<String, String> {
 }
 
 async fn download_skill_zip_bytes(client: &Client, repo_url: &str) -> Result<Vec<u8>, String> {
+    if prefer_proxy_download_for_github_archives() {
+        let base = clawhub_base_url();
+        let download_url = format!(
+            "{}/api/v1/download?url={}",
+            base,
+            urlencoding::encode(repo_url.trim())
+        );
+        let resp = client
+            .get(&download_url)
+            .send()
+            .await
+            .map_err(|e| format!("下载失败: {}", e))?;
+        if resp.status().is_success() {
+            let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
+            if !bytes.is_empty() {
+                return Ok(bytes.to_vec());
+            }
+        }
+    }
+
     if let Some(urls) = build_github_archive_urls(repo_url) {
         for url in urls {
             let resp = client
@@ -2098,6 +2123,15 @@ mod tests {
             build_skillhub_download_url("a skill"),
             "https://lightmake.site/api/v1/download?slug=a%20skill"
         );
+    }
+
+    #[test]
+    fn custom_clawhub_base_prefers_proxy_download_for_github_archives() {
+        std::env::set_var("CLAWHUB_API_BASE", "http://127.0.0.1:8787");
+        let preference = prefer_proxy_download_for_github_archives();
+        std::env::remove_var("CLAWHUB_API_BASE");
+
+        assert!(preference);
     }
 
     #[test]

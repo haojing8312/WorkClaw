@@ -21,6 +21,13 @@ struct ExportToolCall {
     status: String,
 }
 
+#[derive(Debug, Clone)]
+struct ExportRunStopSummary {
+    title: String,
+    detail: Option<String>,
+    last_completed_step: Option<String>,
+}
+
 pub(crate) async fn create_session_with_pool(
     pool: &sqlx::SqlitePool,
     skill_id: String,
@@ -490,6 +497,8 @@ pub(crate) async fn export_session_markdown_with_pool(
     .await
     .map_err(|e| e.to_string())?;
     let tool_calls_by_run = load_export_tool_calls_with_pool(pool, session_id).await?;
+    let run_stop_summaries_by_run =
+        load_export_run_stop_summaries_with_pool(pool, session_id).await?;
     let assistant_run_ids_in_messages: HashSet<String> = messages
         .iter()
         .filter_map(|(role, _, _, _, run_id)| {
@@ -523,6 +532,7 @@ pub(crate) async fn export_session_markdown_with_pool(
                 &messages,
                 &state,
                 &tool_calls_by_run,
+                &run_stop_summaries_by_run,
                 &assistant_run_ids_in_messages,
             );
             if !recovered.is_empty() {
@@ -714,6 +724,41 @@ async fn load_export_tool_calls_with_pool(
     Ok(by_run)
 }
 
+async fn load_export_run_stop_summaries_with_pool(
+    pool: &sqlx::SqlitePool,
+    session_id: &str,
+) -> Result<HashMap<String, ExportRunStopSummary>, String> {
+    let rows = sqlx::query_as::<_, (String, String)>(
+        "SELECT run_id, payload_json
+         FROM session_run_events
+         WHERE session_id = ? AND event_type = 'run_stopped'
+         ORDER BY created_at ASC, id ASC",
+    )
+    .bind(session_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let mut by_run = HashMap::new();
+    for (run_id, payload_json) in rows {
+        let Ok(event) = serde_json::from_str::<SessionRunEvent>(&payload_json) else {
+            continue;
+        };
+        if let SessionRunEvent::RunStopped { stop_reason, .. } = event {
+            by_run.insert(
+                run_id,
+                ExportRunStopSummary {
+                    title: stop_reason.title,
+                    detail: stop_reason.detail,
+                    last_completed_step: stop_reason.last_completed_step,
+                },
+            );
+        }
+    }
+
+    Ok(by_run)
+}
+
 fn render_export_message_content(
     role: &str,
     content: &str,
@@ -868,6 +913,7 @@ fn render_recovered_run_sections(
     messages: &[(String, String, Option<String>, String, Option<String>)],
     state: &SessionJournalState,
     tool_calls_by_run: &HashMap<String, Vec<ExportToolCall>>,
+    run_stop_summaries_by_run: &HashMap<String, ExportRunStopSummary>,
     assistant_run_ids_in_messages: &HashSet<String>,
 ) -> String {
     let assistant_contents: Vec<&str> = messages
@@ -927,6 +973,21 @@ fn render_recovered_run_sections(
                 sections.push(format!("- error_kind: {}", error_kind));
             }
         }
+        if let Some(summary) = run_stop_summaries_by_run.get(&run.run_id) {
+            if !summary.title.trim().is_empty() {
+                sections.push(format!("- 停止原因：{}", summary.title.trim()));
+            }
+            if let Some(detail) = summary.detail.as_deref().map(str::trim) {
+                if !detail.is_empty() {
+                    sections.push(format!("- 停止详情：{}", detail));
+                }
+            }
+            if let Some(step) = summary.last_completed_step.as_deref().map(str::trim) {
+                if !step.is_empty() && !error_message.contains(step) {
+                    sections.push(format!("- 最后完成步骤：{}", step));
+                }
+            }
+        }
         if !error_message.is_empty() && !error_already_exported {
             sections.push(format!("- error_message: {}", error_message));
         }
@@ -957,10 +1018,17 @@ fn export_status_label(status: &SessionRunStatus) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{list_sessions_with_pool, render_user_content_parts, resolve_im_session_source};
+    use super::{
+        export_session_markdown_with_pool, list_sessions_with_pool, render_user_content_parts,
+        resolve_im_session_source,
+    };
+    use crate::agent::run_guard::RunStopReason;
     use crate::commands::chat_policy::permission_mode_label_for_display;
+    use crate::commands::session_runs::append_session_run_event_with_pool;
+    use crate::session_journal::{SessionJournalStore, SessionRunEvent};
     use serde_json::json;
     use sqlx::sqlite::SqlitePoolOptions;
+    use tempfile::tempdir;
 
     #[test]
     fn resolve_im_session_source_maps_wecom_and_feishu_labels() {
@@ -1210,6 +1278,126 @@ mod tests {
         assert_eq!(sessions[3]["id"], "session-general");
         assert_eq!(sessions[3]["display_title"], "帮我整理本周销售周报");
         assert_eq!(sessions[3]["employee_name"], "");
+    }
+
+    #[tokio::test]
+    async fn export_session_markdown_includes_structured_run_stopped_summary() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("create sqlite memory pool");
+
+        sqlx::query(
+            "CREATE TABLE sessions (
+                id TEXT PRIMARY KEY,
+                skill_id TEXT NOT NULL,
+                title TEXT,
+                created_at TEXT NOT NULL,
+                model_id TEXT NOT NULL,
+                permission_mode TEXT NOT NULL DEFAULT 'standard',
+                work_dir TEXT NOT NULL DEFAULT '',
+                employee_id TEXT NOT NULL DEFAULT '',
+                session_mode TEXT NOT NULL DEFAULT 'general',
+                team_id TEXT NOT NULL DEFAULT ''
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create sessions table");
+
+        sqlx::query(
+            "CREATE TABLE messages (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                content_json TEXT,
+                created_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create messages table");
+
+        sqlx::query(
+            "CREATE TABLE session_runs (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                user_message_id TEXT NOT NULL DEFAULT '',
+                assistant_message_id TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'queued',
+                buffered_text TEXT NOT NULL DEFAULT '',
+                error_kind TEXT NOT NULL DEFAULT '',
+                error_message TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create session_runs table");
+
+        sqlx::query(
+            "CREATE TABLE session_run_events (
+                id TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create session_run_events table");
+
+        sqlx::query(
+            "INSERT INTO sessions (id, skill_id, title, created_at, model_id, permission_mode, work_dir, employee_id, session_mode, team_id)
+             VALUES ('session-export', 'skill-1', '导出测试', '2026-03-16T00:00:00Z', 'model-1', 'standard', '', '', 'general', '')",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed session");
+
+        let journal_dir = tempdir().expect("journal tempdir");
+        let journal = SessionJournalStore::new(journal_dir.path().to_path_buf());
+
+        append_session_run_event_with_pool(
+            &pool,
+            &journal,
+            "session-export",
+            SessionRunEvent::RunStarted {
+                run_id: "run-stop-1".to_string(),
+                user_message_id: "user-1".to_string(),
+            },
+        )
+        .await
+        .expect("append run started");
+
+        append_session_run_event_with_pool(
+            &pool,
+            &journal,
+            "session-export",
+            SessionRunEvent::RunStopped {
+                run_id: "run-stop-1".to_string(),
+                stop_reason: RunStopReason::loop_detected(
+                    "工具 browser_snapshot 已连续 6 次返回相同结果。",
+                )
+                .with_last_completed_step("已填写封面标题"),
+            },
+        )
+        .await
+        .expect("append run stopped");
+
+        let markdown = export_session_markdown_with_pool(&pool, "session-export", Some(&journal))
+            .await
+            .expect("export markdown");
+
+        assert!(markdown.contains("## 恢复的运行记录"));
+        assert!(markdown.contains("任务疑似卡住，已自动停止"));
+        assert!(markdown.contains("工具 browser_snapshot 已连续 6 次返回相同结果。"));
+        assert!(markdown.contains("最后完成步骤：已填写封面标题"));
     }
 
     #[test]

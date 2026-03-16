@@ -87,10 +87,7 @@ fn skill_tool_accepts_skill_md_path_within_search_roots() {
         "---\nname: child-skill\nallowed_tools: \"read_file\"\n---\n\nChild prompt",
     );
 
-    let tool = SkillInvokeTool::new(
-        "sess-1".to_string(),
-        vec![actual_root.path().to_path_buf()],
-    );
+    let tool = SkillInvokeTool::new("sess-1".to_string(), vec![actual_root.path().to_path_buf()]);
     let ctx = ToolContext {
         work_dir: None,
         allowed_tools: None,

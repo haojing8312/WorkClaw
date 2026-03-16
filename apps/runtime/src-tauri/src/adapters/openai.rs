@@ -52,6 +52,12 @@ fn is_mock_write_file_from_user_path_base_url(base_url: &str) -> bool {
         .eq_ignore_ascii_case("http://mock-write-file-from-user-path")
 }
 
+fn is_mock_repeat_read_file_loop_base_url(base_url: &str) -> bool {
+    base_url
+        .trim()
+        .eq_ignore_ascii_case("http://mock-repeat-read-file-loop")
+}
+
 fn parse_last_user_tool_input(messages: &[Value]) -> Result<Value> {
     let last_user_content = messages
         .iter()
@@ -402,6 +408,13 @@ pub async fn chat_stream_with_tools(
             input: parse_last_user_tool_input(&messages)?,
         }]));
     }
+    if is_mock_repeat_read_file_loop_base_url(base_url) {
+        return Ok(LLMResponse::ToolCalls(vec![ToolCall {
+            id: "mock-repeat-read-file-loop".to_string(),
+            name: "read_file".to_string(),
+            input: json!({ "path": "loop.txt" }),
+        }]));
+    }
 
     let client = build_http_client()?;
 
@@ -465,6 +478,7 @@ pub async fn test_connection(base_url: &str, api_key: &str, model: &str) -> Resu
         || is_mock_tool_loop_base_url(base_url)
         || is_mock_repeat_invalid_write_file_base_url(base_url)
         || is_mock_write_file_from_user_path_base_url(base_url)
+        || is_mock_repeat_read_file_loop_base_url(base_url)
     {
         return Ok(true);
     }

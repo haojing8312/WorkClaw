@@ -1,5 +1,6 @@
 use crate::agent::permissions::PermissionMode;
 use crate::model_errors::normalize_model_error;
+use crate::agent::run_guard::{parse_run_stop_reason, RunStopReasonKind};
 #[cfg(test)]
 use serde_json::Value;
 
@@ -91,10 +92,102 @@ pub(crate) fn infer_capability_from_user_message(message: &str) -> &'static str 
     "chat"
 }
 
-pub(crate) use crate::model_errors::ModelErrorKind as ModelRouteErrorKind;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ModelRouteErrorKind {
+    Billing,
+    Auth,
+    RateLimit,
+    Timeout,
+    Network,
+    MaxTurns,
+    LoopDetected,
+    NoProgress,
+    Unknown,
+}
+
+pub(crate) fn model_route_error_kind_for_stop_reason_kind(
+    kind: RunStopReasonKind,
+) -> ModelRouteErrorKind {
+    match kind {
+        RunStopReasonKind::Timeout => ModelRouteErrorKind::Timeout,
+        RunStopReasonKind::MaxTurns | RunStopReasonKind::MaxSessionTurns => {
+            ModelRouteErrorKind::MaxTurns
+        }
+        RunStopReasonKind::LoopDetected | RunStopReasonKind::ToolFailureCircuitBreaker => {
+            ModelRouteErrorKind::LoopDetected
+        }
+        RunStopReasonKind::NoProgress => ModelRouteErrorKind::NoProgress,
+        _ => ModelRouteErrorKind::Unknown,
+    }
+}
 
 pub(crate) fn classify_model_route_error(error_message: &str) -> ModelRouteErrorKind {
-    normalize_model_error(error_message).kind
+    if let Some(reason) = parse_run_stop_reason(error_message) {
+        return model_route_error_kind_for_stop_reason_kind(reason.kind);
+    }
+
+    let lower = error_message.to_ascii_lowercase();
+    if lower.contains("达到最大迭代次数") || lower.contains("最大迭代次数") {
+        return ModelRouteErrorKind::MaxTurns;
+    }
+    if lower.contains("loop_detected") {
+        return ModelRouteErrorKind::LoopDetected;
+    }
+    if lower.contains("no_progress") || lower.contains("没有进展") {
+        return ModelRouteErrorKind::NoProgress;
+    }
+    if lower.contains("insufficient_balance")
+        || lower.contains("insufficient balance")
+        || lower.contains("balance too low")
+        || lower.contains("account balance too low")
+        || lower.contains("insufficient_quota")
+        || lower.contains("insufficient quota")
+        || lower.contains("billing")
+        || lower.contains("payment required")
+        || lower.contains("credit balance")
+        || lower.contains("余额不足")
+        || lower.contains("欠费")
+    {
+        return ModelRouteErrorKind::Billing;
+    }
+    if lower.contains("api key")
+        || lower.contains("unauthorized")
+        || lower.contains("invalid_api_key")
+        || lower.contains("authentication")
+        || lower.contains("permission denied")
+        || lower.contains("forbidden")
+    {
+        return ModelRouteErrorKind::Auth;
+    }
+    if lower.contains("rate limit")
+        || lower.contains("too many requests")
+        || lower.contains("429")
+        || lower.contains("quota")
+    {
+        return ModelRouteErrorKind::RateLimit;
+    }
+    if lower.contains("timeout") || lower.contains("timed out") || lower.contains("deadline") {
+        return ModelRouteErrorKind::Timeout;
+    }
+    if lower.contains("connection")
+        || lower.contains("network")
+        || lower.contains("dns")
+        || lower.contains("connect")
+        || lower.contains("socket")
+        || lower.contains("error sending request for url")
+        || lower.contains("sending request for url")
+    {
+        return ModelRouteErrorKind::Network;
+    }
+
+    match normalize_model_error(error_message).kind {
+        crate::model_errors::ModelErrorKind::Billing => ModelRouteErrorKind::Billing,
+        crate::model_errors::ModelErrorKind::Auth => ModelRouteErrorKind::Auth,
+        crate::model_errors::ModelErrorKind::RateLimit => ModelRouteErrorKind::RateLimit,
+        crate::model_errors::ModelErrorKind::Timeout => ModelRouteErrorKind::Timeout,
+        crate::model_errors::ModelErrorKind::Network => ModelRouteErrorKind::Network,
+        crate::model_errors::ModelErrorKind::Unknown => ModelRouteErrorKind::Unknown,
+    }
 }
 
 pub(crate) fn should_retry_same_candidate(kind: ModelRouteErrorKind) -> bool {
@@ -138,6 +231,9 @@ pub(crate) fn model_route_error_kind_key(kind: ModelRouteErrorKind) -> &'static 
         ModelRouteErrorKind::RateLimit => "rate_limit",
         ModelRouteErrorKind::Timeout => "timeout",
         ModelRouteErrorKind::Network => "network",
+        ModelRouteErrorKind::MaxTurns => "max_turns",
+        ModelRouteErrorKind::LoopDetected => "loop_detected",
+        ModelRouteErrorKind::NoProgress => "no_progress",
         ModelRouteErrorKind::Unknown => "unknown",
     }
 }
@@ -349,6 +445,16 @@ mod tests {
             "error sending request for url (https://api.minimax.io/anthropic/v1/messages)",
         );
         assert_eq!(kind, ModelRouteErrorKind::Network);
+    }
+
+    #[test]
+    fn classify_model_route_error_detects_structured_run_stop_reason() {
+        let kind = classify_model_route_error(
+            "__WORKCLAW_RUN_STOP__:{\"kind\":\"max_turns\",\"title\":\"任务达到执行步数上限\",\"message\":\"已达到执行步数上限，系统已自动停止。\",\"detail\":\"达到最大迭代次数 12\"}",
+        );
+        assert_eq!(kind, ModelRouteErrorKind::MaxTurns);
+        assert_eq!(model_route_error_kind_key(kind), "max_turns");
+        assert!(!should_retry_same_candidate(kind));
     }
 
     #[test]

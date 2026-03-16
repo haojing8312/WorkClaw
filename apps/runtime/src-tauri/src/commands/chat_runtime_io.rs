@@ -2,6 +2,7 @@ use super::employee_agents::maybe_handle_team_entry_session_message_with_pool;
 use super::session_runs::{
     append_session_run_event_with_pool, attach_assistant_message_to_run_with_pool,
 };
+use crate::agent::run_guard::RunStopReason;
 use crate::agent::AgentExecutor;
 use crate::session_journal::{SessionJournalStore, SessionRunEvent};
 use chrono::Utc;
@@ -232,6 +233,53 @@ pub(crate) async fn append_run_failed_with_pool(
         },
     )
     .await;
+}
+
+#[allow(dead_code)]
+pub(crate) async fn append_run_guard_warning_with_pool(
+    pool: &sqlx::SqlitePool,
+    journal: &SessionJournalStore,
+    session_id: &str,
+    run_id: &str,
+    warning_kind: &str,
+    title: &str,
+    message: &str,
+    detail: Option<&str>,
+    last_completed_step: Option<&str>,
+) -> Result<(), String> {
+    append_session_run_event_with_pool(
+        pool,
+        journal,
+        session_id,
+        SessionRunEvent::RunGuardWarning {
+            run_id: run_id.to_string(),
+            warning_kind: warning_kind.to_string(),
+            title: title.to_string(),
+            message: message.to_string(),
+            detail: detail.map(str::to_string),
+            last_completed_step: last_completed_step.map(str::to_string),
+        },
+    )
+    .await
+}
+
+pub(crate) async fn append_run_stopped_with_pool(
+    pool: &sqlx::SqlitePool,
+    journal: &SessionJournalStore,
+    session_id: &str,
+    run_id: &str,
+    stop_reason: &RunStopReason,
+) -> Result<(), String> {
+    append_session_run_event_with_pool(
+        pool,
+        journal,
+        session_id,
+        SessionRunEvent::RunStopped {
+            run_id: run_id.to_string(),
+            stop_reason: stop_reason.clone(),
+        },
+    )
+    .await
 }
 
 pub(crate) async fn append_partial_assistant_chunk_with_pool(
@@ -1051,11 +1099,11 @@ pub(crate) fn reconstruct_llm_messages(parsed: &Value, api_format: &str) -> Vec<
 #[cfg(test)]
 mod workspace_skill_projection_tests {
     use super::{
-        build_skill_roots, build_workspace_skill_markdown_path, build_workspace_skill_prompt_entries,
-        build_workspace_skill_prompt_entry, build_workspace_skills_prompt,
-        normalize_workspace_skill_dir_name, prepare_workspace_skills_prompt,
-        resolve_workspace_skill_runtime_entry, sync_workspace_skills_to_directory,
-        WorkspaceSkillContent, WorkspaceSkillPromptEntry,
+        build_skill_roots, build_workspace_skill_markdown_path,
+        build_workspace_skill_prompt_entries, build_workspace_skill_prompt_entry,
+        build_workspace_skills_prompt, normalize_workspace_skill_dir_name,
+        prepare_workspace_skills_prompt, resolve_workspace_skill_runtime_entry,
+        sync_workspace_skills_to_directory, WorkspaceSkillContent, WorkspaceSkillPromptEntry,
     };
     use chrono::Utc;
     use skillpack_rs::{pack, PackConfig, SkillManifest};
@@ -1893,5 +1941,141 @@ mod tests {
             .unwrap_or("")
             .contains("debug.ts"));
         assert_eq!(content[1]["type"].as_str(), Some("image_url"));
+    }
+}
+
+#[cfg(test)]
+mod run_guard_persistence_tests {
+    use super::{
+        append_run_guard_warning_with_pool, append_run_started_with_pool,
+        append_run_stopped_with_pool,
+    };
+    use crate::agent::run_guard::RunStopReason;
+    use crate::session_journal::SessionJournalStore;
+    use sqlx::sqlite::SqlitePoolOptions;
+    use tempfile::tempdir;
+
+    async fn setup_run_event_pool() -> sqlx::SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("create sqlite memory pool");
+
+        sqlx::query(
+            "CREATE TABLE session_runs (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                user_message_id TEXT NOT NULL DEFAULT '',
+                assistant_message_id TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'queued',
+                buffered_text TEXT NOT NULL DEFAULT '',
+                error_kind TEXT NOT NULL DEFAULT '',
+                error_message TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create session_runs table");
+
+        sqlx::query(
+            "CREATE TABLE session_run_events (
+                id TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create session_run_events table");
+
+        pool
+    }
+
+    #[tokio::test]
+    async fn append_run_stopped_event_persists_loop_detected_reason() {
+        let pool = setup_run_event_pool().await;
+        let journal_root = tempdir().expect("journal tempdir");
+        let journal = SessionJournalStore::new(journal_root.path().to_path_buf());
+        let stop_reason =
+            RunStopReason::loop_detected("工具 browser_snapshot 已连续 6 次返回相同结果。")
+                .with_last_completed_step("已填写封面标题");
+
+        append_run_started_with_pool(&pool, &journal, "session-1", "run-1", "user-1")
+            .await
+            .expect("append run started");
+        append_run_stopped_with_pool(&pool, &journal, "session-1", "run-1", &stop_reason)
+            .await
+            .expect("append run stopped");
+
+        let (event_type, payload_json): (String, String) = sqlx::query_as(
+            "SELECT event_type, payload_json
+             FROM session_run_events
+             WHERE run_id = 'run-1' AND event_type = 'run_stopped'
+             ORDER BY created_at DESC
+             LIMIT 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("query run_stopped event");
+        assert_eq!(event_type, "run_stopped");
+        assert!(payload_json.contains("\"kind\":\"loop_detected\""));
+        assert!(payload_json.contains("\"last_completed_step\":\"已填写封面标题\""));
+
+        let (status, error_kind, error_message): (String, String, String) = sqlx::query_as(
+            "SELECT status, error_kind, error_message
+             FROM session_runs
+             WHERE id = 'run-1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("query session run projection");
+        assert_eq!(status, "failed");
+        assert_eq!(error_kind, "loop_detected");
+        assert!(error_message.contains("最后完成步骤：已填写封面标题"));
+    }
+
+    #[tokio::test]
+    async fn append_run_guard_warning_event_persists_warning_payload() {
+        let pool = setup_run_event_pool().await;
+        let journal_root = tempdir().expect("journal tempdir");
+        let journal = SessionJournalStore::new(journal_root.path().to_path_buf());
+
+        append_run_started_with_pool(&pool, &journal, "session-2", "run-2", "user-2")
+            .await
+            .expect("append run started");
+        append_run_guard_warning_with_pool(
+            &pool,
+            &journal,
+            "session-2",
+            "run-2",
+            "loop_detected",
+            "任务可能即将卡住",
+            "系统检测到连续重复步骤，若继续无变化将自动停止。",
+            Some("工具 browser_snapshot 已连续 5 次使用相同输入执行。"),
+            Some("已填写封面标题"),
+        )
+        .await
+        .expect("append run guard warning");
+
+        let (event_type, payload_json): (String, String) = sqlx::query_as(
+            "SELECT event_type, payload_json
+             FROM session_run_events
+             WHERE run_id = 'run-2' AND event_type = 'run_guard_warning'
+             ORDER BY created_at DESC
+             LIMIT 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("query run_guard_warning event");
+
+        assert_eq!(event_type, "run_guard_warning");
+        assert!(payload_json.contains("\"warning_kind\":\"loop_detected\""));
+        assert!(payload_json.contains("\"last_completed_step\":\"已填写封面标题\""));
     }
 }

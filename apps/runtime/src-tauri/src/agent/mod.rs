@@ -1,8 +1,10 @@
+pub mod browser_progress;
 pub mod compactor;
 pub mod executor;
 pub mod group_orchestrator;
 pub mod permissions;
 pub mod registry;
+pub mod run_guard;
 pub mod skill_config;
 pub mod system_prompts;
 pub mod tools;

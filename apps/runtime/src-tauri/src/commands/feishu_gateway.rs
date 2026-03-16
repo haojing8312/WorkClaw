@@ -1,4 +1,6 @@
-use crate::approval_bus::{ApprovalDecision, ApprovalManager, ApprovalResolveResult, PendingApprovalRecord};
+use crate::approval_bus::{
+    ApprovalDecision, ApprovalManager, ApprovalResolveResult, PendingApprovalRecord,
+};
 use crate::commands::approvals::load_approval_record_with_pool;
 use crate::commands::chat::ApprovalManagerState;
 use crate::commands::employee_agents::{
@@ -624,9 +626,7 @@ fn build_feishu_approval_resolution_text(
 ) -> String {
     match result {
         ApprovalResolveResult::Applied {
-            status,
-            decision,
-            ..
+            status, decision, ..
         } => {
             let action = match decision {
                 ApprovalDecision::AllowOnce => "allow_once",
@@ -650,9 +650,7 @@ fn build_feishu_approval_resolution_text(
             )
         }
         ApprovalResolveResult::AlreadyResolved {
-            status,
-            decision,
-            ..
+            status, decision, ..
         } => {
             let decision_label = decision
                 .as_ref()
@@ -684,7 +682,8 @@ pub async fn notify_feishu_approval_requested_with_pool(
     record: &PendingApprovalRecord,
     sidecar_base_url: Option<String>,
 ) -> Result<(), String> {
-    let Some(thread_id) = lookup_feishu_thread_for_session_with_pool(pool, session_id).await? else {
+    let Some(thread_id) = lookup_feishu_thread_for_session_with_pool(pool, session_id).await?
+    else {
         return Ok(());
     };
 
@@ -711,11 +710,13 @@ pub async fn notify_feishu_approval_resolved_with_pool(
     .bind(approval_id.trim())
     .fetch_optional(pool)
     .await
-    .map_err(|e| format!("读取审批结果通知数据失败: {e}"))? else {
+    .map_err(|e| format!("读取审批结果通知数据失败: {e}"))?
+    else {
         return Ok(());
     };
 
-    let Some(thread_id) = lookup_feishu_thread_for_session_with_pool(pool, &row.session_id).await? else {
+    let Some(thread_id) = lookup_feishu_thread_for_session_with_pool(pool, &row.session_id).await?
+    else {
         return Ok(());
     };
 
@@ -738,7 +739,11 @@ pub async fn notify_feishu_approval_resolved_with_pool(
     let text = format!(
         "{} 处理人：{}。",
         build_feishu_approval_resolution_text(&row.id, &result, Some(&row.summary)),
-        if resolved_by.is_empty() { "unknown" } else { resolved_by }
+        if resolved_by.is_empty() {
+            "unknown"
+        } else {
+            resolved_by
+        }
     );
     send_feishu_text_message_with_pool(pool, &thread_id, &text, sidecar_base_url).await?;
     Ok(())

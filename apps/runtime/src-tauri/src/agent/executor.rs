@@ -1,5 +1,10 @@
+use super::browser_progress::BrowserProgressSnapshot;
 use super::permissions::PermissionMode;
 use super::registry::ToolRegistry;
+use super::run_guard::{
+    encode_run_stop_reason, ProgressFingerprint, ProgressGuard, RunBudgetPolicy, RunBudgetScope,
+    RunGuardWarning, RunStopReason,
+};
 use super::system_prompts::SystemPromptBuilder;
 use super::types::{LLMResponse, StreamDelta, ToolContext, ToolResult};
 use crate::adapters;
@@ -20,6 +25,8 @@ use runtime_executor_core::{
     DEFAULT_TOKEN_BUDGET, MAX_TOOL_OUTPUT_CHARS,
 };
 use serde_json::{json, Value};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -82,6 +89,30 @@ async fn append_tool_run_event(
     append_session_run_event_with_pool(&db_state.0, journal_state.0.as_ref(), session_id, event)
         .await
         .map_err(|err| anyhow!(err))
+}
+
+async fn append_run_guard_warning_event(
+    app: &AppHandle,
+    session_id: &str,
+    warning: &RunGuardWarning,
+) -> Result<()> {
+    let Some(run_id) = resolve_current_session_run_id(app, session_id).await else {
+        return Ok(());
+    };
+
+    append_tool_run_event(
+        app,
+        session_id,
+        SessionRunEvent::RunGuardWarning {
+            run_id,
+            warning_kind: warning.kind.as_key().to_string(),
+            title: warning.title.clone(),
+            message: warning.message.clone(),
+            detail: warning.detail.clone(),
+            last_completed_step: warning.last_completed_step.clone(),
+        },
+    )
+    .await
 }
 
 #[derive(Clone)]
@@ -393,6 +424,61 @@ pub struct AgentStateEvent {
     /// 工具名列表（tool_calling 时）或错误信息（error 时）
     pub detail: Option<String>,
     pub iteration: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_reason_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_reason_title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_reason_message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_reason_last_completed_step: Option<String>,
+}
+
+impl AgentStateEvent {
+    fn basic(
+        session_id: impl Into<String>,
+        state: impl Into<String>,
+        detail: Option<String>,
+        iteration: usize,
+    ) -> Self {
+        Self {
+            session_id: session_id.into(),
+            state: state.into(),
+            detail,
+            iteration,
+            stop_reason_kind: None,
+            stop_reason_title: None,
+            stop_reason_message: None,
+            stop_reason_last_completed_step: None,
+        }
+    }
+
+    fn stopped(session_id: impl Into<String>, iteration: usize, reason: &RunStopReason) -> Self {
+        Self {
+            session_id: session_id.into(),
+            state: "stopped".to_string(),
+            detail: reason
+                .detail
+                .clone()
+                .or_else(|| Some(reason.message.clone())),
+            iteration,
+            stop_reason_kind: Some(reason.kind.as_key().to_string()),
+            stop_reason_title: Some(reason.title.clone()),
+            stop_reason_message: Some(reason.message.clone()),
+            stop_reason_last_completed_step: reason.last_completed_step.clone(),
+        }
+    }
+}
+
+fn text_progress_signature(raw: &str) -> String {
+    let mut hasher = DefaultHasher::new();
+    raw.trim().hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+fn json_progress_signature(value: &Value) -> String {
+    let serialized = serde_json::to_string(value).unwrap_or_else(|_| value.to_string());
+    text_progress_signature(&serialized)
 }
 
 pub struct AgentExecutor {
@@ -514,7 +600,7 @@ impl AgentExecutor {
     pub fn new(registry: Arc<ToolRegistry>) -> Self {
         Self {
             registry,
-            max_iterations: 50,
+            max_iterations: RunBudgetPolicy::for_scope(RunBudgetScope::GeneralChat).max_turns,
             system_prompt_builder: SystemPromptBuilder::default(),
         }
     }
@@ -581,6 +667,8 @@ impl AgentExecutor {
             allowed_tools: allowed_tools.map(|tools| tools.to_vec()),
         };
         let max_iterations = max_iterations_override.unwrap_or(self.max_iterations);
+        let mut run_budget_policy = RunBudgetPolicy::for_scope(RunBudgetScope::GeneralChat);
+        run_budget_policy.max_turns = max_iterations;
         let route_node_timeout_secs = route_node_timeout_secs.unwrap_or(60).clamp(5, 600);
         let route_retry_count = route_retry_count.unwrap_or(0).clamp(0, 2);
         let mut iteration = 0;
@@ -591,6 +679,8 @@ impl AgentExecutor {
             None
         };
         let mut tool_failure_streak: Option<ToolFailureStreak> = None;
+        let mut progress_history: Vec<ProgressFingerprint> = Vec::new();
+        let mut latest_browser_progress: Option<BrowserProgressSnapshot> = None;
 
         loop {
             // 检查取消标志
@@ -600,12 +690,12 @@ impl AgentExecutor {
                     if let (Some(app), Some(sid)) = (app_handle, session_id) {
                         let _ = app.emit(
                             "agent-state-event",
-                            AgentStateEvent {
-                                session_id: sid.to_string(),
-                                state: "finished".to_string(),
-                                detail: Some("用户取消".to_string()),
+                            AgentStateEvent::basic(
+                                sid,
+                                "finished",
+                                Some("用户取消".to_string()),
                                 iteration,
-                            },
+                            ),
                         );
                     }
                     messages.push(json!({
@@ -617,19 +707,14 @@ impl AgentExecutor {
             }
 
             if iteration >= max_iterations {
-                // 发射 error 状态事件
+                let stop_reason = RunStopReason::max_turns(max_iterations);
                 if let (Some(app), Some(sid)) = (app_handle, session_id) {
                     let _ = app.emit(
                         "agent-state-event",
-                        AgentStateEvent {
-                            session_id: sid.to_string(),
-                            state: "error".to_string(),
-                            detail: Some(format!("达到最大迭代次数 {}", max_iterations)),
-                            iteration,
-                        },
+                        AgentStateEvent::stopped(sid, iteration, &stop_reason),
                     );
                 }
-                return Err(anyhow!("达到最大迭代次数 {}", max_iterations));
+                return Err(anyhow!(encode_run_stop_reason(&stop_reason)));
             }
             iteration += 1;
 
@@ -639,12 +724,7 @@ impl AgentExecutor {
             if let (Some(app), Some(sid)) = (app_handle, session_id) {
                 let _ = app.emit(
                     "agent-state-event",
-                    AgentStateEvent {
-                        session_id: sid.to_string(),
-                        state: "thinking".to_string(),
-                        detail: None,
-                        iteration,
-                    },
+                    AgentStateEvent::basic(sid, "thinking", None, iteration),
                 );
             }
 
@@ -725,12 +805,7 @@ impl AgentExecutor {
                     if let (Some(app), Some(sid)) = (app_handle, session_id) {
                         let _ = app.emit(
                             "agent-state-event",
-                            AgentStateEvent {
-                                session_id: sid.to_string(),
-                                state: "error".to_string(),
-                                detail: Some(err.to_string()),
-                                iteration,
-                            },
+                            AgentStateEvent::basic(sid, "error", Some(err.to_string()), iteration),
                         );
                     }
                     return Err(err);
@@ -751,12 +826,7 @@ impl AgentExecutor {
                     if let (Some(app), Some(sid)) = (app_handle, session_id) {
                         let _ = app.emit(
                             "agent-state-event",
-                            AgentStateEvent {
-                                session_id: sid.to_string(),
-                                state: "finished".to_string(),
-                                detail: None,
-                                iteration,
-                            },
+                            AgentStateEvent::basic(sid, "finished", None, iteration),
                         );
                     }
 
@@ -782,12 +852,12 @@ impl AgentExecutor {
                             tool_calls.iter().map(|tc| tc.name.as_str()).collect();
                         let _ = app.emit(
                             "agent-state-event",
-                            AgentStateEvent {
-                                session_id: sid.to_string(),
-                                state: "tool_calling".to_string(),
-                                detail: Some(tool_names.join(", ")),
+                            AgentStateEvent::basic(
+                                sid,
+                                "tool_calling",
+                                Some(tool_names.join(", ")),
                                 iteration,
-                            },
+                            ),
                         );
                     }
 
@@ -832,12 +902,12 @@ impl AgentExecutor {
                                 if let (Some(app), Some(sid)) = (app_handle, session_id) {
                                     let _ = app.emit(
                                         "agent-state-event",
-                                        AgentStateEvent {
-                                            session_id: sid.to_string(),
-                                            state: "finished".to_string(),
-                                            detail: Some("用户取消".to_string()),
+                                        AgentStateEvent::basic(
+                                            sid,
+                                            "finished",
+                                            Some("用户取消".to_string()),
                                             iteration,
-                                        },
+                                        ),
                                     );
                                 }
                                 messages.push(json!({
@@ -1332,6 +1402,26 @@ impl AgentExecutor {
                             }
                         }
 
+                        if !is_error {
+                            let browser_progress_snapshot =
+                                BrowserProgressSnapshot::from_tool_output(&call.name, &result);
+                            let input_signature = json_progress_signature(&call.input);
+                            let output_signature =
+                                if let Some(snapshot) = browser_progress_snapshot.as_ref() {
+                                    snapshot.progress_signature()
+                                } else {
+                                    text_progress_signature(&result)
+                                };
+                            if let Some(snapshot) = browser_progress_snapshot {
+                                latest_browser_progress = Some(snapshot);
+                            }
+                            progress_history.push(ProgressFingerprint::tool_result(
+                                call.name.clone(),
+                                input_signature,
+                                output_signature,
+                            ));
+                        }
+
                         tool_results.push(ToolResult {
                             tool_use_id: call.id.clone(),
                             content: result,
@@ -1408,15 +1498,44 @@ impl AgentExecutor {
                         if let (Some(app), Some(sid)) = (app_handle, session_id) {
                             let _ = app.emit(
                                 "agent-state-event",
-                                AgentStateEvent {
-                                    session_id: sid.to_string(),
-                                    state: "finished".to_string(),
-                                    detail: Some("重复工具失败已熔断".to_string()),
+                                AgentStateEvent::basic(
+                                    sid,
+                                    "finished",
+                                    Some("重复工具失败已熔断".to_string()),
                                     iteration,
-                                },
+                                ),
                             );
                         }
                         return Ok(messages);
+                    }
+
+                    let progress_evaluation =
+                        ProgressGuard::evaluate(&run_budget_policy, &progress_history);
+                    if let Some(mut warning) = progress_evaluation.warning {
+                        if let Some(last_completed_step) = latest_browser_progress
+                            .as_ref()
+                            .and_then(BrowserProgressSnapshot::last_completed_step)
+                        {
+                            warning = warning.with_last_completed_step(last_completed_step);
+                        }
+                        if let (Some(app), Some(sid)) = (app_handle, session_id) {
+                            let _ = append_run_guard_warning_event(app, sid, &warning).await;
+                        }
+                    }
+                    if let Some(mut stop_reason) = progress_evaluation.stop_reason {
+                        if let Some(last_completed_step) = latest_browser_progress
+                            .as_ref()
+                            .and_then(BrowserProgressSnapshot::last_completed_step)
+                        {
+                            stop_reason = stop_reason.with_last_completed_step(last_completed_step);
+                        }
+                        if let (Some(app), Some(sid)) = (app_handle, session_id) {
+                            let _ = app.emit(
+                                "agent-state-event",
+                                AgentStateEvent::stopped(sid, iteration, &stop_reason),
+                            );
+                        }
+                        return Err(anyhow!(encode_run_stop_reason(&stop_reason)));
                     }
 
                     // 继续下一轮迭代
@@ -1467,7 +1586,7 @@ mod tests {
             db_dir.path().join("approval-test.db").to_string_lossy()
         );
         let pool = SqlitePoolOptions::new()
-            .max_connections(1)
+            .max_connections(2)
             .connect(&db_url)
             .await
             .expect("connect sqlite");

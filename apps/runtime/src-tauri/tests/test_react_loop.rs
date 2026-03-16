@@ -1,4 +1,5 @@
 use runtime_lib::agent::permissions::PermissionMode;
+use runtime_lib::agent::run_guard::{parse_run_stop_reason, RunStopReasonKind};
 use runtime_lib::agent::{AgentExecutor, ToolRegistry};
 use runtime_lib::providers::{route_with_fallback, RouteFailureKind, RouteTarget, RoutingPolicy};
 use serde_json::json;
@@ -199,6 +200,49 @@ async fn test_react_loop_executes_absolute_nested_write_within_work_dir() {
         "unexpected final content: {:?}",
         last
     );
+
+    fs::remove_dir_all(&work_dir).unwrap();
+}
+
+#[tokio::test]
+async fn test_react_loop_progress_guard_stops_repeated_successful_tool_calls() {
+    let registry = Arc::new(ToolRegistry::with_file_tools());
+    let executor = AgentExecutor::with_max_iterations(Arc::clone(&registry), 12);
+    let work_dir = setup_work_dir("progress_guard_success_loop");
+    let repeated_file = work_dir.join("loop.txt");
+    fs::write(&repeated_file, "loop").unwrap();
+
+    let messages = vec![json!({
+        "role": "user",
+        "content": "请持续读取同一个文件"
+    })];
+
+    let result = executor
+        .execute_turn(
+            "openai",
+            "http://mock-repeat-read-file-loop",
+            "mock-key",
+            "gpt-4",
+            "You are a helpful assistant.",
+            messages,
+            |_token| {},
+            None,
+            None,
+            None,
+            PermissionMode::AcceptEdits,
+            None,
+            Some(work_dir.to_string_lossy().to_string()),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+
+    assert!(result.is_err(), "expected progress guard to stop the run");
+    let stop_reason =
+        parse_run_stop_reason(&result.unwrap_err().to_string()).expect("structured stop reason");
+    assert_eq!(stop_reason.kind, RunStopReasonKind::LoopDetected);
 
     fs::remove_dir_all(&work_dir).unwrap();
 }

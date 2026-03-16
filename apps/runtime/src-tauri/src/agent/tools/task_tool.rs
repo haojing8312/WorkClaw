@@ -1,4 +1,5 @@
 use crate::agent::permissions::PermissionMode;
+use crate::agent::run_guard::{parse_run_stop_reason, RunStopReasonKind};
 use crate::agent::types::{StreamDelta, Tool, ToolContext};
 use crate::agent::{AgentExecutor, ToolRegistry};
 use anyhow::{anyhow, Result};
@@ -252,7 +253,12 @@ impl Tool for TaskTool {
             }
             Err(e) => {
                 let err_str = e.to_string();
-                if err_str.contains("最大迭代次数") {
+                let stop_reason = parse_run_stop_reason(&err_str);
+                if stop_reason
+                    .as_ref()
+                    .map(|reason| reason.kind == RunStopReasonKind::MaxTurns)
+                    .unwrap_or_else(|| err_str.contains("最大迭代次数"))
+                {
                     Ok(format!(
                         "子 Agent ({}, 角色: {}) 达到最大迭代次数 ({}):\n\n最后状态: 未完成",
                         agent_type_display, delegate_display_name, max_iter

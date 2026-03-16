@@ -8,6 +8,7 @@ use super::chat_route_execution::{self, RouteExecutionOutcome, RouteExecutionPar
 use super::chat_runtime_io as chat_io;
 use super::chat_tool_setup::{self, PreparedRuntimeTools, ToolSetupParams};
 use crate::agent::permissions::PermissionMode;
+use crate::agent::run_guard::{RunBudgetPolicy, RunBudgetScope};
 use crate::agent::AgentExecutor;
 use crate::session_journal::SessionJournalStore;
 use runtime_chat_app::{ChatExecutionPreparationRequest, ChatExecutionPreparationService};
@@ -245,7 +246,12 @@ pub(crate) async fn prepare_send_message_context(
         }
     }
     let skill_config = crate::agent::skill_config::SkillConfig::parse(&raw_prompt);
-    let max_iter = skill_config.max_iterations.unwrap_or(10);
+    let budget_scope = if skill_id.trim().eq_ignore_ascii_case("builtin-general") {
+        RunBudgetScope::GeneralChat
+    } else {
+        RunBudgetScope::Skill
+    };
+    let max_iter = RunBudgetPolicy::resolve(budget_scope, skill_config.max_iterations).max_turns;
 
     let prepared_runtime_tools = chat_tool_setup::prepare_runtime_tools(ToolSetupParams {
         app: params.app,
@@ -280,7 +286,7 @@ pub(crate) async fn prepare_send_message_context(
         permission_mode,
         executor_work_dir: execution_preparation_service
             .resolve_executor_work_dir(&execution_guidance),
-        max_iterations: skill_config.max_iterations,
+        max_iterations: Some(max_iter),
         node_timeout_seconds: chat_preparation.node_timeout_seconds,
         route_retry_count: chat_preparation.retry_count,
     })
@@ -316,15 +322,26 @@ pub(crate) async fn finalize_send_message_execution(
             let error_kind = route_execution
                 .last_error_kind
                 .unwrap_or_else(|| "unknown".to_string());
-            chat_io::append_run_failed_with_pool(
-                db,
-                journal,
-                session_id,
-                run_id,
-                &error_kind,
-                &error_message,
-            )
-            .await;
+            if let Some(stop_reason) = route_execution.last_stop_reason.as_ref() {
+                let _ = chat_io::append_run_stopped_with_pool(
+                    db,
+                    journal,
+                    session_id,
+                    run_id,
+                    stop_reason,
+                )
+                .await;
+            } else {
+                chat_io::append_run_failed_with_pool(
+                    db,
+                    journal,
+                    session_id,
+                    run_id,
+                    &error_kind,
+                    &error_message,
+                )
+                .await;
+            }
             let _ = app.emit(
                 "stream-token",
                 StreamToken {

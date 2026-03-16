@@ -175,11 +175,35 @@ pub async fn append_session_run_event_with_pool(
             .await
             .map_err(|e| format!("写入 approval 投影失败: {e}"))?;
 
-            upsert_run_status(pool, &run_id, session_id, "waiting_approval", &now, None, None)
-                .await?;
+            upsert_run_status(
+                pool,
+                &run_id,
+                session_id,
+                "waiting_approval",
+                &now,
+                None,
+                None,
+            )
+            .await?;
         }
         SessionRunEvent::RunCompleted { run_id } => {
             upsert_run_status(pool, &run_id, session_id, "completed", &now, None, None).await?;
+        }
+        SessionRunEvent::RunGuardWarning { .. } => {}
+        SessionRunEvent::RunStopped {
+            run_id,
+            stop_reason,
+        } => {
+            upsert_run_status(
+                pool,
+                &run_id,
+                session_id,
+                "failed",
+                &now,
+                Some(stop_reason.kind.as_key().to_string()),
+                Some(format_run_stop_message(&stop_reason)),
+            )
+            .await?;
         }
         SessionRunEvent::RunFailed {
             run_id,
@@ -286,6 +310,8 @@ fn event_type(event: &SessionRunEvent) -> &'static str {
         SessionRunEvent::ToolCompleted { .. } => "tool_completed",
         SessionRunEvent::ApprovalRequested { .. } => "approval_requested",
         SessionRunEvent::RunCompleted { .. } => "run_completed",
+        SessionRunEvent::RunGuardWarning { .. } => "run_guard_warning",
+        SessionRunEvent::RunStopped { .. } => "run_stopped",
         SessionRunEvent::RunFailed { .. } => "run_failed",
         SessionRunEvent::RunCancelled { .. } => "run_cancelled",
     }
@@ -299,7 +325,18 @@ fn event_run_id(event: &SessionRunEvent) -> &str {
         | SessionRunEvent::ToolCompleted { run_id, .. }
         | SessionRunEvent::ApprovalRequested { run_id, .. }
         | SessionRunEvent::RunCompleted { run_id }
+        | SessionRunEvent::RunGuardWarning { run_id, .. }
+        | SessionRunEvent::RunStopped { run_id, .. }
         | SessionRunEvent::RunFailed { run_id, .. }
         | SessionRunEvent::RunCancelled { run_id, .. } => run_id.as_str(),
+    }
+}
+
+fn format_run_stop_message(stop_reason: &crate::agent::run_guard::RunStopReason) -> String {
+    match stop_reason.last_completed_step.as_deref() {
+        Some(step) if !step.trim().is_empty() => {
+            format!("{}\n最后完成步骤：{}", stop_reason.message, step)
+        }
+        _ => stop_reason.message.clone(),
     }
 }
