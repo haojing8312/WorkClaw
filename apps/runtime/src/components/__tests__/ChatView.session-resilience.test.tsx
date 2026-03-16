@@ -229,6 +229,61 @@ describe("ChatView session resilience", () => {
     expect(assistantMessage.compareDocumentPosition(failureCard) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  test("restores buffered assistant output for an active run when reopening a session", async () => {
+    messagesResponse = [
+      {
+        id: "user-1",
+        role: "user",
+        content: "继续执行旧任务",
+        created_at: "2026-03-16T00:00:01Z",
+      },
+    ];
+    sessionRunsResponse = [
+      {
+        id: "run-active-1",
+        session_id: "sess-recover",
+        user_message_id: "user-1",
+        assistant_message_id: null,
+        status: "thinking",
+        buffered_text: "这是切回会话后应恢复的中间输出",
+        error_kind: null,
+        error_message: null,
+        created_at: "2026-03-16T00:00:02Z",
+        updated_at: "2026-03-16T00:00:03Z",
+      },
+    ];
+
+    render(
+      <ChatView
+        skill={{
+          id: "builtin-general",
+          name: "General",
+          description: "desc",
+          version: "1.0.0",
+          author: "test",
+          recommended_model: "",
+          tags: [],
+          created_at: new Date().toISOString(),
+        }}
+        models={[
+          {
+            id: "m1",
+            name: "model",
+            api_format: "openai",
+            base_url: "https://example.com",
+            model_name: "model",
+            is_default: true,
+          },
+        ]}
+        sessionId="sess-recover"
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("这是切回会话后应恢复的中间输出")).toBeInTheDocument();
+    });
+  });
+
   test("still sends the initial message after the parent clears the pending value", async () => {
     vi.useFakeTimers();
 

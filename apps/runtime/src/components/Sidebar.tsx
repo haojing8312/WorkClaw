@@ -2,13 +2,17 @@ import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   BrainCog,
+  CheckCircle2,
+  CircleAlert,
   CirclePlay,
   Download,
   History,
+  LoaderCircle,
   PanelLeftClose,
   PanelLeftOpen,
   Search,
   Settings2,
+  ShieldAlert,
   Trash2,
   Users,
 } from "lucide-react";
@@ -63,6 +67,43 @@ export function Sidebar({
 
   function getSessionDisplayTitle(session: SessionInfo): string {
     return (session.display_title || session.title || "").trim() || "未命名任务";
+  }
+
+  function getSessionRuntimeStatusMeta(session: SessionInfo): {
+    label: string;
+    className: string;
+    icon: JSX.Element;
+  } | null {
+    const runtimeStatus = (session.runtime_status || "").trim().toLowerCase();
+    if (runtimeStatus === "running") {
+      return {
+        label: "执行中",
+        className: "text-blue-600",
+        icon: <LoaderCircle className="h-3.5 w-3.5 animate-spin" />,
+      };
+    }
+    if (runtimeStatus === "waiting_approval") {
+      return {
+        label: "等待确认",
+        className: "text-amber-600",
+        icon: <ShieldAlert className="h-3.5 w-3.5" />,
+      };
+    }
+    if (runtimeStatus === "completed") {
+      return {
+        label: "已完成",
+        className: "text-emerald-600",
+        icon: <CheckCircle2 className="h-3.5 w-3.5" />,
+      };
+    }
+    if (runtimeStatus === "failed") {
+      return {
+        label: "执行失败",
+        className: "text-rose-600",
+        icon: <CircleAlert className="h-3.5 w-3.5" />,
+      };
+    }
+    return null;
   }
 
   useEffect(() => {
@@ -216,6 +257,7 @@ export function Sidebar({
                   const sourceChannel = (s.source_channel || "").trim().toLowerCase();
                   const isImSession = sourceChannel.length > 0 && sourceChannel !== "local";
                   const badgeText = sourceLabel || sourceChannel || "IM";
+                  const runtimeStatusMeta = getSessionRuntimeStatusMeta(s);
                   return (
                     <motion.div
                       key={s.id}
@@ -232,6 +274,15 @@ export function Sidebar({
                     >
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 min-w-0">
+                          {runtimeStatusMeta && (
+                            <span
+                              data-testid={`session-runtime-status-${s.id}`}
+                              title={runtimeStatusMeta.label}
+                              className={`inline-flex flex-shrink-0 ${runtimeStatusMeta.className}`}
+                            >
+                              {runtimeStatusMeta.icon}
+                            </span>
+                          )}
                           <div className="truncate text-[13px]">{getSessionDisplayTitle(s)}</div>
                           {isImSession && (
                             <span

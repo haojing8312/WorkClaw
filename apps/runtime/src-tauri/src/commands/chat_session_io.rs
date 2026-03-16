@@ -162,6 +162,40 @@ pub(crate) async fn list_sessions_with_pool(
     pool: &sqlx::SqlitePool,
     permission_mode_label_for_display: fn(&str) -> &'static str,
 ) -> Result<Vec<Value>, String> {
+    let runtime_status_rows = sqlx::query_as::<_, (String, Option<String>)>(
+        "SELECT
+            s.id,
+            (
+                SELECT CASE
+                    WHEN sr.status = 'waiting_approval' THEN 'waiting_approval'
+                    WHEN sr.status IN ('thinking', 'tool_calling', 'waiting_user') THEN 'running'
+                    WHEN sr.status = 'completed' THEN 'completed'
+                    WHEN sr.status IN ('failed', 'cancelled') THEN 'failed'
+                    ELSE NULL
+                END
+                FROM session_runs sr
+                WHERE sr.session_id = s.id
+                ORDER BY
+                    CASE
+                        WHEN sr.status = 'waiting_approval' THEN 0
+                        WHEN sr.status IN ('thinking', 'tool_calling', 'waiting_user') THEN 1
+                        ELSE 2
+                    END,
+                    sr.updated_at DESC,
+                    sr.created_at DESC,
+                    sr.id DESC
+                LIMIT 1
+            ) AS runtime_status
+         FROM sessions s",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    let runtime_status_by_session_id = runtime_status_rows
+        .into_iter()
+        .map(|(session_id, runtime_status)| (session_id, runtime_status))
+        .collect::<std::collections::HashMap<_, _>>();
+
     let rows = sqlx::query_as::<
         _,
         (
@@ -277,6 +311,10 @@ pub(crate) async fn list_sessions_with_pool(
             .cloned()
             .unwrap_or_default();
         let (source_channel, source_label) = resolve_im_session_source(Some(&im_source_channel));
+        let runtime_status = runtime_status_by_session_id
+            .get(&id)
+            .cloned()
+            .flatten();
         let display_title = derive_session_display_title_with_pool(
             pool,
             &id,
@@ -304,6 +342,7 @@ pub(crate) async fn list_sessions_with_pool(
             "permission_mode_label": permission_mode_label_for_display(&permission_mode),
             "source_channel": source_channel,
             "source_label": source_label,
+            "runtime_status": runtime_status,
         }));
     }
 
@@ -1210,6 +1249,143 @@ mod tests {
         assert_eq!(sessions[3]["id"], "session-general");
         assert_eq!(sessions[3]["display_title"], "帮我整理本周销售周报");
         assert_eq!(sessions[3]["employee_name"], "");
+    }
+
+    #[tokio::test]
+    async fn list_sessions_with_pool_projects_runtime_status() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("create sqlite memory pool");
+
+        sqlx::query(
+            "CREATE TABLE sessions (
+                id TEXT PRIMARY KEY,
+                skill_id TEXT NOT NULL,
+                title TEXT,
+                created_at TEXT NOT NULL,
+                model_id TEXT NOT NULL,
+                permission_mode TEXT NOT NULL DEFAULT 'standard',
+                work_dir TEXT NOT NULL DEFAULT '',
+                employee_id TEXT NOT NULL DEFAULT '',
+                session_mode TEXT NOT NULL DEFAULT 'general',
+                team_id TEXT NOT NULL DEFAULT ''
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create sessions table");
+
+        sqlx::query(
+            "CREATE TABLE messages (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                content_json TEXT,
+                created_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create messages table");
+
+        sqlx::query(
+            "CREATE TABLE im_thread_sessions (
+                thread_id TEXT NOT NULL,
+                employee_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                route_session_key TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                channel TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY (thread_id, employee_id)
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create im_thread_sessions table");
+
+        sqlx::query(
+            "CREATE TABLE agent_employees (
+                id TEXT PRIMARY KEY,
+                employee_id TEXT NOT NULL DEFAULT '',
+                name TEXT NOT NULL,
+                role_id TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create agent_employees table");
+
+        sqlx::query(
+            "CREATE TABLE employee_groups (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create employee_groups table");
+
+        sqlx::query(
+            "CREATE TABLE session_runs (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                user_message_id TEXT NOT NULL,
+                assistant_message_id TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL,
+                buffered_text TEXT NOT NULL DEFAULT '',
+                error_kind TEXT NOT NULL DEFAULT '',
+                error_message TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create session_runs table");
+
+        sqlx::query(
+            "INSERT INTO sessions (id, skill_id, title, created_at, model_id, permission_mode, work_dir, employee_id, session_mode, team_id)
+             VALUES
+             ('session-failed', 'skill-1', '失败会话', '2026-03-16T00:00:04Z', 'model-1', 'standard', '', '', 'general', ''),
+             ('session-completed', 'skill-1', '完成会话', '2026-03-16T00:00:03Z', 'model-1', 'standard', '', '', 'general', ''),
+             ('session-waiting', 'skill-1', '审批会话', '2026-03-16T00:00:02Z', 'model-1', 'standard', '', '', 'general', ''),
+             ('session-running', 'skill-1', '运行会话', '2026-03-16T00:00:01Z', 'model-1', 'standard', '', '', 'general', ''),
+             ('session-idle', 'skill-1', '空闲会话', '2026-03-16T00:00:00Z', 'model-1', 'standard', '', '', 'general', '')",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed sessions");
+
+        sqlx::query(
+            "INSERT INTO session_runs (id, session_id, user_message_id, assistant_message_id, status, buffered_text, error_kind, error_message, created_at, updated_at)
+             VALUES
+             ('run-failed', 'session-failed', 'user-1', '', 'failed', '', 'billing', '额度不足', '2026-03-16T00:00:04Z', '2026-03-16T00:00:05Z'),
+             ('run-completed', 'session-completed', 'user-2', 'assistant-2', 'completed', '已完成', '', '', '2026-03-16T00:00:03Z', '2026-03-16T00:00:04Z'),
+             ('run-waiting', 'session-waiting', 'user-3', '', 'waiting_approval', '等待确认', '', '', '2026-03-16T00:00:02Z', '2026-03-16T00:00:06Z'),
+             ('run-running', 'session-running', 'user-4', '', 'thinking', '执行中', '', '', '2026-03-16T00:00:01Z', '2026-03-16T00:00:07Z')",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed session_runs");
+
+        let sessions = list_sessions_with_pool(&pool, permission_mode_label_for_display)
+            .await
+            .expect("list sessions should succeed");
+
+        assert_eq!(sessions[0]["id"], "session-failed");
+        assert_eq!(sessions[0]["runtime_status"], "failed");
+        assert_eq!(sessions[1]["id"], "session-completed");
+        assert_eq!(sessions[1]["runtime_status"], "completed");
+        assert_eq!(sessions[2]["id"], "session-waiting");
+        assert_eq!(sessions[2]["runtime_status"], "waiting_approval");
+        assert_eq!(sessions[3]["id"], "session-running");
+        assert_eq!(sessions[3]["runtime_status"], "running");
+        assert_eq!(sessions[4]["id"], "session-idle");
+        assert!(sessions[4]["runtime_status"].is_null());
     }
 
     #[test]
