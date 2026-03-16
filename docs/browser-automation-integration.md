@@ -1,6 +1,8 @@
 # 浏览器自动化集成（本地实现）
 
-本文档说明 WorkClaw 当前版本的浏览器自动化能力（纯本地 sidecar + Playwright），不依赖任何外部 OpenClaw 服务，也不依赖新的 IM 连接器边界。
+本文档说明 WorkClaw 当前版本的浏览器自动化能力（纯本地 sidecar + Playwright），以及面向 OpenClaw browser skill 的 P0 兼容层。
+
+当前实现不依赖任何外部 OpenClaw 服务，也不需要 `openclaw browser start` 一类额外进程。
 
 ## 能力范围
 
@@ -8,6 +10,70 @@
 - `browser_snapshot` 生成页面快照与 `ref -> selector` 映射
 - `browser_act` 基于 `ref` 或 `selector` 执行动作
 - 兼容原有 `browser_*` 工具（navigate/click/type/scroll/...）
+- 新增统一 `browser` 兼容工具，面向 OpenClaw 风格 skill
+
+## OpenClaw Browser Compat（P0）
+
+P0 兼容层的目标是跑通 `xiaohongshu-ops-skill` 一类 browser-heavy skill 的“半程发布链路”，不是完整复刻 OpenClaw runtime。
+
+### 统一工具名
+
+运行时会在会话级动态注册以下兼容工具名：
+
+- `browser`
+- `read`
+- `find`
+- `ls`
+- `exec`
+
+这些别名只在聊天运行时暴露，不会污染 `ToolRegistry::with_standard_tools()` 的静态标准工具集合。
+
+### browser(action=...) 支持范围
+
+P0 已支持：
+
+- `start`
+- `status`
+- `profiles`
+- `tabs`
+- `open`
+- `focus`
+- `snapshot`
+- `act`
+- `upload`
+
+### profile 约束
+
+P0 仅支持：
+
+- `profile="openclaw"`
+
+不支持：
+
+- `profile="chrome"`
+- OpenClaw relay / node / sandbox 模式
+
+### 持久 profile 与 targetId
+
+- `openclaw` profile 使用持久化 Playwright context，登录态会保存在 WorkClaw 自己的目录下
+- compat 层维护真实 `targetId -> page` 映射
+- `snapshot` / `act` / `upload` 都可按 `targetId` 作用于指定 tab
+
+### 上传兼容
+
+- `browser(action="upload")` 支持普通本地文件路径
+- 也兼容 `/tmp/openclaw/uploads/...` 这种 OpenClaw 风格路径
+- WorkClaw 会把上传文件映射/暂存到自有 staging 目录后再交给 Playwright
+
+### 诊断日志
+
+compat 层会在 sidecar 日志中输出：
+
+- `action`
+- `profile`
+- `targetId`
+
+便于排查 OpenClaw 风格 skill 的运行问题。
 
 浏览器自动化与 IM 连接器解耦：
 
