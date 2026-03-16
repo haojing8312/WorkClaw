@@ -1616,10 +1616,38 @@ export function ChatView({
   const currentModel = getDefaultModel(models);
   const thinkingSupport = useMemo(() => getThinkingSupport(currentModel), [currentModel]);
   const installedSkillSet = new Set(installedSkillIds);
+  const recoverableSessionRun = useMemo(() => {
+    return [...sessionRuns]
+      .reverse()
+      .find((run) => {
+        const status = (run.status || "").trim().toLowerCase();
+        const hasAssistantMessage = (run.assistant_message_id || "").trim().length > 0;
+        const bufferedText = (run.buffered_text || "").trim();
+        return (
+          !hasAssistantMessage &&
+          bufferedText.length > 0 &&
+          ["thinking", "tool_calling", "waiting_approval"].includes(status)
+        );
+      }) ?? null;
+  }, [sessionRuns]);
+  const recoveredAssistantMessage = useMemo<Message | null>(() => {
+    if (!recoverableSessionRun) return null;
+    return {
+      id: `recovered-run-${recoverableSessionRun.id}`,
+      role: "assistant",
+      content: recoverableSessionRun.buffered_text,
+      created_at: recoverableSessionRun.updated_at || recoverableSessionRun.created_at,
+      runId: recoverableSessionRun.id,
+    };
+  }, [recoverableSessionRun]);
+  const renderedMessages = useMemo<Message[]>(
+    () => (recoveredAssistantMessage ? [...messages, recoveredAssistantMessage] : messages),
+    [messages, recoveredAssistantMessage]
+  );
   const sidePanelMessages = useMemo<Message[]>(() => {
-    if (streamItems.length === 0) return messages;
+    if (streamItems.length === 0) return renderedMessages;
     return [
-      ...messages,
+      ...renderedMessages,
       {
         role: "assistant",
         content: "",
@@ -1627,7 +1655,7 @@ export function ChatView({
         streamItems,
       },
     ];
-  }, [messages, streamItems]);
+  }, [renderedMessages, streamItems]);
   const taskPanelModel = useMemo(() => buildTaskPanelViewModel(sidePanelMessages), [sidePanelMessages]);
   const webSearchEntries = useMemo(() => buildWebSearchViewModel(sidePanelMessages), [sidePanelMessages]);
   const failedSessionRuns = useMemo(
@@ -2982,8 +3010,8 @@ export function ChatView({
             )}
           </div>
         )}
-        {messages.map((m, i) => {
-          const isLatest = i === messages.length - 1;
+        {renderedMessages.map((m, i) => {
+          const isLatest = i === renderedMessages.length - 1;
           const isSessionFocusTarget = highlightedMessageIndex === i;
           const messageJourneyModel = m.role === "assistant" ? buildTaskJourneyViewModel([m]) : null;
           const shouldRenderJourneySummary =
@@ -3002,6 +3030,7 @@ export function ChatView({
                   messageElementRefs.current[i] = node;
                 }}
                 data-testid={`chat-message-${i}`}
+                data-recovered-run-message={m.id?.startsWith("recovered-run-") ? "true" : "false"}
                 data-session-focus-highlighted={isSessionFocusTarget ? "true" : "false"}
                 initial={isLatest ? { opacity: 0, x: m.role === "user" ? 20 : -20 } : false}
                 animate={{ opacity: 1, x: 0 }}

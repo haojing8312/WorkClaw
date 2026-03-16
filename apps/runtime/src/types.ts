@@ -227,6 +227,7 @@ export interface SessionInfo {
   permission_mode_label?: string;
   source_channel?: "local" | "app" | "feishu" | "wecom" | string;
   source_label?: string;
+  runtime_status?: "running" | "waiting_approval" | "completed" | "failed" | string | null;
 }
 
 export type SkillRouteNodeStatus =
