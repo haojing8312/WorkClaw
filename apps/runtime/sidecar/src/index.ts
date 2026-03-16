@@ -227,6 +227,16 @@ export function createSidecarApp(overrides: Partial<SidecarDeps> = {}) {
     }
   });
 
+  app.post('/api/browser/compat', async (c) => {
+    try {
+      const body = await c.req.json().catch(() => ({}));
+      const result = await deps.browser.compat(body);
+      return c.json({ output: JSON.stringify(result) } as ApiResponse);
+    } catch (e: any) {
+      return c.json({ error: e.message } as ApiResponse, 500);
+    }
+  });
+
   app.post('/api/browser/screenshot', async (c) => {
     try {
       const { path } = await c.req.json();

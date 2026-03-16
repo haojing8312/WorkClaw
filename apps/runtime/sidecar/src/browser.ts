@@ -1,4 +1,8 @@
+import { mkdir } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import path from 'node:path';
 import { chromium, Browser, BrowserContext, Page } from 'playwright';
+import { stageCompatUploadPaths } from './browser_uploads.js';
 
 /** 浏览器启动选项 */
 export interface LaunchOptions {
@@ -72,6 +76,35 @@ interface BrowserActRequest {
   slowly?: boolean;
 }
 
+type CompatAction = 'status' | 'start' | 'stop' | 'profiles' | 'tabs' | 'open' | 'focus' | 'snapshot' | 'act' | 'upload';
+type SupportedCompatProfile = 'openclaw';
+
+interface BrowserCompatRequest extends Partial<SnapshotOptions>, Partial<BrowserActRequest> {
+  action: CompatAction;
+  profile?: string;
+  targetId?: string;
+  url?: string;
+  inputRef?: string;
+  inputSelector?: string;
+  paths?: string[];
+}
+
+type CompatContextLike = Pick<BrowserContext, 'pages' | 'newPage'>;
+
+interface CompatProfileState {
+  profile: SupportedCompatProfile;
+  context: CompatContextLike;
+  pages: Map<string, Page>;
+  activeTargetId: string | null;
+  refMaps: Map<string, Map<string, string>>;
+  userDataDir: string;
+}
+
+interface BrowserControllerOptions {
+  compatProfileRoot?: string;
+  compatUploadRoot?: string;
+}
+
 /**
  * 浏览器自动化控制器
  *
@@ -84,6 +117,17 @@ export class BrowserController {
   private page: Page | null = null;
   private backend: 'playwright' = 'playwright';
   private refToSelector = new Map<string, string>();
+  private compatProfileRoot: string;
+  private compatUploadRoot: string;
+  private compatProfiles = new Map<string, CompatProfileState>();
+  private compatProfileStarts = new Map<string, Promise<CompatProfileState>>();
+  private compatTargetIds = new WeakMap<Page, string>();
+  private compatTargetSeq = 1;
+
+  constructor(options?: BrowserControllerOptions) {
+    this.compatProfileRoot = options?.compatProfileRoot ?? path.join(homedir(), '.workclaw', 'browser-profiles');
+    this.compatUploadRoot = options?.compatUploadRoot ?? path.join(homedir(), '.workclaw', 'staging');
+  }
 
   // ─── stealth 反检测脚本 ───────────────────────────────────────────
   // 参考 puppeteer-extra-plugin-stealth 的核心技术，
@@ -447,6 +491,111 @@ export class BrowserController {
     return JSON.stringify(state);
   }
 
+  async compat(request: BrowserCompatRequest): Promise<Record<string, unknown>> {
+    const action = request.action;
+    console.info(
+      `[browser:compat] action=${action} profile=${request.profile ?? 'openclaw'} targetId=${request.targetId ?? 'auto'}`,
+    );
+    switch (action) {
+      case 'start': {
+        const state = await this.startCompatProfile(this.resolveCompatProfile(request.profile));
+        return this.describeCompatProfile(state);
+      }
+      case 'status': {
+        const profile = this.resolveCompatProfile(request.profile);
+        return this.describeCompatProfile(this.compatProfiles.get(profile) ?? null, profile);
+      }
+      case 'stop': {
+        const profile = this.resolveCompatProfile(request.profile);
+        await this.stopCompatProfile(profile);
+        return {
+          ok: true,
+          profile,
+        };
+      }
+      case 'profiles':
+        return {
+          profiles: [this.describeCompatProfile(this.compatProfiles.get('openclaw') ?? null, 'openclaw')],
+        };
+      case 'tabs': {
+        const state = await this.startCompatProfile(this.resolveCompatProfile(request.profile));
+        this.syncCompatPages(state);
+        return {
+          profile: state.profile,
+          activeTargetId: state.activeTargetId,
+          tabs: await Promise.all(
+            Array.from(state.pages.entries()).map(async ([targetId, page]) => ({
+              targetId,
+              url: page.url(),
+              title: await page.title(),
+              active: targetId === state.activeTargetId,
+            })),
+          ),
+        };
+      }
+      case 'open': {
+        const state = await this.startCompatProfile(this.resolveCompatProfile(request.profile));
+        const { targetId, page } = await this.openCompatTarget(state, request.url);
+        return {
+          profile: state.profile,
+          targetId,
+          url: page.url(),
+          active: targetId === state.activeTargetId,
+        };
+      }
+      case 'focus': {
+        const state = await this.startCompatProfile(this.resolveCompatProfile(request.profile));
+        const { targetId, page } = await this.resolveCompatTarget(state, request.targetId);
+        state.activeTargetId = targetId;
+        return {
+          profile: state.profile,
+          targetId,
+          url: page.url(),
+          active: true,
+        };
+      }
+      case 'snapshot': {
+        const state = await this.startCompatProfile(this.resolveCompatProfile(request.profile));
+        const { targetId } = await this.resolveCompatTarget(state, request.targetId);
+        return await this.withCompatTarget(state, targetId, async () => {
+          const payload = JSON.parse(await this.snapshot({ ...request, targetId }));
+          return payload as Record<string, unknown>;
+        });
+      }
+      case 'act': {
+        const state = await this.startCompatProfile(this.resolveCompatProfile(request.profile));
+        const { targetId } = await this.resolveCompatTarget(state, request.targetId);
+        const message = await this.withCompatTarget(state, targetId, async () => this.act(request as BrowserActRequest));
+        return {
+          ok: true,
+          targetId,
+          message,
+        };
+      }
+      case 'upload': {
+        const state = await this.startCompatProfile(this.resolveCompatProfile(request.profile));
+        const { targetId } = await this.resolveCompatTarget(state, request.targetId);
+        return await this.withCompatTarget(state, targetId, async () => {
+          const selector = this.resolveSelector(request.inputSelector, request.inputRef);
+          if (!selector) {
+            throw new Error('upload 需要 inputSelector 或 inputRef');
+          }
+
+          const stagedPaths = await stageCompatUploadPaths(request.paths ?? [], this.compatUploadRoot);
+          await this.page!.setInputFiles(selector, stagedPaths);
+          return {
+            ok: true,
+            targetId,
+            selector,
+            paths: stagedPaths,
+          };
+        });
+      }
+      default:
+        throw new Error(`暂不支持的 browser compat action: ${action}`);
+    }
+  }
+
   async snapshot(options?: SnapshotOptions): Promise<string> {
     await this.ensureBrowser();
     const opts = options ?? {};
@@ -660,6 +809,15 @@ export class BrowserController {
    * 关闭浏览器实例并释放资源
    */
   async close() {
+    for (const state of this.compatProfiles.values()) {
+      const maybeClose = (state.context as { close?: () => Promise<void> }).close;
+      if (typeof maybeClose === 'function') {
+        await maybeClose.call(state.context);
+      }
+    }
+    this.compatProfiles.clear();
+    this.compatTargetIds = new WeakMap();
+
     if (this.browser) {
       await this.browser.close();
       this.browser = null;
@@ -667,5 +825,220 @@ export class BrowserController {
       this.page = null;
       this.refToSelector.clear();
     }
+  }
+
+  private resolveCompatProfile(profile?: string): SupportedCompatProfile {
+    const normalized = String(profile || 'openclaw').trim().toLowerCase();
+    if (normalized !== 'openclaw') {
+      throw new Error(`P0 仅支持 openclaw profile，收到: ${profile ?? '(empty)'}`);
+    }
+    return 'openclaw';
+  }
+
+  private async startCompatProfile(profile: SupportedCompatProfile): Promise<CompatProfileState> {
+    const existing = this.compatProfiles.get(profile);
+    if (existing) {
+      return existing;
+    }
+
+    const pending = this.compatProfileStarts.get(profile);
+    if (pending) {
+      return await pending;
+    }
+
+    const startup = this.launchCompatProfile(profile).finally(() => {
+      this.compatProfileStarts.delete(profile);
+    });
+    this.compatProfileStarts.set(profile, startup);
+    return await startup;
+  }
+
+  private async stopCompatProfile(profile: SupportedCompatProfile): Promise<void> {
+    this.compatProfileStarts.delete(profile);
+    const state = this.compatProfiles.get(profile);
+    if (!state) {
+      return;
+    }
+
+    const maybeClose = (state.context as { close?: () => Promise<void> }).close;
+    if (typeof maybeClose === 'function') {
+      await maybeClose.call(state.context);
+    }
+
+    this.compatProfiles.delete(profile);
+    if (this.context === state.context) {
+      this.context = null;
+    }
+    if (this.page && Array.from(state.pages.values()).includes(this.page)) {
+      this.page = null;
+    }
+  }
+
+  private async launchCompatProfile(profile: SupportedCompatProfile): Promise<CompatProfileState> {
+    const existing = this.compatProfiles.get(profile);
+    if (existing) {
+      return existing;
+    }
+
+    const userDataDir = path.join(this.compatProfileRoot, profile);
+    await mkdir(userDataDir, { recursive: true });
+
+    const context = await chromium.launchPersistentContext(userDataDir, {
+      headless: false,
+      viewport: { width: 1280, height: 720 },
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      locale: 'zh-CN',
+      args: [
+        '--disable-blink-features=AutomationControlled',
+        '--disable-infobars',
+        '--no-first-run',
+        '--no-default-browser-check',
+      ],
+    });
+
+    await this.applyStealthToContext(context);
+
+    const state: CompatProfileState = {
+      profile,
+      context,
+      pages: new Map(),
+      activeTargetId: null,
+      refMaps: new Map(),
+      userDataDir,
+    };
+
+    for (const page of context.pages()) {
+      const targetId = this.trackCompatPage(state, page);
+      if (!state.activeTargetId) {
+        state.activeTargetId = targetId;
+      }
+    }
+
+    if (!state.activeTargetId) {
+      const page = await context.newPage();
+      state.activeTargetId = this.trackCompatPage(state, page);
+    }
+
+    this.compatProfiles.set(profile, state);
+    this.browser = context.browser() ?? this.browser;
+    this.context = context;
+    this.page = state.activeTargetId ? state.pages.get(state.activeTargetId) ?? null : null;
+    this.backend = 'playwright';
+    return state;
+  }
+
+  private trackCompatPage(state: CompatProfileState, page: Page): string {
+    const existing = this.compatTargetIds.get(page);
+    if (existing) {
+      state.pages.set(existing, page);
+      return existing;
+    }
+
+    const targetId = `tab_${this.compatTargetSeq++}`;
+    this.compatTargetIds.set(page, targetId);
+    state.pages.set(targetId, page);
+    return targetId;
+  }
+
+  private syncCompatPages(state: CompatProfileState) {
+    for (const page of state.context.pages()) {
+      if (Array.from(state.pages.values()).includes(page)) {
+        continue;
+      }
+      this.trackCompatPage(state, page);
+    }
+  }
+
+  private async openCompatTarget(
+    state: CompatProfileState,
+    url?: string,
+  ): Promise<{ targetId: string; page: Page }> {
+    this.syncCompatPages(state);
+
+    let targetId = state.activeTargetId;
+    let page = targetId ? state.pages.get(targetId) : undefined;
+
+    if (!page) {
+      page = await state.context.newPage();
+      targetId = this.trackCompatPage(state, page);
+    }
+
+    if (!targetId) {
+      throw new Error(`未能为 profile ${state.profile} 分配 targetId`);
+    }
+
+    if (url) {
+      await page.goto(url, { waitUntil: 'domcontentloaded' });
+    }
+
+    state.activeTargetId = targetId;
+    return { targetId, page };
+  }
+
+  private async resolveCompatTarget(
+    state: CompatProfileState,
+    requestedTargetId?: string,
+  ): Promise<{ targetId: string; page: Page }> {
+    this.syncCompatPages(state);
+
+    const targetId = requestedTargetId ?? state.activeTargetId;
+    if (targetId) {
+      const page = state.pages.get(targetId);
+      if (!page) {
+        throw new Error(`未找到 targetId=${targetId} 对应的页面`);
+      }
+      state.activeTargetId = targetId;
+      return { targetId, page };
+    }
+
+    return await this.openCompatTarget(state);
+  }
+
+  private async withCompatTarget<T>(
+    state: CompatProfileState,
+    targetId: string,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const page = state.pages.get(targetId);
+    if (!page) {
+      throw new Error(`未找到 targetId=${targetId} 对应的页面`);
+    }
+
+    const prevPage = this.page;
+    const prevBrowser = this.browser;
+    const prevContext = this.context;
+    const prevRefs = this.refToSelector;
+    const refMap = state.refMaps.get(targetId) ?? new Map<string, string>();
+
+    this.browser = this.browser ?? ({} as Browser);
+    this.context = (state.context as BrowserContext) ?? this.context;
+    this.page = page;
+    this.refToSelector = refMap;
+    state.activeTargetId = targetId;
+
+    try {
+      const result = await fn();
+      state.refMaps.set(targetId, this.refToSelector);
+      return result;
+    } finally {
+      this.browser = prevBrowser;
+      this.context = prevContext;
+      this.page = prevPage;
+      this.refToSelector = prevRefs;
+    }
+  }
+
+  private describeCompatProfile(
+    state: CompatProfileState | null,
+    profile: SupportedCompatProfile = 'openclaw',
+  ): Record<string, unknown> {
+    return {
+      profile,
+      supported: true,
+      running: state !== null,
+      activeTargetId: state?.activeTargetId ?? null,
+      tabCount: state?.pages.size ?? 0,
+      userDataDir: state?.userDataDir ?? path.join(this.compatProfileRoot, profile),
+    };
   }
 }

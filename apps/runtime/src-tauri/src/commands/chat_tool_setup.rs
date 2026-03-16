@@ -2,9 +2,11 @@ use super::chat::{AskUserState, SearchCacheState};
 use super::chat_runtime_io as chat_io;
 use crate::agent::tools::search_providers::create_provider;
 use crate::agent::tools::{
+    browser_compat::register_browser_compat_tool,
     browser_tools::register_browser_tools, AskUserTool, BashKillTool, BashOutputTool, BashTool,
     ClawhubRecommendTool, ClawhubSearchTool, CompactTool, EmployeeManageTool,
     GithubRepoDownloadTool, MemoryTool, ProcessManager, SkillInvokeTool, TaskTool, WebSearchTool,
+    register_tool_alias,
 };
 use crate::agent::AgentExecutor;
 use runtime_chat_app::{
@@ -61,6 +63,19 @@ pub(crate) async fn prepare_runtime_tools(
         ))));
 
     register_browser_tools(params.agent_executor.registry(), "http://localhost:8765");
+    register_browser_compat_tool(params.agent_executor.registry(), "http://localhost:8765");
+    if let Some(tool) = params.agent_executor.registry().get("read_file") {
+        register_tool_alias(params.agent_executor.registry(), "read", tool);
+    }
+    if let Some(tool) = params.agent_executor.registry().get("glob") {
+        register_tool_alias(params.agent_executor.registry(), "find", tool);
+    }
+    if let Some(tool) = params.agent_executor.registry().get("list_dir") {
+        register_tool_alias(params.agent_executor.registry(), "ls", tool);
+    }
+    if let Some(tool) = params.agent_executor.registry().get("bash") {
+        register_tool_alias(params.agent_executor.registry(), "exec", tool);
+    }
 
     let task_tool = TaskTool::new(
         params.agent_executor.registry_arc(),
