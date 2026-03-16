@@ -6,6 +6,7 @@ use super::skills::DbState;
 use crate::agent::tools::search_providers::cache::SearchCache;
 use crate::agent::tools::AskUserResponder;
 use crate::agent::AgentExecutor;
+use crate::approval_bus::ApprovalManager;
 use crate::diagnostics::{self, ManagedDiagnosticsState};
 use crate::session_journal::SessionJournalStateHandle;
 use serde::Deserialize;
@@ -22,6 +23,12 @@ pub struct AskUserState(pub AskUserResponder);
 pub type ToolConfirmResponder =
     std::sync::Arc<std::sync::Mutex<Option<std::sync::mpsc::Sender<bool>>>>;
 pub struct ToolConfirmState(pub ToolConfirmResponder);
+
+/// 通用审批管理器（高风险审批总线）
+pub struct ApprovalManagerState(pub Arc<ApprovalManager>);
+
+/// 旧版桌面确认对话框与审批总线之间的过渡桥接（仅保留最近一条待确认 approval）
+pub struct PendingApprovalBridgeState(pub Arc<std::sync::Mutex<Option<String>>>);
 
 /// 全局搜索缓存（跨会话共享，在 lib.rs 中创建）
 pub struct SearchCacheState(pub Arc<SearchCache>);

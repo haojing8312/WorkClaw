@@ -123,6 +123,18 @@ interface Props {
   operationPermissionMode?: "standard" | "full_access" | string;
 }
 
+interface PendingApprovalView {
+  approvalId: string;
+  sessionId: string;
+  toolName: string;
+  toolInput: Record<string, unknown>;
+  title: string;
+  summary: string;
+  impact?: string;
+  irreversible?: boolean;
+  status?: string;
+}
+
 function shouldRenderCompletedJourneySummary(model: TaskJourneyViewModel) {
   if (model.deliverables.length === 0) return false;
   return model.status === "completed" || model.status === "partial";
@@ -217,15 +229,8 @@ export function ChatView({
     detail?: string;
     iteration: number;
   } | null>(null);
-  const [toolConfirm, setToolConfirm] = useState<{
-    requestId: number;
-    toolName: string;
-    toolInput: Record<string, unknown>;
-    title: string;
-    summary: string;
-    impact?: string;
-    irreversible?: boolean;
-  } | null>(null);
+  const [pendingApprovals, setPendingApprovals] = useState<PendingApprovalView[]>([]);
+  const [resolvingApprovalId, setResolvingApprovalId] = useState<string | null>(null);
   const [pendingInstallSkill, setPendingInstallSkill] = useState<ClawhubInstallCandidate | null>(null);
   const [showInstallConfirm, setShowInstallConfirm] = useState(false);
   const [installingSlug, setInstallingSlug] = useState<string | null>(null);
@@ -253,7 +258,6 @@ export function ChatView({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const subAgentBufferRef = useRef("");
   const mainRoleNameRef = useRef("");
-  const pendingToolConfirmRequestIdRef = useRef<number | null>(null);
   const lastHandledSessionFocusNonceRef = useRef<number | null>(null);
   const messageElementRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const lastHandledGroupRunStepFocusNonceRef = useRef<number | null>(null);
@@ -296,6 +300,49 @@ export function ChatView({
     "ps1",
     "sql",
   ]);
+
+  const upsertPendingApproval = (nextApproval: PendingApprovalView) => {
+    setPendingApprovals((prev) => {
+      const existingIndex = prev.findIndex((item) => item.approvalId === nextApproval.approvalId);
+      if (existingIndex >= 0) {
+        const updated = [...prev];
+        updated[existingIndex] = {
+          ...updated[existingIndex],
+          ...nextApproval,
+        };
+        return updated;
+      }
+      return [...prev, nextApproval];
+    });
+  };
+
+  const removePendingApproval = (approvalId: string) => {
+    setPendingApprovals((prev) => prev.filter((item) => item.approvalId !== approvalId));
+    setResolvingApprovalId((current) => (current === approvalId ? null : current));
+  };
+
+  const buildPendingApproval = (payload: {
+    approval_id?: string;
+    session_id: string;
+    tool_name: string;
+    tool_input?: Record<string, unknown>;
+    input?: Record<string, unknown>;
+    title?: string;
+    summary?: string;
+    impact?: string | null;
+    irreversible?: boolean;
+    status?: string;
+  }): PendingApprovalView => ({
+    approvalId: payload.approval_id || `${payload.tool_name}-${Date.now()}`,
+    sessionId: payload.session_id,
+    toolName: payload.tool_name,
+    toolInput: payload.tool_input || payload.input || {},
+    title: payload.title || "高危操作确认",
+    summary: payload.summary || `将执行工具 ${payload.tool_name}`,
+    impact: payload.impact || undefined,
+    irreversible: payload.irreversible,
+    status: payload.status,
+  });
 
   function syncComposerHeight() {
     const el = textareaRef.current;
@@ -596,6 +643,7 @@ export function ChatView({
       setInput("");
     }
     loadSessionRuns(sessionId);
+    void loadPendingApprovals(sessionId);
     loadWorkspace(sessionId);
     // 切换会话时重置流式状态
     setStreaming(false);
@@ -615,7 +663,8 @@ export function ChatView({
     setAskUserOptions([]);
     setAskUserAnswer("");
     setAgentState(null);
-    setToolConfirm(null);
+    setPendingApprovals([]);
+    setResolvingApprovalId(null);
     setSidePanelTab("tasks");
     setImRoleEvents([]);
     setGroupRunSnapshot(null);
@@ -642,7 +691,7 @@ export function ChatView({
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, streamItems, streamReasoning, askUserQuestion, toolConfirm]);
+  }, [messages, streamItems, streamReasoning, askUserQuestion, pendingApprovals]);
 
   useEffect(() => {
     if (!sessionFocusRequest || !sessionFocusRequest.snippet.trim()) {
@@ -1018,9 +1067,37 @@ export function ChatView({
     };
   }, [sessionId]);
 
-  // tool-confirm-event 事件监听（权限确认）
+  // approval-created / approval-resolved 事件监听（权限审批）
   useEffect(() => {
-    const unlistenPromise = listen<{
+    const unlistenCreatedPromise = listen<{
+      approval_id?: string;
+      session_id: string;
+      tool_name: string;
+      tool_input?: Record<string, unknown>;
+      input?: Record<string, unknown>;
+      title?: string;
+      summary?: string;
+      impact?: string | null;
+      irreversible?: boolean;
+      status?: string;
+    }>("approval-created", ({ payload }) => {
+      if (payload.session_id !== sessionId) return;
+      upsertPendingApproval(buildPendingApproval(payload));
+    });
+
+    const unlistenResolvedPromise = listen<{
+      approval_id?: string;
+      session_id?: string;
+      status?: string;
+    }>("approval-resolved", ({ payload }) => {
+      if ((payload.session_id || "").trim() && payload.session_id !== sessionId) return;
+      const approvalId = (payload.approval_id || "").trim();
+      if (!approvalId) return;
+      removePendingApproval(approvalId);
+    });
+
+    const unlistenLegacyPromise = listen<{
+      approval_id?: string;
       session_id: string;
       tool_name: string;
       tool_input: Record<string, unknown>;
@@ -1030,20 +1107,14 @@ export function ChatView({
       irreversible?: boolean;
     }>("tool-confirm-event", ({ payload }) => {
       if (payload.session_id !== sessionId) return;
-      const requestId = Date.now();
-      pendingToolConfirmRequestIdRef.current = requestId;
-      setToolConfirm({
-        requestId,
-        toolName: payload.tool_name,
-        toolInput: payload.tool_input,
-        title: payload.title || "高危操作确认",
-        summary: payload.summary || `将执行工具 ${payload.tool_name}`,
-        impact: payload.impact,
-        irreversible: payload.irreversible,
-      });
+      if ((payload.approval_id || "").trim()) return;
+      upsertPendingApproval(buildPendingApproval(payload));
     });
+
     return () => {
-      unlistenPromise.then((fn) => fn());
+      unlistenCreatedPromise.then((fn) => fn());
+      unlistenResolvedPromise.then((fn) => fn());
+      unlistenLegacyPromise.then((fn) => fn());
     };
   }, [sessionId]);
 
@@ -1097,20 +1168,6 @@ export function ChatView({
       });
     };
   }, [sessionId]);
-
-  useEffect(() => {
-    const requestId = toolConfirm?.requestId;
-    if (!requestId) return;
-    return () => {
-      if (pendingToolConfirmRequestIdRef.current !== requestId) {
-        return;
-      }
-      pendingToolConfirmRequestIdRef.current = null;
-      void invoke("confirm_tool_execution", { confirmed: false }).catch((error) => {
-        console.error("自动拒绝工具确认失败:", error);
-      });
-    };
-  }, [sessionId, toolConfirm?.requestId]);
 
   // tool-call-event 事件监听：按顺序插入到 streamItems
   useEffect(() => {
@@ -1189,6 +1246,49 @@ export function ChatView({
     } catch (e) {
       console.error("加载会话运行记录失败:", e);
       setSessionRuns([]);
+    }
+  }
+
+  async function loadPendingApprovals(sid: string) {
+    if (!sid) {
+      setPendingApprovals([]);
+      return;
+    }
+    try {
+      const approvals = await invoke<
+        Array<{
+          approval_id: string;
+          session_id: string;
+          tool_name: string;
+          input?: Record<string, unknown>;
+          summary: string;
+          impact?: string | null;
+          irreversible?: boolean;
+          status?: string;
+        }>
+      >("list_pending_approvals", {
+        sessionId: sid,
+      });
+      setPendingApprovals(
+        Array.isArray(approvals)
+          ? approvals.map((item) =>
+              buildPendingApproval({
+                approval_id: item.approval_id,
+                session_id: item.session_id,
+                tool_name: item.tool_name,
+                input: item.input,
+                title: "高危操作确认",
+                summary: item.summary,
+                impact: item.impact,
+                irreversible: item.irreversible,
+                status: item.status,
+              })
+            )
+          : []
+      );
+    } catch (error) {
+      console.error("加载待审批列表失败:", error);
+      setPendingApprovals([]);
     }
   }
 
@@ -1316,14 +1416,21 @@ export function ChatView({
     setAskUserAnswer("");
   }
 
-  async function handleToolConfirm(confirmed: boolean) {
+  async function handleResolveApproval(decision: "allow_once" | "allow_always" | "deny") {
+    const activeApproval = pendingApprovals[0];
+    if (!activeApproval || resolvingApprovalId) return;
     try {
-      pendingToolConfirmRequestIdRef.current = null;
-      await invoke("confirm_tool_execution", { confirmed });
+      setResolvingApprovalId(activeApproval.approvalId);
+      await invoke("resolve_approval", {
+        approvalId: activeApproval.approvalId,
+        decision,
+        source: "desktop",
+      });
+      removePendingApproval(activeApproval.approvalId);
     } catch (e) {
       console.error("工具确认失败:", e);
+      setResolvingApprovalId(null);
     }
-    setToolConfirm(null);
   }
 
   async function handleApproveGroupRunReview() {
@@ -1531,6 +1638,8 @@ export function ChatView({
   const sessionSourceBadgeText =
     (sessionSourceLabel || "").trim() ||
     (normalizedSessionSourceChannel ? `${normalizedSessionSourceChannel} 同步` : "IM 同步");
+  const activePendingApproval = pendingApprovals[0] ?? null;
+  const queuedApprovalCount = Math.max(0, pendingApprovals.length - 1);
   const activeDelegationCard = [...delegationCards]
     .reverse()
     .find((card) => card.status === "running");
@@ -2896,17 +3005,20 @@ export function ChatView({
           </div>
         )}
         <RiskConfirmDialog
-          open={Boolean(toolConfirm)}
+          open={Boolean(activePendingApproval)}
           level="high"
-          title={toolConfirm?.title || "高危操作确认"}
-          summary={toolConfirm?.summary || "请确认是否继续执行。"}
-          impact={toolConfirm?.impact}
-          irreversible={toolConfirm?.irreversible}
-          confirmLabel="确认继续"
+          title={activePendingApproval?.title || "高危操作确认"}
+          summary={activePendingApproval?.summary || "请确认是否继续执行。"}
+          impact={activePendingApproval?.impact}
+          note={queuedApprovalCount > 0 ? `还有 ${queuedApprovalCount} 条待审批` : undefined}
+          irreversible={activePendingApproval?.irreversible}
+          confirmLabel="允许一次"
+          secondaryActionLabel="始终允许"
           cancelLabel="取消"
-          loading={false}
-          onConfirm={() => void handleToolConfirm(true)}
-          onCancel={() => void handleToolConfirm(false)}
+          loading={Boolean(resolvingApprovalId)}
+          onConfirm={() => void handleResolveApproval("allow_once")}
+          onSecondaryAction={() => void handleResolveApproval("allow_always")}
+          onCancel={() => void handleResolveApproval("deny")}
         />
         <RiskConfirmDialog
           open={showInstallConfirm && Boolean(pendingInstallSkill)}

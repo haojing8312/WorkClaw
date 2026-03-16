@@ -6,11 +6,14 @@ interface RiskConfirmDialogProps {
   title: string;
   summary: string;
   impact?: string;
+  note?: string;
   irreversible?: boolean;
   confirmLabel?: string;
+  secondaryActionLabel?: string;
   cancelLabel?: string;
   loading: boolean;
   onConfirm: () => void;
+  onSecondaryAction?: () => void;
   onCancel: () => void;
 }
 
@@ -57,6 +60,8 @@ export function RiskConfirmDialog(props: RiskConfirmDialogProps) {
 
         {meta.impact && <p className="mt-2 text-xs sm-text-muted">{meta.impact}</p>}
 
+        {props.note && <p className="mt-2 text-xs sm-text-primary">{props.note}</p>}
+
         {meta.irreversible && (
           <p className="mt-3 text-xs sm-text-danger">该操作不可逆，请确认后再继续。</p>
         )}
@@ -70,6 +75,16 @@ export function RiskConfirmDialog(props: RiskConfirmDialogProps) {
           >
             {meta.cancelLabel}
           </button>
+          {props.secondaryActionLabel && props.onSecondaryAction && (
+            <button
+              type="button"
+              disabled={props.loading}
+              onClick={props.onSecondaryAction}
+              className="sm-btn sm-btn-secondary h-9 px-4 text-sm disabled:opacity-60"
+            >
+              {props.secondaryActionLabel}
+            </button>
+          )}
           <button
             type="button"
             disabled={props.loading}

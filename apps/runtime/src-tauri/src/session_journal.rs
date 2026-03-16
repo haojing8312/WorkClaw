@@ -143,6 +143,7 @@ pub enum SessionRunStatus {
     Queued,
     Thinking,
     ToolCalling,
+    WaitingApproval,
     WaitingUser,
     Completed,
     Failed,
@@ -174,6 +175,16 @@ pub enum SessionRunEvent {
         output: String,
         is_error: bool,
     },
+    ApprovalRequested {
+        run_id: String,
+        approval_id: String,
+        tool_name: String,
+        call_id: String,
+        input: Value,
+        summary: String,
+        impact: Option<String>,
+        irreversible: bool,
+    },
     RunCompleted {
         run_id: String,
     },
@@ -202,6 +213,7 @@ fn apply_event(state: &mut SessionJournalState, event: &SessionRunEvent) {
         | SessionRunEvent::AssistantChunkAppended { run_id, .. }
         | SessionRunEvent::ToolStarted { run_id, .. }
         | SessionRunEvent::ToolCompleted { run_id, .. }
+        | SessionRunEvent::ApprovalRequested { run_id, .. }
         | SessionRunEvent::RunCompleted { run_id }
         | SessionRunEvent::RunFailed { run_id, .. }
         | SessionRunEvent::RunCancelled { run_id, .. } => run_id.clone(),
@@ -234,6 +246,10 @@ fn apply_event(state: &mut SessionJournalState, event: &SessionRunEvent) {
         SessionRunEvent::ToolCompleted { .. } => {
             let run = &mut state.runs[run_index];
             run.status = SessionRunStatus::Thinking;
+        }
+        SessionRunEvent::ApprovalRequested { .. } => {
+            let run = &mut state.runs[run_index];
+            run.status = SessionRunStatus::WaitingApproval;
         }
         SessionRunEvent::RunCompleted { run_id } => {
             state.runs[run_index].status = SessionRunStatus::Completed;
@@ -311,6 +327,7 @@ impl SessionRunStatus {
             SessionRunStatus::Queued => "queued",
             SessionRunStatus::Thinking => "thinking",
             SessionRunStatus::ToolCalling => "tool_calling",
+            SessionRunStatus::WaitingApproval => "waiting_approval",
             SessionRunStatus::WaitingUser => "waiting_user",
             SessionRunStatus::Completed => "completed",
             SessionRunStatus::Failed => "failed",

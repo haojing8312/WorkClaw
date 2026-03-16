@@ -1,3 +1,6 @@
+use crate::approval_bus::{ApprovalDecision, ApprovalManager, ApprovalResolveResult, PendingApprovalRecord};
+use crate::commands::approvals::load_approval_record_with_pool;
+use crate::commands::chat::ApprovalManagerState;
 use crate::commands::employee_agents::{
     ensure_employee_sessions_for_event_with_pool, link_inbound_event_to_session_with_pool,
     list_agent_employees_with_pool, AgentEmployee,
@@ -15,11 +18,13 @@ use crate::im::runtime_bridge::{
 use crate::im::types::{ImEvent, ImEventType};
 use reqwest::Client;
 use sha2::{Digest, Sha256};
+use sqlx::FromRow;
 use sqlx::SqlitePool;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::Emitter;
+use tauri::Manager;
 use tauri::State;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -492,6 +497,294 @@ pub async fn plan_role_dispatch_requests_for_feishu(
         .collect())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FeishuApprovalCommand {
+    approval_id: String,
+    decision: ApprovalDecision,
+}
+
+#[derive(Debug, Clone, FromRow)]
+struct ApprovalResolutionNotificationRow {
+    id: String,
+    session_id: String,
+    summary: String,
+    status: String,
+    decision: String,
+    resolved_by_surface: String,
+    resolved_by_user: String,
+}
+
+fn parse_feishu_approval_command(text: Option<&str>) -> Option<FeishuApprovalCommand> {
+    let raw = text?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+
+    let parts = raw.split_whitespace().collect::<Vec<_>>();
+    if parts.len() < 2 || !parts[0].eq_ignore_ascii_case("/approve") {
+        return None;
+    }
+
+    let approval_id = parts[1].trim();
+    if approval_id.is_empty() {
+        return None;
+    }
+
+    let decision = match parts
+        .get(2)
+        .map(|value| value.trim().to_ascii_lowercase())
+        .as_deref()
+    {
+        None | Some("") | Some("allow_once") | Some("allow-once") | Some("approve") => {
+            ApprovalDecision::AllowOnce
+        }
+        Some("allow_always") | Some("allow-always") => ApprovalDecision::AllowAlways,
+        Some("deny") | Some("reject") => ApprovalDecision::Deny,
+        Some(_) => return None,
+    };
+
+    Some(FeishuApprovalCommand {
+        approval_id: approval_id.to_string(),
+        decision,
+    })
+}
+
+async fn send_feishu_text_message_with_pool(
+    pool: &SqlitePool,
+    chat_id: &str,
+    text: &str,
+    sidecar_base_url: Option<String>,
+) -> Result<String, String> {
+    let (resolved_app_id, resolved_app_secret) =
+        resolve_feishu_app_credentials(pool, None, None).await?;
+    let resolved_sidecar_base_url = resolve_feishu_sidecar_base_url(pool, sidecar_base_url).await?;
+
+    let mut payload = build_feishu_text_message(chat_id, text);
+    if let Some(v) = resolved_app_id {
+        payload["app_id"] = serde_json::Value::String(v);
+    }
+    if let Some(v) = resolved_app_secret {
+        payload["app_secret"] = serde_json::Value::String(v);
+    }
+
+    send_feishu_via_sidecar(payload, resolved_sidecar_base_url).await
+}
+
+async fn lookup_feishu_thread_for_session_with_pool(
+    pool: &SqlitePool,
+    session_id: &str,
+) -> Result<Option<String>, String> {
+    let row = sqlx::query_as::<_, (String,)>(
+        "SELECT ts.thread_id
+         FROM im_thread_sessions ts
+         WHERE ts.session_id = ?
+           AND EXISTS (
+             SELECT 1
+             FROM im_inbox_events e
+             WHERE e.thread_id = ts.thread_id AND e.source = 'feishu'
+           )
+         ORDER BY ts.updated_at DESC, ts.created_at DESC
+         LIMIT 1",
+    )
+    .bind(session_id.trim())
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("查询飞书线程映射失败: {e}"))?;
+
+    Ok(row.map(|(thread_id,)| thread_id))
+}
+
+fn build_feishu_approval_request_text(record: &PendingApprovalRecord) -> String {
+    let impact = record
+        .impact
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("此操作属于高风险动作，请确认后继续。");
+    let irreversible = if record.irreversible {
+        "不可逆"
+    } else {
+        "可恢复性未知"
+    };
+
+    format!(
+        "待审批 #{approval_id}\n工具：{tool_name}\n摘要：{summary}\n影响：{impact}\n风险：{irreversible}\n回复命令：/approve {approval_id} allow_once | allow_always | deny",
+        approval_id = record.approval_id,
+        tool_name = record.tool_name,
+        summary = record.summary,
+        impact = impact,
+        irreversible = irreversible,
+    )
+}
+
+fn build_feishu_approval_resolution_text(
+    approval_id: &str,
+    result: &ApprovalResolveResult,
+    summary: Option<&str>,
+) -> String {
+    match result {
+        ApprovalResolveResult::Applied {
+            status,
+            decision,
+            ..
+        } => {
+            let action = match decision {
+                ApprovalDecision::AllowOnce => "allow_once",
+                ApprovalDecision::AllowAlways => "allow_always",
+                ApprovalDecision::Deny => "deny",
+            };
+            let suffix = if *decision == ApprovalDecision::Deny {
+                "本次操作已取消。"
+            } else {
+                "任务将继续执行。"
+            };
+            format!(
+                "审批 {approval_id} 已处理：{status}（{action}）。{summary_line}{suffix}",
+                approval_id = approval_id,
+                status = status,
+                action = action,
+                summary_line = summary
+                    .map(|value| format!("摘要：{}。", value.trim()))
+                    .unwrap_or_default(),
+                suffix = suffix,
+            )
+        }
+        ApprovalResolveResult::AlreadyResolved {
+            status,
+            decision,
+            ..
+        } => {
+            let decision_label = decision
+                .as_ref()
+                .map(|value| match value {
+                    ApprovalDecision::AllowOnce => "allow_once",
+                    ApprovalDecision::AllowAlways => "allow_always",
+                    ApprovalDecision::Deny => "deny",
+                })
+                .unwrap_or("unknown");
+            format!(
+                "审批 {approval_id} 已被处理，当前状态：{status}（{decision_label}）。",
+                approval_id = approval_id,
+                status = status,
+                decision_label = decision_label,
+            )
+        }
+        ApprovalResolveResult::NotFound { .. } => {
+            format!(
+                "未找到待审批项 {approval_id}，请确认审批编号是否正确。",
+                approval_id = approval_id,
+            )
+        }
+    }
+}
+
+pub async fn notify_feishu_approval_requested_with_pool(
+    pool: &SqlitePool,
+    session_id: &str,
+    record: &PendingApprovalRecord,
+    sidecar_base_url: Option<String>,
+) -> Result<(), String> {
+    let Some(thread_id) = lookup_feishu_thread_for_session_with_pool(pool, session_id).await? else {
+        return Ok(());
+    };
+
+    send_feishu_text_message_with_pool(
+        pool,
+        &thread_id,
+        &build_feishu_approval_request_text(record),
+        sidecar_base_url,
+    )
+    .await?;
+    Ok(())
+}
+
+pub async fn notify_feishu_approval_resolved_with_pool(
+    pool: &SqlitePool,
+    approval_id: &str,
+    sidecar_base_url: Option<String>,
+) -> Result<(), String> {
+    let Some(row) = sqlx::query_as::<_, ApprovalResolutionNotificationRow>(
+        "SELECT id, session_id, summary, status, decision, resolved_by_surface, resolved_by_user
+         FROM approvals
+         WHERE id = ?",
+    )
+    .bind(approval_id.trim())
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("读取审批结果通知数据失败: {e}"))? else {
+        return Ok(());
+    };
+
+    let Some(thread_id) = lookup_feishu_thread_for_session_with_pool(pool, &row.session_id).await? else {
+        return Ok(());
+    };
+
+    let decision = match row.decision.as_str() {
+        "allow_once" => Some(ApprovalDecision::AllowOnce),
+        "allow_always" => Some(ApprovalDecision::AllowAlways),
+        "deny" => Some(ApprovalDecision::Deny),
+        _ => None,
+    };
+    let result = ApprovalResolveResult::AlreadyResolved {
+        approval_id: row.id.clone(),
+        status: row.status.clone(),
+        decision,
+    };
+    let resolved_by = if row.resolved_by_user.trim().is_empty() {
+        row.resolved_by_surface.trim()
+    } else {
+        row.resolved_by_user.trim()
+    };
+    let text = format!(
+        "{} 处理人：{}。",
+        build_feishu_approval_resolution_text(&row.id, &result, Some(&row.summary)),
+        if resolved_by.is_empty() { "unknown" } else { resolved_by }
+    );
+    send_feishu_text_message_with_pool(pool, &thread_id, &text, sidecar_base_url).await?;
+    Ok(())
+}
+
+pub async fn maybe_handle_feishu_approval_command_with_pool(
+    pool: &SqlitePool,
+    approvals: &ApprovalManager,
+    event: &ImEvent,
+    sidecar_base_url: Option<String>,
+) -> Result<Option<ApprovalResolveResult>, String> {
+    let Some(command) = parse_feishu_approval_command(event.text.as_deref()) else {
+        return Ok(None);
+    };
+
+    let resolved_by_user = event
+        .account_id
+        .as_deref()
+        .or(event.tenant_id.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("feishu");
+
+    let resolution = approvals
+        .resolve_with_pool(
+            pool,
+            &command.approval_id,
+            command.decision,
+            "feishu",
+            resolved_by_user,
+        )
+        .await?;
+
+    let summary = load_approval_record_with_pool(pool, &command.approval_id)
+        .await?
+        .map(|record| record.summary);
+    let message = build_feishu_approval_resolution_text(
+        &command.approval_id,
+        &resolution,
+        summary.as_deref(),
+    );
+    send_feishu_text_message_with_pool(pool, &event.thread_id, &message, sidecar_base_url).await?;
+
+    Ok(Some(resolution))
+}
+
 #[tauri::command]
 pub async fn handle_feishu_event(
     payload: String,
@@ -501,6 +794,7 @@ pub async fn handle_feishu_event(
     nonce: Option<String>,
     app: tauri::AppHandle,
     db: State<'_, DbState>,
+    approvals: State<'_, ApprovalManagerState>,
 ) -> Result<FeishuGatewayResult, String> {
     validate_feishu_auth_with_pool(&db.0, auth_token).await?;
     validate_feishu_signature_with_pool(&db.0, &payload, timestamp, nonce, signature).await?;
@@ -513,6 +807,30 @@ pub async fn handle_feishu_event(
         ParsedFeishuPayload::Event(event) => {
             let r = process_im_event(&db.0, event.clone()).await?;
             if !r.deduped {
+                let approval_command = parse_feishu_approval_command(event.text.as_deref());
+                if let Some(command) = approval_command {
+                    if maybe_handle_feishu_approval_command_with_pool(
+                        &db.0,
+                        approvals.inner().0.as_ref(),
+                        &event,
+                        None,
+                    )
+                    .await?
+                    .is_some()
+                    {
+                        if let Some(record) =
+                            load_approval_record_with_pool(&db.0, &command.approval_id).await?
+                        {
+                            let _ = app.emit("approval-resolved", &record);
+                        }
+                        return Ok(FeishuGatewayResult {
+                            accepted: r.accepted,
+                            deduped: r.deduped,
+                            challenge: None,
+                        });
+                    }
+                }
+
                 let route_decision = resolve_openclaw_route_with_pool(&db.0, &event).await.ok();
                 let employee_sessions =
                     ensure_employee_sessions_for_event_with_pool(&db.0, &event).await?;
@@ -1153,6 +1471,30 @@ async fn sync_feishu_ws_events_core(
         };
         let r = process_im_event(pool, inbound.clone()).await?;
         if r.accepted && !r.deduped {
+            if let Some(app) = app {
+                if let Some(approval_state) = app.try_state::<ApprovalManagerState>() {
+                    let approval_command = parse_feishu_approval_command(inbound.text.as_deref());
+                    if let Some(command) = approval_command {
+                        if maybe_handle_feishu_approval_command_with_pool(
+                            pool,
+                            approval_state.0.as_ref(),
+                            &inbound,
+                            None,
+                        )
+                        .await?
+                        .is_some()
+                        {
+                            if let Some(record) =
+                                load_approval_record_with_pool(pool, &command.approval_id).await?
+                            {
+                                let _ = app.emit("approval-resolved", &record);
+                            }
+                            accepted += 1;
+                            continue;
+                        }
+                    }
+                }
+            }
             if let Ok(employee_sessions) =
                 ensure_employee_sessions_for_event_with_pool(pool, &inbound).await
             {

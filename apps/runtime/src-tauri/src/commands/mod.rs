@@ -1,3 +1,4 @@
+pub mod approvals;
 pub mod agent_profile;
 pub mod channel_connectors;
 pub mod chat;

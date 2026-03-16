@@ -179,19 +179,21 @@ describe("ChatView risk flow", () => {
     invokeMock.mockImplementation((command: string) => {
       if (command === "get_messages") return Promise.resolve([]);
       if (command === "get_sessions") return Promise.resolve([]);
-      if (command === "confirm_tool_execution") return Promise.resolve(null);
+      if (command === "list_pending_approvals") return Promise.resolve([]);
+      if (command === "resolve_approval") return Promise.resolve(null);
       return Promise.resolve(null);
     });
 
     renderChat();
 
     await waitFor(() => {
-      expect(listenHandlers.has("tool-confirm-event")).toBe(true);
+      expect(listenHandlers.has("approval-created")).toBe(true);
     });
 
     await act(async () => {
-      listenHandlers.get("tool-confirm-event")?.({
+      listenHandlers.get("approval-created")?.({
         payload: {
+          approval_id: "approval-1",
           session_id: "session-1",
           tool_name: "file_delete",
           tool_input: { path: "E:\\workspace\\danger.txt" },
@@ -210,10 +212,77 @@ describe("ChatView risk flow", () => {
     expect(screen.getByText("将删除 E:\\workspace\\danger.txt")).toBeInTheDocument();
     expect(screen.getByText("该操作不可逆，删除后无法自动恢复。")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "确认继续" }));
+    fireEvent.click(screen.getByRole("button", { name: "允许一次" }));
 
     await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith("confirm_tool_execution", { confirmed: true });
+      expect(invokeMock).toHaveBeenCalledWith("resolve_approval", {
+        approvalId: "approval-1",
+        decision: "allow_once",
+        source: "desktop",
+      });
+    });
+  });
+
+  test("shows queued approvals sequentially and removes remote-resolved entries", async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_messages") return Promise.resolve([]);
+      if (command === "get_sessions") return Promise.resolve([]);
+      if (command === "list_pending_approvals") return Promise.resolve([]);
+      if (command === "resolve_approval") return Promise.resolve(null);
+      return Promise.resolve(null);
+    });
+
+    renderChat();
+
+    await waitFor(() => {
+      expect(listenHandlers.has("approval-created")).toBe(true);
+      expect(listenHandlers.has("approval-resolved")).toBe(true);
+    });
+
+    await act(async () => {
+      listenHandlers.get("approval-created")?.({
+        payload: {
+          approval_id: "approval-a",
+          session_id: "session-1",
+          tool_name: "file_delete",
+          tool_input: { path: "E:\\workspace\\a.txt" },
+          title: "删除文件 A",
+          summary: "将删除 E:\\workspace\\a.txt",
+          impact: "A 不可恢复",
+          irreversible: true,
+        },
+      });
+      listenHandlers.get("approval-created")?.({
+        payload: {
+          approval_id: "approval-b",
+          session_id: "session-1",
+          tool_name: "file_delete",
+          tool_input: { path: "E:\\workspace\\b.txt" },
+          title: "删除文件 B",
+          summary: "将删除 E:\\workspace\\b.txt",
+          impact: "B 不可恢复",
+          irreversible: true,
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("删除文件 A")).toBeInTheDocument();
+    });
+    expect(screen.getByText("还有 1 条待审批")).toBeInTheDocument();
+
+    await act(async () => {
+      listenHandlers.get("approval-resolved")?.({
+        payload: {
+          approval_id: "approval-a",
+          session_id: "session-1",
+          status: "approved",
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("删除文件 B")).toBeInTheDocument();
     });
   });
 

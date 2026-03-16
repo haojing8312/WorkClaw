@@ -3,9 +3,16 @@ use super::registry::ToolRegistry;
 use super::system_prompts::SystemPromptBuilder;
 use super::types::{LLMResponse, StreamDelta, ToolContext, ToolResult};
 use crate::adapters;
+use crate::approval_bus::{
+    approval_bus_rollout_enabled_with_pool, ApprovalDecision, ApprovalManager,
+    CreateApprovalRequest,
+};
+use crate::approval_rules::find_matching_approval_rule_with_pool;
+use crate::commands::chat::{ApprovalManagerState, PendingApprovalBridgeState};
+use crate::commands::feishu_gateway::notify_feishu_approval_requested_with_pool;
 use crate::commands::session_runs::append_session_run_event_with_pool;
 use crate::commands::skills::DbState;
-use crate::session_journal::{SessionJournalStateHandle, SessionRunEvent};
+use crate::session_journal::{SessionJournalStateHandle, SessionJournalStore, SessionRunEvent};
 use anyhow::{anyhow, Result};
 use runtime_executor_core::{
     estimate_tokens, extract_tool_call_parse_error, micro_compact, split_error_code_and_message,
@@ -75,6 +82,129 @@ async fn append_tool_run_event(
     append_session_run_event_with_pool(&db_state.0, journal_state.0.as_ref(), session_id, event)
         .await
         .map_err(|err| anyhow!(err))
+}
+
+#[derive(Clone)]
+struct ApprovalWaitRuntime {
+    pool: sqlx::SqlitePool,
+    journal: Arc<SessionJournalStore>,
+    approval_manager: Arc<ApprovalManager>,
+    pending_bridge: Arc<std::sync::Mutex<Option<String>>>,
+}
+
+fn resolve_approval_wait_runtime(app: &AppHandle) -> Result<ApprovalWaitRuntime> {
+    let db_state = app
+        .try_state::<DbState>()
+        .ok_or_else(|| anyhow!("DbState unavailable"))?;
+    let journal_state = app
+        .try_state::<SessionJournalStateHandle>()
+        .ok_or_else(|| anyhow!("SessionJournalStateHandle unavailable"))?;
+    let approval_state = app
+        .try_state::<ApprovalManagerState>()
+        .ok_or_else(|| anyhow!("ApprovalManagerState unavailable"))?;
+    let pending_bridge = app
+        .try_state::<PendingApprovalBridgeState>()
+        .ok_or_else(|| anyhow!("PendingApprovalBridgeState unavailable"))?;
+
+    Ok(ApprovalWaitRuntime {
+        pool: db_state.0.clone(),
+        journal: journal_state.0.clone(),
+        approval_manager: approval_state.0.clone(),
+        pending_bridge: pending_bridge.0.clone(),
+    })
+}
+
+async fn request_tool_approval_and_wait(
+    runtime: &ApprovalWaitRuntime,
+    app_handle: Option<&AppHandle>,
+    session_id: &str,
+    run_id: Option<&str>,
+    tool_name: &str,
+    call_id: &str,
+    input: &Value,
+    work_dir: Option<&Path>,
+    cancel_flag: Option<Arc<AtomicBool>>,
+) -> Result<ApprovalDecision> {
+    let approval_id = Uuid::new_v4().to_string();
+    let receiver = runtime
+        .approval_manager
+        .register_waiter(approval_id.clone());
+    let (title, summary, impact, irreversible) =
+        critical_action_summary(tool_name, input, work_dir);
+
+    let record = runtime
+        .approval_manager
+        .create_pending_with_pool(
+            &runtime.pool,
+            Some(runtime.journal.as_ref()),
+            CreateApprovalRequest {
+                approval_id: approval_id.clone(),
+                session_id: session_id.to_string(),
+                run_id: run_id.map(str::to_string),
+                call_id: call_id.to_string(),
+                tool_name: tool_name.to_string(),
+                input: input.clone(),
+                summary: summary.clone(),
+                impact: Some(impact.clone()),
+                irreversible,
+                work_dir: work_dir.map(|dir| dir.to_string_lossy().to_string()),
+            },
+        )
+        .await
+        .map_err(|err| anyhow!(err))?;
+
+    if let Ok(mut guard) = runtime.pending_bridge.lock() {
+        *guard = Some(approval_id.clone());
+    }
+
+    if let Some(app) = app_handle {
+        let _ = app.emit(
+            "approval-created",
+            serde_json::json!({
+                "approval_id": record.approval_id,
+                "session_id": record.session_id,
+                "run_id": record.run_id,
+                "call_id": record.call_id,
+                "tool_name": record.tool_name,
+                "tool_input": record.input,
+                "title": title,
+                "summary": record.summary,
+                "impact": record.impact,
+                "irreversible": record.irreversible,
+                "status": record.status,
+            }),
+        );
+        let _ = app.emit(
+            "tool-confirm-event",
+            serde_json::json!({
+                "approval_id": approval_id,
+                "session_id": session_id,
+                "tool_name": tool_name,
+                "tool_input": input,
+                "title": title,
+                "summary": summary,
+                "impact": impact,
+                "irreversible": irreversible,
+            }),
+        );
+    }
+
+    let _ =
+        notify_feishu_approval_requested_with_pool(&runtime.pool, session_id, &record, None).await;
+
+    let resolution = runtime
+        .approval_manager
+        .wait_for_resolution(receiver, cancel_flag)
+        .await
+        .map_err(|err| anyhow!(err))?;
+
+    if let Ok(mut guard) = runtime.pending_bridge.lock() {
+        if guard.as_deref() == Some(resolution.approval_id.as_str()) {
+            *guard = None;
+        }
+    }
+
+    Ok(resolution.decision)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -773,33 +903,150 @@ impl AgentExecutor {
                             &call.input,
                             tool_ctx.work_dir.as_deref(),
                         ) {
-                            if let (Some(app), Some(sid)) = (app_handle, session_id) {
-                                let (confirm_title, confirm_summary, confirm_impact, irreversible) =
-                                    critical_action_summary(
+                            let approval_decision = if let (Some(app), Some(sid)) =
+                                (app_handle, session_id)
+                            {
+                                let runtime = match resolve_approval_wait_runtime(app) {
+                                    Ok(runtime) => runtime,
+                                    Err(err) => {
+                                        let rejection_message = err.to_string();
+                                        let _ = app.emit(
+                                            "tool-call-event",
+                                            ToolCallEvent {
+                                                session_id: sid.to_string(),
+                                                tool_name: call.name.clone(),
+                                                tool_input: call.input.clone(),
+                                                tool_output: Some(rejection_message.clone()),
+                                                status: "error".to_string(),
+                                            },
+                                        );
+                                        if let Some(run_id) = persisted_run_id.as_ref() {
+                                            let _ = append_tool_run_event(
+                                                app,
+                                                sid,
+                                                SessionRunEvent::ToolCompleted {
+                                                    run_id: run_id.clone(),
+                                                    tool_name: call.name.clone(),
+                                                    call_id: call.id.clone(),
+                                                    input: call.input.clone(),
+                                                    output: rejection_message.clone(),
+                                                    is_error: true,
+                                                },
+                                            )
+                                            .await;
+                                        }
+                                        tool_results.push(ToolResult {
+                                            tool_use_id: call.id.clone(),
+                                            content: rejection_message,
+                                        });
+                                        continue;
+                                    }
+                                };
+                                let approval_bus_enabled =
+                                    approval_bus_rollout_enabled_with_pool(&runtime.pool)
+                                        .await
+                                        .unwrap_or(true);
+
+                                if approval_bus_enabled {
+                                    match find_matching_approval_rule_with_pool(
+                                        &runtime.pool,
                                         &call.name,
                                         &call.input,
-                                        tool_ctx.work_dir.as_deref(),
-                                    );
-                                // 发射确认请求事件，前端弹出确认对话框
-                                let _ = app.emit(
-                                    "tool-confirm-event",
-                                    serde_json::json!({
-                                        "session_id": sid,
-                                        "tool_name": call.name,
-                                        "tool_input": call.input,
-                                        "title": confirm_title,
-                                        "summary": confirm_summary,
-                                        "impact": confirm_impact,
-                                        "irreversible": irreversible,
-                                    }),
-                                );
-
-                                // 创建一次性通道并将发送端存入全局状态
-                                let (tx, rx) = std::sync::mpsc::channel::<bool>();
-                                if let Some(ref confirm_state) = tool_confirm_tx {
+                                    )
+                                    .await
+                                    {
+                                        Ok(Some(_)) => Some(ApprovalDecision::AllowAlways),
+                                        Ok(None) | Err(_) => {
+                                            match request_tool_approval_and_wait(
+                                                &runtime,
+                                                Some(app),
+                                                sid,
+                                                persisted_run_id.as_deref(),
+                                                &call.name,
+                                                &call.id,
+                                                &call.input,
+                                                tool_ctx.work_dir.as_deref(),
+                                                cancel_flag.clone(),
+                                            )
+                                            .await
+                                            {
+                                                Ok(decision) => Some(decision),
+                                                Err(err) => {
+                                                    let rejection_message = err.to_string();
+                                                    let _ = app.emit(
+                                                        "tool-call-event",
+                                                        ToolCallEvent {
+                                                            session_id: sid.to_string(),
+                                                            tool_name: call.name.clone(),
+                                                            tool_input: call.input.clone(),
+                                                            tool_output: Some(
+                                                                rejection_message.clone(),
+                                                            ),
+                                                            status: "error".to_string(),
+                                                        },
+                                                    );
+                                                    if let Some(run_id) = persisted_run_id.as_ref()
+                                                    {
+                                                        let _ = append_tool_run_event(
+                                                            app,
+                                                            sid,
+                                                            SessionRunEvent::ToolCompleted {
+                                                                run_id: run_id.clone(),
+                                                                tool_name: call.name.clone(),
+                                                                call_id: call.id.clone(),
+                                                                input: call.input.clone(),
+                                                                output: rejection_message.clone(),
+                                                                is_error: true,
+                                                            },
+                                                        )
+                                                        .await;
+                                                    }
+                                                    tool_results.push(ToolResult {
+                                                        tool_use_id: call.id.clone(),
+                                                        content: rejection_message,
+                                                    });
+                                                    None
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else if let Some(ref confirm_state) = tool_confirm_tx {
+                                    let (tx, rx) = std::sync::mpsc::channel::<bool>();
                                     if let Ok(mut guard) = confirm_state.lock() {
                                         *guard = Some(tx);
                                     }
+
+                                    let confirmation = wait_for_tool_confirmation(
+                                        &rx,
+                                        std::time::Duration::from_secs(TOOL_CONFIRM_TIMEOUT_SECS),
+                                    );
+
+                                    if let Ok(mut guard) = confirm_state.lock() {
+                                        *guard = None;
+                                    }
+
+                                    match confirmation {
+                                        ToolConfirmationDecision::Confirmed => {
+                                            Some(ApprovalDecision::AllowOnce)
+                                        }
+                                        ToolConfirmationDecision::Rejected => {
+                                            Some(ApprovalDecision::Deny)
+                                        }
+                                        ToolConfirmationDecision::TimedOut => {
+                                            tool_results.push(ToolResult {
+                                                tool_use_id: call.id.clone(),
+                                                content: "工具确认超时，已取消此操作".to_string(),
+                                            });
+                                            None
+                                        }
+                                    }
+                                } else {
+                                    Some(ApprovalDecision::AllowOnce)
+                                }
+                            } else if let Some(ref confirm_state) = tool_confirm_tx {
+                                let (tx, rx) = std::sync::mpsc::channel::<bool>();
+                                if let Ok(mut guard) = confirm_state.lock() {
+                                    *guard = Some(tx);
                                 }
 
                                 let confirmation = wait_for_tool_confirmation(
@@ -807,21 +1054,36 @@ impl AgentExecutor {
                                     std::time::Duration::from_secs(TOOL_CONFIRM_TIMEOUT_SECS),
                                 );
 
-                                // 清理发送端，避免下次误用
-                                if let Some(ref confirm_state) = tool_confirm_tx {
-                                    if let Ok(mut guard) = confirm_state.lock() {
-                                        *guard = None;
-                                    }
+                                if let Ok(mut guard) = confirm_state.lock() {
+                                    *guard = None;
                                 }
 
-                                if confirmation != ToolConfirmationDecision::Confirmed {
-                                    let rejection_message = match confirmation {
-                                        ToolConfirmationDecision::TimedOut => {
-                                            "工具确认超时，已取消此操作"
-                                        }
-                                        ToolConfirmationDecision::Rejected => "用户拒绝了此操作",
-                                        ToolConfirmationDecision::Confirmed => unreachable!(),
-                                    };
+                                match confirmation {
+                                    ToolConfirmationDecision::Confirmed => {
+                                        Some(ApprovalDecision::AllowOnce)
+                                    }
+                                    ToolConfirmationDecision::Rejected => {
+                                        Some(ApprovalDecision::Deny)
+                                    }
+                                    ToolConfirmationDecision::TimedOut => {
+                                        tool_results.push(ToolResult {
+                                            tool_use_id: call.id.clone(),
+                                            content: "工具确认超时，已取消此操作".to_string(),
+                                        });
+                                        None
+                                    }
+                                }
+                            } else {
+                                Some(ApprovalDecision::AllowOnce)
+                            };
+
+                            let Some(approval_decision) = approval_decision else {
+                                continue;
+                            };
+
+                            if approval_decision == ApprovalDecision::Deny {
+                                let rejection_message = "用户拒绝了此操作";
+                                if let (Some(app), Some(sid)) = (app_handle, session_id) {
                                     let _ = app.emit(
                                         "tool-call-event",
                                         ToolCallEvent {
@@ -847,12 +1109,12 @@ impl AgentExecutor {
                                         )
                                         .await;
                                     }
-                                    tool_results.push(ToolResult {
-                                        tool_use_id: call.id.clone(),
-                                        content: rejection_message.to_string(),
-                                    });
-                                    continue;
                                 }
+                                tool_results.push(ToolResult {
+                                    tool_use_id: call.id.clone(),
+                                    content: rejection_message.to_string(),
+                                });
+                                continue;
                             }
                         }
 
@@ -1167,10 +1429,20 @@ impl AgentExecutor {
 
 #[cfg(test)]
 mod tests {
+    use super::request_tool_approval_and_wait;
     use super::wait_for_tool_confirmation;
+    use super::ApprovalWaitRuntime;
     use super::ToolConfirmationDecision;
+    use crate::agent::{FileDeleteTool, Tool, ToolContext};
+    use crate::approval_bus::{ApprovalDecision, ApprovalManager};
+    use crate::session_journal::SessionJournalStore;
+    use serde_json::json;
+    use sqlx::sqlite::SqlitePoolOptions;
+    use std::path::PathBuf;
     use std::sync::mpsc;
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
+    use tempfile::tempdir;
 
     #[test]
     fn tool_confirmation_timeout_is_treated_as_rejection() {
@@ -1185,5 +1457,171 @@ mod tests {
         tx.send(false).expect("send");
         let decision = wait_for_tool_confirmation(&rx, Duration::from_millis(5));
         assert_eq!(decision, ToolConfirmationDecision::Rejected);
+    }
+
+    #[tokio::test]
+    async fn approval_bus_blocks_file_delete_until_resolved() {
+        let db_dir = tempdir().expect("create db dir");
+        let db_url = format!(
+            "sqlite://{}?mode=rwc",
+            db_dir.path().join("approval-test.db").to_string_lossy()
+        );
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect(&db_url)
+            .await
+            .expect("connect sqlite");
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS session_runs (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                user_message_id TEXT NOT NULL DEFAULT '',
+                assistant_message_id TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'queued',
+                buffered_text TEXT NOT NULL DEFAULT '',
+                error_kind TEXT NOT NULL DEFAULT '',
+                error_message TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create session_runs");
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS session_run_events (
+                id TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create session_run_events");
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS approvals (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                run_id TEXT NOT NULL,
+                call_id TEXT NOT NULL DEFAULT '',
+                tool_name TEXT NOT NULL,
+                input_json TEXT NOT NULL DEFAULT '{}',
+                summary TEXT NOT NULL DEFAULT '',
+                impact TEXT NOT NULL DEFAULT '',
+                irreversible INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'pending',
+                decision TEXT NOT NULL DEFAULT '',
+                notify_targets_json TEXT NOT NULL DEFAULT '[]',
+                resume_payload_json TEXT NOT NULL DEFAULT '{}',
+                resolved_by_surface TEXT NOT NULL DEFAULT '',
+                resolved_by_user TEXT NOT NULL DEFAULT '',
+                resolved_at TEXT,
+                resumed_at TEXT,
+                expires_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create approvals");
+
+        let journal_dir = tempdir().expect("create journal dir");
+        let runtime = ApprovalWaitRuntime {
+            pool: pool.clone(),
+            journal: Arc::new(SessionJournalStore::new(journal_dir.path().to_path_buf())),
+            approval_manager: Arc::new(ApprovalManager::default()),
+            pending_bridge: Arc::new(Mutex::new(None)),
+        };
+
+        let work_dir = tempdir().expect("create work dir");
+        let target_dir = work_dir.path().join("danger");
+        std::fs::create_dir_all(target_dir.join("nested")).expect("create target tree");
+        std::fs::write(target_dir.join("nested").join("file.txt"), "danger")
+            .expect("write nested file");
+
+        let input = json!({
+            "path": target_dir.to_string_lossy().to_string(),
+            "recursive": true,
+        });
+        let tool_ctx = ToolContext {
+            work_dir: Some(PathBuf::from(work_dir.path())),
+            allowed_tools: None,
+        };
+
+        let runtime_clone = runtime.clone();
+        let manager = runtime.approval_manager.clone();
+        let pool_clone = pool.clone();
+        let input_clone = input.clone();
+        let tool_ctx_clone = tool_ctx.clone();
+        let work_dir_path = work_dir.path().to_path_buf();
+
+        let handle = tokio::spawn(async move {
+            let decision = request_tool_approval_and_wait(
+                &runtime_clone,
+                None,
+                "sess-approval",
+                Some("run-approval"),
+                "file_delete",
+                "call-approval",
+                &input_clone,
+                Some(work_dir_path.as_path()),
+                None,
+            )
+            .await
+            .expect("approval should resolve");
+            assert_eq!(decision, ApprovalDecision::AllowOnce);
+
+            let tool = FileDeleteTool;
+            tool.execute(input_clone, &tool_ctx_clone)
+        });
+
+        let mut pending_row: Option<(String, String)> = None;
+        for _ in 0..20 {
+            if let Some(row) = sqlx::query_as::<_, (String, String)>(
+                "SELECT id, status FROM approvals WHERE session_id = ?",
+            )
+            .bind("sess-approval")
+            .fetch_optional(&pool)
+            .await
+            .expect("query pending approval")
+            {
+                pending_row = Some(row);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        assert!(target_dir.exists(), "directory must remain before approval");
+
+        let (approval_id, status) = pending_row.expect("load pending approval");
+        assert_eq!(status, "pending");
+
+        manager
+            .resolve_with_pool(
+                &pool_clone,
+                &approval_id,
+                ApprovalDecision::AllowOnce,
+                "desktop",
+                "tester",
+            )
+            .await
+            .expect("resolve pending approval");
+
+        let result = handle
+            .await
+            .expect("join task")
+            .expect("file delete success");
+        assert!(result.contains("成功删除"));
+        assert!(
+            !target_dir.exists(),
+            "directory should be removed after approval"
+        );
     }
 }

@@ -1,4 +1,10 @@
-use super::chat::{AskUserState, CancelFlagState, ToolConfirmState};
+use super::approvals::resolve_approval;
+use super::chat::{
+    ApprovalManagerState, AskUserState, CancelFlagState, PendingApprovalBridgeState,
+    ToolConfirmState,
+};
+use super::skills::DbState;
+use crate::approval_bus::ApprovalDecision;
 use tauri::State;
 
 /// 用户回答 AskUser 工具的问题
@@ -26,8 +32,37 @@ pub async fn answer_user_question(
 #[tauri::command]
 pub async fn confirm_tool_execution(
     confirmed: bool,
+    app: tauri::AppHandle,
+    db: State<'_, DbState>,
+    approvals: State<'_, ApprovalManagerState>,
+    pending_approval_bridge: State<'_, PendingApprovalBridgeState>,
     tool_confirm_state: State<'_, ToolConfirmState>,
 ) -> Result<(), String> {
+    let pending_approval_id = pending_approval_bridge
+        .0
+        .lock()
+        .map_err(|e| format!("锁获取失败: {}", e))?
+        .clone();
+
+    if let Some(approval_id) = pending_approval_id {
+        resolve_approval(
+            app,
+            approval_id,
+            if confirmed {
+                ApprovalDecision::AllowOnce
+            } else {
+                ApprovalDecision::Deny
+            },
+            "desktop_legacy".to_string(),
+            Some("desktop_legacy".to_string()),
+            db,
+            approvals,
+            pending_approval_bridge,
+        )
+        .await?;
+        return Ok(());
+    }
+
     let guard = tool_confirm_state
         .0
         .lock()

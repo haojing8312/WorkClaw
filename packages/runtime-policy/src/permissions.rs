@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 
@@ -56,6 +56,56 @@ pub fn classify_action_risk(tool_name: &str, input: &Value, work_dir: Option<&Pa
         | "web_search" | "web_fetch" => ActionRisk::Normal,
         _ => ActionRisk::Normal,
     }
+}
+
+pub fn approval_rule_fingerprint(tool_name: &str, input: &Value) -> Option<String> {
+    match normalize_tool_name(tool_name).as_str() {
+        "file_delete" => {
+            let path = extract_path(input).trim();
+            if path.is_empty() {
+                return None;
+            }
+            Some(
+                json!({
+                    "tool": "file_delete",
+                    "path": path,
+                    "recursive": input.get("recursive").and_then(Value::as_bool).unwrap_or(false),
+                })
+                .to_string(),
+            )
+        }
+        "bash" => {
+            if classify_bash_risk(input) != ActionRisk::Critical {
+                return None;
+            }
+            let command = input
+                .get("command")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .to_ascii_lowercase();
+            if command.is_empty() {
+                return None;
+            }
+            Some(
+                json!({
+                    "tool": "bash",
+                    "command": command,
+                })
+                .to_string(),
+            )
+        }
+        _ => None,
+    }
+}
+
+pub fn matches_approval_rule_fingerprint(tool_name: &str, input: &Value, fingerprint: &str) -> bool {
+    approval_rule_fingerprint(tool_name, input)
+        .as_deref()
+        .map(|value| value == fingerprint)
+        .unwrap_or(false)
 }
 
 fn classify_write_risk(input: &Value, work_dir: Option<&Path>) -> ActionRisk {

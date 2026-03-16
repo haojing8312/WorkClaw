@@ -947,6 +947,7 @@ fn export_status_label(status: &SessionRunStatus) -> &'static str {
         SessionRunStatus::Queued => "queued",
         SessionRunStatus::Thinking => "thinking",
         SessionRunStatus::ToolCalling => "tool_calling",
+        SessionRunStatus::WaitingApproval => "waiting_approval",
         SessionRunStatus::WaitingUser => "waiting_user",
         SessionRunStatus::Completed => "completed",
         SessionRunStatus::Failed => "failed",

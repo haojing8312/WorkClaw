@@ -130,6 +130,54 @@ pub async fn append_session_run_event_with_pool(
         SessionRunEvent::ToolCompleted { run_id, .. } => {
             upsert_run_status(pool, &run_id, session_id, "thinking", &now, None, None).await?;
         }
+        SessionRunEvent::ApprovalRequested {
+            run_id,
+            approval_id,
+            tool_name,
+            call_id,
+            input,
+            summary,
+            impact,
+            irreversible,
+        } => {
+            sqlx::query(
+                "INSERT INTO approvals (
+                    id, session_id, run_id, call_id, tool_name, input_json, summary, impact,
+                    irreversible, status, decision, notify_targets_json, resume_payload_json,
+                    resolved_by_surface, resolved_by_user, resolved_at, resumed_at, expires_at,
+                    created_at, updated_at
+                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '[]', '{}', '', '', NULL, NULL, NULL, ?, ?)
+                 ON CONFLICT(id) DO UPDATE SET
+                    session_id = excluded.session_id,
+                    run_id = excluded.run_id,
+                    call_id = excluded.call_id,
+                    tool_name = excluded.tool_name,
+                    input_json = excluded.input_json,
+                    summary = excluded.summary,
+                    impact = excluded.impact,
+                    irreversible = excluded.irreversible,
+                    status = excluded.status,
+                    updated_at = excluded.updated_at",
+            )
+            .bind(&approval_id)
+            .bind(session_id)
+            .bind(&run_id)
+            .bind(&call_id)
+            .bind(&tool_name)
+            .bind(input.to_string())
+            .bind(&summary)
+            .bind(impact.unwrap_or_default())
+            .bind(if irreversible { 1_i64 } else { 0_i64 })
+            .bind("pending")
+            .bind(&now)
+            .bind(&now)
+            .execute(pool)
+            .await
+            .map_err(|e| format!("写入 approval 投影失败: {e}"))?;
+
+            upsert_run_status(pool, &run_id, session_id, "waiting_approval", &now, None, None)
+                .await?;
+        }
         SessionRunEvent::RunCompleted { run_id } => {
             upsert_run_status(pool, &run_id, session_id, "completed", &now, None, None).await?;
         }
@@ -236,6 +284,7 @@ fn event_type(event: &SessionRunEvent) -> &'static str {
         SessionRunEvent::AssistantChunkAppended { .. } => "assistant_chunk_appended",
         SessionRunEvent::ToolStarted { .. } => "tool_started",
         SessionRunEvent::ToolCompleted { .. } => "tool_completed",
+        SessionRunEvent::ApprovalRequested { .. } => "approval_requested",
         SessionRunEvent::RunCompleted { .. } => "run_completed",
         SessionRunEvent::RunFailed { .. } => "run_failed",
         SessionRunEvent::RunCancelled { .. } => "run_cancelled",
@@ -248,6 +297,7 @@ fn event_run_id(event: &SessionRunEvent) -> &str {
         | SessionRunEvent::AssistantChunkAppended { run_id, .. }
         | SessionRunEvent::ToolStarted { run_id, .. }
         | SessionRunEvent::ToolCompleted { run_id, .. }
+        | SessionRunEvent::ApprovalRequested { run_id, .. }
         | SessionRunEvent::RunCompleted { run_id }
         | SessionRunEvent::RunFailed { run_id, .. }
         | SessionRunEvent::RunCancelled { run_id, .. } => run_id.as_str(),
