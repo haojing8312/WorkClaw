@@ -6,7 +6,9 @@ fn test_register_browser_compat_tool() {
     let registry = ToolRegistry::new();
     register_browser_compat_tool(&registry, "http://localhost:8765");
 
-    let tool = registry.get("browser").expect("browser should be registered");
+    let tool = registry
+        .get("browser")
+        .expect("browser should be registered");
     let schema = tool.input_schema();
 
     assert!(schema["properties"]["action"].is_object());
@@ -18,6 +20,8 @@ fn test_register_browser_compat_tool() {
         .expect("browser action enum should exist");
     assert!(actions.iter().any(|value| value.as_str() == Some("stop")));
     assert!(!actions.iter().any(|value| value.as_str() == Some("dialog")));
-    assert!(!actions.iter().any(|value| value.as_str() == Some("console")));
+    assert!(!actions
+        .iter()
+        .any(|value| value.as_str() == Some("console")));
     assert!(!actions.iter().any(|value| value.as_str() == Some("pdf")));
 }

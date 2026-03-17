@@ -40,8 +40,13 @@ fn resolve_packaged_node_command(bundle_dir: &Path) -> String {
 }
 
 fn resolve_packaged_sidecar_runtime(bundle_dir: &Path) -> Option<ResolvedSidecarRuntime> {
-    let script_candidates = [bundle_dir.join("dist").join("index.js"), bundle_dir.join("index.js")];
-    let script = script_candidates.into_iter().find(|candidate| candidate.is_file())?;
+    let script_candidates = [
+        bundle_dir.join("dist").join("index.js"),
+        bundle_dir.join("index.js"),
+    ];
+    let script = script_candidates
+        .into_iter()
+        .find(|candidate| candidate.is_file())?;
 
     Some(ResolvedSidecarRuntime {
         command: resolve_packaged_node_command(bundle_dir),
@@ -77,7 +82,12 @@ pub fn resolve_sidecar_runtime(paths: SidecarRuntimePaths) -> Result<ResolvedSid
 
     let dev_candidates = [
         paths.cwd.join("sidecar").join("dist").join("index.js"),
-        paths.cwd.join("..").join("sidecar").join("dist").join("index.js"),
+        paths
+            .cwd
+            .join("..")
+            .join("sidecar")
+            .join("dist")
+            .join("index.js"),
     ];
     for script in dev_candidates {
         searched.push(script.display().to_string());

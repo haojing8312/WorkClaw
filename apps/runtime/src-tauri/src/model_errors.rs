@@ -56,9 +56,7 @@ pub(crate) fn normalize_model_error(raw_message: &str) -> NormalizedModelError {
         || lower.contains("quota")
     {
         ModelErrorKind::RateLimit
-    } else if lower.contains("timeout")
-        || lower.contains("timed out")
-        || lower.contains("deadline")
+    } else if lower.contains("timeout") || lower.contains("timed out") || lower.contains("deadline")
     {
         ModelErrorKind::Timeout
     } else if lower.contains("connection")
@@ -98,9 +96,7 @@ pub(crate) fn model_error_message(kind: ModelErrorKind) -> &'static str {
         }
         ModelErrorKind::Auth => "请检查 API Key、组织权限或接口访问范围是否正确。",
         ModelErrorKind::RateLimit => "模型平台当前触发限流，请稍后重试或降低并发频率。",
-        ModelErrorKind::Timeout => {
-            "模型平台响应超时，请稍后重试，或检查网络和所选模型是否可用。"
-        }
+        ModelErrorKind::Timeout => "模型平台响应超时，请稍后重试，或检查网络和所选模型是否可用。",
         ModelErrorKind::Network => "无法连接到模型接口，请检查 Base URL、网络环境或代理配置。",
         ModelErrorKind::Unknown => "模型平台返回了未识别错误，可查看详细信息进一步排查。",
     }

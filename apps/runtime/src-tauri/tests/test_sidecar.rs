@@ -8,7 +8,8 @@ fn resolve_sidecar_runtime_prefers_packaged_resource_layout() {
     let resource_dir = tmp.path().join("resources");
     let sidecar_dir = resource_dir.join("sidecar-runtime");
     std::fs::create_dir_all(&sidecar_dir).expect("create sidecar resource dir");
-    std::fs::write(sidecar_dir.join("index.js"), "console.log('sidecar');").expect("write sidecar script");
+    std::fs::write(sidecar_dir.join("index.js"), "console.log('sidecar');")
+        .expect("write sidecar script");
     std::fs::write(sidecar_dir.join("node.exe"), "node").expect("write bundled node placeholder");
 
     let resolved = resolve_sidecar_runtime(SidecarRuntimePaths {
@@ -18,7 +19,10 @@ fn resolve_sidecar_runtime_prefers_packaged_resource_layout() {
     .expect("packaged sidecar runtime should resolve");
 
     assert!(resolved.script.ends_with("sidecar-runtime/index.js"));
-    assert!(resolved.command.replace('\\', "/").ends_with("sidecar-runtime/node.exe"));
+    assert!(resolved
+        .command
+        .replace('\\', "/")
+        .ends_with("sidecar-runtime/node.exe"));
 }
 
 #[test]
@@ -26,8 +30,11 @@ fn resolve_sidecar_runtime_falls_back_to_dev_layout() {
     let tmp = tempdir().expect("tempdir");
     let dev_sidecar_dir = tmp.path().join("sidecar").join("dist");
     std::fs::create_dir_all(&dev_sidecar_dir).expect("create dev sidecar dir");
-    std::fs::write(dev_sidecar_dir.join("index.js"), "console.log('dev sidecar');")
-        .expect("write dev sidecar script");
+    std::fs::write(
+        dev_sidecar_dir.join("index.js"),
+        "console.log('dev sidecar');",
+    )
+    .expect("write dev sidecar script");
 
     let resolved = resolve_sidecar_runtime(SidecarRuntimePaths {
         cwd: tmp.path().to_path_buf(),
@@ -60,7 +67,9 @@ async fn test_sidecar_start_and_health_check() {
         resource_dir: None,
     });
     if runtime.is_err() {
-        eprintln!("skipping live sidecar startup test because no runnable sidecar runtime is available");
+        eprintln!(
+            "skipping live sidecar startup test because no runnable sidecar runtime is available"
+        );
         return;
     }
 

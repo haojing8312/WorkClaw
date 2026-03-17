@@ -1,4 +1,6 @@
-use runtime_lib::agent::tools::{register_tool_alias, BashTool, GlobTool, ListDirTool, ReadFileTool};
+use runtime_lib::agent::tools::{
+    register_tool_alias, BashTool, GlobTool, ListDirTool, ReadFileTool,
+};
 use runtime_lib::agent::ToolRegistry;
 use std::sync::Arc;
 

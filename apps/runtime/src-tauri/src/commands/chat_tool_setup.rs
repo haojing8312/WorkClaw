@@ -2,11 +2,10 @@ use super::chat::{AskUserState, SearchCacheState};
 use super::chat_runtime_io as chat_io;
 use crate::agent::tools::search_providers::create_provider;
 use crate::agent::tools::{
-    browser_compat::register_browser_compat_tool,
-    browser_tools::register_browser_tools, AskUserTool, BashKillTool, BashOutputTool, BashTool,
-    ClawhubRecommendTool, ClawhubSearchTool, CompactTool, EmployeeManageTool,
-    GithubRepoDownloadTool, MemoryTool, ProcessManager, SkillInvokeTool, TaskTool, WebSearchTool,
-    register_tool_alias,
+    browser_compat::register_browser_compat_tool, browser_tools::register_browser_tools,
+    register_tool_alias, AskUserTool, BashKillTool, BashOutputTool, BashTool, ClawhubRecommendTool,
+    ClawhubSearchTool, CompactTool, EmployeeManageTool, GithubRepoDownloadTool, MemoryTool,
+    ProcessManager, SkillInvokeTool, TaskTool, WebSearchTool,
 };
 use crate::agent::AgentExecutor;
 use runtime_chat_app::{

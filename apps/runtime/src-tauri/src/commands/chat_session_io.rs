@@ -318,10 +318,7 @@ pub(crate) async fn list_sessions_with_pool(
             .cloned()
             .unwrap_or_default();
         let (source_channel, source_label) = resolve_im_session_source(Some(&im_source_channel));
-        let runtime_status = runtime_status_by_session_id
-            .get(&id)
-            .cloned()
-            .flatten();
+        let runtime_status = runtime_status_by_session_id.get(&id).cloned().flatten();
         let display_title = derive_session_display_title_with_pool(
             pool,
             &id,

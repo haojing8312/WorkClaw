@@ -8,8 +8,7 @@ pub fn register_browser_compat_tool(registry: &ToolRegistry, sidecar_url: &str) 
         sidecar_url.to_string(),
         "/api/browser/compat".to_string(),
         "browser".to_string(),
-        "OpenClaw 兼容浏览器工具。通过 action/profile/targetId 等参数驱动浏览器动作。"
-            .to_string(),
+        "OpenClaw 兼容浏览器工具。通过 action/profile/targetId 等参数驱动浏览器动作。".to_string(),
         browser_compat_schema(),
     )));
 }

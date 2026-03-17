@@ -76,7 +76,9 @@ fn initialize_runtime_state(app: &mut tauri::App, pool: sqlx::SqlitePool) -> Man
     let journal_store = Arc::new(SessionJournalStore::new(journal_root));
     app.manage(SessionJournalStateHandle(journal_store));
 
-    let sidecar_manager = Arc::new(SidecarManager::with_resource_dir(app.path().resource_dir().ok()));
+    let sidecar_manager = Arc::new(SidecarManager::with_resource_dir(
+        app.path().resource_dir().ok(),
+    ));
     app.manage(sidecar_manager.clone());
 
     let feishu_relay_state = FeishuEventRelayState::default();

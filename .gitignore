@@ -9,6 +9,7 @@ target/
 *.pdb
 *.ilk
 reference/
+references/
 package-lock.json
  
 # local/unwanted artifacts
