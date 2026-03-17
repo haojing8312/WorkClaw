@@ -1,9 +1,9 @@
 ## WorkClaw Windows Release
 
-- Highlights in `v0.3.0`:
-  - Added approval queue, approval persistence, and recovery flow for multi-step guarded agent actions.
-  - Added OpenClaw browser compatibility and refreshed provider default model presets for smoother model/tool integration.
-  - Fixed running-session recovery so in-progress chat output and runtime status remain visible when switching between concurrent tasks.
+- Highlights in `v0.3.1`:
+  - Added safer run-stop handling for workspace boundary violations, with clearer blocked-state feedback during agent execution.
+  - Improved run continuation after max-turn limits and stabilized session hydration so reloads recover chat state more reliably.
+  - Bundled the browser sidecar runtime for packaged builds and tightened compatibility coverage for local automation flows.
 
 - Recommended download: `*-setup.exe` for direct install.
 - Enterprise deployment: `*.msi` for IT-managed installation and manual upgrades.
