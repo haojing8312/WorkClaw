@@ -36,6 +36,7 @@ pub(crate) struct PrepareSendMessageParams<'a> {
     pub session_id: &'a str,
     pub user_message: &'a str,
     pub user_message_parts: &'a [Value],
+    pub max_iterations_override: Option<usize>,
 }
 
 fn build_attachment_context_text(parts: &[Value]) -> Option<String> {
@@ -251,7 +252,12 @@ pub(crate) async fn prepare_send_message_context(
     } else {
         RunBudgetScope::Skill
     };
-    let max_iter = RunBudgetPolicy::resolve(budget_scope, skill_config.max_iterations).max_turns;
+    let default_max_iter =
+        RunBudgetPolicy::resolve(budget_scope, skill_config.max_iterations).max_turns;
+    let max_iter = params
+        .max_iterations_override
+        .map(|override_value| override_value.max(1))
+        .unwrap_or(default_max_iter);
 
     let prepared_runtime_tools = chat_tool_setup::prepare_runtime_tools(ToolSetupParams {
         app: params.app,

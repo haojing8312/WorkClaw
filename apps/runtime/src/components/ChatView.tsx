@@ -94,6 +94,9 @@ function clearSessionDraft(sessionId: string) {
   persistSessionDraft(sessionId, "");
 }
 
+const CONTINUE_MESSAGE_TEXT = "继续";
+const CONTINUE_BUDGET_INCREMENT = 100;
+
 interface Props {
   skill: SkillManifest;
   models: ModelConfig[];
@@ -1373,8 +1376,16 @@ export function ChatView({
             parts: [{ type: "text", text: request.trim() }],
           }
         : request;
-    const optimisticContent = buildOptimisticUserContent(normalizedRequest.parts);
-    if (!normalizedRequest.parts.length || !optimisticContent.trim()) return;
+    const continuationRequest =
+      shouldGrantContinuationBudget(normalizedRequest) &&
+      normalizedRequest.maxIterations === undefined
+        ? {
+            ...normalizedRequest,
+            maxIterations: CONTINUE_BUDGET_INCREMENT,
+          }
+        : normalizedRequest;
+    const optimisticContent = buildOptimisticUserContent(continuationRequest.parts);
+    if (!continuationRequest.parts.length || !optimisticContent.trim()) return;
 
     setInput("");
     setAttachedFiles([]); // 发送后清空附件
@@ -1384,7 +1395,7 @@ export function ChatView({
       {
         role: "user",
         content: optimisticContent,
-        contentParts: normalizedRequest.parts,
+        contentParts: continuationRequest.parts,
         created_at: new Date().toISOString(),
       },
     ]);
@@ -1397,7 +1408,7 @@ export function ChatView({
     setSubAgentBuffer("");
     setSubAgentRoleName("");
     try {
-      await invoke("send_message", { request: normalizedRequest });
+      await invoke("send_message", { request: continuationRequest });
       onSessionUpdate?.();
     } catch (e) {
       const preserveInlineError = shouldPreserveInlineSendError(e);
@@ -1660,6 +1671,13 @@ export function ChatView({
   const webSearchEntries = useMemo(() => buildWebSearchViewModel(sidePanelMessages), [sidePanelMessages]);
   const failedSessionRuns = useMemo(
     () => sessionRuns.filter((run) => run.status === "failed" || run.status === "cancelled"),
+    [sessionRuns]
+  );
+  const latestMaxTurnsRun = useMemo(
+    () =>
+      [...sessionRuns]
+        .reverse()
+        .find((run) => (run.error_kind || "").trim().toLowerCase() === "max_turns") ?? null,
     [sessionRuns]
   );
   const failedRunsByAssistantMessageId = useMemo(() => {
@@ -2387,7 +2405,8 @@ export function ChatView({
     if (run.error_kind === "max_turns") {
       return {
         title: "任务达到执行步数上限",
-        message: run.error_message || "已达到执行步数上限，系统已自动停止。",
+        message:
+          run.error_message || "已达到执行步数上限，系统已自动停止。\n你可以点击下方“继续执行”，或直接发送“继续”来再追加 100 步预算。",
         rawMessage: null as string | null,
       };
     }
@@ -2430,8 +2449,22 @@ export function ChatView({
     };
   }
 
+  function isContinuationText(text: string) {
+    const normalized = text.trim().toLowerCase();
+    return normalized === "继续" || normalized === "继续执行" || normalized === "continue";
+  }
+
+  function shouldGrantContinuationBudget(request: SendMessageRequest) {
+    if (!latestMaxTurnsRun) return false;
+    if (request.parts.length !== 1) return false;
+    const [part] = request.parts;
+    if (part.type !== "text") return false;
+    return isContinuationText(part.text);
+  }
+
   function renderRunFailureCard(run: SessionRunProjection) {
     const display = getRunFailureDisplay(run);
+    const showContinueAction = run.error_kind === "max_turns";
 
     return (
       <motion.div
@@ -2457,6 +2490,24 @@ export function ChatView({
             <div className="whitespace-pre-wrap">{run.buffered_text}</div>
           </div>
         )}
+        {showContinueAction ? (
+          <div className="mt-3">
+            <button
+              type="button"
+              onClick={() =>
+                void sendContent({
+                  sessionId,
+                  parts: [{ type: "text", text: CONTINUE_MESSAGE_TEXT }],
+                  maxIterations: CONTINUE_BUDGET_INCREMENT,
+                })
+              }
+              disabled={streaming}
+              className="inline-flex items-center rounded-lg bg-amber-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-amber-700 disabled:cursor-not-allowed disabled:bg-amber-300"
+            >
+              继续执行
+            </button>
+          </div>
+        ) : null}
       </motion.div>
     );
   }

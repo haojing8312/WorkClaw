@@ -739,6 +739,7 @@ export type ChatMessagePart =
 export interface SendMessageRequest {
   sessionId: string;
   parts: ChatMessagePart[];
+  maxIterations?: number;
 }
 
 /// 兼容旧附件实现，待迁移到 PendingAttachment/ChatMessagePart。

@@ -1,6 +1,6 @@
 use crate::agent::permissions::PermissionMode;
-use crate::model_errors::normalize_model_error;
 use crate::agent::run_guard::{parse_run_stop_reason, RunStopReasonKind};
+use crate::model_errors::normalize_model_error;
 #[cfg(test)]
 use serde_json::Value;
 
@@ -450,7 +450,7 @@ mod tests {
     #[test]
     fn classify_model_route_error_detects_structured_run_stop_reason() {
         let kind = classify_model_route_error(
-            "__WORKCLAW_RUN_STOP__:{\"kind\":\"max_turns\",\"title\":\"任务达到执行步数上限\",\"message\":\"已达到执行步数上限，系统已自动停止。\",\"detail\":\"达到最大迭代次数 12\"}",
+            "__WORKCLAW_RUN_STOP__:{\"kind\":\"max_turns\",\"title\":\"任务达到执行步数上限\",\"message\":\"已达到执行步数上限，系统已自动停止。\",\"detail\":\"达到最大迭代次数 100\"}",
         );
         assert_eq!(kind, ModelRouteErrorKind::MaxTurns);
         assert_eq!(model_route_error_kind_key(kind), "max_turns");

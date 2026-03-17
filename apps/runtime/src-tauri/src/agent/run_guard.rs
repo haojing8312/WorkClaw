@@ -22,27 +22,27 @@ impl RunBudgetPolicy {
     pub fn for_scope(scope: RunBudgetScope) -> Self {
         match scope {
             RunBudgetScope::GeneralChat => Self {
-                max_turns: 12,
+                max_turns: 100,
                 repeated_tool_call_limit: 6,
                 no_progress_limit: 5,
             },
             RunBudgetScope::Skill => Self {
-                max_turns: 16,
+                max_turns: 100,
                 repeated_tool_call_limit: 6,
                 no_progress_limit: 5,
             },
             RunBudgetScope::Employee => Self {
-                max_turns: 12,
+                max_turns: 100,
                 repeated_tool_call_limit: 6,
                 no_progress_limit: 5,
             },
             RunBudgetScope::SubAgent => Self {
-                max_turns: 8,
+                max_turns: 100,
                 repeated_tool_call_limit: 5,
                 no_progress_limit: 4,
             },
             RunBudgetScope::BrowserHeavy => Self {
-                max_turns: 24,
+                max_turns: 100,
                 repeated_tool_call_limit: 8,
                 no_progress_limit: 6,
             },
@@ -440,15 +440,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn run_budget_policy_defaults_general_chat_to_12_turns() {
+    fn run_budget_policy_defaults_general_chat_to_100_turns() {
         let policy = RunBudgetPolicy::for_scope(RunBudgetScope::GeneralChat);
-        assert_eq!(policy.max_turns, 12);
+        assert_eq!(policy.max_turns, 100);
     }
 
     #[test]
-    fn run_budget_policy_defaults_skill_to_16_turns() {
+    fn run_budget_policy_defaults_skill_to_100_turns() {
         let policy = RunBudgetPolicy::for_scope(RunBudgetScope::Skill);
-        assert_eq!(policy.max_turns, 16);
+        assert_eq!(policy.max_turns, 100);
     }
 
     #[test]
@@ -466,7 +466,7 @@ mod tests {
         assert_eq!(decoded.kind, RunStopReasonKind::MaxTurns);
         assert_eq!(decoded.title, "任务达到执行步数上限");
         assert_eq!(decoded.message, "已达到执行步数上限，系统已自动停止。");
-        assert_eq!(decoded.detail.as_deref(), Some("达到最大迭代次数 12"));
+        assert_eq!(decoded.detail.as_deref(), Some("达到最大迭代次数 100"));
     }
 
     #[test]

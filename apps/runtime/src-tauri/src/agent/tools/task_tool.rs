@@ -68,6 +68,14 @@ impl TaskTool {
             "bash".to_string(),
         ]
     }
+
+    fn budget_for_agent_type(agent_type: &str) -> (Option<Vec<String>>, usize) {
+        match agent_type {
+            "explore" => (Some(Self::get_explore_tools()), 100),
+            "plan" => (Some(Self::get_plan_tools()), 100),
+            _ => (None, 100), // general-purpose: 全部工具
+        }
+    }
 }
 
 impl Tool for TaskTool {
@@ -133,11 +141,8 @@ impl Tool for TaskTool {
         };
 
         // 根据类型确定工具白名单和迭代限制
-        let (allowed_tools, max_iter): (Option<Vec<String>>, usize) = match agent_type.as_str() {
-            "explore" => (Some(Self::get_explore_tools()), 15),
-            "plan" => (Some(Self::get_plan_tools()), 20),
-            _ => (None, 30), // general-purpose: 全部工具
-        };
+        let (allowed_tools, max_iter): (Option<Vec<String>>, usize) =
+            Self::budget_for_agent_type(agent_type.as_str());
 
         // 在闭包外保留副本，用于之后的格式化输出
         let agent_type_display = agent_type.clone();
@@ -268,5 +273,46 @@ impl Tool for TaskTool {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TaskTool;
+
+    #[test]
+    fn task_tool_uses_100_turn_budget_for_explore_agents() {
+        let (allowed_tools, max_iter) = TaskTool::budget_for_agent_type("explore");
+        assert_eq!(max_iter, 100);
+        assert_eq!(
+            allowed_tools,
+            Some(vec![
+                "read_file".to_string(),
+                "glob".to_string(),
+                "grep".to_string()
+            ])
+        );
+    }
+
+    #[test]
+    fn task_tool_uses_100_turn_budget_for_plan_agents() {
+        let (allowed_tools, max_iter) = TaskTool::budget_for_agent_type("plan");
+        assert_eq!(max_iter, 100);
+        assert_eq!(
+            allowed_tools,
+            Some(vec![
+                "read_file".to_string(),
+                "glob".to_string(),
+                "grep".to_string(),
+                "bash".to_string()
+            ])
+        );
+    }
+
+    #[test]
+    fn task_tool_uses_100_turn_budget_for_general_purpose_agents() {
+        let (allowed_tools, max_iter) = TaskTool::budget_for_agent_type("general-purpose");
+        assert_eq!(max_iter, 100);
+        assert_eq!(allowed_tools, None);
     }
 }

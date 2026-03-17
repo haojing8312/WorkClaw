@@ -76,6 +76,8 @@ pub struct SendMessageRequest {
     #[serde(rename = "sessionId")]
     pub session_id: String,
     pub parts: Vec<SendMessagePart>,
+    #[serde(rename = "maxIterations", default)]
+    pub max_iterations: Option<usize>,
 }
 
 #[derive(Debug, Clone, Deserialize, serde::Serialize)]
@@ -264,6 +266,7 @@ pub async fn send_message(
             session_id: &session_id,
             user_message: &user_message,
             user_message_parts: &user_message_parts,
+            max_iterations_override: request.max_iterations,
         })
         .await?;
 
