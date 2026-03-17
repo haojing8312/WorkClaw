@@ -78,6 +78,7 @@ const BUILTIN_EMPLOYEE_CREATOR_SKILL_ID = "builtin-employee-creator";
 const MODEL_SETUP_HINT_DISMISSED_KEY = "workclaw:model-setup-hint-dismissed";
 const INITIAL_MODEL_SETUP_COMPLETED_KEY = "workclaw:initial-model-setup-completed";
 const LAST_SELECTED_SESSION_ID_KEY = "workclaw:last-selected-session-id";
+const LAST_SELECTED_SESSION_SNAPSHOT_KEY = "workclaw:last-selected-session-snapshot";
 const DEFAULT_OPERATION_PERMISSION_MODE: "standard" | "full_access" = "standard";
 const EMPLOYEE_ASSISTANT_DISPLAY_NAME = "智能体员工助手";
 const EMPLOYEE_CREATOR_STARTER_PROMPT =
@@ -294,6 +295,45 @@ function readPersistedLastSelectedSessionId(): string | null {
   }
 }
 
+function readPersistedLastSelectedSessionSnapshot(): SessionInfo | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    const raw = window.localStorage.getItem(LAST_SELECTED_SESSION_SNAPSHOT_KEY);
+    if (!raw) {
+      return null;
+    }
+    const parsed = JSON.parse(raw) as SessionInfo | null;
+    if (!parsed || typeof parsed !== "object") {
+      return null;
+    }
+    const sessionId = typeof parsed.id === "string" ? parsed.id.trim() : "";
+    if (!sessionId) {
+      return null;
+    }
+    return {
+      ...parsed,
+      id: sessionId,
+      title: typeof parsed.title === "string" && parsed.title.trim() ? parsed.title.trim() : DEFAULT_SESSION_TITLE,
+      display_title:
+        typeof parsed.display_title === "string" && parsed.display_title.trim()
+          ? parsed.display_title.trim()
+          : undefined,
+      created_at: typeof parsed.created_at === "string" ? parsed.created_at : "",
+      model_id: typeof parsed.model_id === "string" ? parsed.model_id : "",
+      skill_id: typeof parsed.skill_id === "string" ? parsed.skill_id.trim() : "",
+      session_mode:
+        typeof parsed.session_mode === "string" && parsed.session_mode.trim()
+          ? (parsed.session_mode as SessionInfo["session_mode"])
+          : "general",
+      team_id: typeof parsed.team_id === "string" ? parsed.team_id : "",
+    };
+  } catch {
+    return null;
+  }
+}
+
 function persistLastSelectedSessionId(sessionId: string | null) {
   if (typeof window === "undefined") {
     return;
@@ -304,6 +344,21 @@ function persistLastSelectedSessionId(sessionId: string | null) {
       return;
     }
     window.localStorage.removeItem(LAST_SELECTED_SESSION_ID_KEY);
+  } catch {
+    // ignore localStorage failures
+  }
+}
+
+function persistLastSelectedSessionSnapshot(session: SessionInfo | null) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    if (session?.id?.trim()) {
+      window.localStorage.setItem(LAST_SELECTED_SESSION_SNAPSHOT_KEY, JSON.stringify(session));
+      return;
+    }
+    window.localStorage.removeItem(LAST_SELECTED_SESSION_SNAPSHOT_KEY);
   } catch {
     // ignore localStorage failures
   }
@@ -330,9 +385,13 @@ function buildEmployeeAssistantUpdatePrompt(employee: AgentEmployee): string {
 }
 
 export default function App() {
+  const initialSelectedSessionSnapshot = readPersistedLastSelectedSessionSnapshot();
   const [skills, setSkills] = useState<SkillManifest[]>([]);
   const [models, setModels] = useState<ModelConfig[]>([]);
-  const [selectedSkillId, setSelectedSkillId] = useState<string | null>(null);
+  const [hasHydratedModelConfigs, setHasHydratedModelConfigs] = useState(false);
+  const [selectedSkillId, setSelectedSkillId] = useState<string | null>(
+    () => initialSelectedSessionSnapshot?.skill_id?.trim() || null
+  );
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(() => readPersistedLastSelectedSessionId());
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [showInstall, setShowInstall] = useState(false);
@@ -394,6 +453,7 @@ export default function App() {
   const [quickModelError, setQuickModelError] = useState("");
   const [quickModelApiKeyVisible, setQuickModelApiKeyVisible] = useState(false);
   const [searchConfigs, setSearchConfigs] = useState<ModelConfig[]>([]);
+  const [hasHydratedSearchConfigs, setHasHydratedSearchConfigs] = useState(false);
   const [quickSearchForm, setQuickSearchForm] = useState(EMPTY_SEARCH_CONFIG_FORM);
   const [quickSearchSaving, setQuickSearchSaving] = useState(false);
   const [quickSearchTesting, setQuickSearchTesting] = useState(false);
@@ -436,6 +496,7 @@ export default function App() {
   const loadSessionsRequestIdRef = useRef(0);
   const hasLoadedSessionsRef = useRef(false);
   const initialPersistedSessionIdRef = useRef<string | null>(selectedSessionId);
+  const initialSelectedSessionSnapshotRef = useRef<SessionInfo | null>(initialSelectedSessionSnapshot);
   const hasResolvedInitialPersistedSessionRef = useRef(false);
   const employeesRef = useRef<AgentEmployee[]>([]);
   const quickModelApiKeyInputRef = useRef<HTMLInputElement | null>(null);
@@ -946,13 +1007,21 @@ export default function App() {
   }
 
   async function loadModels() {
-    const list = await invoke<ModelConfig[]>("list_model_configs");
-    setModels(list);
+    try {
+      const list = await invoke<ModelConfig[]>("list_model_configs");
+      setModels(list);
+    } finally {
+      setHasHydratedModelConfigs(true);
+    }
   }
 
   async function loadSearchConfigs() {
-    const list = await invoke<ModelConfig[]>("list_search_configs");
-    setSearchConfigs(Array.isArray(list) ? list : []);
+    try {
+      const list = await invoke<ModelConfig[]>("list_search_configs");
+      setSearchConfigs(Array.isArray(list) ? list : []);
+    } finally {
+      setHasHydratedSearchConfigs(true);
+    }
   }
 
   async function loadEmployees(): Promise<AgentEmployee[]> {
@@ -1017,14 +1086,31 @@ export default function App() {
     persistLastSelectedSessionId(selectedSessionId);
   }, [selectedSessionId]);
 
+  const hydratedSelectedSession =
+    !hasLoadedSessionsRef.current &&
+    selectedSessionId &&
+    initialSelectedSessionSnapshotRef.current?.id === selectedSessionId
+      ? initialSelectedSessionSnapshotRef.current
+      : null;
+
+  const visibleSessions = useMemo(() => {
+    if (!hydratedSelectedSession) {
+      return sessions;
+    }
+    return mergeSessionInfo(sessions, hydratedSelectedSession);
+  }, [hydratedSelectedSession, sessions]);
+
   useEffect(() => {
     if (!selectedSessionId || skills.length === 0) {
       return;
     }
 
-    const activeSession = sessions.find((item) => item.id === selectedSessionId);
+    const activeSession = visibleSessions.find((item) => item.id === selectedSessionId);
     if (activeSession) {
-      if (selectedSessionId === initialPersistedSessionIdRef.current) {
+      if (
+        selectedSessionId === initialPersistedSessionIdRef.current &&
+        (hasLoadedSessionsRef.current || activeSession.id !== hydratedSelectedSession?.id)
+      ) {
         hasResolvedInitialPersistedSessionRef.current = true;
       }
 
@@ -1043,7 +1129,7 @@ export default function App() {
       hasResolvedInitialPersistedSessionRef.current = true;
       setSelectedSessionId(null);
     }
-  }, [selectedSessionId, selectedSkillId, sessions, skills]);
+  }, [hydratedSelectedSession?.id, selectedSessionId, selectedSkillId, skills, visibleSessions]);
 
   async function handleCreateSession(initialMessage = "") {
     const skillId = getDefaultSkillId(skills);
@@ -2057,7 +2143,10 @@ export default function App() {
   }
 
   const selectedSkill = skills.find((s) => s.id === selectedSkillId) ?? null;
-  const selectedSession = sessions.find((s) => s.id === selectedSessionId);
+  const selectedSession = visibleSessions.find((s) => s.id === selectedSessionId);
+  useEffect(() => {
+    persistLastSelectedSessionSnapshot(selectedSessionId ? selectedSession ?? hydratedSelectedSession : null);
+  }, [hydratedSelectedSession, selectedSession, selectedSessionId]);
   const findEmployeeBySessionReference = useCallback(
     (employeeRef?: string | null) => {
       const normalizedRef = (employeeRef || "").trim().toLowerCase();
@@ -2100,8 +2189,11 @@ export default function App() {
     };
   })();
   const selectedSessionImManaged = selectedSessionId ? imManagedSessionIds.includes(selectedSessionId) : false;
-  const shouldShowModelSetupGate = isBlockingInitialModelSetup || forceShowModelSetupGate;
+  const hasHydratedInitialModelSetupState = hasHydratedModelConfigs && hasHydratedSearchConfigs;
+  const shouldShowModelSetupGate =
+    hasHydratedInitialModelSetupState && (isBlockingInitialModelSetup || forceShowModelSetupGate);
   const shouldShowModelSetupHint =
+    hasHydratedInitialModelSetupState &&
     !showSettings &&
     (models.length === 0 || searchConfigs.length === 0) &&
     hasCompletedInitialModelSetup &&
@@ -2121,7 +2213,7 @@ export default function App() {
           navigate("employees");
         }}
         selectedSkillId={selectedSkillId}
-        sessions={sessions}
+        sessions={visibleSessions}
         selectedSessionId={selectedSessionId}
         onSelectSession={handleSelectSession}
         onDeleteSession={handleDeleteSession}

@@ -22,6 +22,16 @@ let mockSearchConfigs: Array<{
   is_default: boolean;
 }> = [];
 
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
 }));
@@ -242,6 +252,74 @@ describe("App model setup hint", () => {
       expect(window.localStorage.getItem(MODEL_SETUP_HINT_DISMISSED_KEY)).toBeNull();
     });
     expect(screen.queryByTestId("model-setup-hint")).not.toBeInTheDocument();
+  });
+
+  test("does not flash the setup hint during reload while configured models are still loading", async () => {
+    window.localStorage.setItem(INITIAL_MODEL_SETUP_COMPLETED_KEY, "1");
+    mockModels = [
+      {
+        id: "model-a",
+        name: "Model A",
+        api_format: "openai",
+        base_url: "https://example.com",
+        model_name: "gpt-4o-mini",
+        is_default: true,
+      },
+    ];
+    mockSearchConfigs = [
+      {
+        id: "search-a",
+        name: "Brave Search",
+        api_format: "search_brave",
+        base_url: "https://api.search.brave.com",
+        model_name: "",
+        is_default: true,
+      },
+    ];
+
+    const deferredModels = createDeferred<typeof mockModels>();
+    const deferredSearchConfigs = createDeferred<typeof mockSearchConfigs>();
+
+    invokeMock.mockImplementation((command: string, payload?: any) => {
+      if (command === "list_skills") {
+        return Promise.resolve([
+          {
+            id: "builtin-general",
+            name: "General",
+            description: "desc",
+            version: "1.0.0",
+            author: "test",
+            recommended_model: "",
+            tags: [],
+            created_at: new Date().toISOString(),
+          },
+        ]);
+      }
+      if (command === "list_model_configs") {
+        return deferredModels.promise;
+      }
+      if (command === "list_search_configs") {
+        return deferredSearchConfigs.promise;
+      }
+      if (command === "list_agent_employees") {
+        return Promise.resolve([]);
+      }
+      if (command === "save_model_config") {
+        return Promise.resolve(payload?.config?.id ?? "model-quick");
+      }
+      return Promise.resolve(null);
+    });
+
+    render(<App />);
+
+    expect(screen.queryByTestId("model-setup-hint")).not.toBeInTheDocument();
+
+    deferredModels.resolve(mockModels);
+    deferredSearchConfigs.resolve(mockSearchConfigs);
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("model-setup-hint")).not.toBeInTheDocument();
+    });
   });
 
   test("advances to the search step after saving model config from quick setup", async () => {
