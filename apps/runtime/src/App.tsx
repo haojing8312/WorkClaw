@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -12,6 +13,8 @@ import {
   Eye,
   EyeOff,
   KeyRound,
+  Minus,
+  Square,
   Sparkles,
   Wand2,
   X,
@@ -47,6 +50,7 @@ import {
   ExpertPreviewPayload,
   ExpertPreviewResult,
 } from "./components/experts/ExpertCreateView";
+import workclawLogo from "./assets/branding/workclaw-logo.png";
 import {
   AgentEmployee,
   ClawhubInstallRequest,
@@ -149,6 +153,17 @@ const MODEL_SETUP_STEPS: Array<{ title: string; description: string }> = [
 ];
 
 const MODEL_SETUP_OUTCOMES = ["创建会话", "执行技能", "驱动智能体员工协作"];
+
+function getDesktopWindow() {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    return getCurrentWindow();
+  } catch {
+    return null;
+  }
+}
 
 type ImBridgeSessionContext = {
   threadId: string;
@@ -451,6 +466,114 @@ const SHOW_DEV_MODEL_SETUP_TOOLS = import.meta.env.DEV || import.meta.env.MODE =
 function buildEmployeeAssistantUpdatePrompt(employee: AgentEmployee): string {
   const employeeCode = (employee.employee_id || employee.role_id || employee.id || "").trim();
   return `调整员工任务：请帮我修改智能体员工「${employee.name}」（employee_id: ${employeeCode}）。先确认修改目标，再给出 update_employee 配置草案（包含变更字段与理由），待我确认后再执行。`;
+}
+
+function DesktopTitleBar() {
+  const [isWindowMaximized, setIsWindowMaximized] = useState(false);
+
+  useEffect(() => {
+    const desktopWindow = getDesktopWindow();
+    if (!desktopWindow) {
+      return;
+    }
+
+    let cancelled = false;
+    void desktopWindow
+      .isMaximized()
+      .then((value) => {
+        if (!cancelled) {
+          setIsWindowMaximized(value);
+        }
+      })
+      .catch((error) => {
+        console.warn("Failed to read window maximized state", error);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleWindowAction = useCallback(async (action: "minimize" | "toggleMaximize" | "close") => {
+    const desktopWindow = getDesktopWindow();
+    if (!desktopWindow) {
+      return;
+    }
+    try {
+      if (action === "toggleMaximize") {
+        const maximized = await desktopWindow.isMaximized();
+        if (maximized) {
+          await desktopWindow.unmaximize();
+        } else {
+          await desktopWindow.maximize();
+        }
+        setIsWindowMaximized(!maximized);
+        return;
+      }
+      await desktopWindow[action]();
+    } catch (error) {
+      console.warn(`Failed to execute desktop window action: ${action}`, error);
+      void reportFrontendDiagnostic({
+        kind: "window_control_error",
+        message: `Desktop window action failed: ${action}`,
+        stack: error instanceof Error ? error.stack : undefined,
+        href: typeof window !== "undefined" ? window.location?.href : undefined,
+      });
+    }
+  }, []);
+
+  return (
+    <header
+      data-testid="app-titlebar"
+      className="sm-titlebar sm-divider flex h-11 items-center border-b px-3"
+    >
+      <div className="flex min-w-0 items-center gap-2.5">
+        <div className="flex h-7 w-7 items-center justify-center rounded-[10px] border border-[var(--sm-border)] bg-[var(--sm-surface)] shadow-[var(--sm-shadow-sm)]">
+          <img src={workclawLogo} alt="" className="h-5 w-5 object-contain" />
+        </div>
+        <span className="text-[13px] font-medium tracking-[0.01em] text-[var(--sm-text-muted)]">WorkClaw</span>
+      </div>
+      <div
+        data-tauri-drag-region
+        className="mx-3 min-w-0 flex-1 self-stretch"
+        onDoubleClick={() => {
+          void handleWindowAction("toggleMaximize");
+        }}
+      />
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          aria-label="最小化窗口"
+          className="sm-window-control"
+          onClick={() => {
+            void handleWindowAction("minimize");
+          }}
+        >
+          <Minus className="h-3.5 w-3.5" />
+        </button>
+        <button
+          type="button"
+          aria-label="最大化窗口"
+          className="sm-window-control"
+          onClick={() => {
+            void handleWindowAction("toggleMaximize");
+          }}
+        >
+          <Square className={"h-3.5 w-3.5 " + (isWindowMaximized ? "opacity-80" : "")} />
+        </button>
+        <button
+          type="button"
+          aria-label="关闭窗口"
+          className="sm-window-control sm-window-control-danger"
+          onClick={() => {
+            void handleWindowAction("close");
+          }}
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+    </header>
+  );
 }
 
 export default function App() {
@@ -2485,33 +2608,35 @@ export default function App() {
     !dismissedModelSetupHint;
 
   return (
-    <div className="sm-app flex h-screen overflow-hidden">
-      <Sidebar
-        activeMainView={activeMainView}
-        onOpenStartTask={handleOpenStartTask}
-        onOpenExperts={() => {
-          setShowSettings(false);
-          navigate("experts");
-        }}
-        onOpenEmployees={() => {
-          setShowSettings(false);
-          navigate("employees");
-        }}
-        selectedSkillId={selectedSkillId}
-        sessions={visibleSessions}
-        selectedSessionId={selectedSessionId}
-        onSelectSession={handleSelectSession}
-        onDeleteSession={handleDeleteSession}
-        onSettings={() => {
-          navigate("start-task");
-          setShowSettings(true);
-        }}
-        onSearchSessions={handleSearchSessions}
-        onExportSession={handleExportSession}
-        onCollapse={() => setSidebarCollapsed((prev) => !prev)}
-        collapsed={sidebarCollapsed}
-      />
-      <div className="flex-1 overflow-hidden flex flex-col">
+    <div className="sm-app flex h-screen flex-col overflow-hidden">
+      <DesktopTitleBar />
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        <Sidebar
+          activeMainView={activeMainView}
+          onOpenStartTask={handleOpenStartTask}
+          onOpenExperts={() => {
+            setShowSettings(false);
+            navigate("experts");
+          }}
+          onOpenEmployees={() => {
+            setShowSettings(false);
+            navigate("employees");
+          }}
+          selectedSkillId={selectedSkillId}
+          sessions={visibleSessions}
+          selectedSessionId={selectedSessionId}
+          onSelectSession={handleSelectSession}
+          onDeleteSession={handleDeleteSession}
+          onSettings={() => {
+            navigate("start-task");
+            setShowSettings(true);
+          }}
+          onSearchSessions={handleSearchSessions}
+          onExportSession={handleExportSession}
+          onCollapse={() => setSidebarCollapsed((prev) => !prev)}
+          collapsed={sidebarCollapsed}
+        />
+        <div className="flex flex-1 flex-col overflow-hidden">
         {shouldShowModelSetupHint && (
           <div className="px-4 pt-4">
             <div
@@ -3335,6 +3460,7 @@ export default function App() {
             </AnimatePresence>
           </div>
         </div>
+      </div>
       </div>
       {showInstall && (
         <InstallDialog onInstalled={handleInstalled} onClose={() => setShowInstall(false)} />

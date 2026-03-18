@@ -270,7 +270,7 @@ describe("ChatView thinking block", () => {
       expect(screen.getByTestId("chat-scroll-jump-button")).toHaveAttribute("aria-label", "跳转到顶部");
     });
     expect(screen.getByTestId("chat-scroll-jump-button")).toHaveAttribute("title", "返回顶部");
-    expect(screen.getByTestId("chat-scroll-jump-button")).toHaveClass("h-10", "w-10", "bg-white/78");
+    expect(screen.getByTestId("chat-scroll-jump-button")).toHaveClass("h-9", "w-9", "bg-[#f4f4f1]/92");
 
     fireEvent.click(screen.getByTestId("chat-scroll-jump-button"));
     await waitFor(() => {
@@ -464,7 +464,7 @@ describe("ChatView thinking block", () => {
       expect(screen.getByText("B 会话输出")).toBeInTheDocument();
     });
 
-    const assistantBubbles = document.querySelectorAll(".max-w-\\[80\\%\\]");
+    const assistantBubbles = screen.getAllByTestId("chat-streaming-bubble");
     expect(assistantBubbles).toHaveLength(2);
     expect(within(assistantBubbles[0] as HTMLElement).getByText("A 会话输出")).toBeInTheDocument();
     expect(within(assistantBubbles[1] as HTMLElement).getByText("B 会话输出")).toBeInTheDocument();
@@ -528,6 +528,84 @@ describe("ChatView thinking block", () => {
     fireEvent.click(screen.getByTestId("thinking-block-toggle-assistant-1"));
 
     expect(screen.getByText("先拆解问题，再汇总答案。")).toBeInTheDocument();
+  });
+
+  test("keeps historical assistant bubbles on a stable width rail while reasoning is collapsed", async () => {
+    messagesResponse = [
+      {
+        id: "assistant-1",
+        role: "assistant",
+        content: "这里是最终结论。",
+        created_at: "2026-03-13T12:00:10Z",
+        reasoning: {
+          status: "completed",
+          duration_ms: 2400,
+          content:
+            "用户希望我将刚才生成的项目档案报告转换为 PDF 格式。我需要使用内置的 PDF 文档助手技能来处理这个任务。用户想要PDF文件，但我注意到builtin-pdf skill声明了工具但没有可用工具。",
+        },
+      },
+    ];
+
+    renderChatView("sess-history-width");
+
+    await waitFor(() => {
+      expect(screen.getByText("已思考 2.4s")).toBeInTheDocument();
+    });
+
+    const assistantBubble = screen.getByTestId("chat-message-bubble-assistant-1");
+
+    expect(assistantBubble).toBeTruthy();
+    expect(assistantBubble?.className).toContain("w-full");
+    expect(assistantBubble?.className).toContain("md:max-w-[48rem]");
+    expect(assistantBubble?.className).not.toContain("bg-white");
+    expect(assistantBubble?.className).not.toContain("border");
+  });
+
+  test("keeps the transcript inside a centered content rail with horizontal breathing room", async () => {
+    messagesResponse = [
+      {
+        id: "assistant-rail",
+        role: "assistant",
+        content: "这里是内容轨道测试。",
+        created_at: "2026-03-13T12:00:12Z",
+      },
+    ];
+
+    renderChatView("sess-content-rail");
+
+    await waitFor(() => {
+      expect(screen.getByText("这里是内容轨道测试。")).toBeInTheDocument();
+    });
+
+    const scrollRegion = screen.getByTestId("chat-scroll-region");
+    const contentRail = screen.getByTestId("chat-content-rail");
+
+    expect(scrollRegion.className).toContain("px-4");
+    expect(scrollRegion.className).toContain("sm:px-6");
+    expect(contentRail.className).toContain("max-w-[76rem]");
+    expect(contentRail.className).toContain("mx-auto");
+  });
+
+  test("renders user messages as lightweight prompt chips instead of strong primary chat bubbles", async () => {
+    messagesResponse = [
+      {
+        id: "user-1",
+        role: "user",
+        content: "当前文件夹有哪些文件",
+        created_at: "2026-03-13T12:00:00Z",
+      },
+    ];
+
+    renderChatView("sess-user-chip");
+
+    await waitFor(() => {
+      expect(screen.getByText("当前文件夹有哪些文件")).toBeInTheDocument();
+    });
+
+    const userBubble = screen.getByTestId("chat-message-bubble-user-1");
+
+    expect(userBubble.className).toContain("bg-slate-100");
+    expect(userBubble.className).not.toContain("bg-blue-500");
   });
 
   test("renders a new thinking state after existing history so it stays near the bottom viewport", async () => {

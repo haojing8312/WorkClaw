@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ChatView } from "../ChatView";
+import { resetChatStreamEventSubscriptionsForTest } from "../../lib/chat-stream-events";
 
 const invokeMock = vi.fn();
 const listeners = new Map<string, Array<(event: { payload: any }) => void>>();
@@ -30,6 +31,7 @@ function emit(name: string, payload: any) {
 
 describe("ChatView IM routing panel", () => {
   beforeEach(() => {
+    resetChatStreamEventSubscriptionsForTest();
     Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
       configurable: true,
       value: vi.fn(),
@@ -369,6 +371,12 @@ describe("ChatView IM routing panel", () => {
         sessionId="session-sub-stream"
       />
     );
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("get_messages", {
+        sessionId: "session-sub-stream",
+      });
+    });
 
     act(() => {
       emit("stream-token", {

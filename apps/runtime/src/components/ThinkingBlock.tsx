@@ -27,40 +27,43 @@ export function ThinkingBlock({
   const label = formatThinkingLabel(status, durationMs);
 
   return (
-    <div className="mb-3 rounded-2xl border border-gray-200 bg-gray-50/90 px-4 py-3 text-sm text-gray-700">
+    <div className="mb-3 w-full border-b border-slate-200/80 pb-2 text-[12px] text-slate-400">
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
           <span
             className={
-              "inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border " +
+              "inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full border " +
               (status === "thinking"
-                ? "border-blue-200 bg-blue-50 text-blue-500"
+                ? "border-slate-200 bg-slate-100 text-slate-500"
                 : status === "interrupted"
                 ? "border-amber-200 bg-amber-50 text-amber-600"
-                : "border-emerald-200 bg-emerald-50 text-emerald-600")
+                : "border-slate-200 bg-slate-100 text-slate-500")
             }
           >
             {status === "thinking" ? (
-              <span className="h-2 w-2 animate-pulse rounded-full bg-current" />
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-current" />
             ) : (
               <span className="text-[10px] font-semibold">{status === "completed" ? "✓" : "!"}</span>
             )}
           </span>
-          <span className="truncate text-xs font-medium text-gray-600">{label}</span>
+          <span className="truncate text-[12px] font-medium text-slate-500">{label}</span>
         </div>
         {hasContent && onToggle && (
           <button
             type="button"
             data-testid={toggleTestId}
             onClick={onToggle}
-            className="shrink-0 text-xs font-medium text-gray-500 underline underline-offset-2 hover:text-gray-700"
+            className="shrink-0 text-[12px] font-medium text-slate-400 transition-colors hover:text-slate-600"
           >
             {expanded ? "收起" : "展开"}
           </button>
         )}
       </div>
       {expanded && hasContent && (
-        <div className="mt-3 max-h-56 overflow-y-auto whitespace-pre-wrap rounded-xl border border-gray-200 bg-white/80 px-3 py-2 text-[13px] leading-6 text-gray-600">
+        <div
+          data-testid="thinking-block-detail"
+          className="mt-2 max-h-56 overflow-y-auto whitespace-pre-wrap border-l border-slate-200 pl-3 pt-1 text-[13px] leading-6 text-slate-600"
+        >
           {content}
         </div>
       )}

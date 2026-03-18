@@ -9,19 +9,19 @@
 :root {
   --sm-font-sans: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
 
-  --sm-bg: #f3f6fb;
+  --sm-bg: #f6f5f2;
   --sm-surface: #ffffff;
-  --sm-surface-muted: #f8fafc;
-  --sm-surface-soft: #eef3fb;
+  --sm-surface-muted: #f4f4f1;
+  --sm-surface-soft: #eceee8;
 
   --sm-text: #0f172a;
   --sm-text-muted: #64748b;
-  --sm-border: #dbe5f0;
+  --sm-border: #dde2e7;
 
-  --sm-primary: #2563eb;
-  --sm-primary-strong: #1d4ed8;
-  --sm-primary-soft: #dbeafe;
-  --sm-success: #16a34a;
+  --sm-primary: #3572b8;
+  --sm-primary-strong: #285f9b;
+  --sm-primary-soft: #dce9f7;
+  --sm-success: #2f8f5b;
   --sm-warn: #d97706;
   --sm-danger: #dc2626;
   --sm-danger-soft: #fee2e2;
@@ -30,13 +30,13 @@
   --sm-radius-md: 12px;
   --sm-radius-lg: 16px;
 
-  --sm-shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.08);
-  --sm-shadow-md: 0 4px 12px rgba(15, 23, 42, 0.1);
+  --sm-shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
+  --sm-shadow-md: 0 6px 16px rgba(15, 23, 42, 0.08);
 
   --sm-duration-fast: 150ms;
   --sm-duration-base: 220ms;
   --sm-ease-standard: cubic-bezier(0.2, 0.8, 0.2, 1);
-  --sm-focus-ring: 0 0 0 2px rgba(37, 99, 235, 0.35);
+  --sm-focus-ring: 0 0 0 2px rgba(53, 114, 184, 0.28);
 }
 
 * {
@@ -85,6 +85,40 @@ body {
 
   .sm-divider {
     border-color: var(--sm-border);
+  }
+
+  .sm-titlebar {
+    background: color-mix(in srgb, var(--sm-surface) 88%, var(--sm-surface-muted) 12%);
+    color: var(--sm-text);
+  }
+
+  .sm-window-control {
+    display: inline-flex;
+    height: 28px;
+    width: 28px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--sm-text-muted);
+    cursor: pointer;
+    transition:
+      background-color var(--sm-duration-fast) var(--sm-ease-standard),
+      color var(--sm-duration-fast) var(--sm-ease-standard),
+      border-color var(--sm-duration-fast) var(--sm-ease-standard);
+  }
+
+  .sm-window-control:hover {
+    background: var(--sm-surface-soft);
+    border-color: var(--sm-border);
+    color: var(--sm-text);
+  }
+
+  .sm-window-control-danger:hover {
+    background: #fee2e2;
+    border-color: #fecaca;
+    color: #b91c1c;
   }
 
   .sm-text-primary {

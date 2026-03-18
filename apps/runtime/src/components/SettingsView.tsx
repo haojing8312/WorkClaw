@@ -1485,7 +1485,7 @@ export function SettingsView({
   }
 
   return (
-    <div className="sm-surface flex flex-col h-full p-6 overflow-y-auto">
+    <div className="sm-surface-muted flex h-full flex-col overflow-y-auto p-6">
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-4">
           <button
@@ -1553,7 +1553,7 @@ export function SettingsView({
             </button>
           )}
         </div>
-        <button onClick={onClose} className="text-gray-500 hover:text-gray-800 text-sm">
+        <button onClick={onClose} className="sm-btn sm-btn-ghost h-9 rounded-lg px-4 text-sm">
           返回
         </button>
       </div>

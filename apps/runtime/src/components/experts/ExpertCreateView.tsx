@@ -361,7 +361,7 @@ export function ExpertCreateView({
           </div>
         </div>
 
-        <div className="h-full overflow-y-auto bg-gray-50">
+        <div className="h-full overflow-y-auto bg-[var(--sm-bg)]">
           <div className="p-6">
             <h2 className="text-sm font-medium text-gray-700 mb-3">实时预览</h2>
             <div className="text-xs text-gray-500 mb-2">

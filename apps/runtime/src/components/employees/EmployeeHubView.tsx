@@ -961,43 +961,43 @@ export function EmployeeHubView({
   const runFilterLabel = runFilter === "running" ? "运行中" : "全部运行";
 
   return (
-    <div className="h-full overflow-y-auto bg-gray-50">
+    <div className="h-full overflow-y-auto bg-[var(--sm-bg)]">
       <div className="max-w-6xl mx-auto px-8 pt-10 pb-12 space-y-4">
         <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
           <div>
-            <h1 className="text-2xl font-semibold text-gray-900">智能体员工</h1>
-            <p className="text-sm text-gray-600 mt-2">用员工编号统一管理 OpenClaw 与多渠道路由。主员工默认进入且拥有全技能权限。</p>
+            <h1 className="text-2xl font-semibold text-[var(--sm-text)]">智能体员工</h1>
+            <p className="mt-2 text-sm text-[var(--sm-text-muted)]">用员工编号统一管理 OpenClaw 与多渠道路由。主员工默认进入且拥有全技能权限。</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
               onClick={() => onOpenEmployeeCreatorSkill?.({ mode: "create" })}
-              className="h-9 px-4 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm"
+              className="sm-btn sm-btn-primary h-9 rounded-lg px-4 text-sm"
             >
               新建员工
             </button>
             <button
               type="button"
               onClick={() => openTeamsTab("all")}
-              className="h-9 px-4 rounded-lg border border-indigo-200 hover:bg-indigo-50 text-indigo-700 text-sm"
+              className="sm-btn sm-btn-secondary h-9 rounded-lg px-4 text-sm"
             >
               新建团队
             </button>
             <button
               type="button"
               onClick={() => openRunsTab("all")}
-              className="h-9 px-4 rounded-lg border border-gray-200 hover:bg-white text-sm text-gray-700"
+              className="sm-btn sm-btn-secondary h-9 rounded-lg px-4 text-sm"
             >
               查看运行记录
             </button>
           </div>
         </div>
-        <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+        <div className="flex flex-col gap-3 rounded-xl border border-[var(--sm-primary-soft)] bg-[var(--sm-primary-soft)] px-4 py-3 md:flex-row md:items-center md:justify-between">
           <div>
-            <div className="text-sm font-medium text-blue-900">推荐：使用内置「智能体员工助手」技能</div>
-            <div className="text-xs text-blue-700 mt-1">通过对话描述岗位需求，系统会自动给出技能匹配与配置建议，并在你确认后创建员工。</div>
+            <div className="text-sm font-medium text-[var(--sm-primary-strong)]">推荐：使用内置「智能体员工助手」技能</div>
+            <div className="mt-1 text-xs text-[var(--sm-primary-strong)]/85">通过对话描述岗位需求，系统会自动给出技能匹配与配置建议，并在你确认后创建员工。</div>
           </div>
-          <button type="button" data-testid="open-employee-creator-skill" onClick={() => onOpenEmployeeCreatorSkill?.({ mode: "create" })} className="h-9 px-4 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm">打开员工助手</button>
+          <button type="button" data-testid="open-employee-creator-skill" onClick={() => onOpenEmployeeCreatorSkill?.({ mode: "create" })} className="sm-btn sm-btn-primary h-9 rounded-lg px-4 text-sm">打开员工助手</button>
         </div>
         {highlightMessage && (
           <div data-testid="employee-creator-highlight" className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 flex items-center justify-between gap-3">
@@ -1005,7 +1005,7 @@ export function EmployeeHubView({
             <button type="button" data-testid="employee-creator-highlight-dismiss" onClick={() => onDismissHighlight?.()} className="h-7 px-2.5 rounded border border-emerald-200 hover:bg-emerald-100 text-emerald-700 text-xs">知道了</button>
           </div>
         )}
-        <div className="rounded-xl border border-gray-200 bg-white p-2">
+        <div className="rounded-xl border border-[var(--sm-border)] bg-[var(--sm-surface)] p-2 shadow-[var(--sm-shadow-sm)]">
           <div role="tablist" aria-label="智能体员工导航" className="flex flex-wrap gap-2">
             {tabs.map((tab) => {
               const selected = activeTab === tab.id;
@@ -1022,8 +1022,8 @@ export function EmployeeHubView({
                   className={
                     "h-9 px-4 rounded-lg text-sm transition " +
                     (selected
-                      ? "bg-blue-600 text-white shadow-sm"
-                      : "border border-gray-200 bg-white text-gray-700 hover:bg-gray-50")
+                      ? "border-[var(--sm-primary-soft)] bg-[var(--sm-primary-soft)] text-[var(--sm-primary-strong)] shadow-[var(--sm-shadow-sm)]"
+                      : "border border-[var(--sm-border)] bg-[var(--sm-surface)] text-[var(--sm-text-muted)] hover:bg-[var(--sm-surface-muted)]")
                   }
                 >
                   {tab.label}

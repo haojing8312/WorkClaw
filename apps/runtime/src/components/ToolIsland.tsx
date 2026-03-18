@@ -77,29 +77,20 @@ export function ToolIsland({ toolCalls, isRunning, subAgentBuffer }: ToolIslandP
     ? `${getToolStatusLabel(current)}${getParamSummary(current) ? ` · ${getParamSummary(current)}` : ""}`
     : null;
 
-  const summaryTitle = isRunning ? "正在处理" : "执行记录";
-  const summarySegments: string[] = [];
-  if (isRunning) {
-    if (total > 1) {
-      summarySegments.push(`${completed}/${total} 步`);
-    } else if (total === 1) {
-      summarySegments.push("1 个步骤");
-    }
-    if (currentLabel) {
-      summarySegments.push(currentLabel);
-    }
-  } else if (total > 0) {
-    summarySegments.push(`${total} 个步骤`);
-    if (errorCount > 0) {
-      summarySegments.push(`${errorCount} 个异常`);
-    }
-  }
-  const summaryLabel = summarySegments.join(" · ");
+  const summaryLabel = isRunning
+    ? currentLabel
+      ? `正在处理 ${currentLabel}`
+      : total > 1
+      ? `正在处理 ${completed}/${total} 步`
+      : "正在处理 1 个步骤"
+    : errorCount > 0
+    ? `已完成 ${total} 个步骤 · ${errorCount} 个异常`
+    : `已完成 ${total} 个步骤`;
 
   return (
     <motion.div
       layout
-      className="my-2 mx-auto max-w-[360px]"
+      className="my-2 w-full"
       transition={{ type: "spring", stiffness: 400, damping: 30 }}
     >
       {/* 胶囊主体 */}
@@ -107,15 +98,15 @@ export function ToolIsland({ toolCalls, isRunning, subAgentBuffer }: ToolIslandP
         layout
         data-testid="tool-island-summary"
         className={
-          "rounded-2xl overflow-hidden cursor-pointer select-none " +
+          "w-full cursor-pointer select-none overflow-hidden rounded-xl border border-slate-200/80 bg-white/75 " +
           (expanded
-            ? "bg-white/95 backdrop-blur-md shadow-lg border border-gray-200"
-            : "bg-white/90 backdrop-blur-md shadow-md border border-gray-200")
+            ? "shadow-sm"
+            : "shadow-[0_1px_2px_rgba(15,23,42,0.04)]")
         }
         onClick={() => setExpanded(!expanded)}
       >
         {/* 顶部摘要行 */}
-        <motion.div layout="position" className="flex items-center gap-2.5 px-4 py-2.5">
+        <motion.div layout="position" className="flex items-center gap-2.5 px-3 py-2">
           {/* 状态指示器 */}
           {isRunning ? (
             <span className="relative flex h-2.5 w-2.5">
@@ -128,24 +119,13 @@ export function ToolIsland({ toolCalls, isRunning, subAgentBuffer }: ToolIslandP
             </svg>
           )}
 
-          {/* 描述文字 */}
-          <div className="flex-1 min-w-0">
-            <div className="text-xs font-medium text-gray-700 truncate">{summaryTitle}</div>
-            {summaryLabel && <div className="text-[11px] text-gray-400 truncate mt-0.5">{summaryLabel}</div>}
-          </div>
-
-          {/* 进度计数 */}
-          {isRunning && total > 1 && (
-            <span className="text-[11px] text-gray-400 tabular-nums">
-              {completed}/{total}
-            </span>
-          )}
+          <div className="min-w-0 flex-1 truncate text-[12px] font-medium text-slate-500">{summaryLabel}</div>
 
           {/* 展开箭头 */}
           <motion.span
             animate={{ rotate: expanded ? 180 : 0 }}
             transition={{ duration: 0.2 }}
-            className="text-gray-400 text-xs"
+            className="text-xs text-slate-400"
           >
             ▾
           </motion.span>
@@ -153,7 +133,7 @@ export function ToolIsland({ toolCalls, isRunning, subAgentBuffer }: ToolIslandP
 
         {/* 进度条（仅运行中且未展开时显示） */}
         {isRunning && !expanded && total > 1 && (
-          <div className="px-4 pb-2.5">
+          <div className="px-3 pb-2">
             <div className="h-1 bg-gray-100 rounded-full overflow-hidden">
               <motion.div
                 className="h-full bg-blue-400 rounded-full"
@@ -175,7 +155,7 @@ export function ToolIsland({ toolCalls, isRunning, subAgentBuffer }: ToolIslandP
               transition={{ type: "spring", stiffness: 500, damping: 35 }}
               className="overflow-hidden"
             >
-              <div className="border-t border-gray-100 px-3 py-2 space-y-0.5">
+              <div className="space-y-0.5 border-t border-slate-200/80 px-3 py-2">
                 {toolCalls.map((tc, i) => (
                   <div key={tc.id}>
                     <button
@@ -184,7 +164,7 @@ export function ToolIsland({ toolCalls, isRunning, subAgentBuffer }: ToolIslandP
                         e.stopPropagation();
                         setDetailIndex(detailIndex === i ? null : i);
                       }}
-                      className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs hover:bg-gray-50 transition-colors text-left"
+                      className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs transition-colors hover:bg-slate-50"
                     >
                       {/* 状态图标 */}
                       {tc.status === "running" ? (
@@ -199,11 +179,11 @@ export function ToolIsland({ toolCalls, isRunning, subAgentBuffer }: ToolIslandP
                         </svg>
                       )}
                       {/* 工具名 */}
-                      <span className="text-gray-700 w-20 truncate flex-shrink-0">
+                      <span className="w-20 shrink-0 truncate text-slate-600">
                         {getToolStatusLabel(tc)}
                       </span>
                       {/* 参数摘要 */}
-                      <span className="text-gray-400 truncate flex-1">
+                      <span className="flex-1 truncate text-slate-400">
                         {getParamSummary(tc)}
                       </span>
                     </button>
@@ -218,22 +198,22 @@ export function ToolIsland({ toolCalls, isRunning, subAgentBuffer }: ToolIslandP
                           className="overflow-hidden"
                         >
                           <div className="ml-7 mr-2 mb-2 space-y-1.5">
-                            <pre className="bg-gray-50 rounded-xl p-2.5 text-[11px] text-gray-600 overflow-x-auto max-h-32 overflow-y-auto">
+                            <pre className="max-h-32 overflow-x-auto overflow-y-auto rounded-xl bg-white/75 p-2.5 text-[11px] text-slate-600">
                               {tc.name === "task"
                                 ? String(tc.input.prompt || "")
                                 : JSON.stringify(tc.input, null, 2)}
                             </pre>
                             {/* 子 Agent 实时输出 */}
                             {tc.name === "task" && tc.status === "running" && subAgentBuffer && (
-                              <div className="bg-gray-50 rounded-xl p-2.5 text-[11px] text-gray-600 max-h-32 overflow-y-auto prose prose-xs prose-gray">
+                              <div className="prose prose-xs max-h-32 overflow-y-auto rounded-xl bg-white/75 p-2.5 text-[11px] text-slate-600 prose-slate">
                                 <ReactMarkdown>{subAgentBuffer}</ReactMarkdown>
                                 <span className="animate-pulse text-blue-400">|</span>
                               </div>
                             )}
                             {tc.output && (
-                              <pre className="bg-gray-50 rounded-xl p-2.5 text-[11px] text-gray-500 overflow-x-auto max-h-32 overflow-y-auto">
+                              <pre className="max-h-32 overflow-x-auto overflow-y-auto rounded-xl bg-white/75 p-2.5 text-[11px] text-slate-500">
                                 {tc.name === "task" ? (
-                                  <div className="prose prose-xs prose-gray">
+                                  <div className="prose prose-xs prose-slate">
                                     <ReactMarkdown>{tc.output}</ReactMarkdown>
                                   </div>
                                 ) : (
@@ -242,7 +222,7 @@ export function ToolIsland({ toolCalls, isRunning, subAgentBuffer }: ToolIslandP
                               </pre>
                             )}
                             {tc.name !== "task" && parseStructuredToolResult(tc.output)?.details && (
-                              <pre className="bg-gray-50 rounded-xl p-2.5 text-[11px] text-gray-500 overflow-x-auto max-h-32 overflow-y-auto">
+                              <pre className="max-h-32 overflow-x-auto overflow-y-auto rounded-xl bg-white/75 p-2.5 text-[11px] text-slate-500">
                                 {JSON.stringify(parseStructuredToolResult(tc.output)?.details, null, 2)}
                               </pre>
                             )}

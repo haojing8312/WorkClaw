@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ChatView } from "../ChatView";
 
 const invokeMock = vi.fn();
+const writeTextMock = vi.fn(() => Promise.resolve());
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
@@ -17,6 +18,17 @@ describe("ChatView semantic theme", () => {
       configurable: true,
       value: vi.fn(),
     });
+    Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+      configurable: true,
+      value: vi.fn(),
+    });
+    Object.defineProperty(globalThis.navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: writeTextMock,
+      },
+    });
+    writeTextMock.mockClear();
     invokeMock.mockReset();
     invokeMock.mockImplementation((command: string) => {
       if (command === "get_messages") return Promise.resolve([]);
@@ -100,7 +112,7 @@ describe("ChatView semantic theme", () => {
     ).toBeInTheDocument();
   });
 
-  test("updates session workspace after selecting a new directory from the header picker", async () => {
+  test("updates session workspace after selecting a new directory from the composer workdir picker", async () => {
     invokeMock.mockImplementation((command: string, payload?: Record<string, unknown>) => {
       if (command === "get_messages") return Promise.resolve([]);
       if (command === "list_sessions") {
@@ -146,7 +158,7 @@ describe("ChatView semantic theme", () => {
       />,
     );
 
-    const workspaceButton = await screen.findByRole("button", { name: /initial/ });
+    const workspaceButton = await screen.findByTestId("chat-composer-workdir-button");
     fireEvent.click(workspaceButton);
 
     await waitFor(() => {
@@ -156,7 +168,7 @@ describe("ChatView semantic theme", () => {
       });
     });
 
-    expect(await screen.findByRole("button", { name: /picked/ })).toBeInTheDocument();
+    expect(await screen.findByTestId("chat-composer-workdir-label")).toHaveTextContent("picked");
   });
 
   test("uses semantic classes in composer shell", async () => {
@@ -190,11 +202,12 @@ describe("ChatView semantic theme", () => {
       expect(screen.getByPlaceholderText("输入消息，Shift+Enter 换行...")).toBeInTheDocument();
     });
 
+    expect(screen.getByTestId("chat-composer-shell")).toBeInTheDocument();
     expect(screen.getByPlaceholderText("输入消息，Shift+Enter 换行...")).toHaveClass("sm-textarea");
     expect(screen.getByRole("button", { name: "发送" })).toHaveClass("sm-btn-primary");
   });
 
-  test("shows the explicit default model in the header instead of the first model", async () => {
+  test("shows the explicit default model in the composer toolbar instead of the first model", async () => {
     render(
       <ChatView
         skill={{
@@ -229,7 +242,7 @@ describe("ChatView semantic theme", () => {
       />
     );
 
-    expect(await screen.findByText("default-model")).toBeInTheDocument();
+    expect(await screen.findByTestId("chat-composer-model-chip")).toHaveTextContent("default-model");
     expect(screen.queryByText("first-model")).not.toBeInTheDocument();
   });
 
@@ -308,8 +321,10 @@ describe("ChatView semantic theme", () => {
 
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("send_message", {
-        sessionId: "session-a",
-        userMessage: "/compact",
+        request: {
+          sessionId: "session-a",
+          parts: [{ type: "text", text: "/compact" }],
+        },
       });
     });
 
@@ -353,8 +368,10 @@ describe("ChatView semantic theme", () => {
 
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("send_message", {
-        sessionId: "session-a",
-        userMessage: "请帮我给 employee_a 增加 find-skills",
+        request: {
+          sessionId: "session-a",
+          parts: [{ type: "text", text: "请帮我给 employee_a 增加 find-skills" }],
+        },
       });
     });
   });
@@ -405,9 +422,15 @@ describe("ChatView semantic theme", () => {
           {
             role: "assistant",
             content: [
+              "# 当前工作目录",
+              "",
+              "当前工作目录中有以下文件：",
+              "",
               "| 员工 | 主技能 | 附加技能 |",
               "|------|--------|----------|",
               "| 玉帝 | builtin-general | builtin-find-skills |",
+              "",
+              "共计 1 个条目。",
             ].join("\n"),
             created_at: new Date().toISOString(),
           },
@@ -447,5 +470,77 @@ describe("ChatView semantic theme", () => {
       expect(screen.getByRole("table")).toBeInTheDocument();
       expect(screen.getByRole("columnheader", { name: "员工" })).toBeInTheDocument();
     });
+
+    const heading = screen.getByRole("heading", { name: "当前工作目录" });
+    const table = screen.getByRole("table");
+    const headerCell = screen.getByRole("columnheader", { name: "员工" });
+    const summary = screen.getByText("当前工作目录中有以下文件：");
+    const tableShell = table.parentElement;
+    const resultSummary = screen.getByTestId("assistant-result-summary");
+
+    expect(heading.className).toContain("text-[1.75rem]");
+    expect(heading.className).toContain("tracking-[-0.02em]");
+    expect(summary.className).toContain("leading-7");
+    expect(tableShell?.className).toContain("bg-white/90");
+    expect(tableShell?.className).toContain("shadow-[0_1px_2px_rgba(15,23,42,0.04)]");
+    expect(headerCell.className).toContain("bg-slate-50/90");
+    expect(headerCell.className).toContain("font-semibold");
+    expect(resultSummary).toHaveTextContent("共计 1 个条目。");
+    expect(resultSummary.className).toContain("rounded-2xl");
+    expect(resultSummary.className).toContain("bg-slate-50/80");
+  });
+
+  test("shows a lightweight copy action for assistant results", async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_messages") {
+        return Promise.resolve([
+          {
+            id: "assistant-copy",
+            role: "assistant",
+            content: "这是最终结果。",
+            created_at: new Date().toISOString(),
+          },
+        ]);
+      }
+      if (command === "list_sessions") return Promise.resolve([]);
+      if (command === "get_sessions") return Promise.resolve([]);
+      return Promise.resolve(null);
+    });
+
+    render(
+      <ChatView
+        skill={{
+          id: "builtin-general",
+          name: "General",
+          description: "desc",
+          version: "1.0.0",
+          author: "test",
+          recommended_model: "",
+          tags: [],
+          created_at: new Date().toISOString(),
+        }}
+        models={[
+          {
+            id: "m1",
+            name: "model",
+            api_format: "openai",
+            base_url: "https://example.com",
+            model_name: "model",
+            is_default: true,
+          },
+        ]}
+        sessionId="session-copy"
+      />,
+    );
+
+    const copyButton = await screen.findByTestId("assistant-copy-action-assistant-copy");
+    fireEvent.click(copyButton);
+
+    await waitFor(() => {
+      expect(writeTextMock).toHaveBeenCalledWith("这是最终结果。");
+    });
+
+    expect(copyButton).toHaveAttribute("aria-label", "复制回答");
+    expect(copyButton).toHaveAttribute("title", "已复制");
   });
 });

@@ -420,6 +420,10 @@ describe("ChatView side panel redesign", () => {
       configurable: true,
       value: vi.fn(),
     });
+    Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+      configurable: true,
+      value: vi.fn(),
+    });
     Object.defineProperty(window, "scrollTo", {
       configurable: true,
       value: vi.fn(),
@@ -948,7 +952,7 @@ describe("ChatView side panel redesign", () => {
     await waitFor(() => {
       const summary = screen.getByTestId("tool-island-summary");
       expect(summary).toBeInTheDocument();
-      expect(summary).toHaveTextContent("执行记录");
+      expect(summary).toHaveTextContent("已完成");
       expect(summary).toHaveTextContent("8 个步骤");
       expect(summary).toHaveTextContent("3 个异常");
     });
@@ -1055,7 +1059,7 @@ describe("ChatView side panel redesign", () => {
     await waitFor(() => {
       const summary = screen.getByTestId("tool-island-summary");
       expect(summary).toBeInTheDocument();
-      expect(summary).toHaveTextContent("执行记录");
+      expect(summary).toHaveTextContent("已完成");
       expect(summary).toHaveTextContent("8 个步骤");
       expect(summary).toHaveTextContent("3 个异常");
     });

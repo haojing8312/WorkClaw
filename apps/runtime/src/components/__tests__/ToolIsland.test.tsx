@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { ToolIsland } from "../ToolIsland";
 
 describe("ToolIsland", () => {
-  test("uses user-facing summaries instead of raw engineering wording", () => {
+  test("uses lightweight event-row summaries instead of a stacked execution card header", () => {
     render(
       <ToolIsland
         isRunning={false}
@@ -25,8 +25,8 @@ describe("ToolIsland", () => {
       />,
     );
 
-    expect(screen.getByText("执行记录")).toBeInTheDocument();
-    expect(screen.getByText("2 个步骤")).toBeInTheDocument();
+    expect(screen.getByText("已完成 2 个步骤")).toBeInTheDocument();
+    expect(screen.queryByText("执行记录")).not.toBeInTheDocument();
     expect(screen.queryByText("已执行 2 个操作")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId("tool-island-summary"));
@@ -35,6 +35,31 @@ describe("ToolIsland", () => {
     expect(screen.getByText("写入文件")).toBeInTheDocument();
     expect(screen.queryByText("web_search")).not.toBeInTheDocument();
     expect(screen.queryByText("write_file")).not.toBeInTheDocument();
+  });
+
+  test("aligns to the parent message rail instead of rendering as a centered narrow island", () => {
+    render(
+      <ToolIsland
+        isRunning
+        toolCalls={[
+          {
+            id: "bash-1",
+            name: "bash",
+            input: { command: "pnpm test" },
+            output: "",
+            status: "running",
+          },
+        ]}
+      />,
+    );
+
+    const summary = screen.getByTestId("tool-island-summary");
+    const widthRail = summary.parentElement;
+
+    expect(widthRail).toBeTruthy();
+    expect(widthRail?.className).toContain("w-full");
+    expect(widthRail?.className).not.toContain("mx-auto");
+    expect(widthRail?.className).not.toContain("max-w-[360px]");
   });
 
   test("renders structured tool summaries instead of raw json blobs", () => {
@@ -62,7 +87,7 @@ describe("ToolIsland", () => {
       />,
     );
 
-    fireEvent.click(screen.getByText("执行记录"));
+    fireEvent.click(screen.getByText("已完成 1 个步骤"));
     fireEvent.click(screen.getByTestId("tool-island-step-write-structured"));
 
     expect(screen.getByText("成功写入 12 字节到 structured-report.html")).toBeInTheDocument();

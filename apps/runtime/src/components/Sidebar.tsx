@@ -59,6 +59,16 @@ export function Sidebar({
   const isExperts = activeMainView === "experts" || activeMainView === "experts-new";
   const isEmployees = activeMainView === "employees";
   const iconClassName = "h-4 w-4 flex-shrink-0";
+  const navButtonBaseClass =
+    "sm-btn w-full justify-start rounded-xl border px-3 py-2.5 text-[13px] font-medium transition-colors";
+  const navButtonActiveClass =
+    "border-[var(--sm-primary-soft)] bg-[var(--sm-primary-soft)] text-[var(--sm-primary-strong)] shadow-[inset_0_1px_0_rgba(255,255,255,0.55)]";
+  const navButtonIdleClass =
+    "border-transparent bg-transparent text-[var(--sm-text-muted)] hover:border-[var(--sm-border)] hover:bg-[var(--sm-surface)] hover:text-[var(--sm-text)]";
+  const collapsedNavButtonClass =
+    "sm-btn h-8 w-8 rounded-lg border border-transparent bg-transparent text-[var(--sm-text-muted)] transition-colors hover:border-[var(--sm-border)] hover:bg-[var(--sm-surface)] hover:text-[var(--sm-text)]";
+  const collapsedNavButtonActiveClass =
+    "border-[var(--sm-primary-soft)] bg-[var(--sm-primary-soft)] text-[var(--sm-primary-strong)]";
 
   function handleSearchChange(value: string) {
     setSearchQuery(value);
@@ -121,7 +131,7 @@ export function Sidebar({
 
   if (collapsed) {
     return (
-      <div className="sm-surface sm-divider w-12 flex flex-col h-full border-r items-center py-3 gap-3 flex-shrink-0">
+      <div className="sm-surface-muted sm-divider w-12 flex flex-col h-full border-r items-center py-3 gap-3 flex-shrink-0">
         <button
           onClick={onCollapse}
           className="sm-btn sm-btn-ghost w-8 h-8 rounded-md"
@@ -132,8 +142,8 @@ export function Sidebar({
         </button>
         <button
           onClick={onOpenStartTask}
-          className={`sm-btn w-8 h-8 rounded-md ${
-            isStartTask ? "sm-btn-primary" : "sm-btn-ghost"
+          className={`${collapsedNavButtonClass} ${
+            isStartTask ? collapsedNavButtonActiveClass : ""
           }`}
           title="开始任务"
           aria-label="开始任务"
@@ -142,8 +152,8 @@ export function Sidebar({
         </button>
         <button
           onClick={onOpenExperts}
-          className={`sm-btn w-8 h-8 rounded-md ${
-            isExperts ? "sm-btn-primary" : "sm-btn-ghost"
+          className={`${collapsedNavButtonClass} ${
+            isExperts ? collapsedNavButtonActiveClass : ""
           }`}
           title="专家技能"
           aria-label="专家技能"
@@ -152,8 +162,8 @@ export function Sidebar({
         </button>
         <button
           onClick={onOpenEmployees}
-          className={`sm-btn w-8 h-8 rounded-md ${
-            isEmployees ? "sm-btn-primary" : "sm-btn-ghost"
+          className={`${collapsedNavButtonClass} ${
+            isEmployees ? collapsedNavButtonActiveClass : ""
           }`}
           title="智能体员工"
           aria-label="智能体员工"
@@ -173,8 +183,8 @@ export function Sidebar({
   }
 
   return (
-    <div className="sm-surface sm-divider w-64 flex flex-col h-full border-r flex-shrink-0">
-      <div className="sm-surface sm-divider px-4 py-3 text-xs font-medium sm-text-muted border-b flex items-center justify-between">
+    <div className="sm-surface-muted sm-divider w-[260px] flex flex-col h-full border-r flex-shrink-0">
+      <div className="sm-surface-muted sm-divider px-4 py-3 text-xs font-medium sm-text-muted border-b flex items-center justify-between">
         <img
           src={workclawLogo}
           alt="WorkClaw Logo"
@@ -195,10 +205,7 @@ export function Sidebar({
           <button
             onClick={onOpenStartTask}
             aria-pressed={isStartTask}
-            className={
-              "sm-btn w-full justify-start text-[13px] font-medium py-2 px-2 rounded-md " +
-              (isStartTask ? "sm-btn-primary" : "sm-btn-secondary")
-            }
+            className={`${navButtonBaseClass} ${isStartTask ? navButtonActiveClass : navButtonIdleClass}`}
           >
             <CirclePlay className={iconClassName} />
             开始任务
@@ -206,10 +213,7 @@ export function Sidebar({
           <button
             onClick={onOpenExperts}
             aria-pressed={isExperts}
-            className={
-              "sm-btn w-full justify-start text-[13px] font-medium py-2 px-2 rounded-md " +
-              (isExperts ? "sm-btn-primary" : "sm-btn-secondary")
-            }
+            className={`${navButtonBaseClass} ${isExperts ? navButtonActiveClass : navButtonIdleClass}`}
           >
             <BrainCog className={iconClassName} />
             专家技能
@@ -217,10 +221,7 @@ export function Sidebar({
           <button
             onClick={onOpenEmployees}
             aria-pressed={isEmployees}
-            className={
-              "sm-btn w-full justify-start text-[13px] font-medium py-2 px-2 rounded-md " +
-              (isEmployees ? "sm-btn-primary" : "sm-btn-secondary")
-            }
+            className={`${navButtonBaseClass} ${isEmployees ? navButtonActiveClass : navButtonIdleClass}`}
           >
             <Users className={iconClassName} />
             智能体员工
@@ -267,8 +268,10 @@ export function Sidebar({
                       exit={{ opacity: 0, x: -20, height: 0 }}
                       transition={{ duration: 0.2 }}
                       className={
-                        "group flex items-center px-4 py-2 text-sm cursor-pointer rounded-md mx-1 transition-colors " +
-                        (selectedSessionId === s.id ? "bg-[var(--sm-primary-soft)] text-[var(--sm-primary-strong)]" : "sm-text-primary hover:bg-[var(--sm-surface-soft)]")
+                        "group mx-2 flex items-center rounded-xl border px-3 py-2 text-sm cursor-pointer transition-colors " +
+                        (selectedSessionId === s.id
+                          ? "border-[var(--sm-primary-soft)] bg-[var(--sm-surface)] text-[var(--sm-primary-strong)] shadow-[var(--sm-shadow-sm)]"
+                          : "border-transparent sm-text-primary hover:border-[var(--sm-border)] hover:bg-[var(--sm-surface)]")
                       }
                       onClick={() => onSelectSession(s.id)}
                     >
@@ -287,7 +290,7 @@ export function Sidebar({
                           {isImSession && (
                             <span
                               title={`来自${badgeText}会话同步`}
-                              className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium bg-blue-50 text-blue-700 border border-blue-100 flex-shrink-0"
+                              className="inline-flex items-center rounded-md border border-[var(--sm-primary-soft)] bg-[var(--sm-primary-soft)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--sm-primary-strong)] flex-shrink-0"
                             >
                               {badgeText}
                             </span>

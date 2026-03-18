@@ -22,6 +22,7 @@ describe("TaskTabStrip", () => {
 
     expect(screen.getByRole("tab", { name: "开始任务" })).toHaveAttribute("aria-selected", "false");
     expect(screen.getByRole("tab", { name: "Session 1" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tablist", { name: "任务标签" })).toHaveClass("gap-1");
 
     fireEvent.click(screen.getByRole("tab", { name: "开始任务" }));
     expect(onSelectTab).toHaveBeenCalledWith("tab-start");

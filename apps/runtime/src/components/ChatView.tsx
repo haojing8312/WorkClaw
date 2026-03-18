@@ -1,4 +1,4 @@
-import { Fragment, useState, useEffect, useRef, useMemo } from "react";
+import { Fragment, useState, useEffect, useLayoutEffect, useRef, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import ReactMarkdown from "react-markdown";
@@ -157,6 +157,39 @@ interface PendingApprovalView {
 function shouldRenderCompletedJourneySummary(model: TaskJourneyViewModel) {
   if (model.deliverables.length === 0) return false;
   return model.status === "completed" || model.status === "partial";
+}
+
+function extractNodeText(node: unknown): string {
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map((item) => extractNodeText(item)).join("");
+  if (node && typeof node === "object" && "props" in node) {
+    return extractNodeText((node as { props?: { children?: unknown } }).props?.children);
+  }
+  return "";
+}
+
+function extractPlainTextFromStreamItems(items: StreamItem[]): string {
+  return items
+    .filter((item) => item.type === "text")
+    .map((item) => item.content || "")
+    .join("");
+}
+
+function CopyActionIcon({ copied }: { copied: boolean }) {
+  if (copied) {
+    return (
+      <svg aria-hidden="true" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg aria-hidden="true" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+      <rect x="9" y="9" width="10" height="10" rx="2" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M15 9V7a2 2 0 00-2-2H7a2 2 0 00-2 2v6a2 2 0 002 2h2" />
+    </svg>
+  );
 }
 
 function getThinkingSupport(model: ModelConfig | null): {
@@ -412,6 +445,7 @@ export function ChatView({
     "approve" | "reject" | "pause" | "resume" | "retry" | "reassign" | null
   >(null);
   const [expandedThinkingKeys, setExpandedThinkingKeys] = useState<string[]>([]);
+  const [copiedAssistantMessageKey, setCopiedAssistantMessageKey] = useState<string | null>(null);
 
   const toggleThinkingBlock = (key: string) => {
     setExpandedThinkingKeys((prev) => (prev.includes(key) ? prev.filter((item) => item !== key) : [...prev, key]));
@@ -956,7 +990,7 @@ export function ChatView({
   }, [expandedGroupRunStepIds, groupRunSnapshot, groupRunStepFocusRequest, sessionId]);
 
   // stream-token 事件监听
-  useEffect(() => {
+  useLayoutEffect(() => {
     let currentSessionId: string | null = sessionId;
     const unsubscribe = subscribeChatStreamEvent(
       "stream-token",
@@ -1909,6 +1943,7 @@ export function ChatView({
   const sessionSourceBadgeText =
     (sessionSourceLabel || "").trim() ||
     (normalizedSessionSourceChannel ? `${normalizedSessionSourceChannel} 同步` : "IM 同步");
+  const displayWorkDirLabel = (workspace || "").trim() || "选择工作目录";
   const activePendingApproval = pendingApprovals[0] ?? null;
   const queuedApprovalCount = Math.max(0, pendingApprovals.length - 1);
   const activeDelegationCard = [...delegationCards]
@@ -2199,6 +2234,7 @@ export function ChatView({
     Boolean(streamReasoning) || (agentState?.state === "thinking" && thinkingSupport.indicator);
   const showStreamingAssistantBubble =
     showStreamingThinkingState || streamItems.length > 0 || subAgentBuffer.length > 0;
+  const streamText = useMemo(() => extractPlainTextFromStreamItems(streamItems), [streamItems]);
   const liveBlockingStatus = useMemo(() => {
     if (pendingApprovals.length > 0 || agentState?.state === "waiting_approval") {
       return "waiting_approval";
@@ -2424,6 +2460,16 @@ export function ChatView({
     setPendingInstallSkill(null);
   }
 
+  async function handleCopyAssistantMessage(messageKey: string, content: string) {
+    const trimmed = content.trim();
+    if (!trimmed) return;
+    await globalThis.navigator?.clipboard?.writeText?.(trimmed);
+    setCopiedAssistantMessageKey(messageKey);
+    window.setTimeout(() => {
+      setCopiedAssistantMessageKey((current) => (current === messageKey ? null : current));
+    }, 1600);
+  }
+
   // Markdown 渲染组件配置
   const markdownComponents = {
     // 代码块
@@ -2446,18 +2492,39 @@ export function ChatView({
       );
     },
     // 标题
-    h1: ({ children }: any) => <h1 className="text-2xl font-bold text-gray-900 mt-6 mb-3 pb-2 border-b border-gray-200">{children}</h1>,
-    h2: ({ children }: any) => <h2 className="text-xl font-bold text-gray-900 mt-5 mb-2.5 pb-1.5 border-b border-gray-100">{children}</h2>,
-    h3: ({ children }: any) => <h3 className="text-lg font-semibold text-gray-800 mt-4 mb-2">{children}</h3>,
-    h4: ({ children }: any) => <h4 className="text-base font-semibold text-gray-700 mt-3 mb-1.5">{children}</h4>,
-    h5: ({ children }: any) => <h5 className="text-sm font-semibold text-gray-700 mt-2 mb-1">{children}</h5>,
-    h6: ({ children }: any) => <h6 className="text-sm font-medium text-gray-600 mt-2 mb-1">{children}</h6>,
+    h1: ({ children }: any) => (
+      <h1 className="mt-7 mb-4 border-b border-slate-200 pb-3 text-[1.75rem] font-semibold tracking-[-0.02em] text-slate-950">
+        {children}
+      </h1>
+    ),
+    h2: ({ children }: any) => (
+      <h2 className="mt-6 mb-3 border-b border-slate-150 pb-2 text-[1.35rem] font-semibold tracking-[-0.015em] text-slate-900">
+        {children}
+      </h2>
+    ),
+    h3: ({ children }: any) => <h3 className="mt-5 mb-2.5 text-[1.1rem] font-semibold text-slate-900">{children}</h3>,
+    h4: ({ children }: any) => <h4 className="mt-4 mb-2 text-base font-semibold text-slate-800">{children}</h4>,
+    h5: ({ children }: any) => <h5 className="mt-3 mb-1.5 text-sm font-semibold uppercase tracking-[0.01em] text-slate-700">{children}</h5>,
+    h6: ({ children }: any) => <h6 className="mt-3 mb-1 text-sm font-medium text-slate-600">{children}</h6>,
     // 段落
-    p: ({ children }: any) => <p className="text-sm text-gray-700 leading-relaxed mb-3">{children}</p>,
+    p: ({ children }: any) => {
+      const text = extractNodeText(children).trim();
+      const isSummaryBlock = /^(共计|总计|总结[:：]?|结论[:：]?)/.test(text);
+      return isSummaryBlock ? (
+        <p
+          data-testid="assistant-result-summary"
+          className="mb-4 rounded-2xl border border-slate-200/90 bg-slate-50/80 px-4 py-3 text-[15px] font-medium leading-7 text-slate-800"
+        >
+          {children}
+        </p>
+      ) : (
+        <p className="mb-4 text-[15px] leading-7 text-slate-700">{children}</p>
+      );
+    },
     // 列表
-    ul: ({ children }: any) => <ul className="list-disc list-inside space-y-1 mb-3 text-sm text-gray-700">{children}</ul>,
-    ol: ({ children }: any) => <ol className="list-decimal list-inside space-y-1 mb-3 text-sm text-gray-700">{children}</ol>,
-    li: ({ children }: any) => <li className="text-sm text-gray-700">{children}</li>,
+    ul: ({ children }: any) => <ul className="mb-4 list-disc space-y-1.5 pl-5 text-[15px] text-slate-700">{children}</ul>,
+    ol: ({ children }: any) => <ol className="mb-4 list-decimal space-y-1.5 pl-5 text-[15px] text-slate-700">{children}</ol>,
+    li: ({ children }: any) => <li className="leading-7 text-slate-700">{children}</li>,
     // 链接
     a: ({ href, children }: any) => (
       <a
@@ -2471,30 +2538,62 @@ export function ChatView({
     ),
     // 引用块
     blockquote: ({ children }: any) => (
-      <blockquote className="border-l-4 border-gray-300 pl-4 py-1 my-3 bg-gray-50 rounded-r-lg">
-        <div className="text-sm text-gray-600 italic">{children}</div>
+      <blockquote className="my-4 rounded-r-lg border-l-[3px] border-slate-300 bg-slate-50/70 py-1 pl-4">
+        <div className="text-[15px] italic text-slate-600">{children}</div>
       </blockquote>
     ),
     // 表格
     table: ({ children }: any) => (
-      <div className="overflow-x-auto my-3">
-        <table className="min-w-full border border-gray-200 rounded-lg overflow-hidden text-sm">{children}</table>
+      <div className="my-4 overflow-x-auto rounded-2xl border border-slate-200/90 bg-white/90 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+        <table className="min-w-full text-sm">{children}</table>
       </div>
     ),
-    thead: ({ children }: any) => <thead className="bg-gray-100">{children}</thead>,
-    tbody: ({ children }: any) => <tbody className="divide-y divide-gray-100">{children}</tbody>,
-    tr: ({ children }: any) => <tr className="hover:bg-gray-50">{children}</tr>,
+    thead: ({ children }: any) => <thead className="bg-slate-50/90">{children}</thead>,
+    tbody: ({ children }: any) => <tbody className="divide-y divide-slate-200/80 bg-white">{children}</tbody>,
+    tr: ({ children }: any) => <tr className="transition-colors hover:bg-slate-50/70">{children}</tr>,
     th: ({ children }: any) => (
-      <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider bg-gray-50">
+      <th className="bg-slate-50/90 px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">
         {children}
       </th>
     ),
-    td: ({ children }: any) => <td className="px-3 py-2 text-sm text-gray-700">{children}</td>,
+    td: ({ children }: any) => {
+      const text = extractNodeText(children).trim();
+      const isNumericLike = /^(?:[\d,]+(?:\.\d+)?(?:\s*(?:字节|KB|MB|GB|%))?|[\d]{4}\/[\d]{1,2}\/[\d]{1,2}.*)$/.test(text);
+      return (
+        <td className={"px-4 py-3 text-[15px] text-slate-700 " + (isNumericLike ? "whitespace-nowrap tabular-nums" : "")}>
+          {children}
+        </td>
+      );
+    },
     // 水平线
-    hr: () => <hr className="my-6 border-gray-200" />,
+    hr: () => <hr className="my-7 border-slate-200" />,
     // 强调
-    strong: ({ children }: any) => <strong className="font-semibold text-gray-900">{children}</strong>,
-    em: ({ children }: any) => <em className="italic text-gray-700">{children}</em>,
+    strong: ({ children }: any) => <strong className="font-semibold text-slate-950">{children}</strong>,
+    em: ({ children }: any) => <em className="italic text-slate-700">{children}</em>,
+    input: ({ type, checked, disabled }: any) => {
+      if (type === "checkbox" && disabled) {
+        return (
+          <span
+            aria-hidden="true"
+            className={
+              "mr-2 inline-flex h-4 w-4 translate-y-[1px] items-center justify-center rounded border " +
+              (checked
+                ? "border-emerald-200 bg-emerald-50 text-emerald-600"
+                : "border-slate-300 bg-white text-transparent")
+            }
+          >
+            {checked ? (
+              <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+              </svg>
+            ) : (
+              <span className="h-3 w-3" />
+            )}
+          </span>
+        );
+      }
+      return <input type={type} checked={checked} disabled={disabled} readOnly />;
+    },
   };
 
   /** 渲染有序的 StreamItem 列表（将连续的工具调用合并到一个 ToolIsland） */
@@ -2732,82 +2831,63 @@ export function ChatView({
   return (
     <div className="flex flex-col h-full">
       {/* 头部 */}
-      <div className="flex items-center justify-between px-6 py-3 border-b border-gray-200 bg-white/70 backdrop-blur-sm">
-        <div className="flex items-center gap-3 min-w-0">
+      <div className="px-4 pt-4 sm:px-6 xl:px-8">
+        <div className="flex w-full items-start justify-between gap-4">
           <div className="min-w-0">
             <div
               data-testid="chat-session-display-title"
-              className="font-semibold text-gray-900 flex-shrink-0"
+              className="truncate text-[22px] font-semibold tracking-tight text-[var(--sm-text)]"
             >
               {sessionDisplayTitle}
             </div>
-            {sessionDisplaySubtitle && (
-              <div
-                data-testid="chat-session-display-subtitle"
-                className="mt-0.5 text-[11px] text-gray-500 truncate"
-              >
-                {sessionDisplaySubtitle}
+            {(sessionDisplaySubtitle || isImSource) && (
+              <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-[var(--sm-text-muted)]">
+                {sessionDisplaySubtitle ? (
+                  <div
+                    data-testid="chat-session-display-subtitle"
+                    className="truncate"
+                  >
+                    {sessionDisplaySubtitle}
+                  </div>
+                ) : null}
+                {isImSource && (
+                  <span
+                    data-testid="chat-session-source-badge"
+                    title={`该会话由${sessionSourceBadgeText}触发`}
+                    className="inline-flex items-center rounded-full border border-[var(--sm-border)] bg-[var(--sm-surface)] px-2 py-0.5 font-medium text-[var(--sm-text-muted)]"
+                  >
+                    {sessionSourceBadgeText}
+                  </span>
+                )}
               </div>
             )}
           </div>
-          {isImSource && (
-            <span
-              data-testid="chat-session-source-badge"
-              title={`该会话由${sessionSourceBadgeText}触发`}
-              className="inline-flex items-center rounded-md border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-700"
-            >
-              {sessionSourceBadgeText}
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-3 flex-shrink-0">
-          {/* 右侧面板切换按钮 */}
           <button
+            type="button"
+            aria-label="面板"
+            title="面板"
+            data-testid="chat-side-panel-trigger"
+            aria-pressed={sidePanelOpen}
             onClick={() => setSidePanelOpen(!sidePanelOpen)}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs transition-colors ${
-              sidePanelOpen
-                ? "bg-blue-100 text-blue-600"
-                : "bg-gray-100 hover:bg-gray-200 text-gray-600"
-            }`}
+            className={
+              "sm-btn ml-auto h-10 w-10 rounded-xl border transition-colors " +
+              (sidePanelOpen
+                ? "border-[var(--sm-primary-soft)] bg-[var(--sm-primary-soft)] text-[var(--sm-primary-strong)]"
+                : "border-[var(--sm-border)] bg-[var(--sm-surface)] text-[var(--sm-text-muted)] hover:bg-[var(--sm-surface-soft)] hover:text-[var(--sm-text)]")
+            }
           >
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2" />
             </svg>
-            面板
           </button>
-          {/* Secure Workspace 选择器 */}
-          <button
-            onClick={() => {
-              // 打开目录选择器
-              invoke<string | null>("select_directory", {
-                defaultPath: workspace || undefined,
-              }).then((newDir) => {
-                if (newDir) {
-                  updateWorkspace(newDir);
-                }
-              });
-            }}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-gray-100 hover:bg-gray-200 text-xs text-gray-600 transition-colors"
-          >
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-            </svg>
-            <span className="max-w-[150px] truncate">
-              {workspace || "选择工作目录"}
-            </span>
-          </button>
-          {currentModel && (
-            <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded-md">
-              {currentModel.name}
-            </span>
-          )}
         </div>
       </div>
       {sessionExecutionContext && (
         <div
           data-testid="chat-session-execution-context-bar"
-          className="flex flex-wrap items-center justify-between gap-2 border-b border-sky-100 bg-sky-50/80 px-6 py-2 text-[11px] text-sky-900"
+          className="border-b border-sky-100 bg-sky-50/80 text-[11px] text-sky-900"
         >
+          <div className="mx-auto flex w-full max-w-[76rem] flex-wrap items-center justify-between gap-2 px-5 py-2 lg:px-8">
           <div className="flex min-w-0 flex-1 flex-col gap-1">
             <div className="flex flex-wrap items-center gap-3">
               <span>{`来源 step：${sessionExecutionContext.sourceStepId}`}</span>
@@ -2860,19 +2940,21 @@ export function ChatView({
           >
             返回协作看板
           </button>
+          </div>
         </div>
       )}
 
       {/* 主内容区：消息列表 + 右侧面板 */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex overflow-hidden bg-[#f7f7f4]">
         {/* 消息列表 */}
-        <div className="relative flex-1">
+        <div className="relative flex-1 bg-[#f7f7f4]">
         <div
           ref={scrollRegionRef}
           data-testid="chat-scroll-region"
           onScroll={handleScrollRegionScroll}
-          className="h-full overflow-y-auto p-6 space-y-5"
+          className="h-full overflow-y-auto bg-transparent px-4 py-6 sm:px-6 xl:px-8"
         >
+        <div data-testid="chat-content-rail" className="mx-auto flex w-full max-w-[76rem] flex-col gap-5">
         {employeeAssistantContext && (
           <div className="space-y-3">
             <div
@@ -3313,12 +3395,13 @@ export function ChatView({
                 className={"flex " + (m.role === "user" ? "justify-end" : "justify-start")}
               >
                 <div
+                  data-testid={`chat-message-bubble-${m.id || i}`}
                   className={
-                    "max-w-[80%] rounded-2xl px-5 py-3 text-sm transition-all " +
-                    (isSessionFocusTarget ? "ring-2 ring-amber-300 bg-amber-50/80 " : "") +
+                    "text-sm transition-all " +
+                    (isSessionFocusTarget ? "ring-2 ring-amber-300 " : "") +
                     (m.role === "user"
-                      ? "bg-blue-500 text-white"
-                      : "bg-white text-gray-800 shadow-sm border border-gray-100")
+                      ? "max-w-[28rem] rounded-[1.4rem] bg-slate-100 px-4 py-2.5 text-slate-800 shadow-[0_1px_2px_rgba(15,23,42,0.04)] md:max-w-[32rem]"
+                      : "w-full max-w-[92%] px-0 py-1 text-slate-800 sm:max-w-[88%] md:max-w-[48rem] xl:max-w-[52rem]")
                   }
                 >
                   {m.role === "assistant" && m.reasoning && (
@@ -3354,6 +3437,20 @@ export function ChatView({
                   ) : (
                     m.content
                   )}
+                  {m.role === "assistant" && m.content.trim() && (
+                    <div className="mt-3 flex items-center justify-end gap-2">
+                      <button
+                        type="button"
+                        data-testid={`assistant-copy-action-${m.id || i}`}
+                        aria-label="复制回答"
+                        title={copiedAssistantMessageKey === `message-${m.id || i}` ? "已复制" : "复制回答"}
+                        onClick={() => void handleCopyAssistantMessage(`message-${m.id || i}`, m.content)}
+                        className="inline-flex h-9 w-9 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300 focus-visible:ring-offset-2"
+                      >
+                        <CopyActionIcon copied={copiedAssistantMessageKey === `message-${m.id || i}`} />
+                      </button>
+                    </div>
+                  )}
                 </div>
               </motion.div>
               {shouldRenderJourneySummary && messageJourneyModel && (
@@ -3376,7 +3473,10 @@ export function ChatView({
             animate={{ opacity: 1, x: 0 }}
             className="flex justify-start"
           >
-            <div className="max-w-[80%] bg-white rounded-2xl px-5 py-3 text-sm text-gray-800 shadow-sm border border-gray-100">
+            <div
+              data-testid="chat-streaming-bubble"
+              className="w-full max-w-[92%] px-0 py-1 text-sm text-slate-800 sm:max-w-[88%] md:max-w-[48rem] xl:max-w-[52rem]"
+            >
               {showStreamingThinkingState && (
                 <ThinkingBlock
                   status={streamReasoning?.status || "thinking"}
@@ -3394,14 +3494,14 @@ export function ChatView({
               {subAgentBuffer && (
                 <div
                   data-testid="sub-agent-stream-buffer"
-                  className="mt-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2"
+                  className="mt-2 rounded-xl border border-slate-200/80 bg-slate-50/80 px-3 py-2"
                 >
-                  <div className="text-[11px] font-semibold text-emerald-700 mb-1">
+                  <div className="mb-1 text-[11px] font-semibold text-slate-600">
                     {subAgentRoleName ? `子员工 · ${subAgentRoleName}` : "子员工"}
                   </div>
-                  <div className="prose prose-xs prose-emerald max-w-none">
+                  <div className="prose prose-xs max-w-none text-slate-700">
                     <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{subAgentBuffer}</ReactMarkdown>
-                    <span className="animate-pulse text-emerald-500">|</span>
+                    <span className="animate-pulse text-slate-400">|</span>
                   </div>
                 </div>
               )}
@@ -3410,6 +3510,20 @@ export function ChatView({
                   {/* 光标闪烁效果 */}
                   <span className="inline-block w-0.5 h-4 bg-blue-400 ml-0.5 align-middle animate-[blink_1s_infinite]" />
                 </>
+              )}
+              {streamText.trim() && (
+                <div className="mt-3 flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    data-testid="assistant-copy-action-stream"
+                    aria-label="复制回答"
+                    title={copiedAssistantMessageKey === "stream" ? "已复制" : "复制回答"}
+                    onClick={() => void handleCopyAssistantMessage("stream", streamText)}
+                    className="inline-flex h-9 w-9 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300 focus-visible:ring-offset-2"
+                  >
+                    <CopyActionIcon copied={copiedAssistantMessageKey === "stream"} />
+                  </button>
+                </div>
               )}
             </div>
           </motion.div>
@@ -3494,6 +3608,7 @@ export function ChatView({
           onCancel={handleCancelInstallConfirm}
         />
         <div ref={bottomRef} />
+        </div>
       </div>
       {showScrollJump && (
         <div className="pointer-events-none absolute inset-x-0 bottom-5 z-20 flex justify-center">
@@ -3510,14 +3625,14 @@ export function ChatView({
               scale: isNearBottom ? 1 : 0.985,
             }}
             transition={{ type: "spring", stiffness: 240, damping: 28, mass: 0.8 }}
-            className="pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full border border-white/80 bg-white/78 text-gray-700 shadow-[0_8px_20px_rgba(15,23,42,0.09)] backdrop-blur-xl transition-all duration-200 hover:border-gray-200 hover:bg-white/90 hover:text-gray-900 hover:shadow-[0_12px_28px_rgba(15,23,42,0.12)]"
+            className="pointer-events-auto flex h-9 w-9 items-center justify-center rounded-full border border-slate-200/85 bg-[#f4f4f1]/92 text-slate-500 shadow-[0_6px_16px_rgba(15,23,42,0.08)] transition-all duration-200 hover:border-slate-300 hover:bg-[#f7f7f4] hover:text-slate-700 hover:shadow-[0_10px_22px_rgba(15,23,42,0.1)]"
           >
             <motion.span
               aria-hidden="true"
               initial={false}
               animate={{ rotate: isNearBottom ? 0 : 180 }}
               transition={{ duration: 0.22, ease: "easeInOut" }}
-              className="translate-y-[-1px] text-[22px] leading-none"
+              className="translate-y-[-1px] text-[20px] leading-none"
             >
               ↑
             </motion.span>
@@ -3541,10 +3656,14 @@ export function ChatView({
       </div>
 
       {/* 输入区域 */}
-      <div className="px-6 py-3 bg-[var(--sm-surface-muted)]/80">
-        <div className="sm-panel max-w-3xl mx-auto focus-within:border-[var(--sm-primary)] focus-within:shadow-[var(--sm-focus-ring)] transition-all">
+      <div className="border-t border-slate-200/80 bg-[#f4f4f1]/92 px-4 py-3 sm:px-6 xl:px-8">
+        <div className="mx-auto w-full max-w-[76rem]">
+        <div
+          data-testid="chat-composer-shell"
+          className="mx-auto max-w-3xl rounded-[26px] border border-[var(--sm-border)] bg-white px-4 pt-4 pb-3 shadow-[0_8px_24px_-20px_rgba(59,130,246,0.35)] transition-all focus-within:border-[var(--sm-primary)] focus-within:shadow-[var(--sm-focus-ring)]"
+        >
           {operationPermissionMode === "full_access" && (
-            <div className="px-3 pt-3">
+            <div className="pb-3">
               <div
                 data-testid="full-access-badge"
                 className="inline-flex items-center rounded-full border border-red-200 bg-red-50 px-2.5 py-1 text-[11px] font-medium text-red-700"
@@ -3554,7 +3673,7 @@ export function ChatView({
             </div>
           )}
           {quickPrompts.length > 0 && (
-            <div data-testid="chat-quick-prompts" className="px-3 pt-3 pb-1 flex flex-wrap gap-2 border-b border-gray-100">
+            <div data-testid="chat-quick-prompts" className="flex flex-wrap gap-2 border-b border-gray-100 pb-2">
               {quickPrompts.map((item, index) => (
                 <button
                   key={`${item.label}-${index}`}
@@ -3580,7 +3699,7 @@ export function ChatView({
           />
 
           {attachedFiles.length > 0 && (
-            <div className="px-3 pt-3 pb-1 space-y-2">
+            <div className="pb-2 space-y-2">
               <div className="text-[11px] text-gray-500">
                 已添加 {attachedFiles.length} 个附件
               </div>
@@ -3624,7 +3743,7 @@ export function ChatView({
           )}
 
           {composerError && (
-            <div className="px-3 pt-3 pb-1">
+            <div className="pb-2">
               <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
                 {composerError}
               </div>
@@ -3651,28 +3770,52 @@ export function ChatView({
             }}
             placeholder="输入消息，Shift+Enter 换行..."
             rows={3}
-            className="sm-textarea w-full border-0 bg-transparent min-h-[80px] max-h-[200px] focus:shadow-none focus:border-0"
+            className="sm-textarea w-full min-h-[88px] max-h-[200px] border-0 bg-transparent px-0 py-0 focus:border-0 focus:shadow-none"
           />
           {/* 底部工具栏 */}
-          <div className="flex items-center justify-between px-3 pb-2.5">
-            <div className="flex items-center gap-2 text-xs text-gray-400">
-              {skill.description && (
-                <span className="truncate max-w-[300px]" title={skill.description}>
-                  {skill.description}
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-gray-100 pt-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                data-testid="chat-composer-workdir-button"
+                onClick={() => {
+                  invoke<string | null>("select_directory", {
+                    defaultPath: workspace || undefined,
+                  }).then((newDir) => {
+                    if (newDir) {
+                      updateWorkspace(newDir);
+                    }
+                  });
+                }}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-gray-100 px-2.5 py-1 text-xs text-gray-600 transition-colors hover:bg-gray-200"
+                title={displayWorkDirLabel}
+              >
+                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-6l-2-2H5a2 2 0 0 0-2 2Z" />
+                </svg>
+                <span data-testid="chat-composer-workdir-label" className="max-w-[180px] truncate">
+                  {displayWorkDirLabel}
+                </span>
+              </button>
+              {currentModel && (
+                <span
+                  data-testid="chat-composer-model-chip"
+                  className="inline-flex items-center rounded-lg bg-gray-100 px-2.5 py-1 text-xs text-gray-600"
+                >
+                  {currentModel.name}
                 </span>
               )}
-            </div>
-            <div className="flex items-center gap-2">
-              {/* 附件按钮 */}
               <label
                 htmlFor="file-upload"
-                className="sm-btn sm-btn-secondary h-8 px-3 gap-1.5 text-xs rounded-lg cursor-pointer"
+                className="sm-btn sm-btn-secondary h-8 gap-1.5 rounded-lg px-3 text-xs cursor-pointer"
               >
                 <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
                 </svg>
                 附件
               </label>
+            </div>
+            <div className="flex items-center gap-2">
               {streaming ? (
                 <button
                   onClick={handleCancel}
@@ -3697,6 +3840,7 @@ export function ChatView({
               )}
             </div>
           </div>
+        </div>
         </div>
       </div>
     </div>
