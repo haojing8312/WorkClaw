@@ -31,6 +31,9 @@ vi.mock("../components/ChatView", () => ({
       chat-view
       {props.initialMessage ? <span data-testid="chat-initial-message">{props.initialMessage}</span> : null}
       {props.workDir ? <span data-testid="chat-work-dir">{props.workDir}</span> : null}
+      {props.initialAttachments ? (
+        <span data-testid="chat-initial-attachments">{props.initialAttachments.length}</span>
+      ) : null}
     </div>
   ),
 }));
@@ -62,6 +65,26 @@ vi.mock("../components/NewSessionLanding", () => ({
         create-with-input
       </button>
       <button onClick={() => props.onCreateSessionWithInitialMessage("")}>create-empty</button>
+      <button
+        onClick={() =>
+          props.onCreateSessionWithInitialMessage({
+            initialMessage: "请结合附件处理当前目录",
+            attachments: [
+              {
+                id: "attachment-1",
+                kind: "text-file",
+                name: "需求说明.txt",
+                mimeType: "text/plain",
+                size: 12,
+                text: "hello",
+              },
+            ],
+            workDir: "D:\\code\\WorkClaw",
+          })
+        }
+      >
+        create-with-context
+      </button>
     </div>
   ),
 }));
@@ -442,6 +465,32 @@ describe("App session create flow", () => {
         }),
       );
     });
+  });
+
+  test("creates session with landing workdir and forwards initial attachments to chat view", async () => {
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "create-with-context" })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "create-with-context" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        "create_session",
+        expect.objectContaining({
+          workDir: "D:\\code\\WorkClaw",
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("chat-view")).toBeInTheDocument();
+    });
+    expect(screen.getByTestId("chat-initial-message")).toHaveTextContent("请结合附件处理当前目录");
+    expect(screen.getByTestId("chat-work-dir")).toHaveTextContent("D:\\code\\WorkClaw");
+    expect(screen.getByTestId("chat-initial-attachments")).toHaveTextContent("1");
   });
 
   test("retries session list hydration when sqlite is temporarily locked", async () => {

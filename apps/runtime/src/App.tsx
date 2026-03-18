@@ -52,9 +52,11 @@ import {
   ClawhubInstallRequest,
   EmployeeGroup,
   ImRoleDispatchRequest,
+  LandingSessionLaunchInput,
   Message,
   ModelConfig,
   ModelConnectionTestResult,
+  PendingAttachment,
   RuntimePreferences,
   SessionInfo,
   SkillManifest,
@@ -320,6 +322,24 @@ function buildOptimisticSession(input: {
   };
 }
 
+function normalizeLandingSessionLaunchInput(
+  input?: string | LandingSessionLaunchInput,
+): LandingSessionLaunchInput {
+  if (typeof input === "string" || typeof input === "undefined") {
+    return {
+      initialMessage: typeof input === "string" ? input : "",
+      attachments: [],
+      workDir: "",
+    };
+  }
+
+  return {
+    initialMessage: typeof input.initialMessage === "string" ? input.initialMessage : "",
+    attachments: Array.isArray(input.attachments) ? input.attachments : [],
+    workDir: typeof input.workDir === "string" ? input.workDir : "",
+  };
+}
+
 function readPersistedLastSelectedSessionId(): string | null {
   if (typeof window === "undefined") {
     return null;
@@ -524,6 +544,10 @@ export default function App() {
   const [pendingInitialMessage, setPendingInitialMessage] = useState<{
     sessionId: string;
     message: string;
+  } | null>(null);
+  const [pendingInitialAttachments, setPendingInitialAttachments] = useState<{
+    sessionId: string;
+    attachments: PendingAttachment[];
   } | null>(null);
   const [pendingSessionFocusRequest, setPendingSessionFocusRequest] = useState<{
     sessionId: string;
@@ -1334,18 +1358,19 @@ export default function App() {
     return activeTab.id;
   }
 
-  async function handleCreateSession(initialMessage = "") {
+  async function handleCreateSession(initialInput: string | LandingSessionLaunchInput = "") {
     const skillId = getDefaultSkillId(skills);
     const modelId = getDefaultModelId(models);
     if (!skillId || !modelId || creatingSession) return;
 
+    const launchInput = normalizeLandingSessionLaunchInput(initialInput);
     const targetTabId = prepareTabForNewTask();
     setCreatingSession(true);
     setCreateSessionError(null);
     try {
       setSelectedEmployeeId(null);
       setSelectedSkillId(skillId);
-      const workDir = await resolveSessionLaunchWorkDir();
+      const workDir = await resolveSessionLaunchWorkDir(launchInput.workDir);
       const id = await createRuntimeSession({
         skillId,
         modelId,
@@ -1355,17 +1380,18 @@ export default function App() {
       setSessions((prev) =>
         mergeSessionInfo(
           prev,
-          buildOptimisticSession({
-            sessionId: id,
-            skillId,
-            modelId,
-            initialUserMessage: initialMessage,
-            sessionMode: "general",
-            workDir,
-          }),
-        ),
-      );
-      const firstMessage = initialMessage.trim();
+            buildOptimisticSession({
+              sessionId: id,
+              skillId,
+              modelId,
+              initialUserMessage: launchInput.initialMessage,
+              sessionMode: "general",
+              workDir,
+            }),
+          ),
+        );
+      const firstMessage = launchInput.initialMessage.trim();
+      const bootstrapAttachments = launchInput.attachments;
       replaceTab(targetTabId, createSessionTab(id, targetTabId));
       setActiveTabId(targetTabId);
       void loadSessions(skillId);
@@ -1373,6 +1399,12 @@ export default function App() {
       if (firstMessage) {
         // 由 ChatView 挂载后再自动发送，避免事件监听竞态导致“无响应”。
         setPendingInitialMessage({ sessionId: id, message: firstMessage });
+      }
+      if (bootstrapAttachments.length > 0) {
+        setPendingInitialAttachments({
+          sessionId: id,
+          attachments: bootstrapAttachments,
+        });
       }
     } catch (e) {
       console.error("创建会话失败:", e);
@@ -1557,6 +1589,16 @@ export default function App() {
 
   async function handlePickSkillDirectory() {
     const dir = await open({ directory: true, title: "选择技能保存目录" });
+    if (!dir || typeof dir !== "string") return null;
+    return dir;
+  }
+
+  async function handlePickLandingWorkDir(currentWorkDir?: string) {
+    const dir = await open({
+      directory: true,
+      title: "选择工作目录",
+      defaultPath: (currentWorkDir || defaultWorkDir || "").trim() || undefined,
+    });
     if (!dir || typeof dir !== "string") return null;
     return dir;
   }
@@ -3235,6 +3277,11 @@ export default function App() {
                     ? pendingInitialMessage.message
                     : undefined
                 }
+                initialAttachments={
+                  pendingInitialAttachments && pendingInitialAttachments.sessionId === selectedSessionId
+                    ? pendingInitialAttachments.attachments
+                    : undefined
+                }
                 quickPrompts={
                   selectedSkill.id === BUILTIN_EMPLOYEE_CREATOR_SKILL_ID
                     ? EMPLOYEE_ASSISTANT_QUICK_PROMPTS
@@ -3245,6 +3292,11 @@ export default function App() {
                 }
                 onInitialMessageConsumed={() => {
                   setPendingInitialMessage((prev) =>
+                    prev && prev.sessionId === selectedSessionId ? null : prev
+                  );
+                }}
+                onInitialAttachmentsConsumed={() => {
+                  setPendingInitialAttachments((prev) =>
                     prev && prev.sessionId === selectedSessionId ? null : prev
                   );
                 }}
@@ -3264,9 +3316,11 @@ export default function App() {
                 teams={landingTeams}
                 creating={creatingSession}
                 error={createSessionError}
+                defaultWorkDir={defaultWorkDir}
                 onSelectSession={handleSelectSession}
                 onCreateSessionWithInitialMessage={handleCreateSession}
                 onCreateTeamEntrySession={handleCreateTeamEntrySession}
+                onPickWorkDir={handlePickLandingWorkDir}
               />
             </motion.div>
           ) : selectedSkill && models.length === 0 ? (

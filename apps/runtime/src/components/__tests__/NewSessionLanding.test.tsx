@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { NewSessionLanding } from "../NewSessionLanding";
 import type { SessionInfo } from "../../types";
 
@@ -53,7 +53,11 @@ describe("NewSessionLanding", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "开始任务" }));
 
-    expect(onCreate).toHaveBeenCalledWith("请帮我整理下载目录");
+    expect(onCreate).toHaveBeenCalledWith({
+      initialMessage: "请帮我整理下载目录",
+      attachments: [],
+      workDir: "",
+    });
   });
 
   test("submits on Enter and keeps newline on Shift+Enter", () => {
@@ -75,7 +79,11 @@ describe("NewSessionLanding", () => {
     expect(onCreate).not.toHaveBeenCalled();
 
     fireEvent.keyDown(input, { key: "Enter", shiftKey: false });
-    expect(onCreate).toHaveBeenCalledWith("第一行");
+    expect(onCreate).toHaveBeenCalledWith({
+      initialMessage: "第一行",
+      attachments: [],
+      workDir: "",
+    });
   });
 
   test("shows empty state when there is no recent session", () => {
@@ -200,9 +208,11 @@ describe("NewSessionLanding", () => {
     expect(unselected).toHaveAttribute("aria-pressed", "false");
 
     fireEvent.click(screen.getByRole("button", { name: "开始任务" }));
-    expect(onCreate).toHaveBeenCalledWith(
-      "请帮我整理下载目录，把文件按类型分类到子文件夹，并按近30天和更早文件分开。先告诉我你的整理方案。"
-    );
+    expect(onCreate).toHaveBeenCalledWith({
+      initialMessage: "请帮我整理下载目录，把文件按类型分类到子文件夹，并按近30天和更早文件分开。先告诉我你的整理方案。",
+      attachments: [],
+      workDir: "",
+    });
   });
 
   test("renders explicit team entry section and dispatches chosen team", () => {
@@ -239,6 +249,111 @@ describe("NewSessionLanding", () => {
     expect(onCreateTeamEntrySession).toHaveBeenCalledWith({
       teamId: "group-1",
       initialMessage: "请安排一份调研和执行计划",
+    });
+  });
+
+  test("renders attachment and workdir controls", () => {
+    render(
+      <NewSessionLanding
+        sessions={[]}
+        teams={[]}
+        creating={false}
+        onSelectSession={() => {}}
+        onCreateSessionWithInitialMessage={() => {}}
+      />
+    );
+
+    expect(screen.getByLabelText("添加附件")).toBeInTheDocument();
+    expect(screen.getByTestId("landing-attachment-trigger")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "选择工作目录" })).toBeInTheDocument();
+  });
+
+  test("shows the default workdir path with chat-like truncation and preserves full path in title", () => {
+    const fullPath = "D:\\code\\WorkClaw\\very-long-project-name";
+    render(
+      <NewSessionLanding
+        sessions={[]}
+        teams={[]}
+        creating={false}
+        defaultWorkDir={fullPath}
+        onSelectSession={() => {}}
+        onCreateSessionWithInitialMessage={() => {}}
+      />
+    );
+
+    const workdirButton = screen.getByRole("button", { name: fullPath });
+    expect(workdirButton).toHaveAttribute("title", fullPath);
+    expect(screen.getByTestId("landing-workdir-label")).toHaveClass("max-w-[150px]", "truncate");
+  });
+
+  test("picks a workdir and includes it in submit payload", async () => {
+    const onCreate = vi.fn();
+    const onPickWorkDir = vi.fn().mockResolvedValue("D:\\code\\WorkClaw");
+    render(
+      <NewSessionLanding
+        sessions={[]}
+        teams={[]}
+        creating={false}
+        onSelectSession={() => {}}
+        onCreateSessionWithInitialMessage={onCreate}
+        onPickWorkDir={onPickWorkDir}
+      />
+    );
+
+    fireEvent.change(screen.getByPlaceholderText("先描述你要完成什么任务..."), {
+      target: { value: "分析当前项目目录" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "选择工作目录" }));
+
+    expect(onPickWorkDir).toHaveBeenCalledTimes(1);
+    const workdirButton = await screen.findByRole("button", { name: "D:\\code\\WorkClaw" });
+    expect(workdirButton).toHaveAttribute("title", "D:\\code\\WorkClaw");
+    expect(screen.getByTestId("landing-workdir-label")).toHaveClass("max-w-[150px]", "truncate");
+
+    fireEvent.click(screen.getByRole("button", { name: "开始任务" }));
+    expect(onCreate).toHaveBeenCalledWith({
+      initialMessage: "分析当前项目目录",
+      attachments: [],
+      workDir: "D:\\code\\WorkClaw",
+    });
+  });
+
+  test("shows attachment summary and includes attachments in submit payload", async () => {
+    const onCreate = vi.fn();
+    render(
+      <NewSessionLanding
+        sessions={[]}
+        teams={[]}
+        creating={false}
+        onSelectSession={() => {}}
+        onCreateSessionWithInitialMessage={onCreate}
+      />
+    );
+
+    const input = screen.getByLabelText("添加附件") as HTMLInputElement;
+    const file = new File(["hello"], "需求说明.txt", { type: "text/plain" });
+    fireEvent.change(input, { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(screen.getByText("已添加 1 个附件")).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByPlaceholderText("先描述你要完成什么任务..."), {
+      target: { value: "请结合附件处理" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "开始任务" }));
+
+    expect(onCreate).toHaveBeenCalledWith({
+      initialMessage: "请结合附件处理",
+      attachments: [
+        expect.objectContaining({
+          kind: "text-file",
+          name: "需求说明.txt",
+          mimeType: "text/plain",
+          text: "hello",
+        }),
+      ],
+      workDir: "",
     });
   });
 });

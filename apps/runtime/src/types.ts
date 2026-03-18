@@ -718,6 +718,12 @@ export type PendingAttachment =
       truncated?: boolean;
     };
 
+export interface LandingSessionLaunchInput {
+  initialMessage: string;
+  attachments: PendingAttachment[];
+  workDir: string;
+}
+
 export type ChatMessagePart =
   | { type: "text"; text: string }
   | {
