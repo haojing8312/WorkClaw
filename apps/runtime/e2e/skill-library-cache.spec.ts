@@ -58,6 +58,26 @@ async function installTauriMocks(page: Page): Promise<void> {
         is_default: true,
       },
     ];
+    const providerConfig = {
+      id: "model-a",
+      provider_key: "openai",
+      display_name: "OpenAI",
+      protocol_type: "openai",
+      base_url: "https://api.openai.com/v1",
+      auth_type: "api_key",
+      api_key_encrypted: "***",
+      org_id: "",
+      extra_json: "{}",
+      enabled: true,
+    };
+    const searchConfig = {
+      id: "search-a",
+      name: "Brave Search",
+      api_format: "search_brave",
+      base_url: "https://api.search.brave.com",
+      model_name: "",
+      is_default: true,
+    };
 
     const libraryItems = [
       {
@@ -116,9 +136,11 @@ async function installTauriMocks(page: Page): Promise<void> {
         case "list_agent_employees":
           return [];
         case "list_search_configs":
-          return [];
+          return [searchConfig];
         case "list_mcp_servers":
           return [];
+        case "list_provider_configs":
+          return [providerConfig];
         case "list_im_routing_bindings":
           return [];
         case "simulate_im_route":
@@ -192,6 +214,11 @@ async function installTauriMocks(page: Page): Promise<void> {
       __E2E_SET_CLAWHUB_NETWORK__?: (available: boolean) => void;
       __E2E_READ_CLAWHUB_STATS__?: () => ClawhubStats;
     };
+    try {
+      window.localStorage.setItem("workclaw:initial-model-setup-completed", "1");
+    } catch {
+      // ignore
+    }
     w.__TAURI_INTERNALS__ = { invoke };
     w.__E2E_TAURI_CALLS__ = calls;
     w.__E2E_SET_CLAWHUB_NETWORK__ = (available: boolean) => {

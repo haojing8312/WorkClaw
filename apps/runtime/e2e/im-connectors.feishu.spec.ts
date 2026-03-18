@@ -10,6 +10,26 @@ type TauriInvokeCall = {
 async function installTauriMocks(page: Page): Promise<void> {
   await page.addInitScript(() => {
     const calls: TauriInvokeCall[] = [];
+    const providerConfig = {
+      id: "model-a",
+      provider_key: "openai",
+      display_name: "OpenAI",
+      protocol_type: "openai",
+      base_url: "https://api.openai.com/v1",
+      auth_type: "api_key",
+      api_key_encrypted: "***",
+      org_id: "",
+      extra_json: "{}",
+      enabled: true,
+    };
+    const searchConfig = {
+      id: "search-a",
+      name: "Brave Search",
+      api_format: "search_brave",
+      base_url: "https://api.search.brave.com",
+      model_name: "",
+      is_default: true,
+    };
     const invoke = async (cmd: string, args?: Record<string, unknown>) => {
       calls.push({ cmd, args });
       switch (cmd) {
@@ -40,7 +60,7 @@ async function installTauriMocks(page: Page): Promise<void> {
         case "list_agent_employees":
           return [];
         case "list_search_configs":
-          return [];
+          return [searchConfig];
         case "list_mcp_servers":
           return [];
         case "get_runtime_preferences":
@@ -72,7 +92,7 @@ async function installTauriMocks(page: Page): Promise<void> {
         case "list_builtin_provider_plugins":
           return [];
         case "list_provider_configs":
-          return [];
+          return [providerConfig];
         case "get_capability_routing_policy":
           return null;
         case "list_capability_route_templates":
@@ -180,6 +200,11 @@ async function installTauriMocks(page: Page): Promise<void> {
       __TAURI_INTERNALS__?: { invoke: typeof invoke };
       __E2E_TAURI_CALLS__?: TauriInvokeCall[];
     };
+    try {
+      window.localStorage.setItem("workclaw:initial-model-setup-completed", "1");
+    } catch {
+      // ignore
+    }
     w.__TAURI_INTERNALS__ = { invoke };
     w.__E2E_TAURI_CALLS__ = calls;
   });
@@ -205,13 +230,13 @@ test("settings exposes connector overview while keeping routing data lazy-loaded
   await expect(page.getByRole("button", { name: "模型连接" })).toBeVisible();
 
   await page.getByRole("button", { name: "渠道连接器" }).click();
-  await expect(page.locator("div").filter({ hasText: /^渠道连接器$/ })).toBeVisible();
+  await expect(page.getByTestId("connector-panel-feishu")).toBeVisible();
   await expect(
-    page.getByText("先连接消息渠道，再设置处理规则，最后用模拟结果确认命中原因。"),
+    page.getByText("先完成飞书连接，再到员工详情中指定谁来接待飞书消息。"),
   ).toBeVisible();
   await expect(page.getByText("连接器概览").first()).toBeVisible();
   await expect(page.getByText("连接器诊断").first()).toBeVisible();
-  await expect(page.getByText("消息处理规则").first()).toBeVisible();
+  await expect(page.getByText("员工关联入口")).toBeVisible();
 
   const calls = await readInvokeCalls(page);
   expect(calls.some((call) => call.cmd === "list_im_routing_bindings")).toBe(false);

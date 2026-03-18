@@ -278,10 +278,10 @@ test("can start a task from experts skill card and open chat directly", async ({
   await expect(page.getByRole("heading", { name: "专家技能" })).toBeVisible();
 
   const skillCard = page
-    .locator("div.bg-white.border.border-gray-200.rounded-xl.p-4")
-    .filter({ hasText: "E2E Local Skill" });
+    .getByText("E2E Local Skill")
+    .locator("xpath=ancestor::div[contains(@class,'rounded-xl')][1]");
   await expect(skillCard).toBeVisible();
-  await skillCard.getByRole("button", { name: "开始任务" }).click();
+  await skillCard.getByRole("button", { name: "开始任务" }).last().click();
 
   await expect(
     page.getByTestId("e2e-chat-view"),
