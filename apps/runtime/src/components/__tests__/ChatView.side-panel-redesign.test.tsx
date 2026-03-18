@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ChatView } from "../ChatView";
 import type { ChatMessagePart, PendingAttachment } from "../../types";
+import { resetChatStreamEventSubscriptionsForTest } from "../../lib/chat-stream-events";
 
 const invokeMock = vi.fn<(command: string, payload?: unknown) => Promise<unknown>>();
 const listenMock = vi.fn<(eventName: string, callback: unknown) => Promise<() => void>>(
@@ -33,6 +34,10 @@ it("defines structured attachment and message-part frontend types", () => {
   };
 
   expect(part.type).toBe("file_text");
+});
+
+beforeEach(() => {
+  resetChatStreamEventSubscriptionsForTest();
 });
 
 function buildMessages() {

@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import { ChatView } from "../ChatView";
+import { resetChatStreamEventSubscriptionsForTest } from "../../lib/chat-stream-events";
 
 const invokeMock = vi.fn<(command: string, payload?: unknown) => Promise<unknown>>();
 const listeners = new Map<string, Array<(event: { payload: any }) => void>>();
@@ -37,6 +38,7 @@ describe("ChatView session resilience", () => {
       configurable: true,
       value: vi.fn(),
     });
+    resetChatStreamEventSubscriptionsForTest();
     listeners.clear();
     invokeMock.mockReset();
     window.localStorage.clear();

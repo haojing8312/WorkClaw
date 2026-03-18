@@ -1,5 +1,7 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { ChatView } from "../ChatView";
+import { resetChatStreamEventSubscriptionsForTest } from "../../lib/chat-stream-events";
 
 const invokeMock = vi.fn<(command: string, payload?: unknown) => Promise<unknown>>();
 const listeners = new Map<string, Array<(event: { payload: any }) => void>>();
@@ -57,6 +59,36 @@ function renderChatView(sessionId = "sess-thinking") {
   );
 }
 
+function renderChatViewInStrictMode(sessionId = "sess-thinking") {
+  return render(
+    <StrictMode>
+      <ChatView
+        skill={{
+          id: "builtin-general",
+          name: "General",
+          description: "desc",
+          version: "1.0.0",
+          author: "test",
+          recommended_model: "",
+          tags: [],
+          created_at: new Date().toISOString(),
+        }}
+        models={[
+          {
+            id: "m1",
+            name: "model",
+            api_format: "openai",
+            base_url: "https://example.com",
+            model_name: "model",
+            is_default: true,
+          },
+        ]}
+        sessionId={sessionId}
+      />
+    </StrictMode>
+  );
+}
+
 function renderChatViewWithModels(models: Array<{
   id: string;
   name: string;
@@ -89,6 +121,7 @@ describe("ChatView thinking block", () => {
       configurable: true,
       value: vi.fn(),
     });
+    resetChatStreamEventSubscriptionsForTest();
     listeners.clear();
     messagesResponse = [];
     invokeMock.mockReset();
@@ -161,6 +194,119 @@ describe("ChatView thinking block", () => {
     fireEvent.click(screen.getByTestId("thinking-block-toggle"));
 
     expect(screen.getByText("先分析需求，再组织输出。")).toBeInTheDocument();
+  });
+
+  test("does not duplicate early stream content in StrictMode", async () => {
+    renderChatViewInStrictMode("sess-strict");
+
+    act(() => {
+      emit("agent-state-event", {
+        session_id: "sess-strict",
+        state: "thinking",
+        detail: null,
+        iteration: 1,
+      });
+      emit("assistant-reasoning-started", {
+        session_id: "sess-strict",
+      });
+      emit("assistant-reasoning-delta", {
+        session_id: "sess-strict",
+        text: "让我先查一下资料。",
+      });
+      emit("stream-token", {
+        session_id: "sess-strict",
+        token: "我来帮你整理结果。",
+        done: false,
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("我来帮你整理结果。")).toBeInTheDocument();
+      expect(screen.getByTestId("thinking-block-toggle")).toBeInTheDocument();
+    });
+
+    expect(screen.getAllByText("我来帮你整理结果。")).toHaveLength(1);
+
+    fireEvent.click(screen.getByTestId("thinking-block-toggle"));
+    expect(screen.getAllByText("让我先查一下资料。")).toHaveLength(1);
+  });
+
+  test("keeps concurrent session streams isolated", async () => {
+    render(
+      <>
+        <ChatView
+          skill={{
+            id: "builtin-general",
+            name: "General",
+            description: "desc",
+            version: "1.0.0",
+            author: "test",
+            recommended_model: "",
+            tags: [],
+            created_at: new Date().toISOString(),
+          }}
+          models={[
+            {
+              id: "m1",
+              name: "model",
+              api_format: "openai",
+              base_url: "https://example.com",
+              model_name: "model",
+              is_default: true,
+            },
+          ]}
+          sessionId="sess-a"
+        />
+        <ChatView
+          skill={{
+            id: "builtin-general",
+            name: "General",
+            description: "desc",
+            version: "1.0.0",
+            author: "test",
+            recommended_model: "",
+            tags: [],
+            created_at: new Date().toISOString(),
+          }}
+          models={[
+            {
+              id: "m1",
+              name: "model",
+              api_format: "openai",
+              base_url: "https://example.com",
+              model_name: "model",
+              is_default: true,
+            },
+          ]}
+          sessionId="sess-b"
+        />
+      </>
+    );
+
+    act(() => {
+      emit("stream-token", {
+        session_id: "sess-a",
+        token: "A 会话输出",
+        done: false,
+      });
+      emit("stream-token", {
+        session_id: "sess-b",
+        token: "B 会话输出",
+        done: false,
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("A 会话输出")).toBeInTheDocument();
+      expect(screen.getByText("B 会话输出")).toBeInTheDocument();
+    });
+
+    const assistantBubbles = document.querySelectorAll(".max-w-\\[80\\%\\]");
+    expect(assistantBubbles).toHaveLength(2);
+    expect(within(assistantBubbles[0] as HTMLElement).getByText("A 会话输出")).toBeInTheDocument();
+    expect(within(assistantBubbles[1] as HTMLElement).getByText("B 会话输出")).toBeInTheDocument();
+    expect(within(assistantBubbles[0] as HTMLElement).queryByText("B 会话输出")).not.toBeInTheDocument();
+    expect(within(assistantBubbles[1] as HTMLElement).queryByText("A 会话输出")).not.toBeInTheDocument();
   });
 
   test("does not render thinking block for non-chat protocols", async () => {

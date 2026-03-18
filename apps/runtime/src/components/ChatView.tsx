@@ -22,6 +22,15 @@ import type { TaskJourneyViewModel } from "./chat-side-panel/view-model";
 import { TaskJourneySummary } from "./chat-journey/TaskJourneySummary";
 import { getDefaultModel } from "../lib/default-model";
 import { getModelErrorDisplay, isModelErrorKind } from "../lib/model-error-display";
+import {
+  subscribeChatStreamEvent,
+  type AssistantReasoningCompletedEvent,
+  type AssistantReasoningDeltaEvent,
+  type AssistantReasoningInterruptedEvent,
+  type AssistantReasoningStartedEvent,
+  type StreamTokenEvent,
+  type ToolCallEvent,
+} from "../lib/chat-stream-events";
 
 type ClawhubInstallCandidate = {
   slug: string;
@@ -803,16 +812,9 @@ export function ChatView({
   // stream-token 事件监听
   useEffect(() => {
     let currentSessionId: string | null = sessionId;
-    const unlistenPromise = listen<{
-      session_id: string;
-      token: string;
-      done: boolean;
-      sub_agent?: boolean;
-      role_id?: string;
-      role_name?: string;
-    }>(
+    const unsubscribe = subscribeChatStreamEvent(
       "stream-token",
-      ({ payload }) => {
+      (payload: StreamTokenEvent) => {
         if (payload.session_id !== currentSessionId) return;
         if (payload.done) {
           // 流结束：将 streamItems 转为历史消息
@@ -874,11 +876,11 @@ export function ChatView({
           streamItemsRef.current = items;
           setStreamItems([...items]);
         }
-      }
+      },
     );
     return () => {
       currentSessionId = null;
-      unlistenPromise.then((fn) => fn());
+      unsubscribe();
     };
   }, [sessionId]);
 
@@ -1185,7 +1187,7 @@ export function ChatView({
 
   useEffect(() => {
     const unlisteners = [
-      listen<{ session_id: string }>("assistant-reasoning-started", ({ payload }) => {
+      subscribeChatStreamEvent("assistant-reasoning-started", (payload: AssistantReasoningStartedEvent) => {
         if (payload.session_id !== sessionId) return;
         updateStreamReasoning((prev) => ({
           status: "thinking",
@@ -1193,7 +1195,7 @@ export function ChatView({
           durationMs: prev?.durationMs,
         }));
       }),
-      listen<{ session_id: string; text: string }>("assistant-reasoning-delta", ({ payload }) => {
+      subscribeChatStreamEvent("assistant-reasoning-delta", (payload: AssistantReasoningDeltaEvent) => {
         if (payload.session_id !== sessionId) return;
         updateStreamReasoning((prev) => ({
           status: "thinking",
@@ -1201,7 +1203,7 @@ export function ChatView({
           durationMs: prev?.durationMs,
         }));
       }),
-      listen<{ session_id: string; duration_ms?: number }>("assistant-reasoning-completed", ({ payload }) => {
+      subscribeChatStreamEvent("assistant-reasoning-completed", (payload: AssistantReasoningCompletedEvent) => {
         if (payload.session_id !== sessionId) return;
         updateStreamReasoning((prev) =>
           prev
@@ -1217,7 +1219,7 @@ export function ChatView({
               }
         );
       }),
-      listen<{ session_id: string }>("assistant-reasoning-interrupted", ({ payload }) => {
+      subscribeChatStreamEvent("assistant-reasoning-interrupted", (payload: AssistantReasoningInterruptedEvent) => {
         if (payload.session_id !== sessionId) return;
         updateStreamReasoning((prev) => ({
           status: "interrupted",
@@ -1228,21 +1230,13 @@ export function ChatView({
     ];
 
     return () => {
-      unlisteners.forEach((item) => {
-        void item.then((fn) => fn());
-      });
+      unlisteners.forEach((dispose) => dispose());
     };
   }, [sessionId]);
 
   // tool-call-event 事件监听：按顺序插入到 streamItems
   useEffect(() => {
-    const unlistenPromise = listen<{
-      session_id: string;
-      tool_name: string;
-      tool_input: Record<string, unknown>;
-      tool_output: string | null;
-      status: string;
-    }>("tool-call-event", ({ payload }) => {
+    const unsubscribe = subscribeChatStreamEvent("tool-call-event", (payload: ToolCallEvent) => {
       if (payload.session_id !== sessionId) return;
       if (payload.status === "started") {
         // 新的工具调用 → 直接追加到 streamItems（文字和工具按时间排列）
@@ -1284,7 +1278,7 @@ export function ChatView({
       }
     });
     return () => {
-      unlistenPromise.then((fn) => fn());
+      unsubscribe();
     };
   }, [sessionId]);
 
