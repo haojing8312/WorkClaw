@@ -38,6 +38,10 @@ describe("ChatView session resilience", () => {
       configurable: true,
       value: vi.fn(),
     });
+    Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+      configurable: true,
+      value: vi.fn(),
+    });
     resetChatStreamEventSubscriptionsForTest();
     listeners.clear();
     invokeMock.mockReset();
@@ -283,6 +287,57 @@ describe("ChatView session resilience", () => {
 
     await waitFor(() => {
       expect(screen.getByText("这是切回会话后应恢复的中间输出")).toBeInTheDocument();
+    });
+  });
+
+  test("hydrates persisted runtime state immediately when reopening an active session", async () => {
+    render(
+      <ChatView
+        skill={{
+          id: "builtin-general",
+          name: "General",
+          description: "desc",
+          version: "1.0.0",
+          author: "test",
+          recommended_model: "",
+          tags: [],
+          created_at: new Date().toISOString(),
+        }}
+        models={[
+          {
+            id: "m1",
+            name: "model",
+            api_format: "openai",
+            base_url: "https://example.com",
+            model_name: "model",
+            is_default: true,
+          },
+        ]}
+        sessionId="sess-persisted-runtime"
+        persistedRuntimeState={{
+          streaming: true,
+          streamItems: [{ type: "text", content: "这是重新打开后应立即显示的流式输出" }],
+          streamReasoning: {
+            status: "thinking",
+            content: "先恢复本地运行态",
+          },
+          agentState: {
+            state: "thinking",
+            iteration: 1,
+          },
+          subAgentBuffer: "",
+          subAgentRoleName: "",
+          mainRoleName: "",
+          mainSummaryDelivered: false,
+          delegationCards: [],
+        }}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("chat-streaming-bubble")).toBeInTheDocument();
+      expect(screen.getByText("这是重新打开后应立即显示的流式输出")).toBeInTheDocument();
+      expect(screen.getByText("思考中")).toBeInTheDocument();
     });
   });
 

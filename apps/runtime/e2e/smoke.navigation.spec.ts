@@ -332,6 +332,8 @@ test("opens a new task tab from a running session and can switch back", async ({
 
   await expect(page.getByTestId("e2e-chat-view")).toBeVisible();
   await expect(page.getByTestId("e2e-chat-session-id")).toContainText("session-e2e-1");
+  await page.getByRole("button", { name: "persist-runtime-state" }).click();
+  await expect(page.getByTestId("e2e-chat-runtime-agent-state")).toContainText("thinking");
 
   await page.getByRole("button", { name: "开始任务" }).first().click();
 
@@ -345,4 +347,60 @@ test("opens a new task tab from a running session and can switch back", async ({
 
   await expect(page.getByTestId("e2e-chat-view")).toBeVisible();
   await expect(page.getByTestId("e2e-chat-session-id")).toContainText("session-e2e-1");
+});
+
+test("restores persisted runtime state after tab and sidebar session switches", async ({ page }) => {
+  const input = page.getByPlaceholder("先描述你要完成什么任务...");
+  await input.fill("帮我整理一下发布任务");
+  await input.press("Enter");
+
+  await expect(page.getByTestId("e2e-chat-view")).toBeVisible();
+  await expect(page.getByTestId("e2e-chat-session-id")).toContainText("session-e2e-1");
+
+  await page.getByRole("button", { name: "persist-runtime-state" }).click();
+  await expect(page.getByTestId("e2e-chat-runtime-stream-text")).toContainText("已缓存的运行中输出");
+  await expect(page.getByTestId("e2e-chat-runtime-agent-state")).toContainText("thinking");
+
+  await page.getByRole("button", { name: "开始任务" }).first().click();
+  await expect(page.getByRole("heading", { name: "你的电脑任务，交给打工虾们协作完成" })).toBeVisible();
+
+  await page.getByRole("tab", { name: "E2E Session" }).click();
+  await expect(page.getByTestId("e2e-chat-session-id")).toContainText("session-e2e-1");
+  await expect(page.getByTestId("e2e-chat-runtime-stream-text")).toContainText("已缓存的运行中输出");
+  await expect(page.getByTestId("e2e-chat-runtime-agent-state")).toContainText("thinking");
+
+  await page.getByRole("button", { name: "开始任务" }).first().click();
+  await expect(page.getByRole("heading", { name: "你的电脑任务，交给打工虾们协作完成" })).toBeVisible();
+  await input.fill("再开一个会话");
+  await input.press("Enter");
+
+  await expect(page.getByTestId("e2e-chat-session-id")).toContainText("session-e2e-2");
+
+  await page.locator('[data-session-id="session-e2e-1"]').first().click();
+  await expect(page.getByTestId("e2e-chat-session-id")).toContainText("session-e2e-1");
+  await expect(page.getByTestId("e2e-chat-runtime-stream-text")).toContainText("已缓存的运行中输出");
+  await expect(page.getByTestId("e2e-chat-runtime-agent-state")).toContainText("thinking");
+});
+
+test("shows runtime progress appended while the session is hidden and restores it on return", async ({ page }) => {
+  const input = page.getByPlaceholder("先描述你要完成什么任务...");
+  await input.fill("帮我持续整理交付内容");
+  await input.press("Enter");
+
+  await expect(page.getByTestId("e2e-chat-view")).toBeVisible();
+  await expect(page.getByTestId("e2e-chat-session-id")).toContainText("session-e2e-1");
+
+  await page.getByRole("button", { name: "persist-runtime-state" }).click();
+  await expect(page.getByTestId("e2e-chat-runtime-stream-text")).toContainText("已缓存的运行中输出");
+
+  await page.getByRole("button", { name: "append-runtime-state-later" }).click();
+  await page.getByRole("button", { name: "开始任务" }).first().click();
+  await expect(page.getByRole("heading", { name: "你的电脑任务，交给打工虾们协作完成" })).toBeVisible();
+
+  await page.waitForTimeout(700);
+
+  await page.getByRole("tab", { name: "E2E Session" }).click();
+  await expect(page.getByTestId("e2e-chat-session-id")).toContainText("session-e2e-1");
+  await expect(page.getByTestId("e2e-chat-runtime-stream-text")).toContainText("后台新增片段");
+  await expect(page.getByTestId("e2e-chat-runtime-agent-state")).toContainText("thinking");
 });

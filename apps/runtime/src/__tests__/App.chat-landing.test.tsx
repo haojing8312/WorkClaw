@@ -72,6 +72,15 @@ vi.mock("../components/ChatView", () => ({
         <div data-testid="chat-view-session-id">{props.sessionId}</div>
         <div data-testid="chat-view-session-mode">{props.sessionMode || ""}</div>
         <div data-testid="chat-view-session-title">{props.sessionTitle || ""}</div>
+        <div data-testid="chat-view-runtime-stream-text">
+          {(props.persistedRuntimeState?.streamItems || [])
+            .filter((item: any) => item.type === "text")
+            .map((item: any) => item.content || "")
+            .join("")}
+        </div>
+        <div data-testid="chat-view-runtime-agent-state">
+          {props.persistedRuntimeState?.agentState?.state || ""}
+        </div>
         {props.groupRunStepFocusRequest ? (
           <div data-testid="chat-view-group-run-step-focus">
             {props.groupRunStepFocusRequest.stepId}
@@ -165,6 +174,29 @@ vi.mock("../components/ChatView", () => ({
           }
         >
           clear-session-thinking
+        </button>
+        <button
+          onClick={() =>
+            props.onPersistRuntimeState?.({
+              streaming: true,
+              streamItems: [{ type: "text", content: "已缓存的运行中输出" }],
+              streamReasoning: {
+                status: "thinking",
+                content: "恢复中",
+              },
+              agentState: {
+                state: "thinking",
+                iteration: 1,
+              },
+              subAgentBuffer: "",
+              subAgentRoleName: "",
+              mainRoleName: "",
+              mainSummaryDelivered: false,
+              delegationCards: [],
+            })
+          }
+        >
+          persist-runtime-state
         </button>
       </div>
     );
@@ -1089,6 +1121,42 @@ describe("App chat landing", () => {
 
     await waitFor(() => {
       expect(screen.getByTestId("chat-view-session-id")).toHaveTextContent("session-1");
+    });
+  });
+
+  test("restores persisted runtime state after switching away and back to the same session tab", async () => {
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("new-session-landing")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "select-first-session" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("chat-view-session-id")).toHaveTextContent("session-1");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "persist-runtime-state" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("chat-view-runtime-stream-text")).toHaveTextContent("已缓存的运行中输出");
+      expect(screen.getByTestId("chat-view-runtime-agent-state")).toHaveTextContent("thinking");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "start-task" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("new-session-landing")).toBeInTheDocument();
+      expect(screen.getByTestId("task-tab-count")).toHaveTextContent("2");
+    });
+
+    fireEvent.click(within(screen.getByTestId("task-tab-strip")).getByRole("button", { name: "Session 1" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("chat-view-session-id")).toHaveTextContent("session-1");
+      expect(screen.getByTestId("chat-view-runtime-stream-text")).toHaveTextContent("已缓存的运行中输出");
+      expect(screen.getByTestId("chat-view-runtime-agent-state")).toHaveTextContent("thinking");
     });
   });
 

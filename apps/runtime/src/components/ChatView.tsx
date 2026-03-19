@@ -5,7 +5,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
-import { SkillManifest, ModelConfig, Message, StreamItem, PendingAttachment, ChatMessagePart, SendMessageRequest, ImRoleTimelineEvent, ImRoleDispatchRequest, EmployeeGroupRunSnapshot, EmployeeGroup, EmployeeGroupRule, SessionRunProjection } from "../types";
+import { SkillManifest, ModelConfig, Message, StreamItem, PendingAttachment, ChatMessagePart, SendMessageRequest, ImRoleTimelineEvent, ImRoleDispatchRequest, EmployeeGroupRunSnapshot, EmployeeGroup, EmployeeGroupRule, SessionRunProjection, PersistedChatRuntimeState, ChatRuntimeAgentState, ChatDelegationCardState } from "../types";
 import { motion } from "framer-motion";
 import { ToolIsland } from "./ToolIsland";
 import { RiskConfirmDialog } from "./RiskConfirmDialog";
@@ -119,6 +119,8 @@ interface Props {
   onReturnToSourceSession?: (sessionId: string) => Promise<void> | void;
   onSessionUpdate?: () => void;
   onSessionBlockingStateChange?: (update: { blocking: boolean; status?: string | null }) => void;
+  persistedRuntimeState?: PersistedChatRuntimeState;
+  onPersistRuntimeState?: (state: PersistedChatRuntimeState) => void;
   initialMessage?: string;
   initialAttachments?: PendingAttachment[];
   onInitialMessageConsumed?: () => void;
@@ -138,6 +140,20 @@ interface Props {
   sessionSourceChannel?: string;
   sessionSourceLabel?: string;
   operationPermissionMode?: "standard" | "full_access" | string;
+}
+
+function clonePersistedChatRuntimeState(state?: PersistedChatRuntimeState | null): PersistedChatRuntimeState {
+  return {
+    streaming: state?.streaming ?? false,
+    streamItems: state?.streamItems ? [...state.streamItems] : [],
+    streamReasoning: state?.streamReasoning ? { ...state.streamReasoning } : null,
+    agentState: state?.agentState ? { ...state.agentState } : null,
+    subAgentBuffer: state?.subAgentBuffer ?? "",
+    subAgentRoleName: state?.subAgentRoleName ?? "",
+    mainRoleName: state?.mainRoleName ?? "",
+    mainSummaryDelivered: state?.mainSummaryDelivered ?? false,
+    delegationCards: state?.delegationCards ? state.delegationCards.map((item) => ({ ...item })) : [],
+  };
 }
 
 interface PendingApprovalView {
@@ -232,6 +248,8 @@ export function ChatView({
   onReturnToSourceSession,
   onSessionUpdate,
   onSessionBlockingStateChange,
+  persistedRuntimeState,
+  onPersistRuntimeState,
   initialMessage,
   initialAttachments = [],
   onInitialMessageConsumed,
@@ -259,35 +277,28 @@ export function ChatView({
     if (!message.includes(prefix)) return null;
     return message.split(prefix)[1]?.trim() || null;
   };
+  const initialRuntimeState = clonePersistedChatRuntimeState(persistedRuntimeState);
   const [messages, setMessages] = useState<Message[]>([]);
   const [sessionRuns, setSessionRuns] = useState<SessionRunProjection[]>([]);
   const [input, setInput] = useState("");
-  const [streaming, setStreaming] = useState(false);
+  const [streaming, setStreaming] = useState(initialRuntimeState.streaming);
   // 有序的流式输出项：文字和工具调用按时间顺序排列
-  const [streamItems, setStreamItems] = useState<StreamItem[]>([]);
-  const streamItemsRef = useRef<StreamItem[]>([]);
+  const [streamItems, setStreamItems] = useState<StreamItem[]>(initialRuntimeState.streamItems);
+  const streamItemsRef = useRef<StreamItem[]>(initialRuntimeState.streamItems);
   const [streamReasoning, setStreamReasoning] = useState<{
     status: "thinking" | "completed" | "interrupted";
     content: string;
     durationMs?: number;
-  } | null>(null);
+  } | null>(initialRuntimeState.streamReasoning);
   const streamReasoningRef = useRef<{
     status: "thinking" | "completed" | "interrupted";
     content: string;
     durationMs?: number;
-  } | null>(null);
+  } | null>(initialRuntimeState.streamReasoning);
   const [askUserQuestion, setAskUserQuestion] = useState<string | null>(null);
   const [askUserOptions, setAskUserOptions] = useState<string[]>([]);
   const [askUserAnswer, setAskUserAnswer] = useState("");
-  const [agentState, setAgentState] = useState<{
-    state: string;
-    detail?: string;
-    iteration: number;
-    stopReasonKind?: string;
-    stopReasonTitle?: string;
-    stopReasonMessage?: string;
-    stopReasonLastCompletedStep?: string;
-  } | null>(null);
+  const [agentState, setAgentState] = useState<ChatRuntimeAgentState | null>(initialRuntimeState.agentState);
   const [pendingApprovals, setPendingApprovals] = useState<PendingApprovalView[]>([]);
   const [resolvingApprovalId, setResolvingApprovalId] = useState<string | null>(null);
   const [pendingInstallSkill, setPendingInstallSkill] = useState<ClawhubInstallCandidate | null>(null);
@@ -296,10 +307,10 @@ export function ChatView({
   const [installError, setInstallError] = useState<string | null>(null);
   const [composerError, setComposerError] = useState<string | null>(null);
   const installInFlightRef = useRef(false);
-  const [subAgentBuffer, setSubAgentBuffer] = useState("");
-  const [subAgentRoleName, setSubAgentRoleName] = useState("");
-  const [mainRoleName, setMainRoleName] = useState("");
-  const [mainSummaryDelivered, setMainSummaryDelivered] = useState(false);
+  const [subAgentBuffer, setSubAgentBuffer] = useState(initialRuntimeState.subAgentBuffer);
+  const [subAgentRoleName, setSubAgentRoleName] = useState(initialRuntimeState.subAgentRoleName);
+  const [mainRoleName, setMainRoleName] = useState(initialRuntimeState.mainRoleName);
+  const [mainSummaryDelivered, setMainSummaryDelivered] = useState(initialRuntimeState.mainSummaryDelivered);
   const [highlightedMessageIndex, setHighlightedMessageIndex] = useState<number | null>(null);
   const [highlightedGroupRunStepId, setHighlightedGroupRunStepId] = useState<string | null>(null);
   const [highlightedGroupRunStepEventId, setHighlightedGroupRunStepEventId] = useState<string | null>(null);
@@ -307,15 +318,7 @@ export function ChatView({
   const [isNearTop, setIsNearTop] = useState(true);
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [hasScrollableContent, setHasScrollableContent] = useState(false);
-  const [delegationCards, setDelegationCards] = useState<
-    Array<{
-      id: string;
-      fromRole: string;
-      toRole: string;
-      status: "running" | "completed" | "failed";
-      taskId?: string;
-    }>
-  >([]);
+  const [delegationCards, setDelegationCards] = useState<ChatDelegationCardState[]>(initialRuntimeState.delegationCards);
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollRegionRef = useRef<HTMLDivElement>(null);
   const autoFollowScrollRef = useRef(true);
@@ -469,6 +472,23 @@ export function ChatView({
       streamReasoningRef.current = next;
       return next;
     });
+  };
+
+  const applyPersistedRuntimeState = (state?: PersistedChatRuntimeState | null) => {
+    const next = clonePersistedChatRuntimeState(state);
+    setStreaming(next.streaming);
+    setStreamItems(next.streamItems);
+    streamItemsRef.current = next.streamItems;
+    setStreamReasoning(next.streamReasoning);
+    streamReasoningRef.current = next.streamReasoning;
+    setAgentState(next.agentState);
+    setSubAgentBuffer(next.subAgentBuffer);
+    subAgentBufferRef.current = next.subAgentBuffer;
+    setSubAgentRoleName(next.subAgentRoleName);
+    setMainRoleName(next.mainRoleName);
+    mainRoleNameRef.current = next.mainRoleName;
+    setMainSummaryDelivered(next.mainSummaryDelivered);
+    setDelegationCards(next.delegationCards);
   };
 
   // File Upload: 读取文件为文本
@@ -728,19 +748,8 @@ export function ChatView({
     void loadPendingApprovals(sessionId);
     loadWorkspace(sessionId);
     // 切换会话时重置流式状态
-    setStreaming(false);
-    setStreamItems([]);
-    streamItemsRef.current = [];
-    setStreamReasoning(null);
-    streamReasoningRef.current = null;
-    setSubAgentBuffer("");
-    setSubAgentRoleName("");
-    setMainRoleName("");
-    setMainSummaryDelivered(false);
+    applyPersistedRuntimeState(persistedRuntimeState);
     setShowDelegationHistory(false);
-    mainRoleNameRef.current = "";
-    setDelegationCards([]);
-    subAgentBufferRef.current = "";
     setAskUserQuestion(null);
     setAskUserOptions([]);
     setAskUserAnswer("");
@@ -762,6 +771,31 @@ export function ChatView({
     lastHandledGroupRunStepFocusNonceRef.current = null;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
+
+  useEffect(() => {
+    onPersistRuntimeState?.({
+      streaming,
+      streamItems: [...streamItems],
+      streamReasoning: streamReasoning ? { ...streamReasoning } : null,
+      agentState: agentState ? { ...agentState } : null,
+      subAgentBuffer,
+      subAgentRoleName,
+      mainRoleName,
+      mainSummaryDelivered,
+      delegationCards: delegationCards.map((item) => ({ ...item })),
+    });
+  }, [
+    agentState,
+    delegationCards,
+    mainRoleName,
+    mainSummaryDelivered,
+    onPersistRuntimeState,
+    streamItems,
+    streamReasoning,
+    streaming,
+    subAgentBuffer,
+    subAgentRoleName,
+  ]);
 
   useEffect(() => {
     persistSessionDraft(sessionId, input);

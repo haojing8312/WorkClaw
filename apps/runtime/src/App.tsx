@@ -61,6 +61,7 @@ import {
   ModelConfig,
   ModelConnectionTestResult,
   PendingAttachment,
+  PersistedChatRuntimeState,
   RuntimePreferences,
   SessionInfo,
   SkillManifest,
@@ -592,6 +593,7 @@ export default function App() {
   const [activeTabId, setActiveTabId] = useState<string>(initialWorkTab.id);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [liveSessionRuntimeStatusById, setLiveSessionRuntimeStatusById] = useState<Record<string, string>>({});
+  const [sessionRuntimeStateById, setSessionRuntimeStateById] = useState<Record<string, PersistedChatRuntimeState>>({});
   const [showInstall, setShowInstall] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [activeMainView, setActiveMainView] = useState<MainView>("start-task");
@@ -720,6 +722,7 @@ export default function App() {
   }, [activeTabId, tabs]);
 
   const selectedSessionId = activeTab?.kind === "session" ? activeTab.sessionId : null;
+  const selectedSessionRuntimeState = selectedSessionId ? sessionRuntimeStateById[selectedSessionId] : undefined;
 
   function replaceTab(tabId: string, nextTab: WorkTab) {
     setTabs((prev) => prev.map((tab) => (tab.id === tabId ? nextTab : tab)));
@@ -811,6 +814,15 @@ export default function App() {
     },
     [selectedSessionId],
   );
+
+  const handlePersistSessionRuntimeState = useCallback((sessionId: string, state: PersistedChatRuntimeState) => {
+    const normalizedSessionId = sessionId.trim();
+    if (!normalizedSessionId) return;
+    setSessionRuntimeStateById((prev) => ({
+      ...prev,
+      [normalizedSessionId]: state,
+    }));
+  }, []);
 
   function handleSelectSession(sessionId: string, options?: { openChatView?: boolean }) {
     const targetSession = visibleSessions.find((item) => item.id === sessionId);
@@ -1629,6 +1641,12 @@ export default function App() {
         return next;
       });
       setLiveSessionRuntimeStatusById((prev) => {
+        if (!prev[sessionId]) return prev;
+        const next = { ...prev };
+        delete next[sessionId];
+        return next;
+      });
+      setSessionRuntimeStateById((prev) => {
         if (!prev[sessionId]) return prev;
         const next = { ...prev };
         delete next[sessionId];
@@ -3394,6 +3412,11 @@ export default function App() {
                 operationPermissionMode={operationPermissionMode}
                 onSessionUpdate={handleSessionRefresh}
                 onSessionBlockingStateChange={handleSelectedSessionBlockingStateChange}
+                persistedRuntimeState={selectedSessionRuntimeState}
+                onPersistRuntimeState={(state) => {
+                  if (!selectedSessionId) return;
+                  handlePersistSessionRuntimeState(selectedSessionId, state);
+                }}
                 installedSkillIds={skills.map((s) => s.id)}
                 onSkillInstalled={handleSkillInstalledFromChat}
                 suppressAskUserPrompt={selectedSessionImManaged}

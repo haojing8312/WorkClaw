@@ -197,6 +197,40 @@ export interface ToolCallInfo {
   status: "running" | "completed" | "error";
 }
 
+export interface ChatRuntimeAgentState {
+  state: string;
+  detail?: string;
+  iteration: number;
+  stopReasonKind?: string;
+  stopReasonTitle?: string;
+  stopReasonMessage?: string;
+  stopReasonLastCompletedStep?: string;
+}
+
+export interface ChatDelegationCardState {
+  id: string;
+  fromRole: string;
+  toRole: string;
+  status: "running" | "completed" | "failed";
+  taskId?: string;
+}
+
+export interface PersistedChatRuntimeState {
+  streaming: boolean;
+  streamItems: StreamItem[];
+  streamReasoning: {
+    status: "thinking" | "completed" | "interrupted";
+    content: string;
+    durationMs?: number;
+  } | null;
+  agentState: ChatRuntimeAgentState | null;
+  subAgentBuffer: string;
+  subAgentRoleName: string;
+  mainRoleName: string;
+  mainSummaryDelivered: boolean;
+  delegationCards: ChatDelegationCardState[];
+}
+
 export interface SessionRunProjection {
   id: string;
   session_id: string;
