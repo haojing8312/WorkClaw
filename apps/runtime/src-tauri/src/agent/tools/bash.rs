@@ -59,6 +59,37 @@ impl BashTool {
         ];
         patterns.iter().any(|p| lower.contains(p))
     }
+
+    fn enrich_execution_details(details: Value, ctx: &ToolContext) -> Value {
+        let platform_shell = ctx
+            .execution_caps
+            .as_ref()
+            .and_then(|caps| caps.preferred_shell.clone())
+            .unwrap_or_else(|| {
+                let (shell, _) = Self::get_shell();
+                shell.to_string()
+            });
+
+        let mut details = details;
+        if let Some(details_obj) = details.as_object_mut() {
+            details_obj.insert("platform_shell".to_string(), Value::String(platform_shell));
+            details_obj.insert(
+                "work_dir".to_string(),
+                ctx.work_dir
+                    .as_ref()
+                    .map(|path| Value::String(path.to_string_lossy().to_string()))
+                    .unwrap_or(Value::Null),
+            );
+            details_obj.insert(
+                "task_temp_dir".to_string(),
+                ctx.task_temp_dir
+                    .as_ref()
+                    .map(|path| Value::String(path.to_string_lossy().to_string()))
+                    .unwrap_or(Value::Null),
+            );
+        }
+        details
+    }
 }
 
 impl Tool for BashTool {
@@ -103,10 +134,10 @@ impl Tool for BashTool {
                 "危险命令已被拦截",
                 "DANGEROUS_COMMAND_BLOCKED",
                 "危险命令已被拦截。此命令可能造成不可逆损害。",
-                json!({
+                Self::enrich_execution_details(json!({
                     "command": command,
                     "background": false,
-                }),
+                }), ctx),
             );
         }
 
@@ -119,11 +150,11 @@ impl Tool for BashTool {
                 return tool_result::success(
                     self.name(),
                     format!("后台进程已启动，process_id: {}", id),
-                    json!({
+                    Self::enrich_execution_details(json!({
                         "command": command,
                         "background": true,
                         "process_id": id,
-                    }),
+                    }), ctx),
                 );
             } else {
                 return Err(anyhow!("后台模式不可用：未配置 ProcessManager"));
@@ -171,27 +202,27 @@ impl Tool for BashTool {
                         format!("命令执行失败（退出码 {}）", status.code().unwrap_or(-1)),
                         "COMMAND_EXIT_NONZERO",
                         format!("命令执行失败（退出码 {}）", status.code().unwrap_or(-1)),
-                        json!({
+                        Self::enrich_execution_details(json!({
                             "command": command,
                             "exit_code": status.code().unwrap_or(-1),
                             "timed_out": false,
                             "background": false,
                             "stdout": stdout_str,
                             "stderr": stderr_str,
-                        }),
+                        }), ctx),
                     )
                 } else {
                     tool_result::success(
                         self.name(),
                         format!("命令执行完成（退出码 {}）", status.code().unwrap_or(0)),
-                        json!({
+                        Self::enrich_execution_details(json!({
                             "command": command,
                             "exit_code": status.code().unwrap_or(0),
                             "timed_out": false,
                             "background": false,
                             "stdout": stdout_str,
                             "stderr": stderr_str,
-                        }),
+                        }), ctx),
                     )
                 }
             }
@@ -204,14 +235,14 @@ impl Tool for BashTool {
                     format!("命令执行超时（{}ms），已终止", timeout_ms),
                     "COMMAND_TIMEOUT",
                     format!("命令执行超时（{}ms），已终止", timeout_ms),
-                    json!({
+                    Self::enrich_execution_details(json!({
                         "command": command,
                         "exit_code": Value::Null,
                         "timed_out": true,
                         "background": false,
                         "stdout": "",
                         "stderr": "",
-                    }),
+                    }), ctx),
                 )
             }
         }

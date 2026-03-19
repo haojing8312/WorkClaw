@@ -1,5 +1,7 @@
 pub mod browser_progress;
 pub mod compactor;
+pub mod execution_caps;
+pub mod file_task_preflight;
 pub mod executor;
 pub mod group_orchestrator;
 pub mod permissions;

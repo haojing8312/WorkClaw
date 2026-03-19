@@ -2,7 +2,9 @@ use runtime_lib::agent::{ReadFileTool, Tool, ToolContext, ToolRegistry};
 use serde_json::json;
 use std::fs;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
+use tempfile::tempdir;
 
 #[test]
 fn test_read_file_success() {
@@ -37,6 +39,47 @@ fn test_read_file_success() {
 
     // Cleanup
     fs::remove_file(test_path).unwrap();
+}
+
+#[test]
+fn test_read_file_docx_returns_structured_failure() {
+    let registry = ToolRegistry::new();
+    registry.register(Arc::new(ReadFileTool));
+
+    let tool = registry.get("read_file");
+    assert!(tool.is_some(), "read_file tool should be registered");
+
+    let dir = tempdir().expect("create temp dir");
+    let test_path = dir.path().join("report.docx");
+    fs::write(&test_path, "fake docx payload").unwrap();
+
+    let ctx = ToolContext {
+        work_dir: Some(PathBuf::from(dir.path())),
+        ..Default::default()
+    };
+    let input = json!({"path": test_path.to_str().expect("utf8 path")});
+
+    let result = tool.unwrap().execute(input, &ctx).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&result).expect("valid json payload");
+
+    assert_eq!(parsed["ok"], false);
+    assert_eq!(parsed["tool"], "read_file");
+    assert_eq!(parsed["error_code"], "UNSUPPORTED_RAW_FILE_READ");
+    assert!(
+        parsed["error_message"]
+            .as_str()
+            .is_some_and(|value| value.contains("raw-read"))
+    );
+    assert!(
+        parsed["details"]["read_mode"]
+            .as_str()
+            .is_some_and(|value| value == "binary_or_office")
+    );
+    assert_eq!(parsed["details"]["path"], test_path.to_str().expect("utf8 path"));
+    assert_eq!(
+        parsed["details"]["absolute_path"],
+        test_path.to_str().expect("utf8 path")
+    );
 }
 
 #[test]

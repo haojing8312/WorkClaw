@@ -6,6 +6,29 @@ use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SkillExecutabilityStatus {
+    InstructionOnly,
+    Executable,
+    Blocked,
+}
+
+impl SkillExecutabilityStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            SkillExecutabilityStatus::InstructionOnly => "instruction_only",
+            SkillExecutabilityStatus::Executable => "executable",
+            SkillExecutabilityStatus::Blocked => "blocked",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SkillExecutability {
+    status: SkillExecutabilityStatus,
+    reason: String,
+}
+
 /// Skill 调用工具：按名称加载本地 SKILL.md，并返回可执行指令文本。
 ///
 /// 设计目标：
@@ -210,6 +233,69 @@ impl SkillInvokeTool {
             }
         }
     }
+
+    fn evaluate_executability(
+        child_declared: &[String],
+        narrowed_tools: &[String],
+    ) -> SkillExecutability {
+        if child_declared.is_empty() {
+            return SkillExecutability {
+                status: SkillExecutabilityStatus::InstructionOnly,
+                reason: "子 Skill 未声明工具".to_string(),
+            };
+        }
+        if narrowed_tools.is_empty() {
+            return SkillExecutability {
+                status: SkillExecutabilityStatus::Blocked,
+                reason: "子 Skill 声明的工具不在当前会话允许范围内".to_string(),
+            };
+        }
+        SkillExecutability {
+            status: SkillExecutabilityStatus::Executable,
+            reason: "子 Skill 声明的工具可用".to_string(),
+        }
+    }
+
+    fn render_skill_result(
+        skill_name: &str,
+        skill_path: &Path,
+        config: &SkillConfig,
+        declared_tools: &str,
+        narrowed_tools_text: &str,
+        executability: &SkillExecutability,
+    ) -> String {
+        format!(
+            "## Skill: {}\n\
+执行状态: {}\n\
+执行原因: {}\n\
+来源: {}\n\
+描述: {}\n\
+声明工具: {}\n\
+收紧后工具: {}\n\
+最大迭代: {}\n\n\
+请严格执行以下 Skill 指令（原文）:\n\n{}",
+            skill_name,
+            executability.status.as_str(),
+            executability.reason,
+            skill_path.display(),
+            config.description.clone().unwrap_or_default(),
+            declared_tools,
+            narrowed_tools_text,
+            config
+                .max_iterations
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "(未声明)".to_string()),
+            config.system_prompt
+        )
+    }
+
+    fn render_executability_status(executability: &SkillExecutability) -> String {
+        format!(
+            "执行状态: {}\n执行原因: {}",
+            executability.status.as_str(),
+            executability.reason
+        )
+    }
 }
 
 impl Tool for SkillInvokeTool {
@@ -291,15 +377,6 @@ impl Tool for SkillInvokeTool {
                     Some(child_declared.as_slice())
                 },
             );
-            if ctx.allowed_tools.is_some()
-                && !child_declared.is_empty()
-                && narrowed_tools.is_empty()
-            {
-                return Err(anyhow!(
-                    "PERMISSION_DENIED: 子 Skill '{}' 声明的工具不在父会话允许范围内",
-                    skill_name
-                ));
-            }
             let declared_tools = if child_declared.is_empty() {
                 "(未声明)".to_string()
             } else {
@@ -310,26 +387,25 @@ impl Tool for SkillInvokeTool {
             } else {
                 narrowed_tools.join(", ")
             };
+            let executability = Self::evaluate_executability(&child_declared, &narrowed_tools);
+            let rendered = Self::render_skill_result(
+                &skill_name,
+                &skill_path,
+                &config,
+                &declared_tools,
+                &narrowed_tools_text,
+                &executability,
+            );
+            if executability.status == SkillExecutabilityStatus::Blocked {
+                let status_summary = Self::render_executability_status(&executability);
+                return Err(anyhow!(
+                    "PERMISSION_DENIED: 子 Skill '{}' 声明的工具不在父会话允许范围内\n{}",
+                    skill_name,
+                    status_summary
+                ));
+            }
 
-            Ok(format!(
-                "## Skill: {}\n\
-来源: {}\n\
-描述: {}\n\
-声明工具: {}\n\
-收紧后工具: {}\n\
-最大迭代: {}\n\n\
-请严格执行以下 Skill 指令（原文）:\n\n{}",
-                skill_name,
-                skill_path.display(),
-                config.description.unwrap_or_default(),
-                declared_tools,
-                narrowed_tools_text,
-                config
-                    .max_iterations
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|| "(未声明)".to_string()),
-                config.system_prompt
-            ))
+            Ok(rendered)
         })();
 
         if let Ok(mut stack_guard) = self.call_stack.lock() {
@@ -337,5 +413,100 @@ impl Tool for SkillInvokeTool {
         }
 
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SkillInvokeTool;
+    use crate::agent::types::{Tool, ToolContext};
+    use serde_json::json;
+    use tempfile::TempDir;
+
+    fn create_skill(root: &TempDir, name: &str, skill_md: &str) {
+        let skill_dir = root.path().join(name);
+        std::fs::create_dir_all(&skill_dir).expect("create skill dir");
+        std::fs::write(skill_dir.join("SKILL.md"), skill_md).expect("write SKILL.md");
+    }
+
+    #[test]
+    fn skill_tool_marks_instruction_only_when_child_declares_no_tools() {
+        let tmp = TempDir::new().expect("temp dir");
+        create_skill(
+            &tmp,
+            "instruction-only-skill",
+            "---\nname: instruction-only-skill\ndescription: helper\n---\n\nChild prompt",
+        );
+
+        let tool = SkillInvokeTool::new("sess-1".to_string(), vec![tmp.path().to_path_buf()]);
+        let ctx = ToolContext {
+            work_dir: None,
+            allowed_tools: None,
+            session_id: None,
+            task_temp_dir: None,
+            execution_caps: None,
+            file_task_caps: None,
+        };
+        let out = tool
+            .execute(json!({"skill_name": "instruction-only-skill"}), &ctx)
+            .expect("instruction-only skill should succeed");
+
+        assert!(out.contains("执行状态: instruction_only"));
+        assert!(out.contains("执行原因: 子 Skill 未声明工具"));
+    }
+
+    #[test]
+    fn skill_tool_marks_executable_when_tools_overlap() {
+        let tmp = TempDir::new().expect("temp dir");
+        create_skill(
+            &tmp,
+            "executable-skill",
+            "---\nname: executable-skill\nallowed_tools: \"read_file, web_search\"\n---\n\nChild prompt",
+        );
+
+        let tool = SkillInvokeTool::new("sess-1".to_string(), vec![tmp.path().to_path_buf()]);
+        let ctx = ToolContext {
+            work_dir: None,
+            allowed_tools: Some(vec!["read_file".to_string()]),
+            session_id: None,
+            task_temp_dir: None,
+            execution_caps: None,
+            file_task_caps: None,
+        };
+        let out = tool
+            .execute(json!({"skill_name": "executable-skill"}), &ctx)
+            .expect("executable skill should succeed");
+
+        assert!(out.contains("执行状态: executable"));
+        assert!(out.contains("执行原因: 子 Skill 声明的工具可用"));
+        assert!(out.contains("收紧后工具: read_file"));
+    }
+
+    #[test]
+    fn skill_tool_marks_blocked_when_child_tools_do_not_overlap_parent_scope() {
+        let tmp = TempDir::new().expect("temp dir");
+        create_skill(
+            &tmp,
+            "blocked-skill",
+            "---\nname: blocked-skill\nallowed_tools: \"bash\"\n---\n\nChild prompt",
+        );
+
+        let tool = SkillInvokeTool::new("sess-1".to_string(), vec![tmp.path().to_path_buf()]);
+        let ctx = ToolContext {
+            work_dir: None,
+            allowed_tools: Some(vec!["read_file".to_string()]),
+            session_id: None,
+            task_temp_dir: None,
+            execution_caps: None,
+            file_task_caps: None,
+        };
+        let err = tool
+            .execute(json!({"skill_name": "blocked-skill"}), &ctx)
+            .expect_err("blocked skill should be rejected");
+
+        assert!(err.to_string().contains("执行状态: blocked"));
+        assert!(err
+            .to_string()
+            .contains("执行原因: 子 Skill 声明的工具不在当前会话允许范围内"));
     }
 }

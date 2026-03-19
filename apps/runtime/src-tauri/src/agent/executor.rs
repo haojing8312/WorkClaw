@@ -6,6 +6,7 @@ use super::run_guard::{
     RunGuardWarning, RunStopReason,
 };
 use super::system_prompts::SystemPromptBuilder;
+use super::execution_caps::detect_execution_caps;
 use super::types::{LLMResponse, StreamDelta, ToolContext, ToolResult};
 use crate::adapters;
 use crate::approval_bus::{
@@ -505,6 +506,44 @@ pub struct AgentExecutor {
     system_prompt_builder: SystemPromptBuilder,
 }
 
+fn build_tool_context(
+    session_id: Option<&str>,
+    work_dir: Option<PathBuf>,
+    allowed_tools: Option<&[String]>,
+) -> Result<ToolContext> {
+    let task_temp_dir = match session_id {
+        Some(session_id) => Some(build_task_temp_dir(session_id)?),
+        None => None,
+    };
+    Ok(ToolContext {
+        work_dir,
+        allowed_tools: allowed_tools.map(|tools| tools.to_vec()),
+        session_id: session_id.map(str::to_string),
+        task_temp_dir,
+        execution_caps: Some(detect_execution_caps()),
+        file_task_caps: None,
+    })
+}
+
+fn build_task_temp_dir(session_id: &str) -> Result<PathBuf> {
+    let temp_root = std::env::temp_dir();
+    let session_slug: String = session_id
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let dir_name = format!("workclaw-task-{}", session_slug);
+    let temp_dir = temp_root.join(dir_name);
+    std::fs::create_dir_all(&temp_dir)
+        .map_err(|e| anyhow!("创建任务临时目录失败: {}", e))?;
+    Ok(temp_dir)
+}
+
 pub fn build_skill_route_event(
     session_id: &str,
     route_run_id: &str,
@@ -680,10 +719,7 @@ impl AgentExecutor {
         // 组合系统级 prompt 和 Skill prompt
         let system_prompt = self.system_prompt_builder.build(skill_system_prompt);
 
-        let tool_ctx = ToolContext {
-            work_dir: work_dir.map(PathBuf::from),
-            allowed_tools: allowed_tools.map(|tools| tools.to_vec()),
-        };
+        let tool_ctx = build_tool_context(session_id, work_dir.map(PathBuf::from), allowed_tools)?;
         let max_iterations = max_iterations_override.unwrap_or(self.max_iterations);
         let mut run_budget_policy = RunBudgetPolicy::for_scope(RunBudgetScope::GeneralChat);
         run_budget_policy.max_turns = max_iterations;
@@ -1447,18 +1483,17 @@ impl AgentExecutor {
                         } else {
                             BrowserProgressSnapshot::from_tool_output(&call.name, &result)
                         };
-                        let output_signature = if let Some(snapshot) =
-                            browser_progress_snapshot.as_ref()
-                        {
-                            snapshot.progress_signature()
-                        } else {
-                            let progress_text = if is_error {
-                                format!("error:{result}")
+                        let output_signature =
+                            if let Some(snapshot) = browser_progress_snapshot.as_ref() {
+                                snapshot.progress_signature()
                             } else {
-                                result.clone()
+                                let progress_text = if is_error {
+                                    format!("error:{result}")
+                                } else {
+                                    result.clone()
+                                };
+                                text_progress_signature(&progress_text)
                             };
-                            text_progress_signature(&progress_text)
-                        };
                         if let Some(snapshot) = browser_progress_snapshot {
                             latest_browser_progress = Some(snapshot);
                         }
@@ -1635,7 +1670,11 @@ mod tests {
         .expect("should classify");
 
         assert_eq!(reason.kind, RunStopReasonKind::PolicyBlocked);
-        assert!(reason.detail.as_deref().unwrap_or_default().contains("切换当前会话的工作目录"));
+        assert!(reason
+            .detail
+            .as_deref()
+            .unwrap_or_default()
+            .contains("切换当前会话的工作目录"));
     }
 
     #[test]
@@ -1653,6 +1692,56 @@ mod tests {
         );
 
         assert!(reason.is_none());
+    }
+
+    #[test]
+    fn tool_context_construction_includes_p0_metadata_slots() {
+        let work_dir = Some(PathBuf::from("workspace"));
+        let allowed_tools = Some(vec!["read_file".to_string(), "skill".to_string()]);
+
+        let ctx = super::build_tool_context(
+            Some("session-123"),
+            work_dir.clone(),
+            allowed_tools.as_deref(),
+        )
+        .expect("build tool context");
+
+        assert_eq!(ctx.session_id.as_deref(), Some("session-123"));
+        assert_eq!(ctx.work_dir, work_dir);
+        assert_eq!(ctx.allowed_tools, allowed_tools);
+        let temp_dir = ctx.task_temp_dir.expect("task temp dir");
+        let temp_dir_name = temp_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("temp dir name");
+        assert_eq!(temp_dir_name, "workclaw-task-session-123");
+        assert!(temp_dir.exists());
+
+        let caps = ctx.execution_caps.expect("execution caps");
+        assert_eq!(caps.platform.as_deref(), Some(std::env::consts::OS));
+        assert_eq!(caps.preferred_shell.as_deref(), Some(if cfg!(target_os = "windows") {
+            "cmd"
+        } else {
+            "bash"
+        }));
+        assert!(caps.python_candidates.is_empty());
+        assert!(caps.node_candidates.is_empty());
+        assert_eq!(caps.notes, vec!["static P0 detection".to_string()]);
+        assert!(ctx.file_task_caps.is_none());
+    }
+
+    #[test]
+    fn tool_context_reuses_task_temp_dir_for_same_session() {
+        let first = super::build_tool_context(Some("session-123"), None, None)
+            .expect("first tool context")
+            .task_temp_dir
+            .expect("first temp dir");
+        let second = super::build_tool_context(Some("session-123"), None, None)
+            .expect("second tool context")
+            .task_temp_dir
+            .expect("second temp dir");
+
+        assert_eq!(first, second);
     }
 
     #[tokio::test]
@@ -1749,6 +1838,10 @@ mod tests {
         let tool_ctx = ToolContext {
             work_dir: Some(PathBuf::from(work_dir.path())),
             allowed_tools: None,
+            session_id: Some("sess-approval".to_string()),
+            task_temp_dir: Some(PathBuf::from(std::env::temp_dir())),
+            execution_caps: Some(super::detect_execution_caps()),
+            file_task_caps: None,
         };
 
         let runtime_clone = runtime.clone();

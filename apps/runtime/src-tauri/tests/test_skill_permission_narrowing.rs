@@ -22,6 +22,10 @@ fn skill_tool_returns_narrowed_allowed_tools() {
     let ctx = ToolContext {
         work_dir: None,
         allowed_tools: Some(vec!["read_file".to_string(), "glob".to_string()]),
+        session_id: None,
+        task_temp_dir: None,
+        execution_caps: None,
+        file_task_caps: None,
     };
     let out = tool
         .execute(json!({"skill_name": "child-skill"}), &ctx)
@@ -44,6 +48,10 @@ fn skill_tool_denies_when_child_tools_outside_parent_scope() {
     let ctx = ToolContext {
         work_dir: None,
         allowed_tools: Some(vec!["read_file".to_string()]),
+        session_id: None,
+        task_temp_dir: None,
+        execution_caps: None,
+        file_task_caps: None,
     };
     let err = tool
         .execute(json!({"skill_name": "child-skill"}), &ctx)
@@ -69,6 +77,10 @@ fn skill_tool_accepts_display_name_via_frontmatter_mapping() {
     let ctx = ToolContext {
         work_dir: None,
         allowed_tools: None,
+        session_id: None,
+        task_temp_dir: None,
+        execution_caps: None,
+        file_task_caps: None,
     };
     let out = tool
         .execute(json!({"skill_name": "通用助手"}), &ctx)
@@ -91,6 +103,10 @@ fn skill_tool_accepts_skill_md_path_within_search_roots() {
     let ctx = ToolContext {
         work_dir: None,
         allowed_tools: None,
+        session_id: None,
+        task_temp_dir: None,
+        execution_caps: None,
+        file_task_caps: None,
     };
     let skill_md_path = actual_root.path().join("child-skill").join("SKILL.md");
     let out = tool
@@ -118,6 +134,10 @@ fn skill_tool_rejects_skill_md_path_outside_search_roots() {
     let ctx = ToolContext {
         work_dir: None,
         allowed_tools: None,
+        session_id: None,
+        task_temp_dir: None,
+        execution_caps: None,
+        file_task_caps: None,
     };
     let skill_md_path = actual_root.path().join("child-skill").join("SKILL.md");
     let err = tool
