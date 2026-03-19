@@ -78,26 +78,6 @@ describe("EmployeeHubView feishu connection status", () => {
       if (command === "list_im_routing_bindings") return Promise.resolve([]);
       if (command === "upsert_im_routing_binding") return Promise.resolve("binding-1");
       if (command === "delete_im_routing_binding") return Promise.resolve(null);
-      if (command === "get_wecom_gateway_settings") {
-        return Promise.resolve({
-          corp_id: "wwcorp",
-          agent_id: "1000002",
-          agent_secret: "secret-x",
-          sidecar_base_url: "",
-        });
-      }
-      if (command === "get_wecom_connector_status") {
-        return Promise.resolve({
-          running: false,
-          started_at: null,
-          last_error: null,
-          reconnect_attempts: 0,
-          queue_depth: 0,
-          instance_id: "wecom:wecom-main",
-        });
-      }
-      if (command === "set_wecom_gateway_settings") return Promise.resolve(null);
-      if (command === "start_wecom_connector") return Promise.resolve("wecom:wecom-main");
       if (command === "resolve_default_work_dir") return Promise.resolve("C:\\Users\\test\\WorkClaw\\workspace");
       return Promise.resolve(null);
     });
@@ -143,69 +123,9 @@ describe("EmployeeHubView feishu connection status", () => {
     expect(screen.getByText("飞书接待")).toBeInTheDocument();
     expect(screen.queryByTestId("connector-panel-feishu")).not.toBeInTheDocument();
     expect(screen.getByText("飞书连接在设置中心统一管理。这里仅决定该员工是否接待飞书入口，以及接待哪些会话。")).toBeInTheDocument();
-    expect(screen.getByTestId("connector-panel-wecom")).toBeInTheDocument();
-    expect(screen.getAllByText("重连次数").length).toBeGreaterThan(0);
+    expect(screen.queryByTestId("connector-panel-wecom")).not.toBeInTheDocument();
+    expect(screen.queryByText("企业微信")).not.toBeInTheDocument();
     expect(screen.getByText("auth failed")).toBeInTheDocument();
-  });
-
-  test("allows saving and retrying wecom connector from employee hub", async () => {
-    render(
-      <EmployeeHubView
-        employees={[buildEmployee("emp-red", "tech", true, "cli_tech", "sec_tech")]}
-        skills={[
-          {
-            id: "builtin-general",
-            name: "通用助手",
-            description: "",
-            version: "1.0.0",
-            author: "",
-            recommended_model: "",
-            tags: [],
-            created_at: "2026-03-01T00:00:00Z",
-          },
-        ]}
-        selectedEmployeeId="emp-red"
-        onSelectEmployee={() => {}}
-        onSaveEmployee={async () => {}}
-        onDeleteEmployee={async () => {}}
-        onSetAsMainAndEnter={() => {}}
-        onStartTaskWithEmployee={() => {}}
-      />,
-    );
-
-    await waitFor(() => {
-      expect(screen.getByPlaceholderText("企业微信 Corp ID")).toHaveValue("wwcorp");
-    });
-
-    fireEvent.change(screen.getByPlaceholderText("企业微信 Corp ID"), {
-      target: { value: "wwcorp-updated" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "保存企业微信连接器" }));
-
-    await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith(
-        "set_wecom_gateway_settings",
-        expect.objectContaining({
-          settings: expect.objectContaining({
-            corp_id: "wwcorp-updated",
-            agent_id: "1000002",
-          }),
-        }),
-      );
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: "重试连接" }));
-
-    await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith(
-        "start_wecom_connector",
-        expect.objectContaining({
-          corpId: "wwcorp-updated",
-          agentId: "1000002",
-          agentSecret: "secret-x",
-        }),
-      );
-    });
   });
 
   test("treats legacy feishu bindings as active reception even when scopes are empty", async () => {
@@ -252,26 +172,6 @@ describe("EmployeeHubView feishu connection status", () => {
           },
         ]);
       }
-      if (command === "get_wecom_gateway_settings") {
-        return Promise.resolve({
-          corp_id: "wwcorp",
-          agent_id: "1000002",
-          agent_secret: "secret-x",
-          sidecar_base_url: "",
-        });
-      }
-      if (command === "get_wecom_connector_status") {
-        return Promise.resolve({
-          running: false,
-          started_at: null,
-          last_error: null,
-          reconnect_attempts: 0,
-          queue_depth: 0,
-          instance_id: "wecom:wecom-main",
-        });
-      }
-      if (command === "set_wecom_gateway_settings") return Promise.resolve(null);
-      if (command === "start_wecom_connector") return Promise.resolve("wecom:wecom-main");
       if (command === "resolve_default_work_dir") return Promise.resolve("C:\\Users\\test\\WorkClaw\\workspace");
       return Promise.resolve(null);
     });
@@ -446,21 +346,6 @@ describe("EmployeeHubView feishu connection status", () => {
       }
       if (command === "delete_im_routing_binding") return Promise.resolve(null);
       if (command === "upsert_im_routing_binding") return Promise.resolve("binding-tech");
-      if (command === "get_wecom_gateway_settings") {
-        return Promise.resolve({ corp_id: "wwcorp", agent_id: "1000002", agent_secret: "secret-x", sidecar_base_url: "" });
-      }
-      if (command === "get_wecom_connector_status") {
-        return Promise.resolve({
-          running: false,
-          started_at: null,
-          last_error: null,
-          reconnect_attempts: 0,
-          queue_depth: 0,
-          instance_id: "wecom:wecom-main",
-        });
-      }
-      if (command === "set_wecom_gateway_settings") return Promise.resolve(null);
-      if (command === "start_wecom_connector") return Promise.resolve("wecom:wecom-main");
       if (command === "resolve_default_work_dir") return Promise.resolve("C:\\Users\\test\\WorkClaw\\workspace");
       return Promise.resolve(null);
     });
@@ -538,21 +423,6 @@ describe("EmployeeHubView feishu connection status", () => {
       }
       if (command === "delete_im_routing_binding") return Promise.resolve(null);
       if (command === "upsert_im_routing_binding") return Promise.resolve("binding-tech-room");
-      if (command === "get_wecom_gateway_settings") {
-        return Promise.resolve({ corp_id: "wwcorp", agent_id: "1000002", agent_secret: "secret-x", sidecar_base_url: "" });
-      }
-      if (command === "get_wecom_connector_status") {
-        return Promise.resolve({
-          running: false,
-          started_at: null,
-          last_error: null,
-          reconnect_attempts: 0,
-          queue_depth: 0,
-          instance_id: "wecom:wecom-main",
-        });
-      }
-      if (command === "set_wecom_gateway_settings") return Promise.resolve(null);
-      if (command === "start_wecom_connector") return Promise.resolve("wecom:wecom-main");
       if (command === "resolve_default_work_dir") return Promise.resolve("C:\\Users\\test\\WorkClaw\\workspace");
       return Promise.resolve(null);
     });

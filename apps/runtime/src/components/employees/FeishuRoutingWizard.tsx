@@ -29,7 +29,6 @@ const blankRule: UpsertImRoutingBindingInput = {
 
 const CONNECTOR_LABELS: Record<string, string> = {
   feishu: "飞书",
-  wecom: "企业微信",
 };
 
 function resolveRuleChannel(channel: string) {
@@ -279,7 +278,6 @@ export function ImRoutingWizard({ bindings, onSaveRule, onDeleteRule, onSimulate
         >
           <option value="">请选择渠道连接器</option>
           <option value="feishu">feishu / 飞书</option>
-          <option value="wecom">wecom / 企业微信</option>
         </select>
         <input
           className="w-full border border-gray-200 rounded px-2 py-1.5 text-sm"

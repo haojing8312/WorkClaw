@@ -52,29 +52,11 @@ describe("SettingsView connector management", () => {
           sidecar_base_url: "",
         });
       }
-      if (command === "get_wecom_gateway_settings") {
-        return Promise.resolve({
-          corp_id: "",
-          agent_id: "",
-          agent_secret: "",
-          sidecar_base_url: "",
-        });
-      }
       if (command === "get_feishu_long_connection_status") {
         return Promise.resolve({
           running: false,
           started_at: null,
           queued_events: 0,
-        });
-      }
-      if (command === "get_wecom_connector_status") {
-        return Promise.resolve({
-          running: false,
-          started_at: null,
-          last_error: null,
-          reconnect_attempts: 0,
-          queue_depth: 0,
-          instance_id: "wecom:wecom-main",
         });
       }
       return Promise.resolve(null);
@@ -91,6 +73,8 @@ describe("SettingsView connector management", () => {
     });
     expect(screen.getByText("员工关联入口")).toBeInTheDocument();
     expect(screen.getByText("飞书连接成功后，请前往员工详情中的“飞书接待”配置默认接待员工或指定群聊范围。")).toBeInTheDocument();
+    expect(screen.queryByTestId("connector-panel-wecom")).not.toBeInTheDocument();
+    expect(screen.queryByText("企业微信")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("路由渠道")).not.toBeInTheDocument();
     expect(invokeMock).not.toHaveBeenCalledWith("upsert_im_routing_binding", expect.anything());
     expect(invokeMock).not.toHaveBeenCalledWith("simulate_im_route", expect.anything());

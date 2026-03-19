@@ -30,29 +30,11 @@ describe("SettingsView connector tab", () => {
           sidecar_base_url: "",
         });
       }
-      if (command === "get_wecom_gateway_settings") {
-        return Promise.resolve({
-          corp_id: "",
-          agent_id: "",
-          agent_secret: "",
-          sidecar_base_url: "",
-        });
-      }
       if (command === "get_feishu_long_connection_status") {
         return Promise.resolve({
           running: false,
           started_at: null,
           queued_events: 0,
-        });
-      }
-      if (command === "get_wecom_connector_status") {
-        return Promise.resolve({
-          running: false,
-          started_at: null,
-          last_error: null,
-          reconnect_attempts: 0,
-          queue_depth: 0,
-          instance_id: "wecom:wecom-main",
         });
       }
 
@@ -75,6 +57,9 @@ describe("SettingsView connector tab", () => {
     expect(screen.getByText("先完成飞书连接，再到员工详情中指定谁来接待飞书消息。")).toBeInTheDocument();
     expect(screen.getAllByText("连接器概览").length).toBeGreaterThan(0);
     expect(screen.getByText("员工关联入口")).toBeInTheDocument();
+    expect(screen.getByText("查看飞书连接是否已启动并可接收事件。")).toBeInTheDocument();
+    expect(screen.queryByTestId("connector-panel-wecom")).not.toBeInTheDocument();
+    expect(screen.queryByText("企业微信")).not.toBeInTheDocument();
     expect(screen.queryByText("消息处理规则")).not.toBeInTheDocument();
 
     expect(invokeMock.mock.calls.some(([command]) => command === "list_im_routing_bindings")).toBe(false);
