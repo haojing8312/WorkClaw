@@ -7,19 +7,41 @@ const isMaximizedMock = vi.fn().mockResolvedValue(false);
 const maximizeMock = vi.fn().mockResolvedValue(undefined);
 const unmaximizeMock = vi.fn().mockResolvedValue(undefined);
 const closeMock = vi.fn().mockResolvedValue(undefined);
+const outerSizeMock = vi.fn().mockResolvedValue({ width: 960, height: 720 });
+const setPositionMock = vi.fn().mockResolvedValue(undefined);
+const startDraggingMock = vi.fn().mockResolvedValue(undefined);
+const onResizedMock = vi.fn();
+let resizeHandler: ((event: { payload: { width: number; height: number } }) => void) | null = null;
+const cursorPositionMock = vi.fn().mockResolvedValue({ x: 1200, y: 24 });
+
+const mockDesktopWindow = {
+  minimize: minimizeMock,
+  isMaximized: isMaximizedMock,
+  maximize: maximizeMock,
+  unmaximize: unmaximizeMock,
+  close: closeMock,
+  outerSize: outerSizeMock,
+  setPosition: setPositionMock,
+  startDragging: startDraggingMock,
+  onResized: onResizedMock,
+};
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
 }));
 
 vi.mock("@tauri-apps/api/window", () => ({
-  getCurrentWindow: () => ({
-    minimize: minimizeMock,
-    isMaximized: isMaximizedMock,
-    maximize: maximizeMock,
-    unmaximize: unmaximizeMock,
-    close: closeMock,
-  }),
+  getCurrentWindow: () => mockDesktopWindow,
+  cursorPosition: () => cursorPositionMock(),
+  PhysicalPosition: class PhysicalPosition {
+    x: number;
+    y: number;
+
+    constructor(x: number, y: number) {
+      this.x = x;
+      this.y = y;
+    }
+  },
 }));
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
@@ -71,7 +93,21 @@ describe("App desktop titlebar", () => {
     maximizeMock.mockClear();
     unmaximizeMock.mockClear();
     closeMock.mockClear();
+    outerSizeMock.mockClear();
+    setPositionMock.mockClear();
+    startDraggingMock.mockClear();
+    cursorPositionMock.mockClear();
+    onResizedMock.mockReset();
+    resizeHandler = null;
     isMaximizedMock.mockResolvedValue(false);
+    outerSizeMock.mockResolvedValue({ width: 960, height: 720 });
+    cursorPositionMock.mockResolvedValue({ x: 1200, y: 24 });
+    onResizedMock.mockImplementation((handler) => {
+      resizeHandler = handler;
+      return Promise.resolve(() => {
+        resizeHandler = null;
+      });
+    });
     window.localStorage.setItem("workclaw:initial-model-setup-completed", "1");
     invokeMock.mockImplementation((command: string) => {
       if (command === "list_skills") {
@@ -140,6 +176,7 @@ describe("App desktop titlebar", () => {
 
     expect(screen.getByText("WorkClaw")).toBeInTheDocument();
     expect(screen.getByTestId("app-titlebar").querySelector(".h-1\\.5")).toBeNull();
+    expect(screen.getByText("WorkClaw").closest('[data-testid="app-titlebar-drag-region"]')).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "最小化窗口" }));
     fireEvent.click(screen.getByRole("button", { name: "最大化窗口" }));
@@ -152,5 +189,68 @@ describe("App desktop titlebar", () => {
       expect(unmaximizeMock).toHaveBeenCalledTimes(0);
       expect(closeMock).toHaveBeenCalledTimes(1);
     });
+  });
+
+  test("switches maximize control text when the window enters or leaves maximized state", async () => {
+    isMaximizedMock.mockResolvedValue(true);
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "还原窗口" })).toBeInTheDocument();
+    });
+
+    isMaximizedMock.mockResolvedValue(false);
+    resizeHandler?.({ payload: { width: 1200, height: 750 } });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "最大化窗口" })).toBeInTheDocument();
+    });
+  });
+
+  test("restores and continues dragging when the titlebar is dragged from maximized state", async () => {
+    isMaximizedMock.mockResolvedValue(true);
+    render(<App />);
+
+    const dragRegion = await waitFor(() => screen.getByTestId("app-titlebar-drag-region"));
+
+    Object.defineProperty(dragRegion, "getBoundingClientRect", {
+      value: () => ({
+        x: 0,
+        y: 0,
+        width: 1200,
+        height: 44,
+        top: 0,
+        left: 0,
+        right: 1200,
+        bottom: 44,
+        toJSON: () => ({}),
+      }),
+    });
+
+    fireEvent.mouseDown(dragRegion, { button: 0, clientX: 300, clientY: 18 });
+
+    await waitFor(() => {
+      expect(unmaximizeMock).toHaveBeenCalledTimes(1);
+      expect(cursorPositionMock).toHaveBeenCalledTimes(1);
+      expect(outerSizeMock).toHaveBeenCalledTimes(1);
+      expect(setPositionMock).toHaveBeenCalledTimes(1);
+      expect(startDraggingMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  test("starts dragging directly when the titlebar is dragged in restored state", async () => {
+    isMaximizedMock.mockResolvedValue(false);
+    render(<App />);
+
+    const dragRegion = await waitFor(() => screen.getByTestId("app-titlebar-drag-region"));
+    fireEvent.mouseDown(dragRegion, { button: 0, clientX: 240, clientY: 18 });
+
+    await waitFor(() => {
+      expect(startDraggingMock).toHaveBeenCalledTimes(1);
+    });
+
+    expect(unmaximizeMock).toHaveBeenCalledTimes(0);
+    expect(setPositionMock).toHaveBeenCalledTimes(0);
+    expect(cursorPositionMock).toHaveBeenCalledTimes(0);
   });
 });

@@ -9,6 +9,10 @@
     "core:window:allow-is-maximized",
     "core:window:allow-maximize",
     "core:window:allow-unmaximize",
+    "core:window:allow-start-dragging",
+    "core:window:allow-outer-size",
+    "core:window:allow-set-position",
+    "core:window:allow-cursor-position",
     "core:window:allow-close",
     "dialog:default"
   ]
