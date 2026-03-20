@@ -389,6 +389,30 @@ export interface OpenClawPluginFeishuRuntimeStatus {
   recent_logs?: string[];
 }
 
+export interface FeishuPluginEnvironmentStatus {
+  node_available: boolean;
+  npm_available: boolean;
+  node_version?: string | null;
+  npm_version?: string | null;
+  can_install_plugin: boolean;
+  can_start_runtime: boolean;
+  error?: string | null;
+}
+
+export interface FeishuSetupProgress {
+  environment: FeishuPluginEnvironmentStatus;
+  credentials_configured: boolean;
+  plugin_installed: boolean;
+  plugin_version?: string | null;
+  runtime_running: boolean;
+  runtime_last_error?: string | null;
+  auth_status: string;
+  pending_pairings: number;
+  default_routing_employee_name?: string | null;
+  scoped_routing_count: number;
+  summary_state: string;
+}
+
 export interface OpenClawPluginFeishuCredentialProbeResult {
   ok: boolean;
   app_id: string;

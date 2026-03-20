@@ -33,6 +33,7 @@ import { EmployeeFeishuAssociationSection } from "./EmployeeFeishuAssociationSec
 interface Props {
   employees: AgentEmployee[];
   skills: SkillManifest[];
+  initialTab?: EmployeeHubTab;
   selectedEmployeeId: string | null;
   onSelectEmployee: (id: string) => void;
   onSaveEmployee: (input: UpsertAgentEmployeeInput) => Promise<void>;
@@ -43,6 +44,7 @@ interface Props {
   onOpenGroupRunSession?: (sessionId: string, skillId: string) => Promise<void> | void;
   onEmployeeGroupsChanged?: () => Promise<void> | void;
   onOpenEmployeeCreatorSkill?: (options?: { mode?: "create" | "update"; employeeId?: string }) => Promise<void> | void;
+  onOpenFeishuSettings?: () => void;
   highlightEmployeeId?: string | null;
   highlightMessage?: string | null;
   onDismissHighlight?: () => void;
@@ -101,6 +103,7 @@ function groupRoleLabel(roleType: string): string {
 export function EmployeeHubView({
   employees,
   skills,
+  initialTab,
   selectedEmployeeId,
   onSelectEmployee,
   onRefreshEmployees,
@@ -110,11 +113,12 @@ export function EmployeeHubView({
   onOpenGroupRunSession,
   onEmployeeGroupsChanged,
   onOpenEmployeeCreatorSkill,
+  onOpenFeishuSettings,
   highlightEmployeeId,
   highlightMessage,
   onDismissHighlight,
 }: Props) {
-  const [activeTab, setActiveTab] = useState<EmployeeHubTab>(selectedEmployeeId ? "employees" : "overview");
+  const [activeTab, setActiveTab] = useState<EmployeeHubTab>(initialTab ?? (selectedEmployeeId ? "employees" : "overview"));
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [officialFeishuRuntimeStatus, setOfficialFeishuRuntimeStatus] =
@@ -211,6 +215,12 @@ export function EmployeeHubView({
       }
     })();
   }, []);
+
+  useEffect(() => {
+    if (initialTab) {
+      setActiveTab(initialTab);
+    }
+  }, [initialTab]);
 
   useEffect(() => {
     const normalized = employees
@@ -1514,6 +1524,7 @@ export function EmployeeHubView({
                     saving={savingFeishuAssociation}
                     runtimeStatus={selectedEmployeeFeishuRuntimeStatus}
                     onSave={saveFeishuAssociation}
+                    onOpenFeishuSettings={onOpenFeishuSettings}
                   />
                 )}
 

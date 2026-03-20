@@ -21,6 +21,7 @@ interface Props {
     last_error?: string | null;
   } | null;
   onSave: (payload: SavePayload) => Promise<void>;
+  onOpenFeishuSettings?: () => void;
 }
 
 function getAgentId(employee: AgentEmployee) {
@@ -44,6 +45,7 @@ export function EmployeeFeishuAssociationSection({
   saving,
   runtimeStatus,
   onSave,
+  onOpenFeishuSettings,
 }: Props) {
   const employeeAgentId = getAgentId(employee);
   const employeeBindings = useMemo(
@@ -231,22 +233,31 @@ export function EmployeeFeishuAssociationSection({
         <div className="text-[11px] text-gray-500">
           官方插件未运行或授权未完成时，请前往设置中心中的飞书连接页面处理。
         </div>
-        <button
-          type="button"
-          disabled={saving || (enabled && mode === "scoped" && !peerId.trim())}
-          onClick={() =>
-            onSave({
-              enabled,
-              mode,
-              peerKind,
-              peerId,
-              priority,
-            })
-          }
-          className="h-8 px-3 rounded bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white text-xs"
-        >
-          {saving ? "保存中..." : "保存飞书接待"}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => onOpenFeishuSettings?.()}
+            className="h-8 px-3 rounded border border-blue-200 bg-white text-blue-700 hover:bg-blue-50 text-xs"
+          >
+            前往飞书设置
+          </button>
+          <button
+            type="button"
+            disabled={saving || (enabled && mode === "scoped" && !peerId.trim())}
+            onClick={() =>
+              onSave({
+                enabled,
+                mode,
+                peerKind,
+                peerId,
+                priority,
+              })
+            }
+            className="h-8 px-3 rounded bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white text-xs"
+          >
+            {saving ? "保存中..." : "保存飞书接待"}
+          </button>
+        </div>
       </div>
     </div>
   );

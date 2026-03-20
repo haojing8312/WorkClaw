@@ -1,7 +1,7 @@
 use crate::commands::feishu_gateway::{
     dispatch_feishu_inbound_to_workclaw_with_pool_and_app, get_app_setting,
     list_enabled_employee_feishu_connections_with_pool, list_feishu_pairing_allow_from_with_pool,
-    set_app_setting, upsert_feishu_pairing_request_with_pool,
+    list_feishu_pairing_requests_with_pool, set_app_setting, upsert_feishu_pairing_request_with_pool,
 };
 use crate::commands::skills::DbState;
 use crate::im::types::{ImEvent, ImEventType};
@@ -189,6 +189,32 @@ pub struct OpenClawPluginFeishuRuntimeStatus {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct FeishuPluginEnvironmentStatus {
+    pub node_available: bool,
+    pub npm_available: bool,
+    pub node_version: Option<String>,
+    pub npm_version: Option<String>,
+    pub can_install_plugin: bool,
+    pub can_start_runtime: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct FeishuSetupProgress {
+    pub environment: FeishuPluginEnvironmentStatus,
+    pub credentials_configured: bool,
+    pub plugin_installed: bool,
+    pub plugin_version: Option<String>,
+    pub runtime_running: bool,
+    pub runtime_last_error: Option<String>,
+    pub auth_status: String,
+    pub pending_pairings: usize,
+    pub default_routing_employee_name: Option<String>,
+    pub scoped_routing_count: usize,
+    pub summary_state: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct OpenClawPluginFeishuAdvancedSettings {
     pub groups_json: String,
     pub dms_json: String,
@@ -229,6 +255,20 @@ impl Default for OpenClawPluginFeishuRuntimeStatus {
             pid: None,
             port: None,
             recent_logs: Vec::new(),
+        }
+    }
+}
+
+impl Default for FeishuPluginEnvironmentStatus {
+    fn default() -> Self {
+        Self {
+            node_available: false,
+            npm_available: false,
+            node_version: None,
+            npm_version: None,
+            can_install_plugin: false,
+            can_start_runtime: false,
+            error: None,
         }
     }
 }
@@ -464,6 +504,262 @@ fn resolve_plugin_host_run_feishu_script() -> PathBuf {
     resolve_plugin_host_dir()
         .join("scripts")
         .join("run-feishu-host.mjs")
+}
+
+fn normalize_command_version_output(output: &[u8]) -> Option<String> {
+    String::from_utf8_lossy(output)
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(str::to_string)
+}
+
+fn probe_command_version(command: &str, args: &[&str]) -> Result<Option<String>, String> {
+    match Command::new(command).args(args).output() {
+        Ok(output) => {
+            if output.status.success() {
+                Ok(normalize_command_version_output(&output.stdout)
+                    .or_else(|| normalize_command_version_output(&output.stderr)))
+            } else {
+                let detail = normalize_command_version_output(&output.stderr)
+                    .or_else(|| normalize_command_version_output(&output.stdout))
+                    .unwrap_or_else(|| format!("{command} exited with status {}", output.status));
+                Err(detail)
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn derive_feishu_plugin_environment_status(
+    node_probe: Result<Option<String>, String>,
+    npm_probe: Result<Option<String>, String>,
+    runtime_script_exists: bool,
+) -> FeishuPluginEnvironmentStatus {
+    let mut status = FeishuPluginEnvironmentStatus::default();
+    let mut errors = Vec::new();
+
+    match node_probe {
+        Ok(version) => {
+            status.node_available = version.is_some();
+            status.node_version = version;
+            if !status.node_available {
+                errors.push("未检测到 Node.js".to_string());
+            }
+        }
+        Err(error) => {
+            errors.push(format!("检测 Node.js 失败: {error}"));
+        }
+    }
+
+    match npm_probe {
+        Ok(version) => {
+            status.npm_available = version.is_some();
+            status.npm_version = version;
+            if !status.npm_available {
+                errors.push("未检测到 npm".to_string());
+            }
+        }
+        Err(error) => {
+            errors.push(format!("检测 npm 失败: {error}"));
+        }
+    }
+
+    if !runtime_script_exists {
+        errors.push("飞书插件运行脚本缺失".to_string());
+    }
+
+    status.can_install_plugin = status.node_available && status.npm_available;
+    status.can_start_runtime = status.node_available && runtime_script_exists;
+    status.error = if errors.is_empty() {
+        None
+    } else {
+        Some(errors.join("；"))
+    };
+    status
+}
+
+fn get_feishu_plugin_environment_status_internal() -> FeishuPluginEnvironmentStatus {
+    derive_feishu_plugin_environment_status(
+        probe_command_version("node", &["--version"]),
+        probe_command_version(resolve_npm_command(), &["--version"]),
+        resolve_plugin_host_run_feishu_script().exists(),
+    )
+}
+
+fn resolve_employee_agent_identity(
+    employee_id: &str,
+    role_id: &str,
+    openclaw_agent_id: &str,
+) -> String {
+    let openclaw_agent_id = openclaw_agent_id.trim();
+    if !openclaw_agent_id.is_empty() {
+        return openclaw_agent_id.to_string();
+    }
+
+    let employee_id = employee_id.trim();
+    if !employee_id.is_empty() {
+        return employee_id.to_string();
+    }
+
+    role_id.trim().to_string()
+}
+
+async fn default_feishu_routing_employee_name_with_pool(
+    pool: &SqlitePool,
+) -> Result<Option<String>, String> {
+    let binding = sqlx::query_as::<_, (String,)>(
+        "SELECT agent_id
+         FROM im_routing_bindings
+         WHERE channel = 'feishu'
+           AND enabled = 1
+           AND trim(peer_id) = ''
+         ORDER BY priority ASC, updated_at DESC
+         LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let Some((binding_agent_id,)) = binding else {
+        return Ok(None);
+    };
+
+    let employees = sqlx::query_as::<_, (String, String, String, String, i64)>(
+        "SELECT employee_id, role_id, COALESCE(openclaw_agent_id, ''), name, enabled
+         FROM agent_employees",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(employees.into_iter().find_map(
+        |(employee_id, role_id, openclaw_agent_id, name, enabled)| {
+            if enabled == 0 {
+                return None;
+            }
+            let resolved = resolve_employee_agent_identity(&employee_id, &role_id, &openclaw_agent_id);
+            if resolved.eq_ignore_ascii_case(binding_agent_id.trim()) {
+                Some(name)
+            } else {
+                None
+            }
+        },
+    ))
+}
+
+async fn count_scoped_feishu_routing_bindings_with_pool(pool: &SqlitePool) -> Result<usize, String> {
+    let count = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*)
+         FROM im_routing_bindings
+         WHERE channel = 'feishu'
+           AND enabled = 1
+           AND trim(peer_id) != ''",
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(count.max(0) as usize)
+}
+
+fn derive_feishu_setup_summary_state(
+    environment: &FeishuPluginEnvironmentStatus,
+    credentials_configured: bool,
+    plugin_installed: bool,
+    runtime_running: bool,
+    runtime_last_error: Option<&str>,
+    auth_status: &str,
+    default_routing_employee_name: Option<&str>,
+    scoped_routing_count: usize,
+) -> String {
+    if !environment.can_install_plugin || !environment.can_start_runtime {
+        return "env_missing".to_string();
+    }
+    if runtime_last_error
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some()
+    {
+        return "runtime_error".to_string();
+    }
+    if !credentials_configured {
+        return "ready_to_bind".to_string();
+    }
+    if !plugin_installed {
+        return "plugin_not_installed".to_string();
+    }
+    if !runtime_running {
+        return "plugin_starting".to_string();
+    }
+    if auth_status != "approved" {
+        return "awaiting_auth".to_string();
+    }
+    if default_routing_employee_name
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_none()
+        && scoped_routing_count == 0
+    {
+        return "ready_for_routing".to_string();
+    }
+    "ready".to_string()
+}
+
+async fn get_feishu_setup_progress_with_pool(
+    pool: &SqlitePool,
+    runtime_state: &OpenClawPluginFeishuRuntimeState,
+) -> Result<FeishuSetupProgress, String> {
+    let environment = get_feishu_plugin_environment_status_internal();
+    let app_id = get_app_setting(pool, "feishu_app_id")
+        .await?
+        .unwrap_or_default();
+    let app_secret = get_app_setting(pool, "feishu_app_secret")
+        .await?
+        .unwrap_or_default();
+    let credentials_configured = !app_id.trim().is_empty() && !app_secret.trim().is_empty();
+
+    let install = get_openclaw_plugin_install_by_id_with_pool(pool, "openclaw-lark").await.ok();
+    let runtime_status = current_feishu_runtime_status(runtime_state);
+    let pairing_requests = list_feishu_pairing_requests_with_pool(pool, None).await?;
+    let pending_pairings = pairing_requests
+        .iter()
+        .filter(|record| record.status == "pending")
+        .count();
+    let auth_status = if pairing_requests.iter().any(|record| record.status == "approved") {
+        "approved".to_string()
+    } else if credentials_configured && runtime_status.running {
+        "pending".to_string()
+    } else {
+        "unknown".to_string()
+    };
+    let default_routing_employee_name = default_feishu_routing_employee_name_with_pool(pool).await?;
+    let scoped_routing_count = count_scoped_feishu_routing_bindings_with_pool(pool).await?;
+    let summary_state = derive_feishu_setup_summary_state(
+        &environment,
+        credentials_configured,
+        install.is_some(),
+        runtime_status.running,
+        runtime_status.last_error.as_deref(),
+        &auth_status,
+        default_routing_employee_name.as_deref(),
+        scoped_routing_count,
+    );
+
+    Ok(FeishuSetupProgress {
+        environment,
+        credentials_configured,
+        plugin_installed: install.is_some(),
+        plugin_version: install.as_ref().map(|record| record.version.clone()),
+        runtime_running: runtime_status.running,
+        runtime_last_error: runtime_status.last_error,
+        auth_status,
+        pending_pairings,
+        default_routing_employee_name,
+        scoped_routing_count,
+        summary_state,
+    })
 }
 
 #[cfg(target_os = "windows")]
@@ -2654,6 +2950,19 @@ pub async fn get_openclaw_plugin_feishu_runtime_status(
     Ok(current_feishu_runtime_status(runtime.inner()))
 }
 
+#[tauri::command]
+pub async fn get_feishu_plugin_environment_status() -> Result<FeishuPluginEnvironmentStatus, String> {
+    Ok(get_feishu_plugin_environment_status_internal())
+}
+
+#[tauri::command]
+pub async fn get_feishu_setup_progress(
+    db: State<'_, DbState>,
+    runtime: State<'_, OpenClawPluginFeishuRuntimeState>,
+) -> Result<FeishuSetupProgress, String> {
+    get_feishu_setup_progress_with_pool(&db.0, runtime.inner()).await
+}
+
 pub async fn get_openclaw_plugin_feishu_advanced_settings_with_pool(
     pool: &SqlitePool,
 ) -> Result<OpenClawPluginFeishuAdvancedSettings, String> {
@@ -3094,17 +3403,35 @@ mod tests {
                 employee_id TEXT NOT NULL DEFAULT '',
                 name TEXT NOT NULL DEFAULT '',
                 role_id TEXT NOT NULL DEFAULT '',
+                persona TEXT NOT NULL DEFAULT '',
                 feishu_open_id TEXT NOT NULL DEFAULT '',
                 feishu_app_id TEXT NOT NULL DEFAULT '',
                 feishu_app_secret TEXT NOT NULL DEFAULT '',
+                primary_skill_id TEXT NOT NULL DEFAULT '',
+                default_work_dir TEXT NOT NULL DEFAULT '',
+                openclaw_agent_id TEXT NOT NULL DEFAULT '',
+                routing_priority INTEGER NOT NULL DEFAULT 100,
+                enabled_scopes_json TEXT NOT NULL DEFAULT '[\"app\"]',
                 enabled INTEGER NOT NULL DEFAULT 1,
                 is_default INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT '',
                 updated_at TEXT NOT NULL DEFAULT ''
             )",
         )
         .execute(&pool)
         .await
         .expect("create agent_employees table");
+
+        sqlx::query(
+            "CREATE TABLE agent_employee_skills (
+                employee_id TEXT NOT NULL,
+                skill_id TEXT NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create agent_employee_skills table");
 
         sqlx::query(
             "CREATE TABLE feishu_pairing_requests (
@@ -3139,6 +3466,28 @@ mod tests {
         .execute(&pool)
         .await
         .expect("create feishu_pairing_allow_from");
+
+        sqlx::query(
+            "CREATE TABLE im_routing_bindings (
+                id TEXT PRIMARY KEY,
+                agent_id TEXT NOT NULL,
+                channel TEXT NOT NULL,
+                account_id TEXT NOT NULL DEFAULT '',
+                peer_kind TEXT NOT NULL DEFAULT '',
+                peer_id TEXT NOT NULL DEFAULT '',
+                guild_id TEXT NOT NULL DEFAULT '',
+                team_id TEXT NOT NULL DEFAULT '',
+                role_ids_json TEXT NOT NULL DEFAULT '[]',
+                connector_meta_json TEXT NOT NULL DEFAULT '{}',
+                priority INTEGER NOT NULL DEFAULT 100,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT ''
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create im_routing_bindings");
 
         pool
     }
@@ -3849,6 +4198,198 @@ mod tests {
             &mut auto,
         );
         assert_eq!(app_secret_payload.as_deref(), Some("secret\r"));
+    }
+
+    #[test]
+    fn derives_environment_status_when_node_and_npm_are_available() {
+        let status = derive_feishu_plugin_environment_status(
+            Ok(Some("v22.0.0".to_string())),
+            Ok(Some("10.8.0".to_string())),
+            true,
+        );
+
+        assert!(status.node_available);
+        assert!(status.npm_available);
+        assert_eq!(status.node_version.as_deref(), Some("v22.0.0"));
+        assert_eq!(status.npm_version.as_deref(), Some("10.8.0"));
+        assert!(status.can_install_plugin);
+        assert!(status.can_start_runtime);
+        assert_eq!(status.error, None);
+    }
+
+    #[test]
+    fn derives_environment_status_when_node_is_missing() {
+        let status = derive_feishu_plugin_environment_status(
+            Ok(None),
+            Ok(Some("10.8.0".to_string())),
+            true,
+        );
+
+        assert!(!status.node_available);
+        assert!(status.npm_available);
+        assert!(!status.can_install_plugin);
+        assert!(!status.can_start_runtime);
+        assert_eq!(status.error.as_deref(), Some("未检测到 Node.js"));
+    }
+
+    #[test]
+    fn derives_environment_status_when_npm_is_missing() {
+        let status = derive_feishu_plugin_environment_status(
+            Ok(Some("v22.0.0".to_string())),
+            Ok(None),
+            true,
+        );
+
+        assert!(status.node_available);
+        assert!(!status.npm_available);
+        assert!(status.can_start_runtime);
+        assert!(!status.can_install_plugin);
+        assert_eq!(status.error.as_deref(), Some("未检测到 npm"));
+    }
+
+    #[test]
+    fn derives_environment_status_when_runtime_script_is_missing() {
+        let status = derive_feishu_plugin_environment_status(
+            Ok(Some("v22.0.0".to_string())),
+            Ok(Some("10.8.0".to_string())),
+            false,
+        );
+
+        assert!(status.node_available);
+        assert!(status.npm_available);
+        assert!(status.can_install_plugin);
+        assert!(!status.can_start_runtime);
+        assert_eq!(status.error.as_deref(), Some("飞书插件运行脚本缺失"));
+    }
+
+    #[test]
+    fn derives_setup_summary_state_for_missing_environment() {
+        let summary = derive_feishu_setup_summary_state(
+            &FeishuPluginEnvironmentStatus::default(),
+            false,
+            false,
+            false,
+            None,
+            "unknown",
+            None,
+            0,
+        );
+        assert_eq!(summary, "env_missing");
+    }
+
+    #[test]
+    fn derives_setup_summary_state_for_missing_credentials() {
+        let summary = derive_feishu_setup_summary_state(
+            &FeishuPluginEnvironmentStatus {
+                node_available: true,
+                npm_available: true,
+                node_version: Some("v22".to_string()),
+                npm_version: Some("10".to_string()),
+                can_install_plugin: true,
+                can_start_runtime: true,
+                error: None,
+            },
+            false,
+            false,
+            false,
+            None,
+            "unknown",
+            None,
+            0,
+        );
+        assert_eq!(summary, "ready_to_bind");
+    }
+
+    #[test]
+    fn derives_setup_summary_state_for_missing_plugin_install() {
+        let summary = derive_feishu_setup_summary_state(
+            &FeishuPluginEnvironmentStatus {
+                node_available: true,
+                npm_available: true,
+                node_version: Some("v22".to_string()),
+                npm_version: Some("10".to_string()),
+                can_install_plugin: true,
+                can_start_runtime: true,
+                error: None,
+            },
+            true,
+            false,
+            false,
+            None,
+            "unknown",
+            None,
+            0,
+        );
+        assert_eq!(summary, "plugin_not_installed");
+    }
+
+    #[test]
+    fn derives_setup_summary_state_for_pending_auth() {
+        let summary = derive_feishu_setup_summary_state(
+            &FeishuPluginEnvironmentStatus {
+                node_available: true,
+                npm_available: true,
+                node_version: Some("v22".to_string()),
+                npm_version: Some("10".to_string()),
+                can_install_plugin: true,
+                can_start_runtime: true,
+                error: None,
+            },
+            true,
+            true,
+            true,
+            None,
+            "pending",
+            None,
+            0,
+        );
+        assert_eq!(summary, "awaiting_auth");
+    }
+
+    #[test]
+    fn derives_setup_summary_state_for_ready_for_routing() {
+        let summary = derive_feishu_setup_summary_state(
+            &FeishuPluginEnvironmentStatus {
+                node_available: true,
+                npm_available: true,
+                node_version: Some("v22".to_string()),
+                npm_version: Some("10".to_string()),
+                can_install_plugin: true,
+                can_start_runtime: true,
+                error: None,
+            },
+            true,
+            true,
+            true,
+            None,
+            "approved",
+            None,
+            0,
+        );
+        assert_eq!(summary, "ready_for_routing");
+    }
+
+    #[test]
+    fn derives_setup_summary_state_for_fully_ready_flow() {
+        let summary = derive_feishu_setup_summary_state(
+            &FeishuPluginEnvironmentStatus {
+                node_available: true,
+                npm_available: true,
+                node_version: Some("v22".to_string()),
+                npm_version: Some("10".to_string()),
+                can_install_plugin: true,
+                can_start_runtime: true,
+                error: None,
+            },
+            true,
+            true,
+            true,
+            None,
+            "approved",
+            Some("财务刚"),
+            1,
+        );
+        assert_eq!(summary, "ready");
     }
 
     #[test]

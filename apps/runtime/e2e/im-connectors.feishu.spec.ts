@@ -105,6 +105,38 @@ async function installTauriMocks(page: Page): Promise<void> {
             encrypt_key: "",
             sidecar_base_url: "",
           };
+        case "get_feishu_plugin_environment_status":
+          return {
+            node_available: true,
+            npm_available: true,
+            node_version: "v22.0.0",
+            npm_version: "10.0.0",
+            can_install_plugin: true,
+            can_start_runtime: true,
+            error: null,
+          };
+        case "get_feishu_setup_progress":
+          return {
+            environment: {
+              node_available: true,
+              npm_available: true,
+              node_version: "v22.0.0",
+              npm_version: "10.0.0",
+              can_install_plugin: true,
+              can_start_runtime: true,
+              error: null,
+            },
+            credentials_configured: true,
+            plugin_installed: true,
+            plugin_version: "2026.3.17",
+            runtime_running: false,
+            runtime_last_error: null,
+            auth_status: "pending",
+            pending_pairings: 0,
+            default_routing_employee_name: null,
+            scoped_routing_count: 0,
+            summary_state: "awaiting_auth",
+          };
         case "get_wecom_gateway_settings":
           return {
             corp_id: "wwcorp",
@@ -225,18 +257,18 @@ test.beforeEach(async ({ page }) => {
   ).toBeVisible({ timeout: 30_000 });
 });
 
-test("settings exposes connector overview while keeping routing data lazy-loaded", async ({ page }) => {
+test("settings shows task-first feishu setup anchors while keeping routing data lazy-loaded", async ({ page }) => {
   await page.getByRole("button", { name: "设置" }).first().click();
   await expect(page.getByRole("button", { name: "模型连接" })).toBeVisible();
 
   await page.getByRole("button", { name: "渠道连接器" }).click();
-  await expect(page.getByTestId("connector-panel-feishu")).toBeVisible();
-  await expect(
-    page.getByText("先完成飞书连接，再到员工详情中指定谁来接待飞书消息。"),
-  ).toBeVisible();
-  await expect(page.getByText("连接器概览").first()).toBeVisible();
-  await expect(page.getByText("连接器诊断").first()).toBeVisible();
-  await expect(page.getByText("员工关联入口")).toBeVisible();
+  await expect(page.getByText("飞书连接", { exact: true })).toBeVisible();
+  await expect(page.getByText("检查运行环境", { exact: true })).toBeVisible();
+  await expect(page.getByText("绑定已有机器人", { exact: true })).toBeVisible();
+  await expect(page.getByText("完成飞书授权", { exact: true })).toBeVisible();
+  await expect(page.getByText("接待设置", { exact: true })).toBeVisible();
+  await expect(page.getByText("Verification Token")).toHaveCount(0);
+  await expect(page.getByText("Encrypt Key")).toHaveCount(0);
 
   const calls = await readInvokeCalls(page);
   expect(calls.some((call) => call.cmd === "list_im_routing_bindings")).toBe(false);

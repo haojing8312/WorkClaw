@@ -490,6 +490,8 @@ pub fn run() {
             commands::openclaw_plugins::start_openclaw_plugin_feishu_runtime,
             commands::openclaw_plugins::stop_openclaw_plugin_feishu_runtime,
             commands::openclaw_plugins::get_openclaw_plugin_feishu_runtime_status,
+            commands::openclaw_plugins::get_feishu_plugin_environment_status,
+            commands::openclaw_plugins::get_feishu_setup_progress,
             commands::openclaw_plugins::get_openclaw_plugin_feishu_advanced_settings,
             commands::openclaw_plugins::set_openclaw_plugin_feishu_advanced_settings,
             commands::openclaw_plugins::start_openclaw_lark_installer_session,

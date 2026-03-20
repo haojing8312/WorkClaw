@@ -2,11 +2,18 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { SettingsView } from "../SettingsView";
 
 const invokeMock = vi.fn();
+const { openExternalUrlMock } = vi.hoisted(() => ({
+  openExternalUrlMock: vi.fn(() => Promise.resolve()),
+}));
 
 type InvokeOverride = (payload?: Record<string, unknown>) => Promise<unknown>;
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
+}));
+
+vi.mock("../../utils/openExternalUrl", () => ({
+  openExternalUrl: openExternalUrlMock,
 }));
 
 function installInvokeMock(overrides: Record<string, InvokeOverride> = {}) {
@@ -83,6 +90,40 @@ function installInvokeMock(overrides: Record<string, InvokeOverride> = {}) {
         dynamic_agent_creation_workspace_template: "workspace/{sender_id}",
         dynamic_agent_creation_agent_dir_template: "agents/{sender_id}",
         dynamic_agent_creation_max_agents: "48",
+      });
+    }
+    if (command === "get_feishu_plugin_environment_status") {
+      return Promise.resolve({
+        node_available: true,
+        npm_available: true,
+        node_version: "v22.0.0",
+        npm_version: "10.0.0",
+        can_install_plugin: true,
+        can_start_runtime: true,
+        error: null,
+      });
+    }
+    if (command === "get_feishu_setup_progress") {
+      return Promise.resolve({
+        environment: {
+          node_available: true,
+          npm_available: true,
+          node_version: "v22.0.0",
+          npm_version: "10.0.0",
+          can_install_plugin: true,
+          can_start_runtime: true,
+          error: null,
+        },
+        credentials_configured: true,
+        plugin_installed: true,
+        plugin_version: "2026.3.17",
+        runtime_running: false,
+        runtime_last_error: null,
+        auth_status: "pending",
+        pending_pairings: 0,
+        default_routing_employee_name: null,
+        scoped_routing_count: 0,
+        summary_state: "awaiting_auth",
       });
     }
     if (command === "set_openclaw_plugin_feishu_advanced_settings") {
@@ -321,681 +362,186 @@ function installInvokeMock(overrides: Record<string, InvokeOverride> = {}) {
 describe("SettingsView connector visibility", () => {
   beforeEach(() => {
     installInvokeMock();
+    openExternalUrlMock.mockClear();
   });
 
-  test("hides wecom connector panel and diagnostics on settings page", async () => {
+  test("shows the redesigned feishu connector anchors without legacy console controls", async () => {
     render(<SettingsView onClose={() => {}} />);
 
     fireEvent.click(screen.getByRole("button", { name: "渠道连接器" }));
 
     await waitFor(() => {
-      expect(screen.getByTestId("connector-panel-feishu")).toBeInTheDocument();
+      expect(screen.getByText("飞书连接")).toBeInTheDocument();
     });
 
-    expect(screen.queryByTestId("connector-panel-wecom")).not.toBeInTheDocument();
-    expect(screen.queryByText("企业微信连接器")).not.toBeInTheDocument();
-    expect(screen.queryByText("企业微信连接异常")).not.toBeInTheDocument();
-    expect(screen.queryByPlaceholderText("企业微信 Corp ID")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "连接配置" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "官方插件" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "配对与授权" })).toBeInTheDocument();
-    expect(screen.getByText("飞书接入概览")).toBeInTheDocument();
-    expect(screen.getAllByText("飞书官方插件配置").length).toBeGreaterThan(0);
-    expect(screen.getByPlaceholderText("飞书事件订阅 Verification Token")).toBeInTheDocument();
-    expect(screen.getByPlaceholderText("飞书事件订阅 Encrypt Key")).toBeInTheDocument();
-    expect(screen.getByText(/官方插件当前默认按 websocket 模式运行/)).toBeInTheDocument();
-    expect(screen.getAllByText("未启动").length).toBeGreaterThan(0);
-    expect(screen.getByText("飞书官方插件配置")).toBeInTheDocument();
-    expect(screen.queryByText("连接器诊断")).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "官方插件" }));
-    expect(screen.getByText("OpenClaw 官方插件频道宿主")).toBeInTheDocument();
-    expect(screen.getAllByText("@larksuite/openclaw-lark").length).toBeGreaterThan(0);
-    expect(screen.getByText("官方插件账号视图 · 默认 default")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "配对与授权" }));
-    expect(screen.getByText("待处理配对请求")).toBeInTheDocument();
-    expect(screen.getByText(/PAIR1234/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "批准" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "拒绝" })).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "连接配置" }));
-    expect(screen.getByText("配置模式")).toBeInTheDocument();
-    expect(invokeMock.mock.calls.some(([command]) => command === "get_feishu_long_connection_status")).toBe(false);
+    expect(screen.getByText("飞书连接")).toBeInTheDocument();
+    expect(screen.getByText("检查运行环境")).toBeInTheDocument();
+    expect(screen.getByText("绑定已有机器人")).toBeInTheDocument();
+    expect(screen.getByText("完成飞书授权")).toBeInTheDocument();
+    expect(screen.getByText("接待设置")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "连接配置" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "官方插件" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "配对与授权" })).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("飞书事件订阅 Verification Token")).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("飞书事件订阅 Encrypt Key")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "新建机器人" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "运行新建机器人向导" })).not.toBeInTheDocument();
   });
 
-  test("shows official plugin install wizard entry point and doc link", async () => {
-    render(<SettingsView onClose={() => {}} />);
+  test("opens the employee hub callback from the routing card", async () => {
+    const onOpenEmployees = vi.fn();
 
-    fireEvent.click(screen.getByRole("button", { name: "渠道连接器" }));
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "重新运行安装向导" })).toBeInTheDocument();
-    });
-
-    expect(screen.getByText("飞书官方插件安装向导")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "查看官方文档" })).toHaveAttribute(
-      "href",
-      "https://bytedance.larkoffice.com/docx/MFK7dDFLFoVlOGxWCv5cTXKmnMh#M0usd9GLwoiBxtx1UyjcpeMhnRe",
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "关联已有机器人" }));
-
-    expect(
-      screen.getAllByText((_, node) => node?.textContent?.includes("/feishu start") ?? false).length,
-    ).toBeGreaterThan(0);
-    expect(
-      screen.getAllByText((_, node) => node?.textContent?.includes("/feishu auth") ?? false).length,
-    ).toBeGreaterThan(0);
-    expect(
-      screen.getAllByText((_, node) => node?.textContent?.includes("/feishu doctor") ?? false).length,
-    ).toBeGreaterThan(0);
-  });
-
-  test("switches official plugin onboarding modes between create and link", async () => {
-    render(<SettingsView onClose={() => {}} />);
-
-    fireEvent.click(screen.getByRole("button", { name: "渠道连接器" }));
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "新建机器人" })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: "新建机器人" }));
-    expect(screen.getByText("目标体验应与官方安装器一致：安装时直接创建机器人，完成后自动启动插件运行态。")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "关联已有机器人" }));
-    expect(screen.getByText(/请在下方填写已有机器人的/)).toBeInTheDocument();
-  });
-
-  test("starts official installer session for create flow and renders session output", async () => {
-    render(<SettingsView onClose={() => {}} />);
-
-    fireEvent.click(screen.getByRole("button", { name: "渠道连接器" }));
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "运行新建机器人向导" })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: "运行新建机器人向导" }));
-
-    await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith("start_openclaw_lark_installer_session", {
-        mode: "create",
-        appId: null,
-        appSecret: null,
-      });
-    });
-
-    expect(screen.getByText("官方安装会话 · 运行中")).toBeInTheDocument();
-    expect(screen.getByText(/\[system\] official installer started/)).toBeInTheDocument();
-    expect(screen.getByText("请输入机器人 App ID")).toBeInTheDocument();
-  });
-
-  test("links existing bot through direct credential probe and runtime start", async () => {
-    render(<SettingsView onClose={() => {}} />);
-
-    fireEvent.click(screen.getByRole("button", { name: "渠道连接器" }));
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "运行关联已有机器人向导" })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: "运行关联已有机器人向导" }));
-
-    await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith("probe_openclaw_plugin_feishu_credentials", {
-        appId: "cli-app",
-        appSecret: "cli-secret",
-      });
-    });
-
-    expect(invokeMock).toHaveBeenCalledWith("set_feishu_gateway_settings", {
-      settings: expect.objectContaining({
-        app_id: "cli-app",
-        app_secret: "cli-secret",
-      }),
-    });
-    expect(invokeMock).toHaveBeenCalledWith("start_openclaw_plugin_feishu_runtime", {
-      pluginId: "openclaw-lark",
-      accountId: null,
-    });
-    expect(invokeMock).not.toHaveBeenCalledWith("start_openclaw_lark_installer_session", {
-      mode: "link",
-      appId: "cli-app",
-      appSecret: "cli-secret",
-    });
-
-    await waitFor(() => {
-      expect(screen.getByText(/已完成已有机器人校验并启动飞书官方插件/)).toBeInTheDocument();
-    });
-  });
-
-  test("resolves feishu pairing requests from settings actions", async () => {
-    render(<SettingsView onClose={() => {}} />);
-
-    fireEvent.click(screen.getByRole("button", { name: "渠道连接器" }));
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "配对与授权" })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: "配对与授权" }));
-    fireEvent.click(screen.getByRole("button", { name: "批准" }));
-
-    await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith("approve_feishu_pairing_request", {
-        requestId: "pairing-1",
-        resolvedByUser: "settings-ui",
-      });
-    });
-  });
-
-  test("saves feishu settings and starts official plugin runtime when plugin mode is ready", async () => {
-    render(<SettingsView onClose={() => {}} />);
-
-    fireEvent.click(screen.getByRole("button", { name: "渠道连接器" }));
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "保存官方插件配置" })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: "保存官方插件配置" }));
-
-    await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith("set_feishu_gateway_settings", {
-        settings: expect.objectContaining({
-          app_id: "cli-app",
-          app_secret: "cli-secret",
-        }),
-      });
-    });
-
-    await waitFor(() => {
-      expect(screen.getByText(/飞书官方插件配置已保存/)).toBeInTheDocument();
-    });
-
-    expect(invokeMock).toHaveBeenCalledWith("start_openclaw_plugin_feishu_runtime", {
-      pluginId: "openclaw-lark",
-      accountId: null,
-    });
-    expect(invokeMock).not.toHaveBeenCalledWith("start_feishu_long_connection", expect.anything());
-  });
-
-  test("starts official plugin runtime instead of legacy sidecar when retrying in plugin mode", async () => {
     installInvokeMock({
-      start_feishu_long_connection: async () => {
-        throw new Error("sidecar offline");
-      },
-    });
-
-    render(<SettingsView onClose={() => {}} />);
-
-    fireEvent.click(screen.getByRole("button", { name: "渠道连接器" }));
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "刷新插件状态" })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: "刷新插件状态" }));
-
-    await waitFor(() => {
-      expect(screen.getByText(/已触发飞书官方插件启动/)).toBeInTheDocument();
-    });
-
-    expect(invokeMock).toHaveBeenCalledWith("start_openclaw_plugin_feishu_runtime", {
-      pluginId: "openclaw-lark",
-      accountId: null,
-    });
-    expect(invokeMock).not.toHaveBeenCalledWith("start_feishu_long_connection", expect.anything());
-  });
-
-  test("loads and saves official feishu advanced json settings", async () => {
-    render(<SettingsView onClose={() => {}} />);
-
-    fireEvent.click(screen.getByRole("button", { name: "渠道连接器" }));
-
-    await waitFor(() => {
-      expect(screen.getByText("飞书官方插件配置")).toBeInTheDocument();
-    });
-
-    await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith("get_openclaw_plugin_feishu_advanced_settings");
-    });
-
-    const groupsEditor = await screen.findByLabelText("群聊高级规则 JSON");
-    const dmsEditor = screen.getByLabelText("私聊高级规则 JSON");
-    const footerEditor = screen.getByLabelText("回复页脚 JSON");
-    const accountOverridesEditor = screen.getByLabelText("账号覆盖 JSON");
-    const renderModeInput = screen.getByLabelText("渲染模式");
-    const streamingInput = screen.getByLabelText("流式输出");
-    const textChunkLimitInput = screen.getByLabelText("文本分块上限");
-    const chunkModeInput = screen.getByLabelText("分块模式");
-    const replyInThreadInput = screen.getByLabelText("线程内回复");
-    const groupSessionScopeInput = screen.getByLabelText("群聊会话范围");
-    const topicSessionModeInput = screen.getByLabelText("话题会话模式");
-    const markdownModeInput = screen.getByLabelText("Markdown 模式");
-    const heartbeatIntervalInput = screen.getByLabelText("心跳间隔毫秒");
-    const webhookHostInput = screen.getByLabelText("Webhook Host");
-    const configWritesInput = screen.getByLabelText("允许插件写回配置");
-    const dynamicWorkspaceTemplateInput = screen.getByLabelText("动态工作区模板");
-
-    expect(String((groupsEditor as HTMLTextAreaElement).value)).toContain("\"oc_demo\"");
-    expect(String((dmsEditor as HTMLTextAreaElement).value)).toContain("\"ou_demo\"");
-    expect(String((footerEditor as HTMLTextAreaElement).value)).toContain("\"elapsed\"");
-    expect(String((accountOverridesEditor as HTMLTextAreaElement).value)).toContain("\"renderMode\"");
-    expect(renderModeInput).toHaveValue("card");
-    expect(streamingInput).toHaveValue("true");
-    expect(textChunkLimitInput).toHaveValue("2400");
-    expect(chunkModeInput).toHaveValue("newline");
-    expect(replyInThreadInput).toHaveValue("enabled");
-    expect(groupSessionScopeInput).toHaveValue("group_sender");
-    expect(topicSessionModeInput).toHaveValue("enabled");
-    expect(markdownModeInput).toHaveValue("native");
-    expect(heartbeatIntervalInput).toHaveValue("30000");
-    expect(webhookHostInput).toHaveValue("127.0.0.1");
-    expect(configWritesInput).toHaveValue("true");
-    expect(dynamicWorkspaceTemplateInput).toHaveValue("workspace/{sender_id}");
-
-    fireEvent.change(groupsEditor, {
-      target: {
-        value: '{\n  "oc_ops": {\n    "enabled": true,\n    "requireMention": false\n  }\n}',
-      },
-    });
-    fireEvent.change(renderModeInput, { target: { value: "raw" } });
-    fireEvent.change(streamingInput, { target: { value: "false" } });
-    fireEvent.change(textChunkLimitInput, { target: { value: "3200" } });
-    fireEvent.change(chunkModeInput, { target: { value: "length" } });
-    fireEvent.change(replyInThreadInput, { target: { value: "disabled" } });
-    fireEvent.change(groupSessionScopeInput, { target: { value: "group" } });
-    fireEvent.change(topicSessionModeInput, { target: { value: "disabled" } });
-    fireEvent.change(markdownModeInput, { target: { value: "rich" } });
-    fireEvent.change(heartbeatIntervalInput, { target: { value: "15000" } });
-    fireEvent.change(webhookHostInput, { target: { value: "localhost" } });
-    fireEvent.change(configWritesInput, { target: { value: "false" } });
-    fireEvent.change(dynamicWorkspaceTemplateInput, {
-      target: { value: "employees/{sender_id}" },
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: "保存高级配置" }));
-
-    await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith("set_openclaw_plugin_feishu_advanced_settings", {
-        settings: {
-          groups_json: '{\n  "oc_ops": {\n    "enabled": true,\n    "requireMention": false\n  }\n}',
-          dms_json: '{\n  "ou_demo": {\n    "enabled": true,\n    "systemPrompt": "优先回答测试问题"\n  }\n}',
-          footer_json: '{\n  "status": true,\n  "elapsed": true\n}',
-          account_overrides_json: '{\n  "default": {\n    "renderMode": "card"\n  }\n}',
-          render_mode: "raw",
-          streaming: "false",
-          text_chunk_limit: "3200",
-          chunk_mode: "length",
-          reply_in_thread: "disabled",
-          group_session_scope: "group",
-          topic_session_mode: "disabled",
-          markdown_mode: "rich",
-          markdown_table_mode: "native",
-          heartbeat_visibility: "visible",
-          heartbeat_interval_ms: "15000",
-          media_max_mb: "20",
-          http_timeout_ms: "60000",
-          config_writes: "false",
-          webhook_host: "localhost",
-          webhook_port: "8787",
-          dynamic_agent_creation_enabled: "true",
-          dynamic_agent_creation_workspace_template: "employees/{sender_id}",
-          dynamic_agent_creation_agent_dir_template: "agents/{sender_id}",
-          dynamic_agent_creation_max_agents: "48",
+      get_feishu_setup_progress: async () => ({
+        environment: {
+          node_available: true,
+          npm_available: true,
+          node_version: "v22.0.0",
+          npm_version: "10.0.0",
+          can_install_plugin: true,
+          can_start_runtime: true,
+          error: null,
         },
-      });
+        credentials_configured: true,
+        plugin_installed: true,
+        plugin_version: "2026.3.17",
+        runtime_running: true,
+        runtime_last_error: null,
+        auth_status: "approved",
+        pending_pairings: 0,
+        default_routing_employee_name: null,
+        scoped_routing_count: 0,
+        summary_state: "ready_for_routing",
+      }),
     });
 
-    expect(screen.getByText("飞书高级配置已保存")).toBeInTheDocument();
+    render(<SettingsView onClose={() => {}} initialTab="feishu" onOpenEmployees={onOpenEmployees} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "去设置接待员工" })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "去设置接待员工" }));
+
+    expect(onOpenEmployees).toHaveBeenCalledTimes(1);
   });
 
-  test("reflects official plugin runtime status returned by start command immediately", async () => {
+  test("opens the official docs through the desktop external-url helper", async () => {
+    render(<SettingsView onClose={() => {}} initialTab="feishu" />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "查看官方文档" })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "查看官方文档" }));
+
+    await waitFor(() => {
+      expect(openExternalUrlMock).toHaveBeenCalledWith(
+        "https://bytedance.larkoffice.com/docx/MFK7dDFLFoVlOGxWCv5cTXKmnMh#M0usd9GLwoiBxtx1UyjcpeMhnRe",
+      );
+    });
+  });
+
+  test("groups advanced feishu settings into readable sections", async () => {
+    render(<SettingsView onClose={() => {}} initialTab="feishu" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("高级设置")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText("高级设置"));
+
+    await waitFor(() => {
+      expect(screen.getByText("消息与展示")).toBeInTheDocument();
+      expect(screen.getByText("群聊与私聊规则")).toBeInTheDocument();
+      expect(screen.getByText("运行与行为")).toBeInTheDocument();
+      expect(screen.getByText("动态 Agent 相关")).toBeInTheDocument();
+    });
+  });
+
+  test("shows condensed connection diagnostics before raw logs", async () => {
+    render(<SettingsView onClose={() => {}} initialTab="feishu" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("连接详情")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText("连接详情"));
+
+    await waitFor(() => {
+      expect(screen.getByText("这里展示当前连接是否正常、最近一次事件，以及排查问题时最有用的诊断摘要。")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "复制诊断摘要" })).toBeInTheDocument();
+      expect(screen.getByText("原始日志（最近 3 条）")).toBeInTheDocument();
+    });
+  });
+
+  test("shows routing completion guidance when no default employee is configured", async () => {
     installInvokeMock({
-      get_openclaw_plugin_feishu_runtime_status: async () => ({
-        plugin_id: "openclaw-lark",
-        account_id: "default",
-        running: false,
-        started_at: null,
-        last_stop_at: null,
-        last_error: null,
-        pid: null,
-        port: null,
-      }),
-      start_openclaw_plugin_feishu_runtime: async () => ({
-        plugin_id: "openclaw-lark",
-        account_id: "default",
-        running: true,
-        started_at: "2026-03-19T10:00:00Z",
-        last_stop_at: null,
-        last_error: null,
-        pid: 43210,
-        port: null,
-      }),
-    });
-
-    render(<SettingsView onClose={() => {}} />);
-
-    fireEvent.click(screen.getByRole("button", { name: "渠道连接器" }));
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "保存官方插件配置" })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: "保存官方插件配置" }));
-
-    await waitFor(() => {
-      expect(screen.getByText("运行中")).toBeInTheDocument();
-    });
-
-    expect(screen.getByText("飞书官方插件运行中")).toBeInTheDocument();
-  });
-
-  test("shows official plugin runtime start errors returned by the start command", async () => {
-    installInvokeMock({
-      get_openclaw_plugin_feishu_runtime_status: async () => ({
-        plugin_id: "openclaw-lark",
-        account_id: "default",
-        running: false,
-        started_at: null,
-        last_stop_at: null,
-        last_error: null,
-        pid: null,
-        port: null,
-      }),
-      start_openclaw_plugin_feishu_runtime: async () => ({
-        plugin_id: "openclaw-lark",
-        account_id: "default",
-        running: false,
-        started_at: null,
-        last_stop_at: "2026-03-19T10:00:10Z",
-        last_error: "official feishu runtime exited with code 1",
-        pid: null,
-        port: null,
-      }),
-    });
-
-    render(<SettingsView onClose={() => {}} />);
-
-    fireEvent.click(screen.getByRole("button", { name: "渠道连接器" }));
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "保存官方插件配置" })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: "保存官方插件配置" }));
-
-    await waitFor(() => {
-      expect(screen.getByText(/官方插件启动失败/)).toBeInTheDocument();
-    });
-
-    expect(screen.getByText(/official feishu runtime exited with code 1/)).toBeInTheDocument();
-  });
-
-  test("shows official runtime connection status when plugin runtime is running", async () => {
-    installInvokeMock({
-      get_openclaw_plugin_feishu_runtime_status: async () => ({
-        plugin_id: "openclaw-lark",
-        account_id: "default",
-        running: true,
-        started_at: "2026-03-19T12:00:00Z",
-        last_stop_at: null,
-        last_error: null,
-        pid: 4242,
-        port: null,
-      }),
-    });
-
-    render(<SettingsView onClose={() => {}} />);
-
-    fireEvent.click(screen.getByRole("button", { name: "渠道连接器" }));
-
-    await waitFor(() => {
-      expect(screen.getByText("运行中")).toBeInTheDocument();
-    });
-
-    expect(screen.getByText("飞书官方插件运行中")).toBeInTheDocument();
-  });
-
-  test("auto-starts official runtime on connector page load when plugin mode has saved credentials", async () => {
-    render(<SettingsView onClose={() => {}} />);
-
-    fireEvent.click(screen.getByRole("button", { name: "渠道连接器" }));
-
-    await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith("start_openclaw_plugin_feishu_runtime", {
-        pluginId: "openclaw-lark",
-        accountId: null,
-      });
-    });
-  });
-
-  test("shows official-plugin diagnostics instead of legacy connector diagnostics in plugin mode", async () => {
-    installInvokeMock({
-      get_openclaw_plugin_feishu_runtime_status: async () => ({
-        plugin_id: "openclaw-lark",
-        account_id: "default",
-        running: false,
-        started_at: null,
-        last_stop_at: null,
-        last_event_at: "2026-03-19T12:00:01Z",
-        last_error: null,
-        pid: null,
-        port: null,
-        recent_logs: ["[info] channel/monitor: feishu[default]: WebSocket client started"],
-      }),
-    });
-
-    render(<SettingsView onClose={() => {}} />);
-
-    fireEvent.click(screen.getByRole("button", { name: "渠道连接器" }));
-
-    await waitFor(() => {
-      expect(screen.getByText("配置模式")).toBeInTheDocument();
-    });
-
-    expect(screen.getByText("官方插件优先")).toBeInTheDocument();
-    expect(screen.getAllByText("@larksuite/openclaw-lark").length).toBeGreaterThan(0);
-    expect(screen.getByText("2026-03-19T12:00:01Z")).toBeInTheDocument();
-    expect(screen.getByText(/\[info\] channel\/monitor: feishu\[default\]: WebSocket client started/)).toBeInTheDocument();
-    expect(screen.queryByText("企业微信连接器")).not.toBeInTheDocument();
-    expect(screen.queryByText("连接器诊断")).not.toBeInTheDocument();
-  });
-
-  test("denies feishu pairing requests from settings actions", async () => {
-    render(<SettingsView onClose={() => {}} />);
-
-    fireEvent.click(screen.getByRole("button", { name: "渠道连接器" }));
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "配对与授权" })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: "配对与授权" }));
-    fireEvent.click(screen.getByRole("button", { name: "拒绝" }));
-
-    await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith("deny_feishu_pairing_request", {
-        requestId: "pairing-1",
-        resolvedByUser: "settings-ui",
-      });
-    });
-  });
-
-  test("filters pairing requests by status in the feishu console", async () => {
-    installInvokeMock({
-      list_feishu_pairing_requests: async () => [
-        {
-          id: "pairing-1",
-          channel: "feishu",
-          account_id: "default",
-          sender_id: "ou_pending",
-          chat_id: "ou_pending",
-          code: "PAIR1234",
-          status: "pending",
-          created_at: "2026-03-19T10:00:00Z",
-          updated_at: "2026-03-19T10:00:00Z",
-          resolved_at: null,
-          resolved_by_user: "",
+      get_feishu_setup_progress: async () => ({
+        environment: {
+          node_available: true,
+          npm_available: true,
+          node_version: "v22.0.0",
+          npm_version: "10.0.0",
+          can_install_plugin: true,
+          can_start_runtime: true,
+          error: null,
         },
-        {
-          id: "pairing-2",
-          channel: "feishu",
-          account_id: "default",
-          sender_id: "ou_approved",
-          chat_id: "ou_approved",
-          code: "PAIR5678",
-          status: "approved",
-          created_at: "2026-03-19T09:00:00Z",
-          updated_at: "2026-03-19T09:10:00Z",
-          resolved_at: "2026-03-19T09:10:00Z",
-          resolved_by_user: "settings-ui",
+        credentials_configured: true,
+        plugin_installed: true,
+        plugin_version: "2026.3.17",
+        runtime_running: true,
+        runtime_last_error: null,
+        auth_status: "approved",
+        pending_pairings: 0,
+        default_routing_employee_name: null,
+        scoped_routing_count: 0,
+        summary_state: "ready_for_routing",
+      }),
+    });
+
+    render(<SettingsView onClose={() => {}} initialTab="feishu" />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText("还差默认员工").length).toBeGreaterThan(0);
+    });
+
+    expect(screen.getAllByText("还差默认员工").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "去设置接待员工" })).toBeInTheDocument();
+  });
+
+  test("shows ready-to-receive state when default routing employee exists", async () => {
+    installInvokeMock({
+      get_feishu_setup_progress: async () => ({
+        environment: {
+          node_available: true,
+          npm_available: true,
+          node_version: "v22.0.0",
+          npm_version: "10.0.0",
+          can_install_plugin: true,
+          can_start_runtime: true,
+          error: null,
         },
-      ],
+        credentials_configured: true,
+        plugin_installed: true,
+        plugin_version: "2026.3.17",
+        runtime_running: true,
+        runtime_last_error: null,
+        auth_status: "approved",
+        pending_pairings: 0,
+        default_routing_employee_name: "太子",
+        scoped_routing_count: 2,
+        summary_state: "ready_for_routing",
+      }),
     });
 
-    render(<SettingsView onClose={() => {}} />);
-
-    fireEvent.click(screen.getByRole("button", { name: "渠道连接器" }));
+    render(<SettingsView onClose={() => {}} initialTab="feishu" />);
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "配对与授权" })).toBeInTheDocument();
+      expect(screen.getAllByText("已可接待").length).toBeGreaterThan(0);
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "配对与授权" }));
-
-    expect(screen.getByRole("button", { name: "待处理" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "已通过" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "全部" })).toBeInTheDocument();
-    expect(screen.getByText("ou_pending · 待处理")).toBeInTheDocument();
-    expect(screen.queryByText("ou_approved · 已通过")).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "已通过" }));
-    expect(screen.getByText("ou_approved · 已通过")).toBeInTheDocument();
-    expect(screen.getByText(/申请时间 2026-03-19 09:00/)).toBeInTheDocument();
-    expect(screen.getByText(/处理人 settings-ui · 处理时间 2026-03-19 09:10/)).toBeInTheDocument();
-    expect(screen.queryByText("ou_pending · 待处理")).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "全部" }));
-    expect(screen.getByText("ou_pending · 待处理")).toBeInTheDocument();
-    expect(screen.getByText("ou_approved · 已通过")).toBeInTheDocument();
-  });
-
-  test("shows guided empty states when official plugin host or pairing requests are missing", async () => {
-    installInvokeMock({
-      list_openclaw_plugin_channel_hosts: async () => [],
-      list_feishu_pairing_requests: async () => [],
-    });
-
-    render(<SettingsView onClose={() => {}} />);
-
-    fireEvent.click(screen.getByRole("button", { name: "渠道连接器" }));
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "官方插件" })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: "官方插件" }));
-    expect(screen.getByText("尚未识别到 OpenClaw 官方飞书插件")).toBeInTheDocument();
-    expect(screen.getByText("@larksuite/openclaw-lark")).toBeInTheDocument();
-    expect(screen.getByText(/账号视图和兼容宿主状态/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "安装官方插件" })).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "配对与授权" }));
-    expect(screen.getByText("暂无待处理配对申请")).toBeInTheDocument();
-    expect(screen.getByText(/新的飞书私聊配对请求会出现在这里/)).toBeInTheDocument();
-  });
-
-  test("installs the official feishu openclaw plugin from the empty state", async () => {
-    let installed = false;
-    installInvokeMock({
-      list_openclaw_plugin_channel_hosts: async () => {
-        if (!installed) {
-          return [];
-        }
-        return [
-          {
-            plugin_id: "openclaw-lark",
-            npm_spec: "@larksuite/openclaw-lark",
-            version: "2026.3.17",
-            channel: "feishu",
-            display_name: "Feishu",
-            capabilities: ["pairing"],
-            reload_config_prefixes: ["channels.feishu"],
-            target_hint: "<chatId|user:openId|chat:chatId>",
-            docs_path: "/channels/feishu",
-            status: "ready",
-            error: null,
-          },
-        ];
-      },
-      install_openclaw_plugin_from_npm: async () => {
-        installed = true;
-        return {
-          plugin_id: "openclaw-lark",
-          npm_spec: "@larksuite/openclaw-lark",
-          version: "2026.3.17",
-          install_path: "D:/plugins/openclaw-lark",
-          source_type: "npm",
-          manifest_json: "{}",
-          installed_at: "2026-03-19T10:00:00Z",
-          updated_at: "2026-03-19T10:00:00Z",
-        };
-      },
-    });
-
-    render(<SettingsView onClose={() => {}} />);
-
-    fireEvent.click(screen.getByRole("button", { name: "渠道连接器" }));
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "安装官方插件" })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: "安装官方插件" }));
-
-    await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith("install_openclaw_plugin_from_npm", {
-        pluginId: "openclaw-lark",
-        npmSpec: "@larksuite/openclaw-lark",
-      });
-    });
-
-    await waitFor(() => {
-      expect(screen.getAllByText("已识别").length).toBeGreaterThan(0);
-    });
-    expect(screen.getByText(/飞书官方插件已安装/)).toBeInTheDocument();
-  });
-
-  test("shows partial-load warnings when plugin host or pairing data fails to load", async () => {
-    installInvokeMock({
-      list_openclaw_plugin_channel_hosts: async () => {
-        throw new Error("plugin host unavailable");
-      },
-      list_feishu_pairing_requests: async () => {
-        throw new Error("pairing unavailable");
-      },
-    });
-
-    render(<SettingsView onClose={() => {}} />);
-
-    fireEvent.click(screen.getByRole("button", { name: "渠道连接器" }));
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "官方插件" })).toBeInTheDocument();
-    });
-
-    expect(screen.getAllByText("加载失败").length).toBeGreaterThan(0);
-
-    fireEvent.click(screen.getByRole("button", { name: "官方插件" }));
-    expect(screen.getByText("官方插件状态暂时不可用")).toBeInTheDocument();
-    expect(screen.getByText(/请稍后刷新，或先检查插件宿主与安装状态/)).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "配对与授权" }));
-    expect(screen.getByText("配对记录加载失败")).toBeInTheDocument();
-    expect(screen.getByText(/暂时无法读取配对请求/)).toBeInTheDocument();
+    expect(screen.getByText("默认接待员工和 2 条群聊范围规则都已生效。")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "调整接待设置" })).toBeInTheDocument();
   });
 });

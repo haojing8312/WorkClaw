@@ -19,6 +19,8 @@ import {
   CapabilityRouteTemplateInfo,
   CapabilityRoutingPolicy,
   FeishuPairingRequestRecord,
+  FeishuPluginEnvironmentStatus,
+  FeishuSetupProgress,
   FeishuGatewaySettings,
   OpenClawPluginFeishuAdvancedSettings,
   OpenClawPluginChannelHost,
@@ -26,8 +28,6 @@ import {
   OpenClawPluginChannelSnapshotResult,
   OpenClawPluginFeishuCredentialProbeResult,
   OpenClawPluginFeishuRuntimeStatus,
-  OpenClawLarkInstallerMode,
-  OpenClawLarkInstallerSessionStatus,
   ModelConfig,
   ModelConnectionTestResult,
   ProviderConfig,
@@ -38,8 +38,6 @@ import {
 } from "../types";
 import { getModelErrorDisplay } from "../lib/model-error-display";
 import { RiskConfirmDialog } from "./RiskConfirmDialog";
-import { ConnectorConfigPanel } from "./connectors/ConnectorConfigPanel";
-import { getConnectorSchema } from "./connectors/connectorSchemas";
 
 const MCP_PRESETS = [
   { label: "— 快速选择 —", value: "", name: "", command: "", args: "", env: "" },
@@ -69,8 +67,28 @@ function parseMcpEnvJson(text: string): { env: Record<string, string>; error: st
   }
 }
 
+function getErrorMessage(error: unknown, fallback: string): string {
+  if (typeof error === "string") {
+    return error || fallback;
+  }
+  if (error instanceof Error) {
+    return error.message || fallback;
+  }
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    typeof (error as { message?: unknown }).message === "string"
+  ) {
+    return (error as { message: string }).message || fallback;
+  }
+  return fallback;
+}
+
 interface Props {
   onClose: () => void;
+  onOpenEmployees?: () => void;
+  initialTab?: "models" | "desktop" | "capabilities" | "health" | "mcp" | "search" | "routing" | "feishu";
   showDevModelSetupTools?: boolean;
   onDevResetFirstUseOnboarding?: () => void;
   onDevOpenQuickModelSetup?: () => void;
@@ -143,8 +161,52 @@ const DEFAULT_MODEL_PROVIDER = getModelProviderCatalogItem(DEFAULT_MODEL_PROVIDE
 const FEISHU_OFFICIAL_PLUGIN_DOC_URL =
   "https://bytedance.larkoffice.com/docx/MFK7dDFLFoVlOGxWCv5cTXKmnMh#M0usd9GLwoiBxtx1UyjcpeMhnRe";
 
+type FeishuAdvancedFieldConfig = {
+  key: keyof OpenClawPluginFeishuAdvancedSettings;
+  label: string;
+  description: string;
+  kind: "input" | "textarea";
+  rows?: number;
+};
+
+const FEISHU_ADVANCED_MESSAGE_FIELDS: FeishuAdvancedFieldConfig[] = [
+  { key: "footer_json", label: "回复页脚 JSON", description: "定义回复尾部展示的状态、耗时等附加信息。", kind: "textarea", rows: 5 },
+  { key: "account_overrides_json", label: "账号覆盖 JSON", description: "按账号覆盖消息展示行为，适合多账号接入时做细分调整。", kind: "textarea", rows: 5 },
+  { key: "render_mode", label: "渲染模式", description: "控制回复内容的主要渲染方式。", kind: "input" },
+  { key: "streaming", label: "流式输出", description: "决定回复是否边生成边发送。", kind: "input" },
+  { key: "text_chunk_limit", label: "文本分块上限", description: "单次消息的最大文本块长度。", kind: "input" },
+  { key: "chunk_mode", label: "分块模式", description: "控制长消息按什么策略拆分。", kind: "input" },
+  { key: "markdown_mode", label: "Markdown 模式", description: "控制 Markdown 内容如何转换给飞书。", kind: "input" },
+  { key: "markdown_table_mode", label: "Markdown 表格模式", description: "控制表格内容的展示方式。", kind: "input" },
+];
+
+const FEISHU_ADVANCED_ROUTING_FIELDS: FeishuAdvancedFieldConfig[] = [
+  { key: "groups_json", label: "群聊高级规则 JSON", description: "按群聊配置启用、提及规则等进阶行为。", kind: "textarea", rows: 8 },
+  { key: "dms_json", label: "私聊高级规则 JSON", description: "按私聊对象配置启用状态和系统提示。", kind: "textarea", rows: 8 },
+  { key: "reply_in_thread", label: "线程内回复", description: "控制消息是否优先在线程中回复。", kind: "input" },
+  { key: "group_session_scope", label: "群聊会话范围", description: "决定群聊里如何划分会话上下文。", kind: "input" },
+  { key: "topic_session_mode", label: "话题会话模式", description: "决定是否把话题回复视为独立会话。", kind: "input" },
+];
+
+const FEISHU_ADVANCED_RUNTIME_FIELDS: FeishuAdvancedFieldConfig[] = [
+  { key: "heartbeat_visibility", label: "心跳可见性", description: "控制连接保活提示是否对外可见。", kind: "input" },
+  { key: "heartbeat_interval_ms", label: "心跳间隔毫秒", description: "设置连接保活检测频率。", kind: "input" },
+  { key: "media_max_mb", label: "媒体大小上限 MB", description: "限制可处理媒体消息的大小。", kind: "input" },
+  { key: "http_timeout_ms", label: "HTTP 超时毫秒", description: "设置外部请求的最大等待时间。", kind: "input" },
+  { key: "config_writes", label: "允许插件写回配置", description: "决定插件运行时是否允许自动写回部分配置。", kind: "input" },
+];
+
+const FEISHU_ADVANCED_DYNAMIC_AGENT_FIELDS: FeishuAdvancedFieldConfig[] = [
+  { key: "dynamic_agent_creation_enabled", label: "动态 Agent 创建", description: "决定是否允许根据飞书会话动态创建 Agent。", kind: "input" },
+  { key: "dynamic_agent_creation_workspace_template", label: "动态工作区模板", description: "定义动态创建工作区时使用的路径模板。", kind: "input" },
+  { key: "dynamic_agent_creation_agent_dir_template", label: "动态 Agent 目录模板", description: "定义动态 Agent 目录的生成规则。", kind: "input" },
+  { key: "dynamic_agent_creation_max_agents", label: "动态 Agent 数量上限", description: "限制动态创建 Agent 的最大数量。", kind: "input" },
+];
+
 export function SettingsView({
   onClose,
+  onOpenEmployees,
+  initialTab = "models",
   showDevModelSetupTools = false,
   onDevResetFirstUseOnboarding,
   onDevOpenQuickModelSetup,
@@ -172,10 +234,9 @@ export function SettingsView({
   const [mcpForm, setMcpForm] = useState({ name: "", command: "", args: "", env: "" });
   const [mcpError, setMcpError] = useState("");
   const [showMcpEnvJson, setShowMcpEnvJson] = useState(false);
-  const [feishuOnboardingMode, setFeishuOnboardingMode] = useState<"create" | "link" | null>(null);
   const [activeTab, setActiveTab] = useState<
     "models" | "desktop" | "capabilities" | "health" | "mcp" | "search" | "routing" | "feishu"
-  >("models");
+  >(initialTab);
 
   // 搜索引擎配置
   const [searchConfigs, setSearchConfigs] = useState<ModelConfig[]>([]);
@@ -270,20 +331,17 @@ export function SettingsView({
   const [pluginChannelSnapshots, setPluginChannelSnapshots] = useState<Record<string, OpenClawPluginChannelSnapshotResult>>({});
   const [pluginChannelHostsError, setPluginChannelHostsError] = useState("");
   const [pluginChannelSnapshotsError, setPluginChannelSnapshotsError] = useState("");
-  const [feishuConsoleSection, setFeishuConsoleSection] = useState<"connection" | "plugin" | "pairing">("connection");
+  const [feishuEnvironmentStatus, setFeishuEnvironmentStatus] = useState<FeishuPluginEnvironmentStatus | null>(null);
+  const [feishuSetupProgress, setFeishuSetupProgress] = useState<FeishuSetupProgress | null>(null);
+  const [validatingFeishuCredentials, setValidatingFeishuCredentials] = useState(false);
+  const [feishuCredentialProbe, setFeishuCredentialProbe] =
+    useState<OpenClawPluginFeishuCredentialProbeResult | null>(null);
   const [feishuPairingRequests, setFeishuPairingRequests] = useState<FeishuPairingRequestRecord[]>([]);
   const [feishuPairingRequestsError, setFeishuPairingRequestsError] = useState("");
-  const [feishuPairingFilter, setFeishuPairingFilter] = useState<"pending" | "approved" | "denied" | "all">("pending");
-  const [feishuPairingActionId, setFeishuPairingActionId] = useState<string | null>(null);
   const [savingFeishuConnector, setSavingFeishuConnector] = useState(false);
   const [savingFeishuAdvancedSettings, setSavingFeishuAdvancedSettings] = useState(false);
   const [retryingFeishuConnector, setRetryingFeishuConnector] = useState(false);
   const [installingOfficialFeishuPlugin, setInstallingOfficialFeishuPlugin] = useState(false);
-  const [startingOfficialInstaller, setStartingOfficialInstaller] = useState(false);
-  const [linkingExistingFeishuBot, setLinkingExistingFeishuBot] = useState(false);
-  const [officialInstallerInput, setOfficialInstallerInput] = useState("");
-  const [officialInstallerStatus, setOfficialInstallerStatus] =
-    useState<OpenClawLarkInstallerSessionStatus | null>(null);
   const [feishuConnectorNotice, setFeishuConnectorNotice] = useState("");
   const [feishuConnectorError, setFeishuConnectorError] = useState("");
   const [runtimePreferences, setRuntimePreferences] = useState<RuntimePreferences>(
@@ -413,6 +471,10 @@ export function SettingsView({
   }
 
   useEffect(() => {
+    setActiveTab(initialTab);
+  }, [initialTab]);
+
+  useEffect(() => {
     loadModels();
     loadSearchConfigs();
     loadRuntimePreferences();
@@ -450,6 +512,7 @@ export function SettingsView({
     void loadConnectorSettings();
     void loadConnectorStatuses();
     void loadConnectorPlatformData();
+    void loadFeishuSetupProgress();
   }, [activeTab]);
 
   useEffect(() => {
@@ -460,6 +523,7 @@ export function SettingsView({
     const timer = window.setInterval(() => {
       void loadConnectorStatuses();
       void loadConnectorPlatformData();
+      void loadFeishuSetupProgress();
     }, 5000);
 
     return () => window.clearInterval(timer);
@@ -831,12 +895,23 @@ export function SettingsView({
     }
   }
 
+  async function loadFeishuSetupProgress() {
+    try {
+      const [environment, progress] = await Promise.all([
+        invoke<FeishuPluginEnvironmentStatus>("get_feishu_plugin_environment_status"),
+        invoke<FeishuSetupProgress>("get_feishu_setup_progress"),
+      ]);
+      setFeishuEnvironmentStatus(environment);
+      setFeishuSetupProgress(progress);
+    } catch (e) {
+      console.warn("加载飞书接入进度失败:", e);
+      setFeishuEnvironmentStatus(null);
+      setFeishuSetupProgress(null);
+    }
+  }
+
   async function loadConnectorStatuses() {
     try {
-      const installerStatus = await invoke<OpenClawLarkInstallerSessionStatus>(
-        "get_openclaw_lark_installer_session_status",
-      );
-      setOfficialInstallerStatus(installerStatus);
       const runtimeStatus = await invoke<OpenClawPluginFeishuRuntimeStatus>(
         "get_openclaw_plugin_feishu_runtime_status",
       );
@@ -844,7 +919,6 @@ export function SettingsView({
     } catch (e) {
       console.warn("加载渠道连接器状态失败:", e);
       setOfficialFeishuRuntimeStatus(null);
-      setOfficialInstallerStatus(null);
     }
   }
 
@@ -905,49 +979,6 @@ export function SettingsView({
     );
   }
 
-  async function handleResolveFeishuPairingRequest(requestId: string, decision: "approve" | "deny") {
-    setFeishuPairingActionId(requestId);
-    try {
-      await invoke(
-        decision === "approve" ? "approve_feishu_pairing_request" : "deny_feishu_pairing_request",
-        {
-          requestId,
-          resolvedByUser: "settings-ui",
-        },
-      );
-      if (decision === "approve" && useOfficialFeishuPluginMode) {
-        await invoke("stop_openclaw_plugin_feishu_runtime");
-        const runtimeStatus = await invoke<OpenClawPluginFeishuRuntimeStatus | null>(
-          "start_openclaw_plugin_feishu_runtime",
-          {
-            pluginId: primaryPluginChannelHost?.plugin_id || "openclaw-lark",
-            accountId: null,
-          },
-        );
-        if (runtimeStatus) {
-          applyOfficialFeishuRuntimeStatus(runtimeStatus, { showStartErrorNotice: true });
-        }
-        setFeishuConnectorNotice("飞书配对已批准，官方插件已刷新配置");
-      } else if (decision === "deny") {
-        setFeishuConnectorNotice("飞书配对已拒绝");
-      }
-      await loadConnectorPlatformData();
-      await loadConnectorStatuses();
-    } catch (error) {
-      setFeishuConnectorError(`处理飞书配对请求失败: ${String(error)}`);
-      console.warn("处理飞书配对请求失败:", error);
-    } finally {
-      setFeishuPairingActionId(null);
-    }
-  }
-
-  function getFeishuPairingStatusLabel(status: FeishuPairingRequestRecord["status"]) {
-    if (status === "pending") return "待处理";
-    if (status === "approved") return "已通过";
-    if (status === "denied") return "已拒绝";
-    return status;
-  }
-
   function formatCompactDateTime(value: string | null | undefined) {
     const normalized = String(value || "").trim();
     if (!normalized) return "未知时间";
@@ -963,9 +994,6 @@ export function SettingsView({
     return `${year}-${month}-${day} ${hours}:${minutes}`;
   }
 
-  const visibleFeishuPairingRequests = feishuPairingRequests.filter((request) =>
-    feishuPairingFilter === "all" ? true : request.status === feishuPairingFilter,
-  );
   const primaryPluginChannelHost = pluginChannelHosts.find((host) => host.channel === "feishu") ?? pluginChannelHosts[0] ?? null;
   const primaryPluginChannelSnapshot =
     (primaryPluginChannelHost ? pluginChannelSnapshots[primaryPluginChannelHost.channel] : null) ??
@@ -975,23 +1003,165 @@ export function SettingsView({
   const hasErroredOfficialFeishuPlugin = pluginChannelHosts.some((host) => host.status === "error");
   const hasInstalledOfficialFeishuPlugin = pluginChannelHosts.length > 0;
   const useOfficialFeishuPluginMode = true;
+  const pendingFeishuPairingCount = feishuSetupProgress?.pending_pairings ?? feishuPairingRequests.filter((request) => request.status === "pending").length;
+  const feishuAuthorizationAction = getFeishuAuthorizationAction();
+  const feishuRoutingStatus = getFeishuRoutingStatus();
+
+  function getFeishuSetupSummary() {
+    const summaryState = feishuSetupProgress?.summary_state;
+    if (summaryState === "env_missing") {
+      return {
+        title: "这台电脑还没有准备好飞书连接环境",
+        description: "请先安装 Node.js LTS，完成后回到这里重新检测环境。",
+        primaryActionLabel: "重新检测环境",
+      };
+    }
+    if (summaryState === "plugin_not_installed") {
+      return {
+        title: "还差一步，安装并启动飞书连接组件",
+        description: "机器人信息已准备好，接下来安装官方插件并启动连接即可。",
+        primaryActionLabel: "安装并启动",
+      };
+    }
+    if (summaryState === "awaiting_auth") {
+      return {
+        title: "飞书连接已启动，还需要完成飞书授权",
+        description: "请回到飞书中的机器人会话完成授权，然后回到这里刷新状态。",
+        primaryActionLabel: "刷新授权状态",
+      };
+    }
+    if (summaryState === "ready_for_routing") {
+      return {
+        title: "飞书已接通，还需要设置谁来接待消息",
+        description: "接待员工或群聊范围未完全配置，完成后才能稳定接待飞书消息。",
+        primaryActionLabel: "查看接待设置",
+      };
+    }
+    if (summaryState === "runtime_error") {
+      return {
+        title: "飞书连接出现异常，需要重新检查",
+        description: summarizeConnectorIssue(feishuSetupProgress?.runtime_last_error || officialFeishuRuntimeStatus?.last_error),
+        primaryActionLabel: "重新检测",
+      };
+    }
+    if (feishuSetupProgress?.runtime_running) {
+      return {
+        title: "飞书已接通，正在接收消息",
+        description: "后续可以继续调整接待员工、群聊规则和高级设置。",
+        primaryActionLabel: "查看连接详情",
+      };
+    }
+    return {
+      title: "飞书还未接入，完成下方步骤后即可开始接待消息",
+      description: "当前版本只支持绑定已有机器人，并使用飞书官方插件的 WebSocket 主路径。",
+      primaryActionLabel: "开始设置",
+    };
+  }
+
+  function getFeishuEnvironmentLabel(ready: boolean, fallback: string) {
+    return ready ? "已就绪" : fallback;
+  }
+
+  function getFeishuAuthorizationAction() {
+    if (officialFeishuRuntimeStatus?.running) {
+      return {
+        label: "重新启动连接",
+        busyLabel: "处理中...",
+      };
+    }
+    if (feishuSetupProgress?.plugin_installed) {
+      return {
+        label: "启动连接",
+        busyLabel: "处理中...",
+      };
+    }
+    return {
+      label: "安装并启动",
+      busyLabel: "处理中...",
+    };
+  }
+
+  function getFeishuRoutingStatus() {
+    const authApproved = feishuSetupProgress?.auth_status === "approved";
+    const hasDefaultEmployee = Boolean(feishuSetupProgress?.default_routing_employee_name?.trim());
+    const scopedCount = feishuSetupProgress?.scoped_routing_count ?? 0;
+
+    if (!authApproved) {
+      return {
+        label: "待完成授权",
+        description: "先回到飞书完成授权，接待设置才会生效。",
+        actionLabel: "先完成授权",
+      };
+    }
+
+    if (hasDefaultEmployee) {
+      return {
+        label: scopedCount > 0 ? "已可接待" : "已可接待",
+        description:
+          scopedCount > 0
+            ? `默认接待员工和 ${scopedCount} 条群聊范围规则都已生效。`
+            : "默认接待员工已设置，未命中规则的消息会自动回退给该员工。",
+        actionLabel: scopedCount > 0 ? "调整接待设置" : "查看接待员工",
+      };
+    }
+
+    if (scopedCount > 0) {
+      return {
+        label: "部分可接待",
+        description: `已配置 ${scopedCount} 条群聊范围规则，但还没有默认接待员工。未命中规则的消息暂时无人接待。`,
+        actionLabel: "补充默认员工",
+      };
+    }
+
+    return {
+      label: "还差默认员工",
+      description: "飞书已接通，但还没有默认接待员工或群聊范围规则，消息暂时不会稳定分配。",
+      actionLabel: "去设置接待员工",
+    };
+  }
+
+  function renderFeishuAdvancedField(field: FeishuAdvancedFieldConfig) {
+    const value = feishuAdvancedSettings[field.key];
+    const updateValue = (nextValue: string) =>
+      setFeishuAdvancedSettings((state) => ({
+        ...state,
+        [field.key]: nextValue,
+      }));
+
+    return (
+      <label key={field.key} className="space-y-1.5">
+        <div className="flex items-center justify-between gap-3">
+          <div className="text-[11px] font-medium text-gray-700">{field.label}</div>
+          <div className="text-[10px] text-gray-400">{field.kind === "textarea" ? "JSON / 模板" : "文本值"}</div>
+        </div>
+        <div className="text-[11px] leading-5 text-gray-500">{field.description}</div>
+        {field.kind === "textarea" ? (
+          <textarea
+            aria-label={field.label}
+            value={value}
+            onChange={(event) => updateValue(event.target.value)}
+            rows={field.rows ?? 5}
+            className="w-full rounded border border-gray-200 bg-gray-50 px-3 py-2 font-mono text-[11px] text-gray-900"
+          />
+        ) : (
+          <input
+            aria-label={field.label}
+            value={value}
+            onChange={(event) => updateValue(event.target.value)}
+            className="w-full rounded border border-gray-200 bg-gray-50 px-3 py-2 text-[11px] text-gray-900"
+          />
+        )}
+      </label>
+    );
+  }
 
   useEffect(() => {
     if (activeTab !== "feishu") {
       return;
     }
     void loadConnectorStatuses();
+    void loadFeishuSetupProgress();
   }, [activeTab, useOfficialFeishuPluginMode]);
-
-  useEffect(() => {
-    if (activeTab !== "feishu" || !officialInstallerStatus?.running) {
-      return;
-    }
-    const timer = window.setInterval(() => {
-      void loadConnectorStatuses();
-    }, 1500);
-    return () => window.clearInterval(timer);
-  }, [activeTab, officialInstallerStatus?.running]);
 
   useEffect(() => {
     if (activeTab !== "feishu" || !useOfficialFeishuPluginMode) {
@@ -1006,7 +1176,11 @@ export function SettingsView({
       return;
     }
 
-    if (officialFeishuRuntimeStatus?.running) {
+    if (
+      officialFeishuRuntimeStatus?.running ||
+      !feishuSetupProgress?.plugin_installed ||
+      !feishuSetupProgress.environment.can_start_runtime
+    ) {
       officialFeishuRuntimeAutostartKeyRef.current = "";
       return;
     }
@@ -1037,6 +1211,8 @@ export function SettingsView({
     feishuConnectorSettings.app_id,
     feishuConnectorSettings.app_secret,
     officialFeishuRuntimeStatus?.running,
+    feishuSetupProgress?.plugin_installed,
+    feishuSetupProgress?.environment.can_start_runtime,
     primaryPluginChannelHost?.plugin_id,
   ]);
 
@@ -1324,51 +1500,48 @@ export function SettingsView({
     return logs.slice(-3).join(" | ");
   }
 
-  function applyOfficialInstallerStatus(status: OpenClawLarkInstallerSessionStatus | null | undefined) {
-    if (!status) {
-      return;
+  function getFeishuConnectionDetailSummary() {
+    const status = resolveFeishuConnectorStatus();
+    if (status.error?.trim()) {
+      return summarizeConnectorIssue(status.error);
     }
-    setOfficialInstallerStatus(status);
-    if (!status.running && status.last_error?.trim()) {
-      setFeishuConnectorError(`飞书官方安装向导失败: ${status.last_error.trim()}`);
+    if (feishuSetupProgress?.auth_status !== "approved") {
+      return "连接已启动，但还需要在飞书里完成授权。";
     }
+    if (!feishuSetupProgress?.default_routing_employee_name && (feishuSetupProgress?.scoped_routing_count ?? 0) === 0) {
+      return "连接正常，但还没有设置默认接待员工或群聊范围。";
+    }
+    if (officialFeishuRuntimeStatus?.running) {
+      return "连接正常，正在接收飞书消息。";
+    }
+    return "当前连接尚未启动。";
   }
 
-  async function handleStartOfficialInstaller(mode: OpenClawLarkInstallerMode) {
-    setStartingOfficialInstaller(true);
-    setFeishuConnectorNotice("");
-    setFeishuConnectorError("");
-    try {
-      const status = await invoke<OpenClawLarkInstallerSessionStatus>(
-        "start_openclaw_lark_installer_session",
-        {
-          mode,
-          appId: mode === "link" ? feishuConnectorSettings.app_id || null : null,
-          appSecret: mode === "link" ? feishuConnectorSettings.app_secret || null : null,
-        },
-      );
-      setFeishuOnboardingMode(mode);
-      applyOfficialInstallerStatus(status);
-      setFeishuConnectorNotice(
-        mode === "create" ? "已启动飞书官方新建机器人向导" : "已启动飞书官方关联机器人向导",
-      );
-    } catch (error) {
-      setFeishuConnectorError("启动飞书官方安装向导失败: " + String(error));
-    } finally {
-      setStartingOfficialInstaller(false);
-    }
+  function buildFeishuDiagnosticSummary() {
+    const status = resolveFeishuConnectorStatus();
+    const lines = [
+      `当前状态: ${status.label}`,
+      `插件版本: ${feishuSetupProgress?.plugin_version || primaryPluginChannelHost?.version || "未识别"}`,
+      `当前接入账号: ${primaryPluginChannelSnapshot?.snapshot.defaultAccountId || "未识别"}`,
+      `授权状态: ${feishuSetupProgress?.auth_status === "approved" ? "已完成" : "待完成"}`,
+      `默认接待员工: ${feishuSetupProgress?.default_routing_employee_name || "未设置"}`,
+      `群聊范围规则: ${feishuSetupProgress?.scoped_routing_count ?? 0} 条`,
+      `最近一次事件: ${formatCompactDateTime(officialFeishuRuntimeStatus?.last_event_at)}`,
+      `诊断摘要: ${getFeishuConnectionDetailSummary()}`,
+      `最近日志: ${summarizeOfficialFeishuRuntimeLogs(officialFeishuRuntimeStatus)}`,
+    ];
+    return lines.join("\n");
   }
 
-  async function handleLinkExistingFeishuBot() {
+  async function handleValidateFeishuCredentials() {
     const appId = feishuConnectorSettings.app_id.trim();
     const appSecret = feishuConnectorSettings.app_secret.trim();
-    setFeishuOnboardingMode("link");
     if (!appId || !appSecret) {
       setFeishuConnectorError("请先填写已有机器人的 App ID 和 App Secret");
       return;
     }
 
-    setLinkingExistingFeishuBot(true);
+    setValidatingFeishuCredentials(true);
     setFeishuConnectorNotice("");
     setFeishuConnectorError("");
     try {
@@ -1380,68 +1553,18 @@ export function SettingsView({
         },
       );
       if (!probe.ok) {
+        setFeishuCredentialProbe(null);
         setFeishuConnectorError(`已有机器人校验失败: ${probe.error || "无法获取机器人信息"}`);
         return;
       }
-
-      await invoke("set_feishu_gateway_settings", {
-        settings: {
-          ...feishuConnectorSettings,
-          app_id: appId,
-          app_secret: appSecret,
-        },
-      });
-      const saved = await invoke<FeishuGatewaySettings>("get_feishu_gateway_settings");
-      setFeishuConnectorSettings(saved);
-
-      const runtimeStatus = await invoke<OpenClawPluginFeishuRuntimeStatus | null>(
-        "start_openclaw_plugin_feishu_runtime",
-        {
-          pluginId: primaryPluginChannelHost?.plugin_id || "openclaw-lark",
-          accountId: null,
-        },
-      );
-      if (runtimeStatus) {
-        applyOfficialFeishuRuntimeStatus(runtimeStatus, { showStartErrorNotice: true });
-      }
-      setOfficialInstallerStatus(null);
-      await loadConnectorStatuses();
-      await loadConnectorPlatformData();
+      setFeishuCredentialProbe(probe);
       const botLabel = probe.bot_name?.trim() ? `（${probe.bot_name.trim()}）` : "";
-      setFeishuConnectorNotice(`已完成已有机器人校验并启动飞书官方插件${botLabel}`);
+      setFeishuConnectorNotice(`机器人信息验证成功${botLabel}`);
     } catch (error) {
-      setFeishuConnectorError("关联已有机器人失败: " + String(error));
+      setFeishuCredentialProbe(null);
+      setFeishuConnectorError("验证机器人信息失败: " + String(error));
     } finally {
-      setLinkingExistingFeishuBot(false);
-    }
-  }
-
-  async function handleSendOfficialInstallerInput() {
-    const nextInput = officialInstallerInput.trim();
-    if (!nextInput) {
-      return;
-    }
-    try {
-      const status = await invoke<OpenClawLarkInstallerSessionStatus>(
-        "send_openclaw_lark_installer_input",
-        { input: nextInput },
-      );
-      applyOfficialInstallerStatus(status);
-      setOfficialInstallerInput("");
-    } catch (error) {
-      setFeishuConnectorError("发送安装向导输入失败: " + String(error));
-    }
-  }
-
-  async function handleStopOfficialInstaller() {
-    try {
-      const status = await invoke<OpenClawLarkInstallerSessionStatus>(
-        "stop_openclaw_lark_installer_session",
-      );
-      applyOfficialInstallerStatus(status);
-      setFeishuConnectorNotice("已停止飞书官方安装向导");
-    } catch (error) {
-      setFeishuConnectorError("停止飞书官方安装向导失败: " + String(error));
+      setValidatingFeishuCredentials(false);
     }
   }
 
@@ -1455,20 +1578,9 @@ export function SettingsView({
       });
       const saved = await invoke<FeishuGatewaySettings>("get_feishu_gateway_settings");
       setFeishuConnectorSettings(saved);
-      if (saved.app_id && saved.app_secret) {
-        const runtimeStatus = await invoke<OpenClawPluginFeishuRuntimeStatus | null>("start_openclaw_plugin_feishu_runtime", {
-          pluginId: primaryPluginChannelHost?.plugin_id || "openclaw-lark",
-          accountId: null,
-        });
-        if (runtimeStatus) {
-          applyOfficialFeishuRuntimeStatus(runtimeStatus, { showStartErrorNotice: true });
-        } else {
-          await loadConnectorStatuses();
-        }
-      } else {
-        await loadConnectorStatuses();
-      }
+      await loadConnectorStatuses();
       await loadConnectorPlatformData();
+      await loadFeishuSetupProgress();
       setFeishuConnectorNotice("飞书官方插件配置已保存");
     } catch (error) {
       setFeishuConnectorError("保存飞书官方插件配置失败: " + String(error));
@@ -1518,6 +1630,7 @@ export function SettingsView({
       );
       setFeishuAdvancedSettings(saved);
       await loadConnectorPlatformData();
+      await loadFeishuSetupProgress();
       setFeishuConnectorNotice("飞书高级配置已保存");
     } catch (error) {
       setFeishuConnectorError("保存飞书高级配置失败: " + String(error));
@@ -1541,6 +1654,7 @@ export function SettingsView({
         await loadConnectorStatuses();
       }
       await loadConnectorPlatformData();
+      await loadFeishuSetupProgress();
       setFeishuConnectorNotice(
         runtimeStatus ? (runtimeStatus.running ? "已触发飞书官方插件启动" : "已刷新飞书官方插件状态") : "已触发飞书官方插件启动",
       );
@@ -1561,11 +1675,88 @@ export function SettingsView({
         npmSpec: "@larksuite/openclaw-lark",
       });
       await loadConnectorPlatformData();
+      await loadFeishuSetupProgress();
       setFeishuConnectorNotice("飞书官方插件已安装");
     } catch (error) {
       setFeishuConnectorError("安装飞书官方插件失败: " + String(error));
     } finally {
       setInstallingOfficialFeishuPlugin(false);
+    }
+  }
+
+  async function handleInstallAndStartFeishuConnector() {
+    setRetryingFeishuConnector(true);
+    setFeishuConnectorNotice("");
+    setFeishuConnectorError("");
+    try {
+      if (!feishuConnectorSettings.app_id.trim() || !feishuConnectorSettings.app_secret.trim()) {
+        setFeishuConnectorError("请先填写并保存已有机器人的 App ID 和 App Secret");
+        return;
+      }
+
+      await invoke("set_feishu_gateway_settings", {
+        settings: feishuConnectorSettings,
+      });
+      const saved = await invoke<FeishuGatewaySettings>("get_feishu_gateway_settings");
+      setFeishuConnectorSettings(saved);
+
+      if (!hasInstalledOfficialFeishuPlugin) {
+        await invoke<OpenClawPluginInstallRecord>("install_openclaw_plugin_from_npm", {
+          pluginId: "openclaw-lark",
+          npmSpec: "@larksuite/openclaw-lark",
+        });
+      }
+
+      const runtimeStatus = await invoke<OpenClawPluginFeishuRuntimeStatus | null>("start_openclaw_plugin_feishu_runtime", {
+        pluginId: primaryPluginChannelHost?.plugin_id || "openclaw-lark",
+        accountId: null,
+      });
+      if (runtimeStatus) {
+        applyOfficialFeishuRuntimeStatus(runtimeStatus, { showStartErrorNotice: true });
+      }
+      await loadConnectorStatuses();
+      await loadConnectorPlatformData();
+      await loadFeishuSetupProgress();
+      setFeishuConnectorNotice(runtimeStatus?.running ? "飞书连接组件已启动" : "已尝试启动飞书连接组件");
+    } catch (error) {
+      setFeishuConnectorError("安装并启动飞书连接失败: " + String(error));
+    } finally {
+      setRetryingFeishuConnector(false);
+    }
+  }
+
+  async function handleOpenFeishuOfficialDocs() {
+    try {
+      await openExternalUrl(FEISHU_OFFICIAL_PLUGIN_DOC_URL);
+    } catch (error) {
+      setFeishuConnectorError(getErrorMessage(error, "打开官方文档失败，请稍后重试"));
+    }
+  }
+
+  async function handleCopyFeishuDiagnostics() {
+    try {
+      await navigator?.clipboard?.writeText?.(buildFeishuDiagnosticSummary());
+      setFeishuConnectorNotice("连接诊断摘要已复制");
+    } catch (error) {
+      setFeishuConnectorError(getErrorMessage(error, "复制连接诊断摘要失败，请稍后重试"));
+    }
+  }
+
+  async function handleRefreshFeishuSetup() {
+    setRetryingFeishuConnector(true);
+    setFeishuConnectorNotice("");
+    setFeishuConnectorError("");
+    try {
+      await Promise.all([
+        loadConnectorSettings(),
+        loadConnectorStatuses(),
+        loadConnectorPlatformData(),
+        loadFeishuSetupProgress(),
+      ]);
+    } catch (error) {
+      setFeishuConnectorError("刷新飞书接入状态失败: " + String(error));
+    } finally {
+      setRetryingFeishuConnector(false);
     }
   }
 
@@ -1864,13 +2055,7 @@ export function SettingsView({
   const labelCls = "sm-field-label";
   const parsedMcpEnv = parseMcpEnvJson(mcpForm.env);
   const mcpApiKeyEnvKeys = Object.keys(parsedMcpEnv.env).filter((key) => key.toUpperCase().includes("API_KEY"));
-  const feishuConnectorSchema = {
-    ...getConnectorSchema("feishu"),
-    title: "飞书官方插件配置",
-    description: "为飞书官方 OpenClaw 插件保存凭据与账号配置。",
-    saveLabel: "保存官方插件配置",
-    retryLabel: "刷新插件状态",
-  };
+  const feishuSetupSummary = getFeishuSetupSummary();
   // 眼睛图标：显示状态（可见）
   function EyeOpenIcon() {
     return (
@@ -3249,940 +3434,355 @@ export function SettingsView({
 
       {activeTab === "feishu" && (
         <div className="space-y-3">
-          <div className="bg-white rounded-lg p-4 space-y-1">
-            <div className="text-sm font-medium text-gray-900">飞书连接</div>
-            <div className="text-xs text-gray-500">先完成飞书连接，再到员工详情中指定谁来接待飞书消息。</div>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-2 pt-2">
-              <div className="rounded border border-gray-100 bg-gray-50 px-3 py-2">
-                <div className="text-[11px] font-medium text-gray-700">连接状态</div>
-                <div className="text-[11px] text-gray-500">查看飞书连接是否已启动并可接收事件。</div>
+          <div className="bg-white rounded-lg p-4 space-y-4">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+              <div className="space-y-1">
+                <div className="text-sm font-medium text-gray-900">飞书连接</div>
+                <div className="text-xs text-gray-500">当前版本只支持绑定已有机器人，并使用飞书官方插件的 WebSocket 主路径。</div>
               </div>
-              <div className="rounded border border-gray-100 bg-gray-50 px-3 py-2">
-                <div className="text-[11px] font-medium text-gray-700">授权与重试</div>
-                <div className="text-[11px] text-gray-500">完成授权后，可在此重试连接并查看最近问题。</div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => void handleRefreshFeishuSetup()}
+                  disabled={retryingFeishuConnector}
+                  className="h-8 px-3 rounded border border-gray-200 bg-white text-xs text-gray-700 hover:bg-gray-50 disabled:bg-gray-100"
+                >
+                  {retryingFeishuConnector ? "检测中..." : "重新检测"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleOpenFeishuOfficialDocs()}
+                  className="inline-flex h-8 items-center rounded border border-blue-200 bg-blue-50 px-3 text-xs text-blue-700 hover:bg-blue-100"
+                >
+                  查看官方文档
+                </button>
               </div>
-              <div className="rounded border border-gray-100 bg-gray-50 px-3 py-2">
-                <div className="text-[11px] font-medium text-gray-700">员工关联</div>
-                <div className="text-[11px] text-gray-500">飞书接待员工与群聊分工，请到员工详情中配置。</div>
+            </div>
+
+            {feishuConnectorError ? (
+              <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                {feishuConnectorError}
+              </div>
+            ) : null}
+            {feishuConnectorNotice ? (
+              <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
+                {feishuConnectorNotice}
+              </div>
+            ) : null}
+
+            <div className="rounded-xl border border-blue-200 bg-blue-50 p-4">
+              <div className="text-base font-medium text-blue-950">{feishuSetupSummary.title}</div>
+              <div className="mt-1 text-sm text-blue-900">{feishuSetupSummary.description}</div>
+              <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-4">
+                <div className="rounded border border-blue-100 bg-white/80 px-3 py-2">
+                  <div className="text-[11px] text-blue-700">运行环境</div>
+                  <div className="text-sm font-medium text-gray-900">
+                    {feishuEnvironmentStatus?.can_start_runtime ? "已准备好" : "待检查"}
+                  </div>
+                </div>
+                <div className="rounded border border-blue-100 bg-white/80 px-3 py-2">
+                  <div className="text-[11px] text-blue-700">机器人信息</div>
+                  <div className="text-sm font-medium text-gray-900">
+                    {feishuSetupProgress?.credentials_configured ? "已填写" : "未填写"}
+                  </div>
+                </div>
+                <div className="rounded border border-blue-100 bg-white/80 px-3 py-2">
+                  <div className="text-[11px] text-blue-700">连接组件</div>
+                  <div className="text-sm font-medium text-gray-900">
+                    {feishuSetupProgress?.plugin_installed ? "已安装" : "未安装"}
+                  </div>
+                </div>
+                <div className="rounded border border-blue-100 bg-white/80 px-3 py-2">
+                  <div className="text-[11px] text-blue-700">授权与接待</div>
+                  <div className="text-sm font-medium text-gray-900">
+                    {feishuRoutingStatus.label}
+                  </div>
+                </div>
               </div>
             </div>
           </div>
+
           <div className="rounded-lg border border-gray-200 bg-white p-4 space-y-3">
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
-              <div className="rounded border border-gray-100 bg-gray-50 px-3 py-2">
-                <div className="text-[11px] text-gray-500">连接状态</div>
-                <div className="text-sm font-medium text-gray-900">
-                  {resolveFeishuConnectorStatus().stateLabel}
+            <div>
+              <div className="text-sm font-medium text-gray-900">检查运行环境</div>
+              <div className="text-xs text-gray-500 mt-1">不内置运行环境；如果电脑未安装 Node.js，系统会在这里提示你先完成安装。</div>
+            </div>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+              <div className="rounded border border-gray-100 bg-gray-50 px-3 py-3">
+                <div className="text-[11px] text-gray-500">Node.js</div>
+                <div className="mt-1 text-sm font-medium text-gray-900">
+                  {getFeishuEnvironmentLabel(Boolean(feishuEnvironmentStatus?.node_available), "未检测到")}
                 </div>
+                <div className="mt-1 text-[11px] text-gray-500">{feishuEnvironmentStatus?.node_version || "请安装 Node.js LTS"}</div>
+              </div>
+              <div className="rounded border border-gray-100 bg-gray-50 px-3 py-3">
+                <div className="text-[11px] text-gray-500">npm</div>
+                <div className="mt-1 text-sm font-medium text-gray-900">
+                  {getFeishuEnvironmentLabel(Boolean(feishuEnvironmentStatus?.npm_available), "未检测到")}
+                </div>
+                <div className="mt-1 text-[11px] text-gray-500">{feishuEnvironmentStatus?.npm_version || "安装 Node.js 后通常会一起提供"}</div>
+              </div>
+              <div className="rounded border border-gray-100 bg-gray-50 px-3 py-3">
+                <div className="text-[11px] text-gray-500">飞书连接组件运行条件</div>
+                <div className="mt-1 text-sm font-medium text-gray-900">
+                  {feishuEnvironmentStatus?.can_start_runtime ? "已准备好" : "暂未满足"}
+                </div>
+                <div className="mt-1 text-[11px] text-gray-500">{feishuEnvironmentStatus?.error || "完成环境检查后即可继续后续步骤"}</div>
+              </div>
+            </div>
+            {!feishuEnvironmentStatus?.can_start_runtime ? (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                当前电脑还没有安装飞书连接所需环境。请先安装 Node.js LTS，完成后重新打开 WorkClaw 或回到这里点击“重新检测”。
+              </div>
+            ) : null}
+          </div>
+
+          <div className="rounded-lg border border-gray-200 bg-white p-4 space-y-3">
+            <div>
+              <div className="text-sm font-medium text-gray-900">绑定已有机器人</div>
+              <div className="text-xs text-gray-500 mt-1">这里只需要填写已有机器人的 App ID 和 App Secret；当前版本不再展示 webhook 相关配置。</div>
+            </div>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <label className="space-y-1">
+                <div className="text-[11px] font-medium text-gray-700">App ID</div>
+                <input
+                  value={feishuConnectorSettings.app_id}
+                  onChange={(event) => setFeishuConnectorSettings((state) => ({ ...state, app_id: event.target.value }))}
+                  className="w-full rounded border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-900"
+                  placeholder="cli_xxx"
+                />
+              </label>
+              <label className="space-y-1">
+                <div className="text-[11px] font-medium text-gray-700">App Secret</div>
+                <input
+                  type="password"
+                  value={feishuConnectorSettings.app_secret}
+                  onChange={(event) => setFeishuConnectorSettings((state) => ({ ...state, app_secret: event.target.value }))}
+                  className="w-full rounded border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-900"
+                  placeholder="填写机器人的 App Secret"
+                />
+              </label>
+            </div>
+            {feishuCredentialProbe?.ok ? (
+              <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+                已识别机器人
+                {feishuCredentialProbe.bot_name ? `：${feishuCredentialProbe.bot_name}` : ""}。
+                {feishuCredentialProbe.bot_open_id ? ` open_id：${feishuCredentialProbe.bot_open_id}` : ""}
+              </div>
+            ) : null}
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => void handleValidateFeishuCredentials()}
+                disabled={validatingFeishuCredentials}
+                className="h-8 px-3 rounded border border-blue-200 bg-white text-xs text-blue-700 hover:bg-blue-50 disabled:bg-gray-100"
+              >
+                {validatingFeishuCredentials ? "验证中..." : "验证机器人信息"}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleSaveFeishuConnector()}
+                disabled={savingFeishuConnector}
+                className="h-8 px-3 rounded bg-blue-600 text-xs text-white hover:bg-blue-700 disabled:bg-blue-300"
+              >
+                {savingFeishuConnector ? "保存中..." : "保存并继续"}
+              </button>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-gray-200 bg-white p-4 space-y-3">
+            <div>
+              <div className="text-sm font-medium text-gray-900">完成飞书授权</div>
+              <div className="text-xs text-gray-500 mt-1">安装并启动后，请回到飞书中的机器人会话按提示完成授权，然后回到这里刷新状态。</div>
+            </div>
+            <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-3 text-xs text-gray-700 space-y-1">
+              <div>1. 在飞书中打开机器人会话</div>
+              <div>2. 按提示完成授权</div>
+              <div>3. 回到这里点击“刷新授权状态”</div>
+            </div>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+              <div className="rounded border border-gray-100 bg-gray-50 px-3 py-2">
+                <div className="text-[11px] text-gray-500">连接组件</div>
+                <div className="text-sm font-medium text-gray-900">{feishuSetupProgress?.plugin_installed ? "已安装" : "未安装"}</div>
               </div>
               <div className="rounded border border-gray-100 bg-gray-50 px-3 py-2">
-                <div className="text-[11px] text-gray-500">官方插件</div>
-                <div className="text-sm font-medium text-gray-900">
-                  {pluginChannelHostsError
-                    ? "加载失败"
-                    : hasReadyOfficialFeishuPlugin
-                      ? "已识别"
-                      : hasErroredOfficialFeishuPlugin
-                        ? "异常"
-                        : "未安装"}
-                </div>
+                <div className="text-[11px] text-gray-500">运行状态</div>
+                <div className="text-sm font-medium text-gray-900">{officialFeishuRuntimeStatus?.running ? "运行中" : "未启动"}</div>
               </div>
               <div className="rounded border border-gray-100 bg-gray-50 px-3 py-2">
-                <div className="text-[11px] text-gray-500">默认账号</div>
-                <div className="text-sm font-medium text-gray-900">
-                  {Object.values(pluginChannelSnapshots)[0]?.snapshot.defaultAccountId || "未识别"}
-                </div>
-              </div>
-              <div className="rounded border border-gray-100 bg-gray-50 px-3 py-2">
-                <div className="text-[11px] text-gray-500">待处理配对</div>
-                <div className="text-sm font-medium text-gray-900">
-                  {feishuPairingRequestsError ? "加载失败" : feishuPairingRequests.filter((request) => request.status === "pending").length}
-                </div>
+                <div className="text-[11px] text-gray-500">授权状态</div>
+                <div className="text-sm font-medium text-gray-900">{feishuSetupProgress?.auth_status === "approved" ? "已完成" : "待完成"}</div>
               </div>
             </div>
             <div className="flex flex-wrap gap-2">
-              {[
-                { key: "connection", label: "连接配置" },
-                { key: "plugin", label: "官方插件" },
-                { key: "pairing", label: "配对与授权" },
-              ].map((item) => (
-                <button
-                  key={item.key}
-                  type="button"
-                  onClick={() => setFeishuConsoleSection(item.key as "connection" | "plugin" | "pairing")}
-                  className={`h-8 px-3 rounded border text-xs ${
-                    feishuConsoleSection === item.key
-                      ? "border-blue-500 bg-blue-50 text-blue-700"
-                      : "border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
-                  }`}
-                >
-                  {item.label}
-                </button>
-              ))}
+              <button
+                type="button"
+                onClick={() => void handleInstallAndStartFeishuConnector()}
+                disabled={retryingFeishuConnector || installingOfficialFeishuPlugin}
+                className="h-8 px-3 rounded bg-indigo-600 text-xs text-white hover:bg-indigo-700 disabled:bg-indigo-300"
+              >
+                {retryingFeishuConnector || installingOfficialFeishuPlugin
+                  ? feishuAuthorizationAction.busyLabel
+                  : feishuAuthorizationAction.label}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleRefreshFeishuSetup()}
+                disabled={retryingFeishuConnector}
+                className="h-8 px-3 rounded border border-gray-200 bg-white text-xs text-gray-700 hover:bg-gray-50 disabled:bg-gray-100"
+              >
+                刷新授权状态
+              </button>
             </div>
           </div>
-          {feishuConsoleSection === "connection" && (
-            <>
-              <div className="text-xs font-medium text-gray-500 px-1">飞书接入概览</div>
-              <div className="grid grid-cols-1 gap-3">
-                {feishuConnectorError ? (
-                  <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
-                    {feishuConnectorError}
-                  </div>
-                ) : null}
-                {feishuConnectorNotice ? (
-                  <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
-                    {feishuConnectorNotice}
-                  </div>
-                ) : null}
-                {useOfficialFeishuPluginMode ? (
-                  <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
-                    官方插件当前默认按 websocket 模式运行。Verification Token 和 Encrypt Key 仅在你切换到 webhook 事件订阅模式时才需要配置。
-                  </div>
-                ) : null}
-                <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-3 space-y-2">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="text-xs font-medium text-indigo-950">飞书官方插件安装向导</div>
-                      <div className="text-[11px] text-indigo-800">
-                        对齐 OpenClaw 官方流程，优先通过安装向导完成机器人创建、已有机器人绑定和飞书内验证。
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setFeishuOnboardingMode((state) => (state ? null : "link"))}
-                      className="h-8 px-3 rounded bg-indigo-600 hover:bg-indigo-700 text-white text-xs"
-                    >
-                      {feishuOnboardingMode ? "收起安装向导" : hasInstalledOfficialFeishuPlugin ? "重新运行安装向导" : "开始安装向导"}
-                    </button>
-                  </div>
-                  <div className="flex flex-wrap gap-2 text-[11px] text-indigo-900">
-                    <button
-                      type="button"
-                      onClick={() => setFeishuOnboardingMode("create")}
-                      className={`h-7 px-3 rounded border ${
-                        feishuOnboardingMode === "create"
-                          ? "border-indigo-500 bg-white text-indigo-700"
-                          : "border-indigo-200 bg-indigo-100 text-indigo-800"
-                      }`}
-                    >
-                      新建机器人
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setFeishuOnboardingMode("link")}
-                      className={`h-7 px-3 rounded border ${
-                        feishuOnboardingMode === "link"
-                          ? "border-indigo-500 bg-white text-indigo-700"
-                          : "border-indigo-200 bg-indigo-100 text-indigo-800"
-                      }`}
-                    >
-                      关联已有机器人
-                    </button>
-                    <a
-                      href={FEISHU_OFFICIAL_PLUGIN_DOC_URL}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex h-7 items-center px-3 rounded border border-indigo-200 bg-white text-indigo-700 hover:bg-indigo-50"
-                    >
-                      查看官方文档
-                    </a>
-                    <button
-                      type="button"
-                      onClick={() => void handleStartOfficialInstaller("create")}
-                      disabled={startingOfficialInstaller || linkingExistingFeishuBot}
-                      className="h-7 px-3 rounded bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white"
-                    >
-                      {startingOfficialInstaller && feishuOnboardingMode === "create" ? "启动中..." : "运行新建机器人向导"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void handleLinkExistingFeishuBot()}
-                      disabled={startingOfficialInstaller || linkingExistingFeishuBot}
-                      className="h-7 px-3 rounded border border-indigo-300 bg-white hover:bg-indigo-50 disabled:bg-gray-100 text-indigo-700"
-                    >
-                      {linkingExistingFeishuBot ? "校验并启动中..." : "运行关联已有机器人向导"}
-                    </button>
-                  </div>
-                  {feishuOnboardingMode === "create" ? (
-                    <div className="rounded border border-indigo-100 bg-white/80 px-3 py-2 text-[11px] text-indigo-900 space-y-1">
-                      <div className="font-medium">新建机器人</div>
-                      <div>目标体验应与官方安装器一致：安装时直接创建机器人，完成后自动启动插件运行态。</div>
-                      <div>当前阶段可先参考官方文档完成机器人创建，随后回到此页确认插件已运行，并在飞书里执行 <span className="font-mono">/feishu start</span>。</div>
-                    </div>
-                  ) : null}
-                  {feishuOnboardingMode === "link" ? (
-                    <div className="rounded border border-indigo-100 bg-white/80 px-3 py-2 text-[11px] text-indigo-900 space-y-1">
-                      <div className="font-medium">关联已有机器人</div>
-                      <div>请在下方填写已有机器人的 <span className="font-mono">App ID</span> 与 <span className="font-mono">App Secret</span>，保存后 WorkClaw 会自动拉起官方插件宿主。</div>
-                      <div>完成后请到飞书会话中依次尝试 <span className="font-mono">/feishu start</span>、<span className="font-mono">/feishu auth</span>、<span className="font-mono">/feishu doctor</span>。</div>
-                    </div>
-                  ) : null}
-                  {officialInstallerStatus ? (
-                    <div className="rounded border border-indigo-100 bg-white/80 px-3 py-2 text-[11px] text-indigo-950 space-y-2">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="font-medium">
-                          官方安装会话
-                          {officialInstallerStatus.running ? " · 运行中" : " · 已结束"}
-                        </div>
-                        <div className="flex items-center gap-2">
-                          {officialInstallerStatus.prompt_hint ? (
-                            <span className="text-[10px] text-indigo-700">{officialInstallerStatus.prompt_hint}</span>
-                          ) : null}
-                          {officialInstallerStatus.running ? (
-                            <button
-                              type="button"
-                              onClick={() => void handleStopOfficialInstaller()}
-                              className="h-7 px-2 rounded border border-red-200 bg-white text-red-600 hover:bg-red-50"
-                            >
-                              停止向导
-                            </button>
-                          ) : null}
-                        </div>
-                      </div>
-                      <div className="rounded border border-indigo-100 bg-slate-950 text-slate-100 font-mono text-[10px] leading-5 px-3 py-2 max-h-48 overflow-auto whitespace-pre-wrap">
-                        {(officialInstallerStatus.recent_output || []).length > 0
-                          ? officialInstallerStatus.recent_output.join("\n")
-                          : "暂无安装向导输出"}
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <input
-                          value={officialInstallerInput}
-                          onChange={(event) => setOfficialInstallerInput(event.target.value)}
-                          placeholder="需要时手动输入，例如 App ID、App Secret 或回车"
-                          className="flex-1 rounded border border-indigo-200 bg-white px-2 py-1.5 text-xs text-gray-900"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => void handleSendOfficialInstallerInput()}
-                          disabled={!officialInstallerStatus.running || !officialInstallerInput.trim()}
-                          className="h-8 px-3 rounded border border-indigo-300 bg-white hover:bg-indigo-50 disabled:bg-gray-100 disabled:text-gray-400 text-indigo-700"
-                        >
-                          发送输入
-                        </button>
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-                <div className="rounded-lg border border-gray-200 bg-white p-3 space-y-2">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <div className="text-xs font-medium text-gray-700">飞书官方插件</div>
-                      <div className="text-[11px] text-gray-500">保存凭据后会优先按官方插件宿主能力识别账号、配对和权限规则。</div>
-                    </div>
-                    <div
-                      className={`text-[11px] px-2 py-1 rounded-full border ${
-                        pluginChannelHostsError
-                          ? "border-red-200 bg-red-50 text-red-700"
-                          : hasReadyOfficialFeishuPlugin
-                            ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                            : hasErroredOfficialFeishuPlugin
-                              ? "border-amber-200 bg-amber-50 text-amber-800"
-                            : "border-amber-200 bg-amber-50 text-amber-700"
-                      }`}
-                    >
-                      {pluginChannelHostsError
-                        ? "加载失败"
-                        : hasReadyOfficialFeishuPlugin
-                          ? "已识别"
-                          : hasErroredOfficialFeishuPlugin
-                            ? "已安装但识别异常"
-                            : "未安装"}
-                    </div>
-                  </div>
-                  {pluginChannelHostsError ? (
-                    <div className="text-xs text-red-700">{pluginChannelHostsError}</div>
-                  ) : primaryPluginChannelHost ? (
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-xs">
-                      <div className="rounded border border-gray-100 bg-gray-50 px-2 py-2">
-                        <div className="text-gray-500">插件包</div>
-                        <div className="font-mono text-gray-900">{primaryPluginChannelHost.npm_spec}</div>
-                      </div>
-                      <div className="rounded border border-gray-100 bg-gray-50 px-2 py-2">
-                        <div className="text-gray-500">版本</div>
-                        <div className="text-gray-900">{primaryPluginChannelHost.version}</div>
-                      </div>
-                      <div className="rounded border border-gray-100 bg-gray-50 px-2 py-2">
-                        <div className="text-gray-500">默认账号</div>
-                        <div className="text-gray-900">{primaryPluginChannelSnapshot?.snapshot.defaultAccountId || "未识别"}</div>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="space-y-2">
-                      <div className="text-xs text-amber-800">
-                        尚未识别到 <span className="font-mono">@larksuite/openclaw-lark</span>。安装后，这里会显示官方插件版本、默认账号和宿主状态。
-                      </div>
-                      <button
-                        type="button"
-                        disabled={installingOfficialFeishuPlugin}
-                        onClick={() => void handleInstallOfficialFeishuPlugin()}
-                        className="h-8 px-3 rounded bg-amber-500 hover:bg-amber-600 disabled:bg-amber-300 text-white text-xs"
-                      >
-                        {installingOfficialFeishuPlugin ? "安装中..." : "安装官方插件"}
-                      </button>
-                    </div>
-                  )}
-                </div>
-                <ConnectorConfigPanel
-                  schema={feishuConnectorSchema}
-                  status={resolveFeishuConnectorStatus()}
-                  values={{
-                    openId: "",
-                    appId: feishuConnectorSettings.app_id,
-                    appSecret: feishuConnectorSettings.app_secret,
-                    ingressToken: feishuConnectorSettings.ingress_token,
-                    encryptKey: feishuConnectorSettings.encrypt_key,
-                  }}
-                  saving={savingFeishuConnector}
-                  retrying={retryingFeishuConnector}
-                  diagnostics={
-                    useOfficialFeishuPluginMode
-                      ? [
-                          { label: "配置模式", value: "官方插件优先" },
-                          { label: "插件包", value: primaryPluginChannelHost?.npm_spec || "@larksuite/openclaw-lark" },
-                          { label: "默认账号", value: primaryPluginChannelSnapshot?.snapshot.defaultAccountId || "未识别" },
-                          { label: "最近事件", value: officialFeishuRuntimeStatus?.last_event_at || "暂无" },
-                          { label: "回调凭据", value: feishuConnectorSettings.ingress_token ? "已配置" : "未配置" },
-                          { label: "加密配置", value: feishuConnectorSettings.encrypt_key ? "已配置" : "未配置" },
-                          { label: "最近问题", value: summarizeConnectorIssue(resolveFeishuConnectorStatus().error) },
-                          { label: "最近日志", value: summarizeOfficialFeishuRuntimeLogs(officialFeishuRuntimeStatus) },
-                        ]
-                      : [
-                          { label: "回调凭据", value: feishuConnectorSettings.ingress_token ? "已配置" : "未配置" },
-                          { label: "加密配置", value: feishuConnectorSettings.encrypt_key ? "已配置" : "未配置" },
-                          { label: "连接地址", value: feishuConnectorSettings.sidecar_base_url || "默认 http://localhost:8765" },
-                          { label: "最近问题", value: summarizeConnectorIssue(resolveFeishuConnectorStatus().error) },
-                        ]
-                  }
-                  onChange={(key, value) => {
-                    if (key === "appId") {
-                      setFeishuConnectorSettings((state) => ({ ...state, app_id: value }));
-                    } else if (key === "appSecret") {
-                      setFeishuConnectorSettings((state) => ({ ...state, app_secret: value }));
-                    } else if (key === "ingressToken") {
-                      setFeishuConnectorSettings((state) => ({ ...state, ingress_token: value }));
-                    } else if (key === "encryptKey") {
-                      setFeishuConnectorSettings((state) => ({ ...state, encrypt_key: value }));
-                    }
-                  }}
-                  onSave={handleSaveFeishuConnector}
-                  onRetry={handleRetryFeishuConnector}
-                />
-                <div className="rounded-lg border border-gray-200 bg-white p-3 space-y-3">
-                  <div>
-                    <div className="text-xs font-medium text-gray-700">飞书官方插件高级配置</div>
-                    <div className="text-[11px] text-gray-500 mt-1">
-                      用 JSON 覆盖官方插件的高级规则，直接投影到 <span className="font-mono">channels.feishu</span>。
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
-                    <label className="space-y-1">
-                      <div className="text-[11px] font-medium text-gray-700">群聊高级规则 JSON</div>
-                      <textarea
-                        aria-label="群聊高级规则 JSON"
-                        value={feishuAdvancedSettings.groups_json}
-                        onChange={(event) =>
-                          setFeishuAdvancedSettings((state) => ({
-                            ...state,
-                            groups_json: event.target.value,
-                          }))
-                        }
-                        rows={8}
-                        className="w-full rounded border border-gray-200 bg-gray-50 px-3 py-2 font-mono text-[11px] text-gray-900"
-                        placeholder='{\n  "oc_demo": { "enabled": true, "requireMention": true }\n}'
-                      />
-                    </label>
-                    <label className="space-y-1">
-                      <div className="text-[11px] font-medium text-gray-700">私聊高级规则 JSON</div>
-                      <textarea
-                        aria-label="私聊高级规则 JSON"
-                        value={feishuAdvancedSettings.dms_json}
-                        onChange={(event) =>
-                          setFeishuAdvancedSettings((state) => ({
-                            ...state,
-                            dms_json: event.target.value,
-                          }))
-                        }
-                        rows={8}
-                        className="w-full rounded border border-gray-200 bg-gray-50 px-3 py-2 font-mono text-[11px] text-gray-900"
-                        placeholder='{\n  "ou_demo": { "enabled": true, "systemPrompt": "优先回答测试问题" }\n}'
-                      />
-                    </label>
-                    <label className="space-y-1">
-                      <div className="text-[11px] font-medium text-gray-700">回复页脚 JSON</div>
-                      <textarea
-                        aria-label="回复页脚 JSON"
-                        value={feishuAdvancedSettings.footer_json}
-                        onChange={(event) =>
-                          setFeishuAdvancedSettings((state) => ({
-                            ...state,
-                            footer_json: event.target.value,
-                          }))
-                        }
-                        rows={5}
-                        className="w-full rounded border border-gray-200 bg-gray-50 px-3 py-2 font-mono text-[11px] text-gray-900"
-                        placeholder='{\n  "status": true,\n  "elapsed": true\n}'
-                      />
-                    </label>
-                    <label className="space-y-1">
-                      <div className="text-[11px] font-medium text-gray-700">账号覆盖 JSON</div>
-                      <textarea
-                        aria-label="账号覆盖 JSON"
-                        value={feishuAdvancedSettings.account_overrides_json}
-                        onChange={(event) =>
-                          setFeishuAdvancedSettings((state) => ({
-                            ...state,
-                            account_overrides_json: event.target.value,
-                          }))
-                        }
-                        rows={5}
-                        className="w-full rounded border border-gray-200 bg-gray-50 px-3 py-2 font-mono text-[11px] text-gray-900"
-                        placeholder='{\n  "default": { "renderMode": "card" }\n}'
-                      />
-                    </label>
-                  </div>
-                  <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
-                    <label className="space-y-1">
-                      <div className="text-[11px] font-medium text-gray-700">渲染模式</div>
-                      <input
-                        aria-label="渲染模式"
-                        value={feishuAdvancedSettings.render_mode}
-                        onChange={(event) =>
-                          setFeishuAdvancedSettings((state) => ({
-                            ...state,
-                            render_mode: event.target.value,
-                          }))
-                        }
-                        className="w-full rounded border border-gray-200 bg-gray-50 px-3 py-2 text-[11px] text-gray-900"
-                        placeholder="auto / card / raw"
-                      />
-                    </label>
-                    <label className="space-y-1">
-                      <div className="text-[11px] font-medium text-gray-700">流式输出</div>
-                      <input
-                        aria-label="流式输出"
-                        value={feishuAdvancedSettings.streaming}
-                        onChange={(event) =>
-                          setFeishuAdvancedSettings((state) => ({
-                            ...state,
-                            streaming: event.target.value,
-                          }))
-                        }
-                        className="w-full rounded border border-gray-200 bg-gray-50 px-3 py-2 text-[11px] text-gray-900"
-                        placeholder="true / false"
-                      />
-                    </label>
-                    <label className="space-y-1">
-                      <div className="text-[11px] font-medium text-gray-700">文本分块上限</div>
-                      <input
-                        aria-label="文本分块上限"
-                        value={feishuAdvancedSettings.text_chunk_limit}
-                        onChange={(event) =>
-                          setFeishuAdvancedSettings((state) => ({
-                            ...state,
-                            text_chunk_limit: event.target.value,
-                          }))
-                        }
-                        className="w-full rounded border border-gray-200 bg-gray-50 px-3 py-2 text-[11px] text-gray-900"
-                        placeholder="4000"
-                      />
-                    </label>
-                    <label className="space-y-1">
-                      <div className="text-[11px] font-medium text-gray-700">分块模式</div>
-                      <input
-                        aria-label="分块模式"
-                        value={feishuAdvancedSettings.chunk_mode}
-                        onChange={(event) =>
-                          setFeishuAdvancedSettings((state) => ({
-                            ...state,
-                            chunk_mode: event.target.value,
-                          }))
-                        }
-                        className="w-full rounded border border-gray-200 bg-gray-50 px-3 py-2 text-[11px] text-gray-900"
-                        placeholder="length / newline"
-                      />
-                    </label>
-                    <label className="space-y-1">
-                      <div className="text-[11px] font-medium text-gray-700">线程内回复</div>
-                      <input
-                        aria-label="线程内回复"
-                        value={feishuAdvancedSettings.reply_in_thread}
-                        onChange={(event) =>
-                          setFeishuAdvancedSettings((state) => ({
-                            ...state,
-                            reply_in_thread: event.target.value,
-                          }))
-                        }
-                        className="w-full rounded border border-gray-200 bg-gray-50 px-3 py-2 text-[11px] text-gray-900"
-                        placeholder="enabled / disabled"
-                      />
-                    </label>
-                    <label className="space-y-1">
-                      <div className="text-[11px] font-medium text-gray-700">群聊会话范围</div>
-                      <input
-                        aria-label="群聊会话范围"
-                        value={feishuAdvancedSettings.group_session_scope}
-                        onChange={(event) =>
-                          setFeishuAdvancedSettings((state) => ({
-                            ...state,
-                            group_session_scope: event.target.value,
-                          }))
-                        }
-                        className="w-full rounded border border-gray-200 bg-gray-50 px-3 py-2 text-[11px] text-gray-900"
-                        placeholder="group / group_sender"
-                      />
-                    </label>
-                    <label className="space-y-1">
-                      <div className="text-[11px] font-medium text-gray-700">话题会话模式</div>
-                      <input
-                        aria-label="话题会话模式"
-                        value={feishuAdvancedSettings.topic_session_mode}
-                        onChange={(event) =>
-                          setFeishuAdvancedSettings((state) => ({
-                            ...state,
-                            topic_session_mode: event.target.value,
-                          }))
-                        }
-                        className="w-full rounded border border-gray-200 bg-gray-50 px-3 py-2 text-[11px] text-gray-900"
-                        placeholder="enabled / disabled"
-                      />
-                    </label>
-                    <label className="space-y-1">
-                      <div className="text-[11px] font-medium text-gray-700">Markdown 模式</div>
-                      <input
-                        aria-label="Markdown 模式"
-                        value={feishuAdvancedSettings.markdown_mode}
-                        onChange={(event) =>
-                          setFeishuAdvancedSettings((state) => ({
-                            ...state,
-                            markdown_mode: event.target.value,
-                          }))
-                        }
-                        className="w-full rounded border border-gray-200 bg-gray-50 px-3 py-2 text-[11px] text-gray-900"
-                        placeholder="native"
-                      />
-                    </label>
-                    <label className="space-y-1">
-                      <div className="text-[11px] font-medium text-gray-700">Markdown 表格模式</div>
-                      <input
-                        aria-label="Markdown 表格模式"
-                        value={feishuAdvancedSettings.markdown_table_mode}
-                        onChange={(event) =>
-                          setFeishuAdvancedSettings((state) => ({
-                            ...state,
-                            markdown_table_mode: event.target.value,
-                          }))
-                        }
-                        className="w-full rounded border border-gray-200 bg-gray-50 px-3 py-2 text-[11px] text-gray-900"
-                        placeholder="native"
-                      />
-                    </label>
-                    <label className="space-y-1">
-                      <div className="text-[11px] font-medium text-gray-700">心跳可见性</div>
-                      <input
-                        aria-label="心跳可见性"
-                        value={feishuAdvancedSettings.heartbeat_visibility}
-                        onChange={(event) =>
-                          setFeishuAdvancedSettings((state) => ({
-                            ...state,
-                            heartbeat_visibility: event.target.value,
-                          }))
-                        }
-                        className="w-full rounded border border-gray-200 bg-gray-50 px-3 py-2 text-[11px] text-gray-900"
-                        placeholder="visible / hidden"
-                      />
-                    </label>
-                    <label className="space-y-1">
-                      <div className="text-[11px] font-medium text-gray-700">心跳间隔毫秒</div>
-                      <input
-                        aria-label="心跳间隔毫秒"
-                        value={feishuAdvancedSettings.heartbeat_interval_ms}
-                        onChange={(event) =>
-                          setFeishuAdvancedSettings((state) => ({
-                            ...state,
-                            heartbeat_interval_ms: event.target.value,
-                          }))
-                        }
-                        className="w-full rounded border border-gray-200 bg-gray-50 px-3 py-2 text-[11px] text-gray-900"
-                        placeholder="30000"
-                      />
-                    </label>
-                    <label className="space-y-1">
-                      <div className="text-[11px] font-medium text-gray-700">媒体大小上限 MB</div>
-                      <input
-                        aria-label="媒体大小上限 MB"
-                        value={feishuAdvancedSettings.media_max_mb}
-                        onChange={(event) =>
-                          setFeishuAdvancedSettings((state) => ({
-                            ...state,
-                            media_max_mb: event.target.value,
-                          }))
-                        }
-                        className="w-full rounded border border-gray-200 bg-gray-50 px-3 py-2 text-[11px] text-gray-900"
-                        placeholder="20"
-                      />
-                    </label>
-                    <label className="space-y-1">
-                      <div className="text-[11px] font-medium text-gray-700">HTTP 超时毫秒</div>
-                      <input
-                        aria-label="HTTP 超时毫秒"
-                        value={feishuAdvancedSettings.http_timeout_ms}
-                        onChange={(event) =>
-                          setFeishuAdvancedSettings((state) => ({
-                            ...state,
-                            http_timeout_ms: event.target.value,
-                          }))
-                        }
-                        className="w-full rounded border border-gray-200 bg-gray-50 px-3 py-2 text-[11px] text-gray-900"
-                        placeholder="60000"
-                      />
-                    </label>
-                    <label className="space-y-1">
-                      <div className="text-[11px] font-medium text-gray-700">允许插件写回配置</div>
-                      <input
-                        aria-label="允许插件写回配置"
-                        value={feishuAdvancedSettings.config_writes}
-                        onChange={(event) =>
-                          setFeishuAdvancedSettings((state) => ({
-                            ...state,
-                            config_writes: event.target.value,
-                          }))
-                        }
-                        className="w-full rounded border border-gray-200 bg-gray-50 px-3 py-2 text-[11px] text-gray-900"
-                        placeholder="true / false"
-                      />
-                    </label>
-                    <label className="space-y-1">
-                      <div className="text-[11px] font-medium text-gray-700">Webhook Host</div>
-                      <input
-                        aria-label="Webhook Host"
-                        value={feishuAdvancedSettings.webhook_host}
-                        onChange={(event) =>
-                          setFeishuAdvancedSettings((state) => ({
-                            ...state,
-                            webhook_host: event.target.value,
-                          }))
-                        }
-                        className="w-full rounded border border-gray-200 bg-gray-50 px-3 py-2 text-[11px] text-gray-900"
-                        placeholder="127.0.0.1"
-                      />
-                    </label>
-                    <label className="space-y-1">
-                      <div className="text-[11px] font-medium text-gray-700">Webhook Port</div>
-                      <input
-                        aria-label="Webhook Port"
-                        value={feishuAdvancedSettings.webhook_port}
-                        onChange={(event) =>
-                          setFeishuAdvancedSettings((state) => ({
-                            ...state,
-                            webhook_port: event.target.value,
-                          }))
-                        }
-                        className="w-full rounded border border-gray-200 bg-gray-50 px-3 py-2 text-[11px] text-gray-900"
-                        placeholder="8787"
-                      />
-                    </label>
-                    <label className="space-y-1">
-                      <div className="text-[11px] font-medium text-gray-700">动态 Agent 创建</div>
-                      <input
-                        aria-label="动态 Agent 创建"
-                        value={feishuAdvancedSettings.dynamic_agent_creation_enabled}
-                        onChange={(event) =>
-                          setFeishuAdvancedSettings((state) => ({
-                            ...state,
-                            dynamic_agent_creation_enabled: event.target.value,
-                          }))
-                        }
-                        className="w-full rounded border border-gray-200 bg-gray-50 px-3 py-2 text-[11px] text-gray-900"
-                        placeholder="true / false"
-                      />
-                    </label>
-                    <label className="space-y-1">
-                      <div className="text-[11px] font-medium text-gray-700">动态工作区模板</div>
-                      <input
-                        aria-label="动态工作区模板"
-                        value={feishuAdvancedSettings.dynamic_agent_creation_workspace_template}
-                        onChange={(event) =>
-                          setFeishuAdvancedSettings((state) => ({
-                            ...state,
-                            dynamic_agent_creation_workspace_template: event.target.value,
-                          }))
-                        }
-                        className="w-full rounded border border-gray-200 bg-gray-50 px-3 py-2 text-[11px] text-gray-900"
-                        placeholder="workspace/{sender_id}"
-                      />
-                    </label>
-                    <label className="space-y-1">
-                      <div className="text-[11px] font-medium text-gray-700">动态 Agent 目录模板</div>
-                      <input
-                        aria-label="动态 Agent 目录模板"
-                        value={feishuAdvancedSettings.dynamic_agent_creation_agent_dir_template}
-                        onChange={(event) =>
-                          setFeishuAdvancedSettings((state) => ({
-                            ...state,
-                            dynamic_agent_creation_agent_dir_template: event.target.value,
-                          }))
-                        }
-                        className="w-full rounded border border-gray-200 bg-gray-50 px-3 py-2 text-[11px] text-gray-900"
-                        placeholder="agents/{sender_id}"
-                      />
-                    </label>
-                    <label className="space-y-1">
-                      <div className="text-[11px] font-medium text-gray-700">动态 Agent 数量上限</div>
-                      <input
-                        aria-label="动态 Agent 数量上限"
-                        value={feishuAdvancedSettings.dynamic_agent_creation_max_agents}
-                        onChange={(event) =>
-                          setFeishuAdvancedSettings((state) => ({
-                            ...state,
-                            dynamic_agent_creation_max_agents: event.target.value,
-                          }))
-                        }
-                        className="w-full rounded border border-gray-200 bg-gray-50 px-3 py-2 text-[11px] text-gray-900"
-                        placeholder="48"
-                      />
-                    </label>
-                  </div>
-                  <div className="flex justify-end">
-                    <button
-                      type="button"
-                      onClick={() => void handleSaveFeishuAdvancedSettings()}
-                      disabled={savingFeishuAdvancedSettings}
-                      className="sm-btn sm-btn-primary h-9 rounded-lg px-4 text-sm disabled:opacity-60"
-                    >
-                      {savingFeishuAdvancedSettings ? "保存中..." : "保存高级配置"}
-                    </button>
-                  </div>
-                </div>
+
+          <div className="rounded-lg border border-gray-200 bg-white p-4 space-y-3">
+            <div>
+              <div className="text-sm font-medium text-gray-900">接待设置</div>
+              <div className="text-xs text-gray-500 mt-1">飞书接通后，还需要指定默认接待员工或配置群聊范围，消息才会稳定落到正确员工。</div>
+            </div>
+            <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-3">
+              <div className="text-sm font-medium text-blue-950">{feishuRoutingStatus.label}</div>
+              <div className="mt-1 text-xs text-blue-900">{feishuRoutingStatus.description}</div>
+            </div>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+              <div className="rounded border border-gray-100 bg-gray-50 px-3 py-2">
+                <div className="text-[11px] text-gray-500">授权状态</div>
+                <div className="text-sm font-medium text-gray-900">{feishuSetupProgress?.auth_status === "approved" ? "已完成" : "待完成"}</div>
               </div>
-              <div className="rounded-lg border border-blue-100 bg-blue-50 p-3 space-y-1">
-                <div className="text-sm font-medium text-blue-900">员工关联入口</div>
-                <div className="text-xs text-blue-800">
-                  飞书连接成功后，请前往员工详情中的“飞书接待”配置默认接待员工或指定群聊范围。
-                </div>
+              <div className="rounded border border-gray-100 bg-gray-50 px-3 py-2">
+                <div className="text-[11px] text-gray-500">默认接待员工</div>
+                <div className="text-sm font-medium text-gray-900">{feishuSetupProgress?.default_routing_employee_name || "未设置"}</div>
               </div>
-            </>
-          )}
-          {feishuConsoleSection === "plugin" && (
-            <>
-              <div className="text-xs font-medium text-gray-500 px-1">OpenClaw 官方插件频道宿主</div>
-              {pluginChannelHostsError ? (
-                <div className="rounded-lg border border-red-200 bg-red-50 p-4 space-y-1">
-                  <div className="text-sm font-medium text-red-900">{pluginChannelHostsError}</div>
-                  <div className="text-xs text-red-700">
-                    请稍后刷新，或先检查插件宿主与安装状态，再确认 <span className="font-mono">@larksuite/openclaw-lark</span> 是否已安装。
-                  </div>
-                </div>
-              ) : pluginChannelHosts.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-amber-200 bg-amber-50 p-4 space-y-1">
-                  <div className="text-sm font-medium text-amber-950">尚未识别到 OpenClaw 官方飞书插件</div>
-                  <div className="text-xs text-amber-800">
-                    安装并识别 <span className="font-mono">@larksuite/openclaw-lark</span> 后，这里会显示官方插件版本、账号视图和兼容宿主状态。
-                  </div>
-                  <div className="pt-1">
-                    <button
-                      type="button"
-                      disabled={installingOfficialFeishuPlugin}
-                      onClick={() => void handleInstallOfficialFeishuPlugin()}
-                      className="h-8 px-3 rounded bg-amber-500 hover:bg-amber-600 disabled:bg-amber-300 text-white text-xs"
-                    >
-                      {installingOfficialFeishuPlugin ? "安装中..." : "安装官方插件"}
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
-                  {pluginChannelHosts.map((host) => (
-                    <div
-                      key={`${host.plugin_id}:${host.channel}`}
-                      className={`rounded-lg p-4 space-y-2 ${
-                        host.status === "ready"
-                          ? "border border-emerald-100 bg-emerald-50"
-                          : "border border-amber-200 bg-amber-50"
-                      }`}
-                    >
-                      {(() => {
-                        const snapshot =
-                          pluginChannelSnapshots[host.channel] ??
-                          Object.values(pluginChannelSnapshots).find(
-                            (entry) => entry.snapshot.channelId === host.channel,
-                          );
-                        return (
-                          <>
-                            <div className="flex items-start justify-between gap-3">
-                              <div>
-                                <div className="text-sm font-medium text-emerald-950">{host.display_name}</div>
-                                <div className="text-[11px] text-emerald-800">
-                                  {host.plugin_id} · {host.version}
-                                </div>
-                              </div>
-                              <div
-                                className={`text-[11px] px-2 py-0.5 rounded-full bg-white border ${
-                                  host.status === "ready"
-                                    ? "text-emerald-700 border-emerald-200"
-                                    : "text-amber-800 border-amber-200"
-                                }`}
-                              >
-                                {host.status === "ready" ? "已识别" : "已安装但识别异常"}
-                              </div>
-                            </div>
-                            <div className="text-[11px] text-emerald-900">
-                              npm: <span className="font-mono">{host.npm_spec}</span>
-                            </div>
-                            {host.target_hint && (
-                              <div className="text-[11px] text-emerald-900">
-                                Target Hint: <span className="font-mono">{host.target_hint}</span>
-                              </div>
-                            )}
-                            {host.reload_config_prefixes.length > 0 && (
-                              <div className="text-[11px] text-emerald-900">
-                                配置前缀: {host.reload_config_prefixes.join(", ")}
-                              </div>
-                            )}
-                            {host.capabilities.length > 0 && (
-                              <div className="flex flex-wrap gap-1">
-                                {host.capabilities.map((capability) => (
-                                  <span
-                                    key={capability}
-                                    className="text-[10px] px-2 py-0.5 rounded-full bg-white text-emerald-700 border border-emerald-200"
-                                  >
-                                    {capability}
-                                  </span>
-                                ))}
-                              </div>
-                            )}
-                            {snapshot?.snapshot.accountIds?.length ? (
-                              <div className="rounded border border-emerald-100 bg-white/70 px-3 py-2 space-y-1">
-                                <div className="text-[11px] font-medium text-emerald-900">
-                                  官方插件账号视图
-                                  {snapshot.snapshot.defaultAccountId ? ` · 默认 ${snapshot.snapshot.defaultAccountId}` : ""}
-                                </div>
-                                {snapshot.snapshot.accounts.map((account) => (
-                                  <div key={account.accountId} className="text-[11px] text-emerald-900 space-y-0.5">
-                                    <div>
-                                      {account.accountId}
-                                      {account.describedAccount?.configured ? " · 已配置" : " · 未配置"}
-                                      {account.describedAccount?.enabled ? " · 已启用" : " · 未启用"}
-                                    </div>
-                                    {account.allowFrom.length > 0 && (
-                                      <div className="text-emerald-700">
-                                        allowFrom: {account.allowFrom.join(", ")}
-                                      </div>
-                                    )}
-                                    {account.warnings.length > 0 && (
-                                      <div className="text-amber-700">
-                                        {account.warnings.join(" ")}
-                                      </div>
-                                    )}
-                                  </div>
-                                ))}
-                              </div>
-                            ) : null}
-                            {host.error && (
-                              <div className="text-[11px] text-amber-900 bg-white border border-amber-200 rounded px-2 py-1 whitespace-pre-wrap break-all">
-                                {host.error}
-                              </div>
-                            )}
-                          </>
-                        );
-                      })()}
-                    </div>
-                  ))}
-                </div>
-              )}
-              {pluginChannelSnapshotsError && !pluginChannelHostsError && (
-                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                  {pluginChannelSnapshotsError}
-                </div>
-              )}
-            </>
-          )}
-          {feishuConsoleSection === "pairing" && (
-            <div className="space-y-3">
-              <div className="text-xs font-medium text-gray-500 px-1">待处理配对请求</div>
-              <div className="flex flex-wrap gap-2">
-                {[
-                  { key: "pending", label: "待处理" },
-                  { key: "approved", label: "已通过" },
-                  { key: "denied", label: "已拒绝" },
-                  { key: "all", label: "全部" },
-                ].map((item) => (
-                  <button
-                    key={item.key}
-                    type="button"
-                    onClick={() => setFeishuPairingFilter(item.key as "pending" | "approved" | "denied" | "all")}
-                    className={`h-8 px-3 rounded border text-xs ${
-                      feishuPairingFilter === item.key
-                        ? "border-blue-500 bg-blue-50 text-blue-700"
-                        : "border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
-                    }`}
-                  >
-                    {item.label}
-                  </button>
-                ))}
-              </div>
-              <div className="rounded-lg border border-gray-200 bg-white divide-y divide-gray-100">
-                {feishuPairingRequestsError ? (
-                  <div className="px-4 py-6 space-y-1">
-                    <div className="text-sm font-medium text-red-700">{feishuPairingRequestsError}</div>
-                    <div className="text-xs text-gray-500">暂时无法读取配对请求，请稍后刷新后重试。</div>
-                  </div>
-                ) : visibleFeishuPairingRequests.length === 0 ? (
-                  <div className="px-4 py-6 space-y-1">
-                    <div className="text-sm font-medium text-gray-700">
-                      {feishuPairingRequests.length === 0 ? "暂无待处理配对申请" : "当前筛选下暂无记录"}
-                    </div>
-                    <div className="text-xs text-gray-500">
-                      {feishuPairingRequests.length === 0
-                        ? "新的飞书私聊配对请求会出现在这里，批准后对应发送者会自动进入允许列表。"
-                        : "可以切换到其他状态，查看已通过、已拒绝或全部配对记录。"}
-                    </div>
-                  </div>
-                ) : (
-                  visibleFeishuPairingRequests.map((request) => (
-                    <div key={request.id} className="px-4 py-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                      <div className="space-y-1">
-                        <div className="text-sm font-medium text-gray-900">
-                          {request.sender_id} · {getFeishuPairingStatusLabel(request.status)}
-                        </div>
-                        <div className="text-xs text-gray-500">
-                          配对码 {request.code} · 账号 {request.account_id}
-                        </div>
-                        <div className="text-xs text-gray-500">
-                          申请时间 {formatCompactDateTime(request.created_at)}
-                        </div>
-                        {request.resolved_at && (
-                          <div className="text-xs text-gray-500">
-                            处理人 {request.resolved_by_user || "系统"} · 处理时间 {formatCompactDateTime(request.resolved_at)}
-                          </div>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          disabled={request.status !== "pending" || feishuPairingActionId === request.id}
-                          onClick={() => handleResolveFeishuPairingRequest(request.id, "approve")}
-                          className="h-8 px-3 rounded bg-emerald-600 text-white text-xs disabled:bg-gray-300"
-                        >
-                          批准
-                        </button>
-                        <button
-                          type="button"
-                          disabled={request.status !== "pending" || feishuPairingActionId === request.id}
-                          onClick={() => handleResolveFeishuPairingRequest(request.id, "deny")}
-                          className="h-8 px-3 rounded border border-red-200 text-red-600 text-xs disabled:border-gray-200 disabled:text-gray-400"
-                        >
-                          拒绝
-                        </button>
-                      </div>
-                    </div>
-                  ))
-                )}
+              <div className="rounded border border-gray-100 bg-gray-50 px-3 py-2">
+                <div className="text-[11px] text-gray-500">群聊范围规则</div>
+                <div className="text-sm font-medium text-gray-900">{feishuSetupProgress?.scoped_routing_count ?? 0} 条</div>
               </div>
             </div>
-          )}
+            <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+              接待员工的具体配置入口在员工详情页。完成当前接入后，请关闭设置窗口并前往员工详情中的“飞书接待”继续配置。
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => onOpenEmployees?.()}
+                className="h-8 px-3 rounded border border-blue-200 bg-white text-xs text-blue-700 hover:bg-blue-50"
+              >
+                {feishuRoutingStatus.actionLabel}
+              </button>
+            </div>
+          </div>
+
+          <details className="rounded-lg border border-gray-200 bg-white p-4">
+            <summary className="cursor-pointer text-sm font-medium text-gray-900">连接详情</summary>
+            <div className="mt-2 text-xs text-gray-500">这里展示当前连接是否正常、最近一次事件，以及排查问题时最有用的诊断摘要。</div>
+            <div className="mt-3 rounded-lg border border-blue-100 bg-blue-50 px-3 py-3 text-sm text-blue-900">
+              {getFeishuConnectionDetailSummary()}
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => void handleRefreshFeishuSetup()}
+                disabled={retryingFeishuConnector}
+                className="h-8 px-3 rounded border border-gray-200 bg-white text-xs text-gray-700 hover:bg-gray-50 disabled:bg-gray-100"
+              >
+                {retryingFeishuConnector ? "检测中..." : "重新检测"}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleCopyFeishuDiagnostics()}
+                className="h-8 px-3 rounded border border-blue-200 bg-white text-xs text-blue-700 hover:bg-blue-50"
+              >
+                复制诊断摘要
+              </button>
+            </div>
+            <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <div className="rounded border border-gray-100 bg-gray-50 px-3 py-2">
+                <div className="text-[11px] text-gray-500">当前状态</div>
+                <div className="text-sm font-medium text-gray-900">{resolveFeishuConnectorStatus().label}</div>
+              </div>
+              <div className="rounded border border-gray-100 bg-gray-50 px-3 py-2">
+                <div className="text-[11px] text-gray-500">插件版本</div>
+                <div className="text-sm font-medium text-gray-900">{feishuSetupProgress?.plugin_version || primaryPluginChannelHost?.version || "未识别"}</div>
+              </div>
+              <div className="rounded border border-gray-100 bg-gray-50 px-3 py-2">
+                <div className="text-[11px] text-gray-500">当前接入账号</div>
+                <div className="text-sm font-medium text-gray-900">{primaryPluginChannelSnapshot?.snapshot.defaultAccountId || "未识别"}</div>
+              </div>
+              <div className="rounded border border-gray-100 bg-gray-50 px-3 py-2">
+                <div className="text-[11px] text-gray-500">待完成授权</div>
+                <div className="text-sm font-medium text-gray-900">{pendingFeishuPairingCount}</div>
+              </div>
+              <div className="rounded border border-gray-100 bg-gray-50 px-3 py-2 md:col-span-2">
+                <div className="text-[11px] text-gray-500">最近一次事件</div>
+                <div className="text-sm font-medium text-gray-900">{formatCompactDateTime(officialFeishuRuntimeStatus?.last_event_at)}</div>
+              </div>
+              <div className="rounded border border-gray-100 bg-gray-50 px-3 py-2 md:col-span-2">
+                <div className="text-[11px] text-gray-500">最近问题</div>
+                <div className="text-sm font-medium text-gray-900">{summarizeConnectorIssue(resolveFeishuConnectorStatus().error)}</div>
+              </div>
+            </div>
+            <details className="mt-3 rounded-lg border border-gray-100 bg-gray-50 p-3">
+              <summary className="cursor-pointer text-xs font-medium text-gray-700">原始日志（最近 3 条）</summary>
+              <div className="mt-2 text-xs text-gray-700 whitespace-pre-wrap break-all">
+                {summarizeOfficialFeishuRuntimeLogs(officialFeishuRuntimeStatus)}
+              </div>
+            </details>
+          </details>
+
+          <details className="rounded-lg border border-gray-200 bg-white p-4">
+            <summary className="cursor-pointer text-sm font-medium text-gray-900">高级设置</summary>
+            <div className="mt-2 text-xs text-gray-500">这里可以调整消息格式、接待规则和其他进阶选项。默认设置通常已经够用。</div>
+            <div className="mt-3 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              建议先完成接入和接待配置，再按需调整这里的参数；不确定时保持默认值通常更稳妥。
+            </div>
+            <div className="mt-4 space-y-4">
+              <details open className="rounded-lg border border-gray-100 bg-gray-50/70 p-3">
+                <summary className="cursor-pointer text-sm font-medium text-gray-900">消息与展示</summary>
+                <div className="mt-2 text-xs text-gray-500">调整消息输出格式、分块策略和 Markdown 展示方式。</div>
+                <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
+                  {FEISHU_ADVANCED_MESSAGE_FIELDS.map(renderFeishuAdvancedField)}
+                </div>
+              </details>
+
+              <details className="rounded-lg border border-gray-100 bg-gray-50/70 p-3">
+                <summary className="cursor-pointer text-sm font-medium text-gray-900">群聊与私聊规则</summary>
+                <div className="mt-2 text-xs text-gray-500">按群聊或私聊对象自定义启用状态、会话范围和回复规则。</div>
+                <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
+                  {FEISHU_ADVANCED_ROUTING_FIELDS.map(renderFeishuAdvancedField)}
+                </div>
+              </details>
+
+              <details className="rounded-lg border border-gray-100 bg-gray-50/70 p-3">
+                <summary className="cursor-pointer text-sm font-medium text-gray-900">运行与行为</summary>
+                <div className="mt-2 text-xs text-gray-500">调整心跳、媒体限制、超时和插件运行行为。</div>
+                <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
+                  {FEISHU_ADVANCED_RUNTIME_FIELDS.map(renderFeishuAdvancedField)}
+                </div>
+                <details className="mt-4 rounded-lg border border-gray-200 bg-white p-3">
+                  <summary className="cursor-pointer text-sm font-medium text-gray-800">动态 Agent 相关</summary>
+                  <div className="mt-2 text-xs text-gray-500">只有在需要按飞书会话动态生成 Agent 时才需要调整这里。</div>
+                  <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
+                    {FEISHU_ADVANCED_DYNAMIC_AGENT_FIELDS.map(renderFeishuAdvancedField)}
+                  </div>
+                </details>
+              </details>
+
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => void handleSaveFeishuAdvancedSettings()}
+                  disabled={savingFeishuAdvancedSettings}
+                  className="sm-btn sm-btn-primary h-9 rounded-lg px-4 text-sm disabled:opacity-60"
+                >
+                  {savingFeishuAdvancedSettings ? "保存中..." : "保存高级配置"}
+                </button>
+              </div>
+            </div>
+          </details>
         </div>
       )}
+
 
       {SHOW_AUTO_ROUTING_SETTINGS && activeTab === "routing" && (
         <div className="bg-white rounded-lg p-4 space-y-3">

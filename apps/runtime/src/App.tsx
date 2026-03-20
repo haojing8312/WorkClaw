@@ -77,6 +77,7 @@ type EmployeeAssistantLaunchOptions = {
   mode?: EmployeeAssistantMode;
   employeeId?: string;
 };
+type EmployeeHubInitialTab = "overview" | "employees" | "teams" | "runs" | "settings";
 type EmployeeAssistantSessionContext = {
   mode: EmployeeAssistantMode;
   employeeName?: string;
@@ -732,6 +733,10 @@ export default function App() {
   const [sessionRuntimeStateById, setSessionRuntimeStateById] = useState<Record<string, PersistedChatRuntimeState>>({});
   const [showInstall, setShowInstall] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [settingsInitialTab, setSettingsInitialTab] = useState<
+    "models" | "desktop" | "capabilities" | "health" | "mcp" | "search" | "routing" | "feishu"
+  >("models");
+  const [employeeHubInitialTab, setEmployeeHubInitialTab] = useState<EmployeeHubInitialTab>("overview");
   const [activeMainView, setActiveMainView] = useState<MainView>("start-task");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [operationPermissionMode, setOperationPermissionMode] = useState<"standard" | "full_access">(
@@ -832,6 +837,20 @@ export default function App() {
   const [employeeAssistantSessionContexts, setEmployeeAssistantSessionContexts] = useState<
     Record<string, EmployeeAssistantSessionContext>
   >({});
+
+  const openSettingsAtTab = (
+    tab: "models" | "desktop" | "capabilities" | "health" | "mcp" | "search" | "routing" | "feishu",
+  ) => {
+    setSettingsInitialTab(tab);
+    setShowSettings(true);
+  };
+
+  const openEmployeeHub = async (tab: EmployeeHubInitialTab = "overview") => {
+    await loadModels();
+    setEmployeeHubInitialTab(tab);
+    setShowSettings(false);
+    setActiveMainView("employees");
+  };
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loadSessionsRequestIdRef = useRef(0);
   const hasLoadedSessionsRef = useRef(false);
@@ -2308,7 +2327,7 @@ export default function App() {
     setQuickSearchError("");
     setQuickSearchTestResult(null);
     setQuickSearchApiKeyVisible(false);
-    setShowSettings(true);
+    openSettingsAtTab("models");
   }
 
   function openQuickModelSetup() {
@@ -2830,6 +2849,7 @@ export default function App() {
           }}
           onOpenEmployees={() => {
             setShowSettings(false);
+            setEmployeeHubInitialTab("overview");
             navigate("employees");
           }}
           selectedSkillId={selectedSkillId}
@@ -2839,7 +2859,7 @@ export default function App() {
           onDeleteSession={handleDeleteSession}
           onSettings={() => {
             navigate("start-task");
-            setShowSettings(true);
+            openSettingsAtTab("models");
           }}
           onSearchSessions={handleSearchSessions}
           onExportSession={handleExportSession}
@@ -3388,9 +3408,13 @@ export default function App() {
               className="h-full"
             >
               <SettingsView
+                initialTab={settingsInitialTab}
                 onClose={async () => {
                   await loadModels();
                   setShowSettings(false);
+                }}
+                onOpenEmployees={() => {
+                  void openEmployeeHub("employees");
                 }}
                 showDevModelSetupTools={SHOW_DEV_MODEL_SETUP_TOOLS}
                 onDevResetFirstUseOnboarding={resetFirstUseOnboardingForDevelopment}
@@ -3479,6 +3503,7 @@ export default function App() {
               <EmployeeHubView
                 employees={employees}
                 skills={skills}
+                initialTab={employeeHubInitialTab}
                 selectedEmployeeId={selectedEmployeeId}
                 highlightEmployeeId={employeeCreatorHighlight?.employeeId ?? null}
                 highlightMessage={
@@ -3498,6 +3523,10 @@ export default function App() {
                   void loadEmployeeGroups();
                 }}
                 onOpenEmployeeCreatorSkill={handleOpenEmployeeCreatorSkill}
+                onOpenFeishuSettings={() => {
+                  setEmployeeHubInitialTab("overview");
+                  openSettingsAtTab("feishu");
+                }}
               />
             </motion.div>
           ) : selectedSkill && models.length > 0 && selectedSessionId ? (
