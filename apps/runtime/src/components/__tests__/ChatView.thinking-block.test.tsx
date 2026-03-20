@@ -394,6 +394,47 @@ describe("ChatView thinking block", () => {
     expect(screen.getAllByText("让我先查一下资料。")).toHaveLength(1);
   });
 
+  test("does not duplicate streaming text when the same token snapshot arrives twice", async () => {
+    renderChatView("sess-dup-snapshot");
+
+    act(() => {
+      emit("stream-token", {
+        session_id: "sess-dup-snapshot",
+        token: "我来帮你在浏览器中搜索关于“企业级AI原生工作平台悟空”的最新公开信息。",
+        done: false,
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("我来帮你在浏览器中搜索关于“企业级AI原生工作平台悟空”的最新公开信息。"),
+      ).toBeInTheDocument();
+    });
+
+    act(() => {
+      emit("stream-token", {
+        session_id: "sess-dup-snapshot",
+        token: "我来帮你在浏览器中搜索关于“企业级AI原生工作平台悟空”的最新公开信息。",
+        done: false,
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("我来帮你在浏览器中搜索关于“企业级AI原生工作平台悟空”的最新公开信息。"),
+      ).toBeInTheDocument();
+    });
+
+    expect(
+      screen.queryByText(
+        "我来帮你在浏览器中搜索关于“企业级AI原生工作平台悟空”的最新公开信息。我来帮你在浏览器中搜索关于“企业级AI原生工作平台悟空”的最新公开信息。",
+      ),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getAllByText("我来帮你在浏览器中搜索关于“企业级AI原生工作平台悟空”的最新公开信息。"),
+    ).toHaveLength(1);
+  });
+
   test("keeps concurrent session streams isolated", async () => {
     render(
       <>

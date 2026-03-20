@@ -1705,11 +1705,6 @@ pub(crate) fn build_assistant_content_from_final_messages(
                 }
             }
             if let Some(tool_calls_arr) = msg["tool_calls"].as_array() {
-                if let Some(text) = msg["content"].as_str() {
-                    if !text.is_empty() {
-                        ordered_items.push(json!({"type": "text", "content": text}));
-                    }
-                }
                 for tc in tool_calls_arr {
                     let func = &tc["function"];
                     let input_val =
@@ -1887,6 +1882,44 @@ mod tests {
         let parsed_before: Value =
             serde_json::from_str(&content_before).expect("structured content before fallback");
         assert_eq!(parsed_before["text"].as_str(), Some(""));
+    }
+
+    #[test]
+    fn build_assistant_content_from_final_messages_does_not_duplicate_text_when_tool_calls_exist() {
+        let final_messages = vec![json!({
+            "role": "assistant",
+            "content": "让我先检查正确的目录路径。",
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {
+                        "name": "list_dir",
+                        "arguments": "{\"path\":\".\"}"
+                    }
+                }
+            ]
+        })];
+
+        let (final_text, has_tool_calls, content) =
+            build_assistant_content_from_final_messages(&final_messages, 0);
+
+        assert_eq!(final_text, "让我先检查正确的目录路径。");
+        assert!(has_tool_calls);
+
+        let parsed: Value = serde_json::from_str(&content).expect("structured content");
+        let items = parsed["items"].as_array().expect("items array");
+
+        assert_eq!(parsed["text"].as_str(), Some("让我先检查正确的目录路径。"));
+        assert_eq!(
+            items
+                .iter()
+                .filter(|item| item["type"].as_str() == Some("text"))
+                .count(),
+            1
+        );
+        assert_eq!(items[0]["content"].as_str(), Some("让我先检查正确的目录路径。"));
+        assert_eq!(items[1]["toolCall"]["name"].as_str(), Some("list_dir"));
     }
 
     #[test]

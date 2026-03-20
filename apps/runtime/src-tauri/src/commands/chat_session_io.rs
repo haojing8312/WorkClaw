@@ -1052,9 +1052,24 @@ fn render_recovered_run_sections(
     run_stop_summaries_by_run: &HashMap<String, ExportRunStopSummary>,
     assistant_run_ids_in_messages: &HashSet<String>,
 ) -> String {
-    let assistant_contents: Vec<&str> = messages
+    let assistant_contents: Vec<String> = messages
         .iter()
-        .filter_map(|(role, content, _, _, _)| (role == "assistant").then_some(content.as_str()))
+        .filter_map(|(role, content, content_json, _, run_id)| {
+            if role != "assistant" {
+                return None;
+            }
+            let tool_calls = run_id
+                .as_ref()
+                .and_then(|value| tool_calls_by_run.get(value))
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            Some(render_export_message_content(
+                role,
+                content,
+                content_json.as_deref(),
+                tool_calls,
+            ))
+        })
         .collect();
 
     let mut sections = Vec::new();
@@ -1534,6 +1549,150 @@ mod tests {
         assert!(markdown.contains("任务疑似卡住，已自动停止"));
         assert!(markdown.contains("工具 browser_snapshot 已连续 6 次返回相同结果。"));
         assert!(markdown.contains("最后完成步骤：已填写封面标题"));
+    }
+
+    #[tokio::test]
+    async fn export_session_markdown_skips_recovered_buffer_when_structured_assistant_text_matches() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("create sqlite memory pool");
+
+        sqlx::query(
+            "CREATE TABLE sessions (
+                id TEXT PRIMARY KEY,
+                skill_id TEXT NOT NULL,
+                title TEXT,
+                created_at TEXT NOT NULL,
+                model_id TEXT NOT NULL,
+                permission_mode TEXT NOT NULL DEFAULT 'standard',
+                work_dir TEXT NOT NULL DEFAULT '',
+                employee_id TEXT NOT NULL DEFAULT '',
+                session_mode TEXT NOT NULL DEFAULT 'general',
+                team_id TEXT NOT NULL DEFAULT ''
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create sessions table");
+
+        sqlx::query(
+            "CREATE TABLE messages (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                content_json TEXT,
+                created_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create messages table");
+
+        sqlx::query(
+            "CREATE TABLE session_runs (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                user_message_id TEXT NOT NULL DEFAULT '',
+                assistant_message_id TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'queued',
+                buffered_text TEXT NOT NULL DEFAULT '',
+                error_kind TEXT NOT NULL DEFAULT '',
+                error_message TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create session_runs table");
+
+        sqlx::query(
+            "CREATE TABLE session_run_events (
+                id TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create session_run_events table");
+
+        sqlx::query(
+            "INSERT INTO sessions (id, skill_id, title, created_at, model_id, permission_mode, work_dir, employee_id, session_mode, team_id)
+             VALUES ('session-structured-export', 'skill-1', '结构化导出去重', '2026-03-19T00:00:00Z', 'model-1', 'standard', '', '', 'general', '')",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed session");
+
+        sqlx::query(
+            "INSERT INTO messages (id, session_id, role, content, created_at)
+             VALUES
+             ('user-1', 'session-structured-export', 'user', '继续执行', '2026-03-19T00:00:01Z'),
+             ('assistant-1', 'session-structured-export', 'assistant', ?, '2026-03-19T00:00:02Z')",
+        )
+        .bind(r#"{"text":"让我先检查正确的目录路径。","items":[{"type":"text","content":"让我先检查正确的目录路径。"}]}"#)
+        .execute(&pool)
+        .await
+        .expect("seed messages");
+
+        sqlx::query(
+            "INSERT INTO session_runs (id, session_id, user_message_id, assistant_message_id, status, buffered_text, error_kind, error_message, created_at, updated_at)
+             VALUES ('run-1', 'session-structured-export', 'user-1', 'assistant-1', 'completed', '让我先检查正确的目录路径。', '', '', '2026-03-19T00:00:01Z', '2026-03-19T00:00:03Z')",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed session run");
+
+        let journal_dir = tempdir().expect("journal tempdir");
+        let journal = SessionJournalStore::new(journal_dir.path().to_path_buf());
+        append_session_run_event_with_pool(
+            &pool,
+            &journal,
+            "session-structured-export",
+            SessionRunEvent::RunStarted {
+                run_id: "run-1".to_string(),
+                user_message_id: "user-1".to_string(),
+            },
+        )
+        .await
+        .expect("append run started");
+        append_session_run_event_with_pool(
+            &pool,
+            &journal,
+            "session-structured-export",
+            SessionRunEvent::AssistantChunkAppended {
+                run_id: "run-1".to_string(),
+                chunk: "让我先检查正确的目录路径。".to_string(),
+            },
+        )
+        .await
+        .expect("append assistant chunk");
+        append_session_run_event_with_pool(
+            &pool,
+            &journal,
+            "session-structured-export",
+            SessionRunEvent::RunCompleted {
+                run_id: "run-1".to_string(),
+            },
+        )
+        .await
+        .expect("append run completed");
+
+        let markdown =
+            export_session_markdown_with_pool(&pool, "session-structured-export", Some(&journal))
+                .await
+                .expect("export markdown");
+
+        assert!(markdown.contains("让我先检查正确的目录路径。"));
+        assert!(!markdown.contains("## 恢复的运行记录"));
+        assert_eq!(markdown.matches("让我先检查正确的目录路径。").count(), 1);
     }
 
     #[tokio::test]

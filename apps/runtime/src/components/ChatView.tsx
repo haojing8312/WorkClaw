@@ -191,6 +191,22 @@ function extractPlainTextFromStreamItems(items: StreamItem[]): string {
     .join("");
 }
 
+function mergeStreamingTextChunk(currentText: string, incomingText: string): string {
+  if (!incomingText) return currentText;
+  if (!currentText) return incomingText;
+  if (currentText.endsWith(incomingText)) return currentText;
+  if (incomingText.startsWith(currentText)) return incomingText;
+
+  const maxOverlap = Math.min(currentText.length, incomingText.length);
+  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
+    if (currentText.slice(-overlap) === incomingText.slice(0, overlap)) {
+      return currentText + incomingText.slice(overlap);
+    }
+  }
+
+  return currentText + incomingText;
+}
+
 function CopyActionIcon({ copied }: { copied: boolean }) {
   if (copied) {
     return (
@@ -1080,10 +1096,10 @@ export function ChatView({
           setSubAgentBuffer(subAgentBufferRef.current);
         } else {
           // 主 Agent 的文字 token → 追加到最后一个 text 项或新建
-          const items = streamItemsRef.current;
+          const items = [...streamItemsRef.current];
           const last = items[items.length - 1];
           if (last && last.type === "text") {
-            last.content = (last.content || "") + payload.token;
+            last.content = mergeStreamingTextChunk(last.content || "", payload.token);
           } else {
             items.push({ type: "text", content: payload.token });
           }
