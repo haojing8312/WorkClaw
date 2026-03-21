@@ -29,7 +29,8 @@ use diagnostics::{DiagnosticsState, ManagedDiagnosticsState};
 use session_journal::{SessionJournalStateHandle, SessionJournalStore};
 use sidecar::SidecarManager;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tauri::Manager;
 
 struct DiagnosticsStateHandle(Arc<DiagnosticsState>);
@@ -73,6 +74,18 @@ struct ManagedRuntimeHandles {
     sidecar_manager: Arc<SidecarManager>,
     feishu_relay_state: FeishuEventRelayState,
 }
+
+#[derive(Clone)]
+struct SingleInstanceActivationState(Arc<Mutex<Option<Instant>>>);
+
+impl Default for SingleInstanceActivationState {
+    fn default() -> Self {
+        Self(Arc::new(Mutex::new(None)))
+    }
+}
+
+const SINGLE_INSTANCE_FOCUS_DEBOUNCE: Duration = Duration::from_secs(5);
+const TRAY_BEHAVIOR_ENABLED: bool = false;
 
 fn initialize_runtime_state(app: &mut tauri::App, pool: sqlx::SqlitePool) -> ManagedRuntimeHandles {
     app.manage(DbState(pool.clone()));
@@ -156,65 +169,6 @@ fn spawn_sidecar_bootstrap(sidecar_manager: Arc<SidecarManager>) {
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             }
         });
-    });
-}
-
-fn spawn_openclaw_feishu_runtime_bootstrap(
-    app: tauri::AppHandle,
-    pool: sqlx::SqlitePool,
-    runtime_state: OpenClawPluginFeishuRuntimeState,
-) {
-    tauri::async_runtime::spawn(async move {
-        let has_openclaw_lark_install = sqlx::query_scalar::<_, String>(
-            "SELECT plugin_id
-             FROM installed_openclaw_plugins
-             WHERE plugin_id = 'openclaw-lark'
-             LIMIT 1",
-        )
-        .fetch_optional(&pool)
-        .await
-        .ok()
-        .flatten()
-        .is_some();
-
-        if !has_openclaw_lark_install {
-            return;
-        }
-
-        let app_id = commands::feishu_gateway::get_app_setting(&pool, "feishu_app_id")
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or_default();
-        let app_secret = commands::feishu_gateway::get_app_setting(&pool, "feishu_app_secret")
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or_default();
-
-        if app_id.trim().is_empty() || app_secret.trim().is_empty() {
-            return;
-        }
-
-        match commands::openclaw_plugins::start_openclaw_plugin_feishu_runtime_with_pool(
-            &pool,
-            &runtime_state,
-            "openclaw-lark",
-            Some("default"),
-            Some(app),
-        )
-        .await
-        {
-            Ok(status) => {
-                eprintln!(
-                    "[openclaw-feishu] auto-started official runtime pid={:?} running={}",
-                    status.pid, status.running
-                );
-            }
-            Err(error) => {
-                eprintln!("[openclaw-feishu] auto-start skipped/failed: {}", error);
-            }
-        }
     });
 }
 
@@ -347,6 +301,20 @@ fn write_startup_audit_snapshot(
     );
 }
 
+fn should_surface_single_instance_activation(
+    state: &SingleInstanceActivationState,
+    now: Instant,
+) -> bool {
+    let mut guard = state.0.lock().expect("single instance activation lock");
+    if let Some(previous) = *guard {
+        if now.duration_since(previous) < SINGLE_INSTANCE_FOCUS_DEBOUNCE {
+            return false;
+        }
+    }
+    *guard = Some(now);
+    true
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -361,7 +329,7 @@ pub fn run() {
                 .map(|prefs| prefs.close_to_tray)
                 .unwrap_or(false);
 
-                if close_to_tray {
+                if close_to_tray && TRAY_BEHAVIOR_ENABLED {
                     api.prevent_close();
                     if let Some(window) = app.get_webview_window("main") {
                         let _ = window.hide();
@@ -369,8 +337,21 @@ pub fn run() {
                 }
             }
         })
+        .manage(SingleInstanceActivationState::default())
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            let should_surface = app
+                .try_state::<SingleInstanceActivationState>()
+                .map(|state| should_surface_single_instance_activation(&state, Instant::now()))
+                .unwrap_or(true);
+            if !should_surface {
+                return;
+            }
             if let Some(window) = app.get_webview_window("main") {
+                let is_visible = window.is_visible().unwrap_or(true);
+                let is_minimized = window.is_minimized().unwrap_or(false);
+                if is_visible && !is_minimized {
+                    return;
+                }
                 let _ = window.unminimize();
                 let _ = window.show();
                 let _ = window.set_focus();
@@ -419,12 +400,13 @@ pub fn run() {
                 Arc::clone(&handles.registry),
             );
             spawn_sidecar_bootstrap(handles.sidecar_manager.clone());
-            spawn_openclaw_feishu_runtime_bootstrap(
-                app.handle().clone(),
-                pool.clone(),
-                app.state::<OpenClawPluginFeishuRuntimeState>().inner().clone(),
-            );
             restore_saved_mcp_servers(pool.clone(), Arc::clone(&handles.registry));
+            tauri::async_runtime::spawn({
+                let pool = pool.clone();
+                async move {
+                    let _ = commands::clawhub::sync_skillhub_catalog_with_pool(&pool, false).await;
+                }
+            });
             let _ = (&pool, &handles.feishu_relay_state);
 
             Ok(())
@@ -442,6 +424,7 @@ pub fn run() {
             commands::clawhub::search_clawhub_skills,
             commands::clawhub::recommend_clawhub_skills,
             commands::clawhub::list_clawhub_library,
+            commands::clawhub::sync_skillhub_catalog,
             commands::clawhub::get_clawhub_skill_detail,
             commands::clawhub::translate_texts_with_preferences,
             commands::clawhub::translate_clawhub_texts,
@@ -597,4 +580,26 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        should_surface_single_instance_activation, SingleInstanceActivationState,
+        SINGLE_INSTANCE_FOCUS_DEBOUNCE,
+    };
+    use std::time::Instant;
+
+    #[test]
+    fn single_instance_activation_is_debounced() {
+        let state = SingleInstanceActivationState::default();
+        let now = Instant::now();
+
+        assert!(should_surface_single_instance_activation(&state, now));
+        assert!(!should_surface_single_instance_activation(&state, now));
+        assert!(should_surface_single_instance_activation(
+            &state,
+            now + SINGLE_INSTANCE_FOCUS_DEBOUNCE
+        ));
+    }
 }

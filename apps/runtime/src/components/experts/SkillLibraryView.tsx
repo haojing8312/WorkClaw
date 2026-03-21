@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ClawhubInstallRequest, ClawhubLibraryItem, ClawhubSkillDetail } from "../../types";
+import {
+  ClawhubInstallRequest,
+  ClawhubLibraryItem,
+  ClawhubLibraryResponse,
+  ClawhubSkillDetail,
+  SkillhubCatalogSyncStatus,
+} from "../../types";
 import { RiskConfirmDialog } from "../RiskConfirmDialog";
 import { useImmersiveTranslation } from "../../hooks/useImmersiveTranslation";
 
@@ -9,17 +15,16 @@ interface Props {
   onInstall: (request: ClawhubInstallRequest) => Promise<void>;
 }
 
-interface LibraryResponse {
-  items: ClawhubLibraryItem[];
-  next_cursor?: string | null;
-}
-
-function sortLibraryItemsByPopularity(items: ClawhubLibraryItem[]): ClawhubLibraryItem[] {
-  return [...items].sort((a, b) => {
-    if (b.downloads !== a.downloads) return b.downloads - a.downloads;
-    if (b.stars !== a.stars) return b.stars - a.stars;
-    return a.name.localeCompare(b.name);
-  });
+function formatLastSyncedAt(value?: string | null): string {
+  if (!value) return "最近同步：尚未完成";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return `最近同步：${value}`;
+  return `最近同步：${parsed.toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  })}`;
 }
 
 function isDetailNotFoundError(raw: string): boolean {
@@ -41,6 +46,8 @@ export function SkillLibraryView({ installedSkillIds, onInstall }: Props) {
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
   const [detailNotFound, setDetailNotFound] = useState(false);
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
+  const [refreshingCatalog, setRefreshingCatalog] = useState(false);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
 
   async function loadMore(reset = false) {
@@ -49,21 +56,22 @@ export function SkillLibraryView({ installedSkillIds, onInstall }: Props) {
     setLoading(true);
     setError("");
     try {
-      const result = await invoke<LibraryResponse>("list_clawhub_library", {
+      const result = await invoke<ClawhubLibraryResponse>("list_clawhub_library", {
         cursor: reset ? null : nextCursor,
         limit: 20,
         sort: "downloads",
       });
       setItems((prev) => {
-        if (reset) return sortLibraryItemsByPopularity(result.items ?? []);
+        if (reset) return result.items ?? [];
         const existing = new Set(prev.map((i) => i.slug));
         const merged = [...prev];
         for (const item of result.items ?? []) {
           if (!existing.has(item.slug)) merged.push(item);
         }
-        return sortLibraryItemsByPopularity(merged);
+        return merged;
       });
       setNextCursor(result.next_cursor ?? null);
+      setLastSyncedAt(result.last_synced_at ?? null);
       setInitialized(true);
     } catch (e: unknown) {
       setError(String(e));
@@ -218,6 +226,23 @@ export function SkillLibraryView({ installedSkillIds, onInstall }: Props) {
     setPendingInstall(null);
   }
 
+  async function handleRefreshCatalog() {
+    if (refreshingCatalog) return;
+    setRefreshingCatalog(true);
+    setError("");
+    try {
+      const result = await invoke<SkillhubCatalogSyncStatus>("sync_skillhub_catalog", {
+        force: true,
+      });
+      setLastSyncedAt(result.last_synced_at ?? null);
+      await loadMore(true);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setRefreshingCatalog(false);
+    }
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -236,19 +261,31 @@ export function SkillLibraryView({ installedSkillIds, onInstall }: Props) {
             </button>
           ))}
         </div>
-        <button
-          onClick={() => {
-            void translateNow();
-          }}
-          disabled={!immersiveEnabled || isTranslating || !hasPendingTranslations}
-          className="h-7 px-3 rounded border border-blue-200 bg-blue-50 text-blue-700 text-xs hover:bg-blue-100 disabled:opacity-60"
-        >
-          {isTranslating
-            ? "翻译中..."
-            : translationFallbackActive || translationError
-              ? "重试翻译"
-              : "翻译本页"}
-        </button>
+        <div className="flex items-center gap-2 flex-wrap justify-end">
+          <div className="text-[11px] text-gray-500">{formatLastSyncedAt(lastSyncedAt)}</div>
+          <button
+            onClick={() => {
+              void handleRefreshCatalog();
+            }}
+            disabled={refreshingCatalog}
+            className="h-7 px-3 rounded border border-gray-200 bg-white text-gray-700 text-xs hover:bg-gray-50 disabled:opacity-60"
+          >
+            {refreshingCatalog ? "刷新中..." : "刷新技能库"}
+          </button>
+          <button
+            onClick={() => {
+              void translateNow();
+            }}
+            disabled={!immersiveEnabled || isTranslating || !hasPendingTranslations}
+            className="h-7 px-3 rounded border border-blue-200 bg-blue-50 text-blue-700 text-xs hover:bg-blue-100 disabled:opacity-60"
+          >
+            {isTranslating
+              ? "翻译中..."
+              : translationFallbackActive || translationError
+                ? "重试翻译"
+                : "翻译本页"}
+          </button>
+        </div>
       </div>
 
       {immersiveEnabled && !isTranslating && translationFallbackActive && (

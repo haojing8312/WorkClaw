@@ -667,6 +667,31 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
     .execute(&pool)
     .await?;
 
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS skillhub_catalog_index (
+            slug TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            description TEXT NOT NULL,
+            github_url TEXT,
+            source_url TEXT,
+            tags_json TEXT NOT NULL,
+            stars INTEGER NOT NULL DEFAULT 0,
+            downloads INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT,
+            synced_at TEXT NOT NULL
+        )",
+    )
+    .execute(&pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_skillhub_catalog_index_popularity
+        ON skillhub_catalog_index (downloads DESC, stars DESC, name ASC)",
+    )
+    .execute(&pool)
+    .await?;
+
     // Migration: add api_key column for databases created before this column existed
     let _ = sqlx::query("ALTER TABLE model_configs ADD COLUMN api_key TEXT NOT NULL DEFAULT ''")
         .execute(&pool)

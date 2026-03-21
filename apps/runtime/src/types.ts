@@ -30,6 +30,18 @@ export interface ClawhubLibraryItem {
   downloads: number;
 }
 
+export interface ClawhubLibraryResponse {
+  items: ClawhubLibraryItem[];
+  next_cursor?: string | null;
+  last_synced_at?: string | null;
+}
+
+export interface SkillhubCatalogSyncStatus {
+  total_skills: number;
+  last_synced_at?: string | null;
+  refreshed: boolean;
+}
+
 export interface ClawhubSkillDetail {
   slug: string;
   name: string;

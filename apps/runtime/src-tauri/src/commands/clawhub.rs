@@ -25,6 +25,7 @@ const DEFAULT_CLAWHUB_BASE: &str = "https://www.clawhub.ai";
 const DEFAULT_SKILLHUB_CATALOG_URL: &str =
     "https://cloudcache.tencentcs.com/qcloud/tea/app/data/skills.2d46363b.json?max_age=31536000";
 const DEFAULT_SKILLHUB_DOWNLOAD_BASE: &str = "https://lightmake.site";
+const SKILLHUB_INDEX_SYNC_TTL_SECONDS: i64 = 6 * 60 * 60;
 const CLAWHUB_LIBRARY_CACHE_TTL_SECONDS: i64 = 10 * 60;
 const CLAWHUB_DETAIL_CACHE_TTL_SECONDS: i64 = 24 * 60 * 60;
 const CLAWHUB_FIRST_CURSOR: &str = "__first__";
@@ -58,6 +59,14 @@ pub struct ClawhubLibraryItem {
 pub struct ClawhubLibraryResponse {
     pub items: Vec<ClawhubLibraryItem>,
     pub next_cursor: Option<String>,
+    pub last_synced_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillhubCatalogSyncStatus {
+    pub total_skills: usize,
+    pub last_synced_at: Option<String>,
+    pub refreshed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -121,6 +130,21 @@ pub struct GithubRepoInstallResult {
 pub struct GithubRepoDownloadResult {
     pub repo_dir: String,
     pub detected_skills: Vec<DiscoveredSkillDir>,
+}
+
+#[derive(Debug, Clone)]
+struct SkillhubCatalogIndexRow {
+    slug: String,
+    name: String,
+    summary: String,
+    description: String,
+    github_url: Option<String>,
+    source_url: Option<String>,
+    tags_json: String,
+    stars: i64,
+    downloads: i64,
+    updated_at: Option<String>,
+    synced_at: String,
 }
 
 fn clawhub_base_url() -> String {
@@ -515,7 +539,11 @@ fn normalize_skillhub_library_response(
         None
     };
 
-    ClawhubLibraryResponse { items, next_cursor }
+    ClawhubLibraryResponse {
+        items,
+        next_cursor,
+        last_synced_at: None,
+    }
 }
 
 fn normalize_skillhub_search_candidates(body: &Value) -> Vec<ClawhubSkillSummary> {
@@ -526,6 +554,134 @@ fn normalize_skillhub_search_candidates(body: &Value) -> Vec<ClawhubSkillSummary
         .iter()
         .filter_map(normalize_skillhub_search_skill)
         .collect()
+}
+
+fn is_sync_timestamp_stale(raw: &str, ttl_seconds: i64) -> bool {
+    chrono::DateTime::parse_from_rfc3339(raw)
+        .map(|dt| {
+            let age = Utc::now().signed_duration_since(dt.with_timezone(&Utc));
+            age.num_seconds() > ttl_seconds
+        })
+        .unwrap_or(true)
+}
+
+fn normalize_skillhub_catalog_index_rows(body: &Value, synced_at: &str) -> Vec<SkillhubCatalogIndexRow> {
+    body.get("skills")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|item| {
+            let normalized = normalize_skillhub_library_item(item)?;
+            let description = skillhub_text_fallback(item, "description_zh", "description");
+            let updated_at = item
+                .get("updated_at")
+                .and_then(|v| v.as_str())
+                .or_else(|| item.get("updatedAt").and_then(|v| v.as_str()))
+                .or_else(|| item.get("version").and_then(|v| v.as_str()))
+                .map(|v| v.to_string());
+            Some(SkillhubCatalogIndexRow {
+                slug: normalized.slug,
+                name: normalized.name,
+                summary: normalized.summary,
+                description,
+                github_url: normalized.github_url,
+                source_url: normalized.source_url,
+                tags_json: serde_json::to_string(&normalized.tags).unwrap_or_else(|_| "[]".to_string()),
+                stars: normalized.stars,
+                downloads: normalized.downloads,
+                updated_at,
+                synced_at: synced_at.to_string(),
+            })
+        })
+        .collect()
+}
+
+async fn read_skillhub_index_last_synced_at(pool: &SqlitePool) -> Result<Option<String>, String> {
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT synced_at FROM skillhub_catalog_index ORDER BY synced_at DESC LIMIT 1")
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| e.to_string())?;
+    Ok(row.map(|(synced_at,)| synced_at))
+}
+
+async fn count_skillhub_index_rows(pool: &SqlitePool) -> Result<i64, String> {
+    let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM skillhub_catalog_index")
+        .fetch_one(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(count)
+}
+
+async fn read_local_skillhub_library_page(
+    pool: &SqlitePool,
+    cursor: Option<&str>,
+    limit: u32,
+) -> Result<Option<ClawhubLibraryResponse>, String> {
+    let total = count_skillhub_index_rows(pool).await?;
+    if total <= 0 {
+        return Ok(None);
+    }
+
+    let offset = parse_skillhub_cursor(cursor) as i64;
+    let rows: Vec<(
+        String,
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        String,
+        i64,
+        i64,
+    )> = sqlx::query_as(
+        "SELECT slug, name, summary, github_url, source_url, tags_json, stars, downloads
+         FROM skillhub_catalog_index
+         ORDER BY downloads DESC, stars DESC, name ASC
+         LIMIT ? OFFSET ?",
+    )
+    .bind(limit as i64)
+    .bind(offset)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let items = rows
+        .into_iter()
+        .map(
+            |(slug, name, summary, github_url, source_url, tags_json, stars, downloads)| {
+                ClawhubLibraryItem {
+                    slug,
+                    name,
+                    summary,
+                    github_url,
+                    source_url,
+                    tags: serde_json::from_str::<Vec<String>>(&tags_json).unwrap_or_default(),
+                    stars,
+                    downloads,
+                }
+            },
+        )
+        .collect::<Vec<_>>();
+
+    let item_count = items.len() as i64;
+    let next_cursor = if offset + item_count < total {
+        Some((offset + item_count).to_string())
+    } else {
+        None
+    };
+
+    Ok(Some(ClawhubLibraryResponse {
+        items,
+        next_cursor,
+        last_synced_at: read_skillhub_index_last_synced_at(pool).await?,
+    }))
+}
+
+fn spawn_skillhub_sync_if_needed(pool: SqlitePool, force: bool) {
+    spawn_refresh_if_needed("skillhub:index:sync".to_string(), async move {
+        let _ = sync_skillhub_catalog_with_pool(&pool, force).await;
+    });
 }
 
 fn normalize_skill_detail(raw: &Value, fallback_slug: &str) -> Option<ClawhubSkillDetail> {
@@ -1536,7 +1692,66 @@ fn normalize_library_response(body: &Value) -> ClawhubLibraryResponse {
     ClawhubLibraryResponse {
         items: items.iter().filter_map(normalize_library_item).collect(),
         next_cursor,
+        last_synced_at: None,
     }
+}
+
+pub async fn sync_skillhub_catalog_with_pool(
+    pool: &SqlitePool,
+    force: bool,
+) -> Result<SkillhubCatalogSyncStatus, String> {
+    let existing_total = count_skillhub_index_rows(pool).await?;
+    let last_synced_at = read_skillhub_index_last_synced_at(pool).await?;
+    let stale = last_synced_at
+        .as_deref()
+        .map(|raw| is_sync_timestamp_stale(raw, SKILLHUB_INDEX_SYNC_TTL_SECONDS))
+        .unwrap_or(true);
+    if !force && existing_total > 0 && !stale {
+        return Ok(SkillhubCatalogSyncStatus {
+            total_skills: existing_total as usize,
+            last_synced_at,
+            refreshed: false,
+        });
+    }
+
+    let client = Client::new();
+    let body = fetch_skillhub_catalog_body(&client).await?;
+    let synced_at = Utc::now().to_rfc3339();
+    let rows = normalize_skillhub_catalog_index_rows(&body, &synced_at);
+
+    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
+    sqlx::query("DELETE FROM skillhub_catalog_index")
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    for row in &rows {
+        sqlx::query(
+            "INSERT INTO skillhub_catalog_index (
+                slug, name, summary, description, github_url, source_url, tags_json, stars, downloads, updated_at, synced_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&row.slug)
+        .bind(&row.name)
+        .bind(&row.summary)
+        .bind(&row.description)
+        .bind(&row.github_url)
+        .bind(&row.source_url)
+        .bind(&row.tags_json)
+        .bind(row.stars)
+        .bind(row.downloads)
+        .bind(&row.updated_at)
+        .bind(&row.synced_at)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    }
+    tx.commit().await.map_err(|e| e.to_string())?;
+
+    Ok(SkillhubCatalogSyncStatus {
+        total_skills: rows.len(),
+        last_synced_at: Some(synced_at),
+        refreshed: true,
+    })
 }
 
 pub async fn list_clawhub_library_with_pool(
@@ -1548,6 +1763,24 @@ pub async fn list_clawhub_library_with_pool(
     let normalized_limit = normalize_library_limit(limit);
     let normalized_sort = normalize_library_sort(sort.as_deref());
     let cursor_ref = cursor.as_deref();
+    let local_last_synced_at = read_skillhub_index_last_synced_at(pool).await?;
+    if let Some(response) = read_local_skillhub_library_page(pool, cursor_ref, normalized_limit).await? {
+        if local_last_synced_at
+            .as_deref()
+            .map(|raw| is_sync_timestamp_stale(raw, SKILLHUB_INDEX_SYNC_TTL_SECONDS))
+            .unwrap_or(true)
+        {
+            spawn_skillhub_sync_if_needed(pool.clone(), false);
+        }
+        return Ok(response);
+    }
+
+    if sync_skillhub_catalog_with_pool(pool, false).await.is_ok() {
+        if let Some(response) = read_local_skillhub_library_page(pool, cursor_ref, normalized_limit).await? {
+            return Ok(response);
+        }
+    }
+
     let cache_key = build_library_cache_key(cursor_ref, normalized_limit, &normalized_sort);
 
     if let Some((cached_body, stale)) =
@@ -1563,12 +1796,19 @@ pub async fn list_clawhub_library_with_pool(
                 spawn_refresh_if_needed(key_for_refresh.clone(), async move {
                     let client = Client::new();
                     let fresh_json = match fetch_skillhub_catalog_body(&client).await {
-                        Ok(body) => serde_json::to_value(normalize_skillhub_library_response(
-                            &body,
-                            cursor_for_refresh.as_deref(),
-                            normalized_limit,
-                        ))
-                        .ok(),
+                        Ok(body) => {
+                            let synced_at = Utc::now().to_rfc3339();
+                            serde_json::to_value(normalize_skillhub_library_response(
+                                &body,
+                                cursor_for_refresh.as_deref(),
+                                normalized_limit,
+                            ))
+                            .ok()
+                            .map(|mut value| {
+                                value["last_synced_at"] = Value::String(synced_at);
+                                value
+                            })
+                        }
                         Err(_) => fetch_library_body(
                             &client,
                             cursor_for_refresh.as_deref(),
@@ -1625,6 +1865,14 @@ pub async fn list_clawhub_library(
     db: State<'_, DbState>,
 ) -> Result<ClawhubLibraryResponse, String> {
     list_clawhub_library_with_pool(&db.0, cursor, limit, sort).await
+}
+
+#[tauri::command]
+pub async fn sync_skillhub_catalog(
+    force: Option<bool>,
+    db: State<'_, DbState>,
+) -> Result<SkillhubCatalogSyncStatus, String> {
+    sync_skillhub_catalog_with_pool(&db.0, force.unwrap_or(false)).await
 }
 
 pub async fn get_clawhub_skill_detail_with_pool(

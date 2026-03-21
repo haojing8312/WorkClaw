@@ -618,6 +618,25 @@ pub async fn setup_test_db() -> (SqlitePool, TempDir) {
     .await
     .unwrap();
 
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS skillhub_catalog_index (
+            slug TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            description TEXT NOT NULL,
+            github_url TEXT,
+            source_url TEXT,
+            tags_json TEXT NOT NULL,
+            stars INTEGER NOT NULL DEFAULT 0,
+            downloads INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT,
+            synced_at TEXT NOT NULL
+        )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
     (pool, tmp)
 }
 

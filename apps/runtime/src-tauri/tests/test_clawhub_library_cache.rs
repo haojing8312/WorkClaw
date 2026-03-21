@@ -25,6 +25,7 @@ async fn seed_cache_row(pool: &sqlx::SqlitePool, key: &str, body: &str, fetched_
 async fn list_uses_fresh_cache_when_network_unavailable() {
     let (pool, _tmp) = helpers::setup_test_db().await;
     std::env::set_var("CLAWHUB_API_BASE", "http://127.0.0.1:1");
+    std::env::set_var("SKILLHUB_CATALOG_URL", "http://127.0.0.1:1/skills.json");
 
     let body = json!({
         "items": [
@@ -54,6 +55,8 @@ async fn list_uses_fresh_cache_when_network_unavailable() {
     assert_eq!(response.items.len(), 1);
     assert_eq!(response.items[0].slug, "video-maker");
     assert_eq!(response.items[0].downloads, 99);
+
+    std::env::remove_var("SKILLHUB_CATALOG_URL");
 }
 
 #[tokio::test]
@@ -81,4 +84,39 @@ async fn detail_falls_back_to_stale_cache_when_network_unavailable() {
     assert_eq!(response.slug, "video-maker");
     assert_eq!(response.downloads, 5000);
     assert_eq!(response.description, "Create videos from scripts");
+}
+
+#[tokio::test]
+async fn list_reads_local_skillhub_index_in_popularity_order() {
+    let (pool, _tmp) = helpers::setup_test_db().await;
+    let synced_at = Utc::now().to_rfc3339();
+
+    for (slug, name, downloads, stars) in [
+        ("mid-download", "Mid Download", 120, 20),
+        ("top-download", "Top Download", 300, 5),
+        ("tie-break", "A Name", 120, 30),
+    ] {
+        sqlx::query(
+            "INSERT INTO skillhub_catalog_index (
+                slug, name, summary, description, github_url, source_url, tags_json, stars, downloads, updated_at, synced_at
+            ) VALUES (?, ?, '', '', NULL, NULL, '[]', ?, ?, NULL, ?)",
+        )
+        .bind(slug)
+        .bind(name)
+        .bind(stars)
+        .bind(downloads)
+        .bind(&synced_at)
+        .execute(&pool)
+        .await
+        .expect("insert skillhub index row");
+    }
+
+    let response =
+        list_clawhub_library_with_pool(&pool, None, Some(20), Some("downloads".to_string()))
+            .await
+            .expect("list from local index");
+
+    let ordered: Vec<&str> = response.items.iter().map(|item| item.slug.as_str()).collect();
+    assert_eq!(ordered, vec!["top-download", "tie-break", "mid-download"]);
+    assert_eq!(response.last_synced_at.as_deref(), Some(synced_at.as_str()));
 }
