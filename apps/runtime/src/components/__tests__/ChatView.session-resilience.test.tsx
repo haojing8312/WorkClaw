@@ -466,6 +466,203 @@ describe("ChatView session resilience", () => {
     });
   });
 
+  test("shows a single friendly auth failure surface instead of repeating raw transport errors", async () => {
+    const rawAuthError =
+      '{"type":"error","error":{"type":"authentication_error","message":"login fail: Please carry the API secret key in the \'Authorization\' field of the request header"},"request_id":"060d83de3828d796eb11939cf30ed6b8"}';
+
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_messages") return Promise.resolve(messagesResponse);
+      if (command === "list_sessions") return Promise.resolve([]);
+      if (command === "get_sessions") return Promise.resolve([]);
+      if (command === "list_session_runs") return Promise.resolve(sessionRunsResponse);
+      if (command === "send_message") {
+        sessionRunsResponse = [
+          {
+            id: "run-auth-1",
+            session_id: "sess-auth",
+            user_message_id: "user-persisted-auth",
+            assistant_message_id: null,
+            status: "failed",
+            buffered_text: "",
+            error_kind: "auth",
+            error_message: rawAuthError,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          },
+        ];
+        messagesResponse = [
+          {
+            id: "user-persisted-auth",
+            role: "user",
+            content: "你好",
+            created_at: new Date().toISOString(),
+          },
+        ];
+        return Promise.reject(new Error(rawAuthError));
+      }
+      return Promise.resolve(null);
+    });
+
+    render(
+      <ChatView
+        skill={{
+          id: "builtin-general",
+          name: "General",
+          description: "desc",
+          version: "1.0.0",
+          author: "test",
+          recommended_model: "",
+          tags: [],
+          created_at: new Date().toISOString(),
+        }}
+        models={[
+          {
+            id: "m1",
+            name: "model",
+            api_format: "openai",
+            base_url: "https://example.com",
+            model_name: "model",
+            is_default: true,
+          },
+        ]}
+        sessionId="sess-auth"
+      />
+    );
+
+    const composer = await screen.findByPlaceholderText("输入消息，Shift+Enter 换行...");
+    fireEvent.change(composer, { target: { value: "你好" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+
+    const failureCard = await screen.findByTestId("run-failure-card-run-auth-1");
+    expect(failureCard).toHaveTextContent("鉴权失败");
+    expect(failureCard).toHaveTextContent("请检查 API Key、组织权限或接口访问范围是否正确。");
+    expect(failureCard).not.toHaveTextContent("request_id");
+    expect(screen.queryByText(new RegExp(rawAuthError.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))).not.toBeInTheDocument();
+    expect(screen.queryByText(/错误:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Authorization/)).not.toBeInTheDocument();
+  });
+
+  test("falls back to friendly billing copy when a failed run only has raw provider quota JSON", async () => {
+    sessionRunsResponse = [
+      {
+        id: "run-billing-raw",
+        session_id: "sess-billing-raw",
+        user_message_id: "user-billing-raw",
+        assistant_message_id: null,
+        status: "failed",
+        buffered_text: "",
+        error_kind: null,
+        error_message:
+          '{"error":{"message":"insufficient_quota","code":"insufficient_quota"},"request_id":"quota-123"}',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+    ];
+    messagesResponse = [
+      {
+        id: "user-billing-raw",
+        role: "user",
+        content: "继续执行",
+        created_at: new Date().toISOString(),
+      },
+    ];
+
+    render(
+      <ChatView
+        skill={{
+          id: "builtin-general",
+          name: "General",
+          description: "desc",
+          version: "1.0.0",
+          author: "test",
+          recommended_model: "",
+          tags: [],
+          created_at: new Date().toISOString(),
+        }}
+        models={[
+          {
+            id: "m1",
+            name: "model",
+            api_format: "openai",
+            base_url: "https://example.com",
+            model_name: "model",
+            is_default: true,
+          },
+        ]}
+        sessionId="sess-billing-raw"
+      />
+    );
+
+    const failureCard = await screen.findByTestId("run-failure-card-run-billing-raw");
+    expect(failureCard).toHaveTextContent("模型余额不足");
+    expect(failureCard).toHaveTextContent(
+      "当前模型平台返回余额或额度不足，请到对应服务商控制台充值或检查套餐额度。",
+    );
+    expect(failureCard).not.toHaveTextContent("insufficient_quota");
+    expect(failureCard).not.toHaveTextContent("request_id");
+  });
+
+  test("keeps technical error details collapsed until the user asks to view them", async () => {
+    sessionRunsResponse = [
+      {
+        id: "run-unknown-raw",
+        session_id: "sess-unknown-raw",
+        user_message_id: "user-unknown-raw",
+        assistant_message_id: null,
+        status: "failed",
+        buffered_text: "",
+        error_kind: "unknown",
+        error_message: "upstream gateway exploded with trace id abc-123",
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+    ];
+    messagesResponse = [
+      {
+        id: "user-unknown-raw",
+        role: "user",
+        content: "继续执行",
+        created_at: new Date().toISOString(),
+      },
+    ];
+
+    render(
+      <ChatView
+        skill={{
+          id: "builtin-general",
+          name: "General",
+          description: "desc",
+          version: "1.0.0",
+          author: "test",
+          recommended_model: "",
+          tags: [],
+          created_at: new Date().toISOString(),
+        }}
+        models={[
+          {
+            id: "m1",
+            name: "model",
+            api_format: "openai",
+            base_url: "https://example.com",
+            model_name: "model",
+            is_default: true,
+          },
+        ]}
+        sessionId="sess-unknown-raw"
+      />
+    );
+
+    const failureCard = await screen.findByTestId("run-failure-card-run-unknown-raw");
+    expect(failureCard).toHaveTextContent("连接失败");
+    expect(failureCard).not.toHaveTextContent("trace id abc-123");
+
+    const expandButton = screen.getByRole("button", { name: "查看技术详情" });
+    fireEvent.click(expandButton);
+
+    expect(screen.getByRole("button", { name: "隐藏技术详情" })).toBeInTheDocument();
+    expect(failureCard).toHaveTextContent("upstream gateway exploded with trace id abc-123");
+  });
+
   test("keeps unsent drafts isolated per session when switching between conversations", async () => {
     const { rerender } = render(
       <ChatView

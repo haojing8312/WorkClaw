@@ -43,6 +43,108 @@ export function isModelErrorKind(value: unknown): value is ModelErrorKind {
   );
 }
 
+function collectErrorStrings(value: unknown, out: string[]) {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed) {
+      out.push(trimmed);
+    }
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectErrorStrings(item, out));
+    return;
+  }
+
+  if (!value || typeof value !== "object") {
+    return;
+  }
+
+  const record = value as Record<string, unknown>;
+  ["message", "code", "type", "error", "detail"].forEach((key) => {
+    if (key in record) {
+      collectErrorStrings(record[key], out);
+    }
+  });
+  Object.values(record).forEach((item) => collectErrorStrings(item, out));
+}
+
+function normalizeErrorSearchText(rawMessage: string): string {
+  try {
+    const parsed = JSON.parse(rawMessage) as unknown;
+    const parts: string[] = [];
+    collectErrorStrings(parsed, parts);
+    if (parts.length > 0) {
+      return parts.join(" ").toLowerCase();
+    }
+  } catch {
+    // Fall back to plain-text matching when the message is not JSON.
+  }
+  return rawMessage.toLowerCase();
+}
+
+export function inferModelErrorKindFromMessage(rawMessage: string): ModelErrorKind | null {
+  const lower = normalizeErrorSearchText(rawMessage);
+
+  if (
+    lower.includes("insufficient_balance") ||
+    lower.includes("insufficient balance") ||
+    lower.includes("balance too low") ||
+    lower.includes("account balance too low") ||
+    lower.includes("insufficient_quota") ||
+    lower.includes("insufficient quota") ||
+    lower.includes("billing") ||
+    lower.includes("payment required") ||
+    lower.includes("credit balance") ||
+    lower.includes("余额不足") ||
+    lower.includes("欠费")
+  ) {
+    return "billing";
+  }
+
+  if (
+    lower.includes("api key") ||
+    lower.includes("unauthorized") ||
+    lower.includes("invalid_api_key") ||
+    lower.includes("authentication") ||
+    lower.includes("permission denied") ||
+    lower.includes("forbidden")
+  ) {
+    return "auth";
+  }
+
+  if (
+    lower.includes("rate limit") ||
+    lower.includes("too many requests") ||
+    lower.includes("429") ||
+    lower.includes("quota")
+  ) {
+    return "rate_limit";
+  }
+
+  if (lower.includes("timeout") || lower.includes("timed out") || lower.includes("deadline")) {
+    return "timeout";
+  }
+
+  if (
+    lower.includes("connection") ||
+    lower.includes("network") ||
+    lower.includes("dns") ||
+    lower.includes("connect") ||
+    lower.includes("socket") ||
+    lower.includes("decoding response body") ||
+    lower.includes("decode response body") ||
+    lower.includes("error decoding response body") ||
+    lower.includes("error sending request for url") ||
+    lower.includes("sending request for url")
+  ) {
+    return "network";
+  }
+
+  return null;
+}
+
 export function getModelErrorDisplay(
   input: ModelErrorKind | ModelConnectionTestResult,
 ) {

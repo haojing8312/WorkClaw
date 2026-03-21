@@ -21,7 +21,11 @@ import {
 import type { TaskJourneyViewModel } from "./chat-side-panel/view-model";
 import { TaskJourneySummary } from "./chat-journey/TaskJourneySummary";
 import { getDefaultModel } from "../lib/default-model";
-import { getModelErrorDisplay, isModelErrorKind } from "../lib/model-error-display";
+import {
+  getModelErrorDisplay,
+  inferModelErrorKindFromMessage,
+  isModelErrorKind,
+} from "../lib/model-error-display";
 import {
   subscribeChatStreamEvent,
   type AssistantReasoningCompletedEvent,
@@ -68,6 +72,14 @@ type ChatSessionExecutionContext = {
 };
 
 const SESSION_DRAFT_STORAGE_PREFIX = "workclaw:session-draft:";
+const RUN_FAILURE_CARD_CLASS =
+  "mr-auto max-w-[80%] rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-900 shadow-sm";
+const RUN_FAILURE_SECTION_LABEL_CLASS = "text-xs font-medium tracking-wide text-amber-700";
+const RUN_FAILURE_MESSAGE_CLASS = "mt-2 whitespace-pre-wrap text-sm text-amber-800";
+const RUN_FAILURE_TECHNICAL_DETAILS_TOGGLE_CLASS =
+  "inline-flex items-center rounded-lg border border-amber-200 bg-white/70 px-3 py-1.5 text-xs font-medium text-amber-800 transition-colors hover:bg-white";
+const RUN_FAILURE_TECHNICAL_DETAILS_PANEL_CLASS =
+  "mt-2 whitespace-pre-wrap break-all rounded-xl border border-white/70 bg-white/70 px-4 py-3 font-mono text-xs text-amber-900/90";
 
 function getSessionDraftStorageKey(sessionId: string): string {
   return `${SESSION_DRAFT_STORAGE_PREFIX}${sessionId}`;
@@ -82,6 +94,10 @@ function readSessionDraft(sessionId: string): string {
   } catch {
     return "";
   }
+}
+
+function getRunFailureTechnicalToggleLabel(expanded: boolean): string {
+  return expanded ? "隐藏技术详情" : "查看技术详情";
 }
 
 function persistSessionDraft(sessionId: string, value: string) {
@@ -296,6 +312,7 @@ export function ChatView({
   const initialRuntimeState = clonePersistedChatRuntimeState(persistedRuntimeState);
   const [messages, setMessages] = useState<Message[]>([]);
   const [sessionRuns, setSessionRuns] = useState<SessionRunProjection[]>([]);
+  const [expandedRunDetailIds, setExpandedRunDetailIds] = useState<string[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(initialRuntimeState.streaming);
   // 有序的流式输出项：文字和工具调用按时间顺序排列
@@ -658,6 +675,11 @@ export function ChatView({
     if (raw.includes("VISION_MODEL_NOT_CONFIGURED")) {
       return "请先在设置中配置图片理解模型";
     }
+    const modelErrorKind = inferModelErrorKindFromMessage(raw);
+    if (modelErrorKind) {
+      const display = getModelErrorDisplay(modelErrorKind);
+      return `${display.title}：${display.message}`;
+    }
     return `错误: ${raw}`;
   };
 
@@ -669,6 +691,16 @@ export function ChatView({
         ? error.message
         : String(error ?? "");
     return raw.includes("VISION_MODEL_NOT_CONFIGURED");
+  };
+
+  const isModelRouteFailureError = (error: unknown): boolean => {
+    const raw =
+      typeof error === "string"
+        ? error
+        : error instanceof Error
+        ? error.message
+        : String(error ?? "");
+    return inferModelErrorKindFromMessage(raw) !== null;
   };
 
   const renderUserContentParts = (parts: ChatMessagePart[]) => {
@@ -859,6 +891,14 @@ export function ChatView({
     scrollAnimationTargetRef.current = null;
   };
 
+  const setScrollRegionTop = (scrollRegion: HTMLDivElement, top: number) => {
+    if (typeof scrollRegion.scrollTo === "function") {
+      scrollRegion.scrollTo({ top });
+      return;
+    }
+    scrollRegion.scrollTop = top;
+  };
+
   const animateScrollRegionTo = (targetTop: number, durationMs = 1000, target: "top" | "bottom" | null = null) => {
     const scrollRegion = scrollRegionRef.current;
     if (!scrollRegion) {
@@ -874,7 +914,7 @@ export function ChatView({
     const distance = clampedTargetTop - startTop;
 
     if (Math.abs(distance) < 1) {
-      scrollRegion.scrollTo({ top: clampedTargetTop });
+      setScrollRegionTop(scrollRegion, clampedTargetTop);
       syncScrollMetrics(scrollRegion);
       if (target !== "bottom") {
         scrollAnimationTargetRef.current = null;
@@ -884,7 +924,7 @@ export function ChatView({
 
     const easeOutCubic = (t: number) => 1 - Math.pow(1 - t, 3);
     const initialTop = startTop + distance * 0.22;
-    scrollRegion.scrollTo({ top: initialTop });
+    setScrollRegionTop(scrollRegion, initialTop);
     syncScrollMetrics(scrollRegion);
     let startTime: number | null = null;
 
@@ -894,7 +934,7 @@ export function ChatView({
       }
       const progress = Math.min((timestamp - startTime) / durationMs, 1);
       const nextTop = startTop + distance * easeOutCubic(progress);
-      scrollRegion.scrollTo({ top: nextTop });
+      setScrollRegionTop(scrollRegion, nextTop);
       syncScrollMetrics(scrollRegion);
 
       if (progress < 1) {
@@ -1646,20 +1686,23 @@ export function ChatView({
       onSessionUpdate?.();
     } catch (e) {
       const preserveInlineError = shouldPreserveInlineSendError(e);
+      const modelRouteFailureError = isModelRouteFailureError(e);
       const userFacingError = toUserFacingSendError(e);
-      setComposerError(userFacingError);
+      setComposerError(modelRouteFailureError ? null : userFacingError);
       if (preserveInlineError) {
         return;
       }
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          content: userFacingError,
-          created_at: new Date().toISOString(),
-        },
-      ]);
       await Promise.all([loadMessages(sessionId), loadSessionRuns(sessionId)]);
+      if (!modelRouteFailureError) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "assistant",
+            content: userFacingError,
+            created_at: new Date().toISOString(),
+          },
+        ]);
+      }
     } finally {
       setStreaming(false);
     }
@@ -2796,16 +2839,28 @@ export function ChatView({
 
     if (isModelErrorKind(run.error_kind)) {
       const display = getModelErrorDisplay(run.error_kind);
-      const rawMessage =
-        run.error_message &&
-        run.error_message !== display.title &&
-        run.error_message !== display.message
-          ? run.error_message
-          : null;
       return {
         title: display.title,
         message: display.message,
-        rawMessage,
+        rawMessage:
+          run.error_kind === "unknown" &&
+          run.error_message &&
+          run.error_message !== display.title &&
+          run.error_message !== display.message
+            ? run.error_message
+            : null,
+      };
+    }
+
+    const inferredModelErrorKind = run.error_message
+      ? inferModelErrorKindFromMessage(run.error_message)
+      : null;
+    if (inferredModelErrorKind) {
+      const display = getModelErrorDisplay(inferredModelErrorKind);
+      return {
+        title: display.title,
+        message: display.message,
+        rawMessage: null as string | null,
       };
     }
 
@@ -2832,6 +2887,8 @@ export function ChatView({
   function renderRunFailureCard(run: SessionRunProjection) {
     const display = getRunFailureDisplay(run);
     const showContinueAction = run.error_kind === "max_turns";
+    const rawDetailsExpanded = expandedRunDetailIds.includes(run.id);
+    const technicalToggleLabel = getRunFailureTechnicalToggleLabel(rawDetailsExpanded);
 
     return (
       <motion.div
@@ -2839,16 +2896,31 @@ export function ChatView({
         data-testid={`run-failure-card-${run.id}`}
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
-        className="mr-auto max-w-[80%] rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-900 shadow-sm"
+        className={RUN_FAILURE_CARD_CLASS}
       >
-        <div className="text-xs font-medium tracking-wide text-amber-700">本轮执行结果</div>
+        <div className={RUN_FAILURE_SECTION_LABEL_CLASS}>本轮执行结果</div>
         <div className="mt-1 text-lg font-semibold">{display.title}</div>
         {display.message ? (
-          <div className="mt-2 whitespace-pre-wrap text-sm text-amber-800">{display.message}</div>
+          <div className={RUN_FAILURE_MESSAGE_CLASS}>{display.message}</div>
         ) : null}
         {display.rawMessage ? (
-          <div className="mt-2 whitespace-pre-wrap break-all rounded-xl border border-white/70 bg-white/70 px-4 py-3 font-mono text-xs text-amber-900/90">
-            {display.rawMessage}
+          <div className="mt-3">
+            <button
+              type="button"
+              onClick={() =>
+                setExpandedRunDetailIds((prev) =>
+                  prev.includes(run.id) ? prev.filter((item) => item !== run.id) : [...prev, run.id],
+                )
+              }
+              className={RUN_FAILURE_TECHNICAL_DETAILS_TOGGLE_CLASS}
+            >
+              {technicalToggleLabel}
+            </button>
+            {rawDetailsExpanded ? (
+              <div className={RUN_FAILURE_TECHNICAL_DETAILS_PANEL_CLASS}>
+                {display.rawMessage}
+              </div>
+            ) : null}
           </div>
         ) : null}
         {run.buffered_text && (
@@ -2878,6 +2950,19 @@ export function ChatView({
       </motion.div>
     );
   }
+  const shouldShowAgentStateBanner = !(
+    agentState?.state === "error" &&
+    failedSessionRuns.some((run) => {
+      if (run.status !== "failed") {
+        return false;
+      }
+      if (isModelErrorKind(run.error_kind)) {
+        return true;
+      }
+      const errorMessage = (run.error_message || "").trim();
+      return errorMessage ? inferModelErrorKindFromMessage(errorMessage) !== null : false;
+    })
+  );
   return (
     <div className="flex flex-col h-full">
       {/* 头部 */}
@@ -3026,7 +3111,7 @@ export function ChatView({
             )}
           </div>
         )}
-        {agentState && agentState.state !== "thinking" && (
+        {agentState && agentState.state !== "thinking" && shouldShowAgentStateBanner && (
           <div
             className={`sticky top-0 z-10 flex items-center gap-2 bg-white/80 backdrop-blur-lg px-4 py-2 rounded-xl text-xs border shadow-sm mx-4 mt-2 ${
               agentState.state === "stopped"

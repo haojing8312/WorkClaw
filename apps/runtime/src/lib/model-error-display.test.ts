@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { getModelErrorDisplay } from "./model-error-display";
+import { getModelErrorDisplay, inferModelErrorKindFromMessage } from "./model-error-display";
 
 describe("getModelErrorDisplay", () => {
   test("maps billing errors to the shared balance warning copy", () => {
@@ -29,5 +29,21 @@ describe("getModelErrorDisplay", () => {
         rawMessage: "Unauthorized: invalid_api_key",
       }),
     );
+  });
+
+  test("infers auth errors from raw provider JSON payloads", () => {
+    const raw =
+      '{"type":"error","error":{"type":"authentication_error","message":"login fail: Please carry the API secret key in the Authorization field of the request header"},"request_id":"060d83de3828d796eb11939cf30ed6b8"}';
+
+    expect(inferModelErrorKindFromMessage(raw)).toBe("auth");
+  });
+
+  test.each([
+    ["billing", '{"error":{"message":"insufficient_quota","code":"insufficient_quota"}}', "billing"],
+    ["rate limit", '{"error":{"message":"429 Too Many Requests","type":"rate_limit_error"}}', "rate_limit"],
+    ["timeout", "upstream request timed out after 30s", "timeout"],
+    ["network", "error sending request for url (https://provider.example/v1/chat/completions)", "network"],
+  ])("infers %s model errors from raw transport messages", (_label, raw, expected) => {
+    expect(inferModelErrorKindFromMessage(raw)).toBe(expected);
   });
 });
