@@ -11,6 +11,7 @@ describe("model provider catalog", () => {
   test("contains the full set of official and custom providers", () => {
     expect(MODEL_PROVIDER_CATALOG.map((item) => item.id)).toEqual([
       "zhipu",
+      "doubao",
       "openai",
       "anthropic",
       "minimax-openai",
@@ -48,11 +49,24 @@ describe("model provider catalog", () => {
     const byId = (id: string) => MODEL_PROVIDER_CATALOG.find((entry) => entry.id === id);
 
     expect(byId("zhipu")?.defaultModel).toBe("glm-5-turbo");
+    expect(byId("doubao")?.defaultModel).toBe("doubao-seed-1.6");
     expect(byId("openai")?.defaultModel).toBe("gpt-5.4");
     expect(byId("anthropic")?.defaultModel).toBe("claude-sonnet-4-5-20250929");
     expect(byId("deepseek")?.defaultModel).toBe("deepseek-chat");
     expect(byId("qwen-intl")?.defaultModel).toBe("qwen3.5-plus");
     expect(byId("qwen-cn")?.defaultModel).toBe("qwen3.5-plus");
+  });
+
+  test("exposes the official doubao ark preset", () => {
+    const item = MODEL_PROVIDER_CATALOG.find((entry) => entry.id === "doubao");
+    expect(item).toBeDefined();
+    expect(item).toMatchObject({
+      providerKey: "doubao",
+      apiFormat: "openai",
+      baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+      defaultModel: "doubao-seed-1.6",
+      models: ["doubao-seed-1.6"],
+    });
   });
 
   test("uses MiniMax domestic defaults for official presets", () => {

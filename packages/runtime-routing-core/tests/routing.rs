@@ -28,6 +28,9 @@ fn recommended_models_cover_known_providers() {
 
     let deepseek = recommended_models_for_provider("deepseek");
     assert!(deepseek.iter().any(|m| m == "deepseek-chat"));
+
+    let doubao = recommended_models_for_provider("doubao");
+    assert!(doubao.iter().any(|m| m == "doubao-seed-1.6"));
 }
 
 #[test]

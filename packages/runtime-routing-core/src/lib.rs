@@ -134,6 +134,7 @@ pub fn default_model_for_protocol(protocol_type: &str) -> &'static str {
 
 pub fn recommended_models_for_provider(provider_key: &str) -> Vec<String> {
     match provider_key {
+        "doubao" => vec!["doubao-seed-1.6".to_string()],
         "deepseek" => vec!["deepseek-chat".to_string(), "deepseek-reasoner".to_string()],
         "qwen" => vec![
             "qwen-max".to_string(),
