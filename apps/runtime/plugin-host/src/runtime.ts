@@ -173,6 +173,15 @@ function generatePairingCode(): string {
   return Math.random().toString(36).slice(2, 10).toUpperCase();
 }
 
+function normalizeOutboundTarget(rawTarget: unknown): string | undefined {
+  return (
+    stripPrefixedTarget(rawTarget, "chat:") ??
+    stripPrefixedTarget(rawTarget, "user:") ??
+    stripPrefixedTarget(rawTarget, "feishu:") ??
+    readString(rawTarget)
+  );
+}
+
 export type PluginRuntimeState = {
   config: {
     loadConfig: () => PluginRuntimeConfig;
@@ -214,7 +223,27 @@ export type PluginRuntimeState = {
         peer?: { kind?: string; id?: string };
       }) => { agentId: string; sessionKey: string; matchedBy: string };
     };
-      reply: {
+    outbound: {
+      sendMessage: (params: {
+        accountId?: string | null;
+        target?: string | null;
+        threadId?: string | null;
+        text?: string | null;
+        mode?: string | null;
+      }) => Promise<{
+        delivered: boolean;
+        channel: string;
+        accountId: string;
+        target: string;
+        threadId?: string;
+        text: string;
+        mode: string;
+        messageId: string;
+        chatId: string;
+        sequence: number;
+      }>;
+    };
+    reply: {
         resolveEnvelopeFormatOptions: (_cfg?: PluginRuntimeConfig) => Record<string, unknown>;
         formatAgentEnvelope: (params: { body?: string; bodyForAgent?: string }) => string;
         finalizeInboundContext: (ctx: Record<string, unknown>) => Record<string, unknown>;
@@ -263,6 +292,7 @@ export function createPluginRuntime(input: {
   const systemRecords: Array<{ message: string; meta?: Record<string, unknown> }> = [];
   const dispatchRequests: Array<Record<string, unknown>> = [];
   const pairingRequests = new Map<string, Record<string, unknown>>();
+  let outboundSendSequence = 0;
   const config = input.config ?? {};
 
   function createLogger(scope: string): PluginRuntimeLogger {
@@ -375,6 +405,49 @@ export function createPluginRuntime(input: {
       },
       routing: {
         resolveAgentRoute,
+      },
+      outbound: {
+        async sendMessage(params) {
+          const accountId = readString(params.accountId) ?? "default";
+          const target = normalizeOutboundTarget(params.target);
+          if (!target) {
+            throw new Error("outbound target is required");
+          }
+          const text = readString(params.text) ?? "";
+          const mode = readString(params.mode) ?? "text";
+          const threadId = readString(params.threadId);
+          const sequence = ++outboundSendSequence;
+          const result = {
+            delivered: true,
+            channel: "feishu",
+            accountId,
+            target,
+            ...(threadId ? { threadId } : {}),
+            text,
+            mode,
+            messageId: `om_outbound_${sequence}`,
+            chatId: target,
+            sequence,
+          };
+
+          systemRecords.push({
+            message: "outbound-send-request",
+            meta: {
+              accountId,
+              target,
+              ...(threadId ? { threadId } : {}),
+              text,
+              mode,
+              sequence,
+            },
+          });
+          systemRecords.push({
+            message: "outbound-send-result",
+            meta: result,
+          });
+
+          return result;
+        },
       },
       reply: {
         resolveEnvelopeFormatOptions() {

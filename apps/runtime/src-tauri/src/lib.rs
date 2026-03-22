@@ -154,22 +154,16 @@ fn apply_startup_preferences(app: &mut tauri::App, pool: &sqlx::SqlitePool) {
     }
 }
 
-fn spawn_sidecar_bootstrap(sidecar_manager: Arc<SidecarManager>) {
-    std::thread::spawn(move || {
-        tauri::async_runtime::block_on(async move {
-            for i in 0..20 {
-                if sidecar_manager.health_check().await.is_ok() {
-                    break;
-                }
-                if let Err(e) = sidecar_manager.start().await {
-                    eprintln!("[sidecar] start attempt {} failed: {}", i + 1, e);
-                } else {
-                    break;
-                }
-                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-            }
-        });
-    });
+async fn bootstrap_sidecar(sidecar_manager: Arc<SidecarManager>) {
+    for _ in 0..20 {
+        if sidecar_manager.health_check().await.is_ok() {
+            return;
+        }
+        if sidecar_manager.start().await.is_ok() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    }
 }
 
 fn restore_saved_mcp_servers(pool: sqlx::SqlitePool, registry: Arc<ToolRegistry>) {
@@ -399,8 +393,22 @@ pub fn run() {
                 journal_store,
                 Arc::clone(&handles.registry),
             );
-            spawn_sidecar_bootstrap(handles.sidecar_manager.clone());
             restore_saved_mcp_servers(pool.clone(), Arc::clone(&handles.registry));
+            tauri::async_runtime::spawn({
+                let pool = pool.clone();
+                let runtime_state = app.state::<OpenClawPluginFeishuRuntimeState>().inner().clone();
+                let app_handle = app.handle().clone();
+                let sidecar_manager = handles.sidecar_manager.clone();
+                async move {
+                    bootstrap_sidecar(sidecar_manager).await;
+                    let _ = commands::openclaw_plugins::maybe_restore_openclaw_plugin_feishu_runtime_with_pool(
+                        &pool,
+                        &runtime_state,
+                        app_handle,
+                    )
+                    .await;
+                }
+            });
             tauri::async_runtime::spawn({
                 let pool = pool.clone();
                 async move {

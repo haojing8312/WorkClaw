@@ -2,6 +2,7 @@ use crate::windows_process::hide_console_window;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::process::ExitStatus;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 
@@ -23,6 +24,12 @@ pub struct SidecarManager {
     env_vars: Arc<Mutex<HashMap<String, String>>>,
     url: String,
     resource_dir: Option<PathBuf>,
+}
+
+fn child_has_exited(child: &mut Child) -> Result<Option<ExitStatus>> {
+    child
+        .try_wait()
+        .map_err(anyhow::Error::from)
 }
 
 fn resolve_packaged_node_command(bundle_dir: &Path) -> String {
@@ -61,25 +68,6 @@ fn resolve_packaged_sidecar_runtime(bundle_dir: &Path) -> Option<ResolvedSidecar
 pub fn resolve_sidecar_runtime(paths: SidecarRuntimePaths) -> Result<ResolvedSidecarRuntime> {
     let mut searched = Vec::new();
 
-    if let Some(resource_dir) = paths.resource_dir.as_ref() {
-        for bundle_dir in [
-            resource_dir.join("sidecar-runtime"),
-            resource_dir.join("resources").join("sidecar-runtime"),
-        ] {
-            searched.push(bundle_dir.display().to_string());
-            if let Some(runtime) = resolve_packaged_sidecar_runtime(&bundle_dir) {
-                return Ok(runtime);
-            }
-        }
-    }
-
-    for bundle_dir in [paths.cwd.join("resources").join("sidecar-runtime")] {
-        searched.push(bundle_dir.display().to_string());
-        if let Some(runtime) = resolve_packaged_sidecar_runtime(&bundle_dir) {
-            return Ok(runtime);
-        }
-    }
-
     let dev_candidates = [
         paths.cwd.join("sidecar").join("dist").join("index.js"),
         paths
@@ -100,6 +88,25 @@ pub fn resolve_sidecar_runtime(paths: SidecarRuntimePaths) -> Result<ResolvedSid
                     .unwrap_or_else(|| paths.cwd.clone()),
                 script,
             });
+        }
+    }
+
+    if let Some(resource_dir) = paths.resource_dir.as_ref() {
+        for bundle_dir in [
+            resource_dir.join("sidecar-runtime"),
+            resource_dir.join("resources").join("sidecar-runtime"),
+        ] {
+            searched.push(bundle_dir.display().to_string());
+            if let Some(runtime) = resolve_packaged_sidecar_runtime(&bundle_dir) {
+                return Ok(runtime);
+            }
+        }
+    }
+
+    for bundle_dir in [paths.cwd.join("resources").join("sidecar-runtime")] {
+        searched.push(bundle_dir.display().to_string());
+        if let Some(runtime) = resolve_packaged_sidecar_runtime(&bundle_dir) {
+            return Ok(runtime);
         }
     }
 
@@ -130,9 +137,17 @@ impl SidecarManager {
 
     pub async fn start(&self) -> Result<()> {
         {
-            let proc = self.process.lock().unwrap();
-            if proc.is_some() {
-                return Ok(());
+            let mut proc = self.process.lock().unwrap();
+            if let Some(child) = proc.as_mut() {
+                match child_has_exited(child)? {
+                    None => {
+                        // The sidecar process is still alive. Wait for health below instead of
+                        // returning immediately, so we can recover if the server is still warming up.
+                    }
+                    Some(_) => {
+                        *proc = None;
+                    }
+                }
             }
         }
 
@@ -142,32 +157,47 @@ impl SidecarManager {
             resource_dir: self.resource_dir.clone(),
         })?;
 
-        let mut command = Command::new(&runtime.command);
-        command
-            .arg(&runtime.script)
-            .current_dir(&runtime.working_dir)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        for (key, value) in self.env_vars.lock().unwrap().iter() {
-            command.env(key, value);
-        }
-
-        hide_console_window(&mut command);
-
-        let child = command.spawn()?;
         {
             let mut proc = self.process.lock().unwrap();
-            *proc = Some(child);
+            if proc.is_none() {
+                let mut command = Command::new(&runtime.command);
+                command
+                    .arg(&runtime.script)
+                    .current_dir(&runtime.working_dir)
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped());
+                for (key, value) in self.env_vars.lock().unwrap().iter() {
+                    command.env(key, value);
+                }
+
+                hide_console_window(&mut command);
+
+                let child = command.spawn()?;
+                *proc = Some(child);
+            }
         }
 
         // Wait for server to be ready (max 5 seconds)
         for _ in 0..50 {
             if self.health_check().await.is_ok() {
-                eprintln!("[sidecar] Service started: {}", self.url);
                 return Ok(());
+            }
+
+            {
+                let mut proc = self.process.lock().unwrap();
+                if let Some(child) = proc.as_mut() {
+                    if child_has_exited(child)?.is_some() {
+                        *proc = None;
+                        break;
+                    }
+                } else {
+                    break;
+                }
             }
             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         }
+
+        self.stop();
 
         Err(anyhow::anyhow!("Sidecar startup timeout"))
     }
@@ -186,7 +216,6 @@ impl SidecarManager {
         if let Some(mut child) = proc.take() {
             let _ = child.kill();
             let _ = child.wait();
-            eprintln!("[sidecar] Service stopped");
         }
     }
 

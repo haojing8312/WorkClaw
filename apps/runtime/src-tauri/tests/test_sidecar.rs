@@ -26,6 +26,32 @@ fn resolve_sidecar_runtime_prefers_packaged_resource_layout() {
 }
 
 #[test]
+fn resolve_sidecar_runtime_prefers_dev_layout_when_available() {
+    let tmp = tempdir().expect("tempdir");
+    let resource_dir = tmp.path().join("resources");
+    let packaged_sidecar_dir = resource_dir.join("sidecar-runtime");
+    std::fs::create_dir_all(&packaged_sidecar_dir).expect("create packaged sidecar dir");
+    std::fs::write(packaged_sidecar_dir.join("index.js"), "console.log('packaged sidecar');")
+        .expect("write packaged sidecar script");
+    std::fs::write(packaged_sidecar_dir.join("node.exe"), "node")
+        .expect("write packaged node placeholder");
+
+    let dev_sidecar_dir = tmp.path().join("sidecar").join("dist");
+    std::fs::create_dir_all(&dev_sidecar_dir).expect("create dev sidecar dir");
+    std::fs::write(dev_sidecar_dir.join("index.js"), "console.log('dev sidecar');")
+        .expect("write dev sidecar script");
+
+    let resolved = resolve_sidecar_runtime(SidecarRuntimePaths {
+        cwd: tmp.path().to_path_buf(),
+        resource_dir: Some(resource_dir),
+    })
+    .expect("dev sidecar runtime should resolve ahead of packaged resources");
+
+    assert_eq!(resolved.command, "node");
+    assert!(resolved.script.ends_with("sidecar/dist/index.js"));
+}
+
+#[test]
 fn resolve_sidecar_runtime_falls_back_to_dev_layout() {
     let tmp = tempdir().expect("tempdir");
     let dev_sidecar_dir = tmp.path().join("sidecar").join("dist");

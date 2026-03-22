@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+const scriptPath = fileURLToPath(import.meta.url);
 const projectRoot = path.resolve(scriptDir, "..");
 const bundleDir = path.join(
   projectRoot,
@@ -13,13 +14,39 @@ const bundleDir = path.join(
   "resources",
   "sidecar-runtime",
 );
-const distEntry = path.join(bundleDir, "dist", "index.js");
 const bundledNodeName = process.platform === "win32" ? "node.exe" : "node";
 
 function resolvePnpmRunner() {
   return {
     command: process.platform === "win32" ? "pnpm.cmd" : "pnpm",
     args: [],
+  };
+}
+
+export function buildDeployCommand(runner, pnpmMajor, targetDir, baseEnv = process.env) {
+  const deployArgs = [
+    ...runner.args,
+    "--filter",
+    "workclaw-runtime-sidecar",
+    "deploy",
+    "--prod",
+    "--config.bin-links=false",
+  ];
+  if (pnpmMajor >= 10) {
+    deployArgs.push("--legacy");
+  }
+  deployArgs.push(targetDir);
+
+  return {
+    command: runner.command,
+    args: deployArgs,
+    env: {
+      ...baseEnv,
+      npm_config_bin_links: "false",
+      pnpm_config_bin_links: "false",
+      NPM_CONFIG_BIN_LINKS: "false",
+      PNPM_CONFIG_BIN_LINKS: "false",
+    },
   };
 }
 
@@ -44,12 +71,12 @@ function readPnpmMajorVersion(runner) {
   return major;
 }
 
-function runOrThrow(command, args) {
+function runOrThrow(command, args, env = process.env) {
   const result = spawnSync(command, args, {
     cwd: projectRoot,
     stdio: "inherit",
     windowsHide: true,
-    env: process.env,
+    env,
     shell: process.platform === "win32",
   });
 
@@ -58,26 +85,26 @@ function runOrThrow(command, args) {
   }
 }
 
+function removeDirForWindowsBuild(targetDir) {
+  if (process.platform === "win32") {
+    spawnSync("cmd.exe", ["/c", "rmdir", "/s", "/q", targetDir], {
+      cwd: projectRoot,
+      windowsHide: true,
+      env: process.env,
+    });
+  }
+  rmSync(targetDir, { recursive: true, force: true });
+}
+
 function main() {
-  rmSync(bundleDir, { recursive: true, force: true });
+  removeDirForWindowsBuild(bundleDir);
 
   const runner = resolvePnpmRunner();
   const pnpmMajor = readPnpmMajorVersion(runner);
-  const deployArgs = [
-    ...runner.args,
-    "--filter",
-    "workclaw-runtime-sidecar",
-    "deploy",
-    "--prod",
-  ];
-  if (pnpmMajor >= 10) {
-    deployArgs.push("--legacy");
-  }
-  deployArgs.push("--config.bin-links=false", bundleDir);
-  runOrThrow(runner.command, [
-    ...deployArgs,
-  ]);
+  const deployCommand = buildDeployCommand(runner, pnpmMajor, bundleDir);
+  runOrThrow(deployCommand.command, deployCommand.args, deployCommand.env);
 
+  const distEntry = path.join(bundleDir, "dist", "index.js");
   if (!existsSync(distEntry)) {
     throw new Error(
       `Bundled sidecar runtime is missing ${distEntry}. Run the sidecar build before staging resources.`,
@@ -87,4 +114,10 @@ function main() {
   copyFileSync(process.execPath, path.join(bundleDir, bundledNodeName));
 }
 
-main();
+const isMainModule =
+  typeof process.argv[1] === "string" &&
+  path.resolve(process.argv[1]) === path.resolve(scriptPath);
+
+if (isMainModule) {
+  main();
+}

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import readline from "node:readline";
 import { pathToFileURL } from "node:url";
 
 const workspaceRuntimeDir = path.resolve(process.cwd(), "..");
@@ -213,6 +214,40 @@ function readString(value) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+function normalizeOutboundTarget(rawTarget) {
+  const value = readString(rawTarget);
+  if (!value) {
+    return undefined;
+  }
+  if (value.startsWith("chat:")) {
+    return value.slice("chat:".length).trim() || undefined;
+  }
+  if (value.startsWith("user:")) {
+    return value.slice("user:".length).trim() || undefined;
+  }
+  if (value.startsWith("feishu:")) {
+    return value.slice("feishu:".length).trim() || undefined;
+  }
+  return value;
+}
+
+function normalizeCommandPayload(payload) {
+  if (!asRecord(payload)) {
+    return undefined;
+  }
+  const requestId = readString(payload.requestId) ?? readString(payload.id) ?? readString(payload.request_id);
+  const command = readString(payload.command);
+  return {
+    requestId,
+    command,
+    accountId: readString(payload.accountId) ?? readString(payload.account_id),
+    target: readString(payload.target),
+    threadId: readString(payload.threadId) ?? readString(payload.thread_id),
+    text: readString(payload.text),
+    mode: readString(payload.mode),
+  };
+}
+
 function normalizeAllowFrom(value) {
   if (Array.isArray(value)) {
     return value.map((entry) => String(entry ?? "").trim()).filter(Boolean);
@@ -321,6 +356,7 @@ function createPluginRuntime(config) {
   const records = [];
   const systemRecords = [];
   const pairingRequests = new Map();
+  let outboundSendSequence = 0;
 
   function pushRecord(level, scope, args) {
     const message = stringifyLogArgs(args);
@@ -448,6 +484,49 @@ function createPluginRuntime(config) {
       },
       routing: {
         resolveAgentRoute,
+      },
+      outbound: {
+        async sendMessage(params) {
+          const accountId = readString(params?.accountId) ?? "default";
+          const target = normalizeOutboundTarget(params?.target);
+          if (!target) {
+            throw new Error("outbound target is required");
+          }
+          const text = readString(params?.text) ?? "";
+          const mode = readString(params?.mode) ?? "text";
+          const threadId = readString(params?.threadId);
+          const sequence = ++outboundSendSequence;
+          const result = {
+            delivered: true,
+            channel: "feishu",
+            accountId,
+            target,
+            ...(threadId ? { threadId } : {}),
+            text,
+            mode,
+            messageId: `om_outbound_${sequence}`,
+            chatId: target,
+            sequence,
+          };
+
+          systemRecords.push({
+            message: "outbound-send-request",
+            meta: {
+              accountId,
+              target,
+              ...(threadId ? { threadId } : {}),
+              text,
+              mode,
+              sequence,
+            },
+          });
+          systemRecords.push({
+            message: "outbound-send-result",
+            meta: result,
+          });
+
+          return result;
+        },
       },
       reply: {
         resolveEnvelopeFormatOptions() {
@@ -652,6 +731,46 @@ function prepareFixture(pluginRoot, fixtureName) {
   return targetRoot;
 }
 
+function resolveOutboundCommandSender(channel, config, defaultAccountId) {
+  const outbound = asRecord(channel?.outbound);
+  if (typeof outbound?.sendText !== "function") {
+    throw new Error("feishu channel outbound.sendText not found");
+  }
+  let outboundCommandSequence = 0;
+
+  return async function sendCommand(request) {
+    const accountId = readString(request?.accountId) ?? defaultAccountId;
+    const target = readString(request?.target);
+    if (!target) {
+      throw new Error("outbound target is required");
+    }
+    const text = readString(request?.text) ?? "";
+
+    const result = await outbound.sendText({
+      cfg: config,
+      to: target,
+      text,
+      accountId,
+      threadId: readString(request?.threadId),
+    });
+    const sequence = ++outboundCommandSequence;
+    const normalized = asRecord(result);
+
+    return {
+      delivered: typeof normalized.delivered === "boolean" ? normalized.delivered : true,
+      channel: readString(normalized.channel) ?? "feishu",
+      accountId: readString(normalized.accountId) ?? accountId,
+      target: readString(normalized.target) ?? target,
+      threadId: readString(normalized.threadId) ?? readString(request?.threadId) ?? null,
+      text: readString(normalized.text) ?? text,
+      mode: readString(normalized.mode) ?? readString(request?.mode) ?? "text",
+      messageId: readString(normalized.messageId) ?? `om_outbound_${sequence}`,
+      chatId: readString(normalized.chatId) ?? target,
+      sequence,
+    };
+  };
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const pluginRoot = path.resolve(args.pluginRoot);
@@ -684,6 +803,7 @@ async function main() {
   if (typeof channel?.config?.resolveAccount !== "function") {
     throw new Error("feishu channel config.resolveAccount not found");
   }
+  const sendOutboundCommand = resolveOutboundCommandSender(channel, config, args.accountId);
 
   const account = channel.config.resolveAccount(config, args.accountId);
   const runtimeStatus = {};
@@ -705,20 +825,140 @@ async function main() {
     accountId: args.accountId,
   });
 
-  await channel.gateway.startAccount({
-    cfg: config,
-    accountId: args.accountId,
-    account,
-    runtime,
-    abortSignal: abortController.signal,
-    log: logger,
-    getStatus: () => runtimeStatus,
-    setStatus: (next) => {
-      Object.assign(runtimeStatus, next);
-      emit("status", { patch: next });
-    },
-    channelRuntime: runtime.channel,
+  let gatewayStartError = null;
+  const gatewayStartPromise = channel.gateway
+    .startAccount({
+      cfg: config,
+      accountId: args.accountId,
+      account,
+      runtime,
+      abortSignal: abortController.signal,
+      log: logger,
+      getStatus: () => runtimeStatus,
+      setStatus: (next) => {
+        Object.assign(runtimeStatus, next);
+        emit("status", { patch: next });
+      },
+      channelRuntime: runtime.channel,
+    })
+    .catch((error) => {
+      gatewayStartError = error instanceof Error ? error : new Error(String(error));
+      emit("fatal", {
+        error: gatewayStartError.message,
+      });
+      if (!abortController.signal.aborted) {
+        abortController.abort();
+      }
+    });
+
+  const stdinInterface = readline.createInterface({
+    input: process.stdin,
+    crlfDelay: Infinity,
   });
+  const pendingCommandChain = [];
+  let commandChain = Promise.resolve();
+
+  const handleCommandLine = async (line) => {
+    const trimmed = String(line ?? "").trim();
+    if (!trimmed) {
+      return;
+    }
+    let commandPayload;
+    try {
+      commandPayload = normalizeCommandPayload(JSON.parse(trimmed));
+    } catch (error) {
+      emit("command_error", {
+        requestId: null,
+        command: null,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+    if (!commandPayload?.command) {
+      emit("command_error", {
+        requestId: commandPayload?.requestId ?? null,
+        command: null,
+        error: "command is required",
+      });
+      return;
+    }
+    if (commandPayload.command !== "send_message") {
+      emit("command_error", {
+        requestId: commandPayload.requestId ?? null,
+        command: commandPayload.command,
+        error: `unsupported command: ${commandPayload.command}`,
+      });
+      return;
+    }
+
+    const request = {
+      requestId: commandPayload.requestId ?? `cmd_${Date.now()}`,
+      command: commandPayload.command,
+      accountId: commandPayload.accountId ?? args.accountId,
+      target: commandPayload.target,
+      threadId: commandPayload.threadId,
+      text: commandPayload.text ?? "",
+      mode: commandPayload.mode ?? "text",
+    };
+
+    emit("send_request", {
+      requestId: request.requestId,
+      request,
+    });
+    try {
+      const result = await sendOutboundCommand(request);
+      emit("send_result", {
+        requestId: request.requestId,
+        request,
+        result,
+      });
+    } catch (error) {
+      emit("command_error", {
+        requestId: request.requestId,
+        command: request.command,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+
+  const lifecycle = new Promise((resolve) => {
+    stdinInterface.on("line", (line) => {
+      commandChain = commandChain
+        .then(() => handleCommandLine(line))
+        .catch((error) => {
+          emit("command_error", {
+            requestId: null,
+            command: null,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      pendingCommandChain.push(commandChain);
+    });
+    stdinInterface.on("close", () => {
+      resolve("stdin-close");
+    });
+    abortController.signal.addEventListener(
+      "abort",
+      () => {
+        resolve("abort");
+      },
+      { once: true },
+    );
+  });
+
+  if (process.stdin.isTTY) {
+    process.stdin.resume();
+  }
+
+  await lifecycle;
+  await Promise.all(pendingCommandChain);
+  await gatewayStartPromise;
+  stdinInterface.close();
+
+  if (gatewayStartError) {
+    process.exitCode = 1;
+    return;
+  }
 
   emit("stopped", {
     accountId: args.accountId,

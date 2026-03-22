@@ -1,5 +1,9 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { SettingsView } from "../SettingsView";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  SettingsView,
+  buildFeishuOnboardingState,
+  type FeishuOnboardingInput,
+} from "../SettingsView";
 
 const invokeMock = vi.fn();
 const { openExternalUrlMock } = vi.hoisted(() => ({
@@ -365,6 +369,10 @@ describe("SettingsView connector visibility", () => {
     openExternalUrlMock.mockClear();
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   test("shows the redesigned feishu connector anchors and keeps advanced new-bot access", async () => {
     render(<SettingsView onClose={() => {}} />);
 
@@ -384,12 +392,246 @@ describe("SettingsView connector visibility", () => {
     expect(screen.queryByRole("button", { name: "配对与授权" })).not.toBeInTheDocument();
     expect(screen.queryByPlaceholderText("飞书事件订阅 Verification Token")).not.toBeInTheDocument();
     expect(screen.queryByPlaceholderText("飞书事件订阅 Encrypt Key")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "新建机器人向导（高级）" })).toBeInTheDocument();
-    expect(screen.getByText("查看安装向导输出")).toBeInTheDocument();
+    expect(within(screen.getByTestId("feishu-onboarding-step")).getByRole("button", { name: "启动连接" })).toBeInTheDocument();
+    expect(screen.getByText("高级设置与控制台")).toBeInTheDocument();
+  });
+
+  test("refreshes plugin host inspection while feishu tab stays open without auto-starting runtime", async () => {
+    vi.useFakeTimers();
+
+    render(<SettingsView onClose={() => {}} initialTab="feishu" />);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(screen.getByText("飞书连接")).toBeInTheDocument();
+
+    const initialHostLoads = invokeMock.mock.calls.filter(
+      ([command]) => command === "list_openclaw_plugin_channel_hosts",
+    ).length;
+    const initialSnapshotLoads = invokeMock.mock.calls.filter(
+      ([command]) => command === "get_openclaw_plugin_feishu_channel_snapshot",
+    ).length;
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+
+    expect(
+      invokeMock.mock.calls.filter(([command]) => command === "list_openclaw_plugin_channel_hosts")
+        .length,
+    ).toBeGreaterThan(initialHostLoads);
+    expect(
+      invokeMock.mock.calls.filter(
+        ([command]) => command === "get_openclaw_plugin_feishu_channel_snapshot",
+      ).length,
+    ).toBeGreaterThan(initialSnapshotLoads);
+    expect(
+      invokeMock.mock.calls.some(
+        ([command]) => command === "start_openclaw_plugin_feishu_runtime",
+      ),
+    ).toBe(false);
+  }, 15000);
+
+  test("does not auto-start feishu runtime when opening the feishu tab", async () => {
+    const { rerender } = render(<SettingsView onClose={() => {}} initialTab="feishu" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("飞书连接")).toBeInTheDocument();
+    });
+
+    expect(
+      invokeMock.mock.calls.some(
+        ([command]) => command === "start_openclaw_plugin_feishu_runtime",
+      ),
+    ).toBe(false);
+  });
+
+  test("polls feishu setup progress in background without re-running environment detection", async () => {
+    vi.useFakeTimers();
+
+    render(<SettingsView onClose={() => {}} initialTab="feishu" />);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    const initialProgressLoads = invokeMock.mock.calls.filter(
+      ([command]) => command === "get_feishu_setup_progress",
+    ).length;
+    const initialEnvironmentLoads = invokeMock.mock.calls.filter(
+      ([command]) => command === "get_feishu_plugin_environment_status",
+    ).length;
+    const initialRuntimeStatusLoads = invokeMock.mock.calls.filter(
+      ([command]) => command === "get_openclaw_plugin_feishu_runtime_status",
+    ).length;
+
+    expect(initialProgressLoads).toBe(1);
+    expect(initialEnvironmentLoads).toBe(0);
+    expect(initialRuntimeStatusLoads).toBe(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+
+    expect(
+      invokeMock.mock.calls.filter(([command]) => command === "get_feishu_setup_progress").length,
+    ).toBeGreaterThan(initialProgressLoads);
+    expect(
+      invokeMock.mock.calls.filter(
+        ([command]) => command === "get_feishu_plugin_environment_status",
+      ).length,
+    ).toBe(initialEnvironmentLoads);
+    expect(
+      invokeMock.mock.calls.filter(
+        ([command]) => command === "get_openclaw_plugin_feishu_runtime_status",
+      ).length,
+    ).toBeGreaterThan(initialRuntimeStatusLoads);
+  }, 15000);
+
+  test("renders one primary onboarding step at a time", async () => {
+    render(<SettingsView onClose={() => {}} initialTab="feishu" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("feishu-onboarding-step")).toBeInTheDocument();
+    });
+
+    expect(screen.getAllByTestId("feishu-onboarding-step")).toHaveLength(1);
+    expect(screen.getByTestId("feishu-onboarding-step")).toHaveTextContent("完成授权");
+    expect(screen.queryByText("检查运行环境")).not.toBeVisible();
+    expect(screen.queryByText("绑定已有机器人")).not.toBeVisible();
+  });
+
+  test("switches from skip to reopen within the local onboarding flow", async () => {
+    render(<SettingsView onClose={() => {}} initialTab="feishu" />);
+
+    await waitFor(() => {
+      expect(within(screen.getByTestId("feishu-onboarding-step")).getByRole("button", { name: "启动连接" })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "暂时跳过" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "重新打开引导" })).toBeInTheDocument();
+    });
+
+    expect(
+      within(screen.getByTestId("feishu-onboarding-step")).queryByRole("button", { name: "启动连接" }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "重新打开引导" }));
+
+    await waitFor(() => {
+      expect(within(screen.getByTestId("feishu-onboarding-step")).getByRole("button", { name: "启动连接" })).toBeInTheDocument();
+      expect(screen.getByTestId("feishu-onboarding-step")).toBeInTheDocument();
+    });
+  });
+
+  test("reconciles local skip state when backend onboarding progress advances", async () => {
+    let setupProgressCalls = 0;
+
+    installInvokeMock({
+      get_feishu_setup_progress: async () => {
+        setupProgressCalls += 1;
+        if (setupProgressCalls === 1) {
+          return {
+            environment: {
+              node_available: true,
+              npm_available: true,
+              node_version: "v22.0.0",
+              npm_version: "10.0.0",
+              can_install_plugin: true,
+              can_start_runtime: true,
+              error: null,
+            },
+            credentials_configured: true,
+            plugin_installed: true,
+            plugin_version: "2026.3.17",
+            runtime_running: true,
+            runtime_last_error: null,
+            auth_status: "pending",
+            pending_pairings: 0,
+            default_routing_employee_name: null,
+            scoped_routing_count: 0,
+            summary_state: "awaiting_auth",
+          };
+        }
+
+        return {
+          environment: {
+            node_available: true,
+            npm_available: true,
+            node_version: "v22.0.0",
+            npm_version: "10.0.0",
+            can_install_plugin: true,
+            can_start_runtime: true,
+            error: null,
+          },
+          credentials_configured: true,
+          plugin_installed: true,
+          plugin_version: "2026.3.17",
+          runtime_running: true,
+          runtime_last_error: null,
+          auth_status: "approved",
+          pending_pairings: 0,
+          default_routing_employee_name: "太子",
+          scoped_routing_count: 2,
+          summary_state: "ready_for_routing",
+        };
+      },
+    });
+
+    render(<SettingsView onClose={() => {}} initialTab="feishu" />);
+
+    await waitFor(() => {
+      expect(within(screen.getByTestId("feishu-onboarding-step")).getByRole("button", { name: "启动连接" })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "暂时跳过" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "重新打开引导" })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "重新打开引导" }));
+
+    await waitFor(() => {
+      expect(within(screen.getByTestId("feishu-onboarding-step")).getByRole("button", { name: "启动连接" })).toBeInTheDocument();
+    });
+
+    fireEvent.click(within(screen.getByTestId("feishu-onboarding-step")).getByRole("button", { name: "刷新授权状态" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("设置接待")).toBeInTheDocument();
+      expect(within(screen.getByTestId("feishu-onboarding-step")).getByRole("button", { name: "请从员工中心继续" })).toBeDisabled();
+      expect(screen.queryByText("已跳过引导。需要时随时点击“重新打开引导”。")).not.toBeInTheDocument();
+    });
+  });
+
+  test("keeps the existing console available as an advanced section", async () => {
+    render(<SettingsView onClose={() => {}} initialTab="feishu" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("高级设置与控制台")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText("高级设置与控制台"));
+
+    await waitFor(() => {
+      expect(screen.getByText("连接详情")).toBeInTheDocument();
+      expect(screen.getByText("高级设置")).toBeInTheDocument();
+    });
   });
 
   test("starts the advanced create-bot installer session from the redesigned feishu page", async () => {
     render(<SettingsView onClose={() => {}} initialTab="feishu" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("高级设置与控制台")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText("高级设置与控制台"));
 
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "新建机器人向导（高级）" })).toBeInTheDocument();
@@ -403,6 +645,511 @@ describe("SettingsView connector visibility", () => {
         appId: null,
         appSecret: null,
       });
+    });
+  });
+
+  test("shows an immediate launching state for the advanced create-bot flow", async () => {
+    let resolveStart: ((value: unknown) => void) | null = null;
+    installInvokeMock({
+      get_feishu_setup_progress: async () => ({
+        environment: {
+          node_available: true,
+          npm_available: true,
+          node_version: "v22.0.0",
+          npm_version: "10.0.0",
+          can_install_plugin: true,
+          can_start_runtime: true,
+          error: null,
+        },
+        credentials_configured: false,
+        plugin_installed: true,
+        plugin_version: "2026.3.17",
+        runtime_running: false,
+        runtime_last_error: null,
+        auth_status: "pending",
+        pending_pairings: 0,
+        default_routing_employee_name: null,
+        scoped_routing_count: 0,
+        summary_state: "ready_to_bind",
+      }),
+      start_openclaw_lark_installer_session: () =>
+        new Promise((resolve) => {
+          resolveStart = resolve;
+        }),
+    });
+
+    render(<SettingsView onClose={() => {}} initialTab="feishu" />);
+
+    const onboardingStep = await screen.findByTestId("feishu-onboarding-step");
+    fireEvent.click(within(onboardingStep).getByRole("button", { name: "新建机器人向导（高级）" }));
+
+    expect(within(onboardingStep).getByRole("button", { name: "启动中..." })).toBeDisabled();
+    expect(within(onboardingStep).getByText("正在启动飞书官方创建机器人向导，请稍候...")).toBeInTheDocument();
+
+    resolveStart?.({
+      running: true,
+      mode: "create",
+      started_at: "2026-03-22T00:00:00Z",
+      last_output_at: "2026-03-22T00:00:01Z",
+      last_error: null,
+      prompt_hint: "请使用飞书扫码完成机器人创建",
+      recent_output: ["[system] official installer started"],
+    });
+
+    await waitFor(() => {
+      expect(within(onboardingStep).getByText("已启动飞书官方创建机器人向导")).toBeInTheDocument();
+    });
+  });
+
+  test("switches the guided Feishu branch between existing and create paths", async () => {
+    installInvokeMock({
+      get_feishu_gateway_settings: async () => ({
+        app_id: "",
+        app_secret: "",
+        ingress_token: "",
+        encrypt_key: "",
+        sidecar_base_url: "",
+      }),
+      get_feishu_setup_progress: async () => ({
+        environment: {
+          node_available: true,
+          npm_available: true,
+          node_version: "v22.0.0",
+          npm_version: "10.0.0",
+          can_install_plugin: true,
+          can_start_runtime: true,
+          error: null,
+        },
+        credentials_configured: false,
+        plugin_installed: false,
+        plugin_version: null,
+        runtime_running: false,
+        runtime_last_error: null,
+        auth_status: "pending",
+        pending_pairings: 0,
+        default_routing_employee_name: null,
+        scoped_routing_count: 0,
+        summary_state: "ready_to_bind",
+      }),
+    });
+
+    render(<SettingsView onClose={() => {}} initialTab="feishu" />);
+
+    const onboardingStep = await screen.findByTestId("feishu-onboarding-step");
+
+    fireEvent.click(within(onboardingStep).getByRole("button", { name: "绑定已有机器人" }));
+
+    await waitFor(() => {
+      expect(within(onboardingStep).getByRole("button", { name: "验证机器人信息" })).toBeInTheDocument();
+      expect(screen.getByTestId("feishu-onboarding-state")).toHaveTextContent("绑定已有机器人");
+    });
+
+    fireEvent.click(screen.getByText("高级设置与控制台"));
+
+    await waitFor(() => {
+      expect(screen.getByText("App ID")).toBeInTheDocument();
+      expect(screen.getByText("App Secret")).toBeInTheDocument();
+    });
+
+    fireEvent.click(within(onboardingStep).getByRole("button", { name: "新建机器人" }));
+
+    await waitFor(() => {
+      expect(within(onboardingStep).getByRole("button", { name: "新建机器人向导（高级）" })).toBeInTheDocument();
+      expect(screen.getByTestId("feishu-onboarding-state")).toHaveTextContent("新建机器人");
+      expect(screen.queryByText("App ID")).not.toBeInTheDocument();
+      expect(screen.queryByText("App Secret")).not.toBeInTheDocument();
+    });
+  });
+
+  test("requires existing-robot credentials before continuing but not on the create path", async () => {
+    installInvokeMock({
+      get_feishu_setup_progress: async () => ({
+        environment: {
+          node_available: true,
+          npm_available: true,
+          node_version: "v22.0.0",
+          npm_version: "10.0.0",
+          can_install_plugin: true,
+          can_start_runtime: true,
+          error: null,
+        },
+        credentials_configured: false,
+        plugin_installed: false,
+        plugin_version: null,
+        runtime_running: false,
+        runtime_last_error: null,
+        auth_status: "pending",
+        pending_pairings: 0,
+        default_routing_employee_name: null,
+        scoped_routing_count: 0,
+        summary_state: "ready_to_bind",
+      }),
+    });
+
+    render(<SettingsView onClose={() => {}} initialTab="feishu" />);
+
+    const onboardingStep = await screen.findByTestId("feishu-onboarding-step");
+
+    fireEvent.click(within(onboardingStep).getByRole("button", { name: "绑定已有机器人" }));
+    fireEvent.click(screen.getByText("高级设置与控制台"));
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText("cli_xxx")).toBeInTheDocument();
+      expect(screen.getByPlaceholderText("填写机器人的 App Secret")).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByPlaceholderText("cli_xxx"), { target: { value: "" } });
+    fireEvent.change(screen.getByPlaceholderText("填写机器人的 App Secret"), { target: { value: "" } });
+
+    fireEvent.click(within(onboardingStep).getByRole("button", { name: "验证机器人信息" }));
+
+    await waitFor(() => {
+      expect(within(onboardingStep).getByText("请先填写已有机器人的 App ID 和 App Secret")).toBeInTheDocument();
+      expect(screen.getAllByText("请先填写已有机器人的 App ID 和 App Secret")).toHaveLength(1);
+    });
+
+    fireEvent.click(within(onboardingStep).getByRole("button", { name: "新建机器人" }));
+    fireEvent.click(within(onboardingStep).getByRole("button", { name: "新建机器人向导（高级）" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("start_openclaw_lark_installer_session", {
+        mode: "create",
+        appId: null,
+        appSecret: null,
+      });
+    });
+  });
+
+  test("shows create-path installer failures inline inside the guided step", async () => {
+    installInvokeMock({
+      get_feishu_setup_progress: async () => ({
+        environment: {
+          node_available: true,
+          npm_available: true,
+          node_version: "v22.0.0",
+          npm_version: "10.0.0",
+          can_install_plugin: true,
+          can_start_runtime: true,
+          error: null,
+        },
+        credentials_configured: false,
+        plugin_installed: false,
+        plugin_version: null,
+        runtime_running: false,
+        runtime_last_error: null,
+        auth_status: "pending",
+        pending_pairings: 0,
+        default_routing_employee_name: null,
+        scoped_routing_count: 0,
+        summary_state: "ready_to_bind",
+      }),
+      get_openclaw_lark_installer_session_status: async () => ({
+        running: false,
+        mode: "create",
+        started_at: null,
+        last_output_at: null,
+        last_error: null,
+        prompt_hint: null,
+        recent_output: [],
+      }),
+      start_openclaw_lark_installer_session: async () => {
+        throw "simulated install failure";
+      },
+    });
+
+    render(<SettingsView onClose={() => {}} initialTab="feishu" />);
+
+    const onboardingStep = await screen.findByTestId("feishu-onboarding-step");
+
+    fireEvent.click(within(onboardingStep).getByRole("button", { name: "新建机器人向导（高级）" }));
+
+    await waitFor(() => {
+      expect(within(onboardingStep).getByText("启动飞书官方创建机器人向导失败: simulated install failure")).toBeInTheDocument();
+      expect(screen.getAllByText("启动飞书官方创建机器人向导失败: simulated install failure")).toHaveLength(1);
+    });
+  });
+
+  test("surfaces the create installer output directly inside the guided panel", async () => {
+    installInvokeMock({
+      get_feishu_setup_progress: async () => ({
+        environment: {
+          node_available: true,
+          npm_available: true,
+          node_version: "v22.0.0",
+          npm_version: "10.0.0",
+          can_install_plugin: true,
+          can_start_runtime: true,
+          error: null,
+        },
+        credentials_configured: false,
+        plugin_installed: true,
+        plugin_version: "2026.3.17",
+        runtime_running: false,
+        runtime_last_error: null,
+        auth_status: "pending",
+        pending_pairings: 0,
+        default_routing_employee_name: null,
+        scoped_routing_count: 0,
+        summary_state: "ready_to_bind",
+      }),
+      get_openclaw_lark_installer_session_status: async () => ({
+        running: true,
+        mode: "create",
+        started_at: "2026-03-22T00:00:00Z",
+        last_output_at: "2026-03-22T00:00:02Z",
+        last_error: null,
+        prompt_hint: "请使用飞书扫码完成机器人创建",
+        recent_output: [
+          "[system] official installer started (pid=123, mode=create)",
+          "Scan with Feishu to configure your bot",
+        ],
+      }),
+    });
+
+    render(<SettingsView onClose={() => {}} initialTab="feishu" />);
+
+    const guidedPanel = await screen.findByTestId("feishu-guided-installer-panel");
+    expect(within(guidedPanel).getByText("飞书官方创建机器人向导正在这里继续")).toBeInTheDocument();
+    expect(within(guidedPanel).getByText("向导运行中")).toBeInTheDocument();
+    expect(within(guidedPanel).getByText("请使用飞书扫码完成机器人创建")).toBeInTheDocument();
+    expect(within(guidedPanel).getByText(/Scan with Feishu to configure your bot/)).toBeInTheDocument();
+  });
+
+  test("pins the qr block above filtered installer logs in the guided panel", async () => {
+    installInvokeMock({
+      get_feishu_setup_progress: async () => ({
+        environment: {
+          node_available: true,
+          npm_available: true,
+          node_version: "v22.0.0",
+          npm_version: "10.0.0",
+          can_install_plugin: true,
+          can_start_runtime: true,
+          error: null,
+        },
+        credentials_configured: false,
+        plugin_installed: true,
+        plugin_version: "2026.3.17",
+        runtime_running: false,
+        runtime_last_error: null,
+        auth_status: "pending",
+        pending_pairings: 0,
+        default_routing_employee_name: null,
+        scoped_routing_count: 0,
+        summary_state: "ready_to_bind",
+      }),
+      get_openclaw_lark_installer_session_status: async () => ({
+        running: true,
+        mode: "create",
+        started_at: "2026-03-22T00:00:00Z",
+        last_output_at: "2026-03-22T00:00:02Z",
+        last_error: null,
+        prompt_hint: "请使用飞书扫码完成机器人创建",
+        recent_output: [
+          "[DEBUG] Request: {",
+          "  host: 'https://accounts.feishu.cn',",
+          "}",
+          "████",
+          "█  █",
+          "████",
+          "[DEBUG] Poll result: {",
+          "  \"error\": \"authorization_pending\"",
+          "}",
+          "[stderr] - Fetching configuration results (正在获取你的机器人配置结果)...",
+        ],
+      }),
+    });
+
+    render(<SettingsView onClose={() => {}} initialTab="feishu" />);
+
+    const guidedPanel = await screen.findByTestId("feishu-guided-installer-panel");
+    expect(within(guidedPanel).getByTestId("feishu-guided-installer-qr")).toHaveTextContent("████");
+    expect(within(guidedPanel).getByText("请使用飞书扫码继续")).toBeInTheDocument();
+    expect(within(guidedPanel).getByText("[stderr] - Fetching configuration results (正在获取你的机器人配置结果)...")).toBeInTheDocument();
+    expect(within(guidedPanel).queryByText("[DEBUG] Request: {")).not.toBeInTheDocument();
+    expect(within(guidedPanel).queryByText("[DEBUG] Poll result: {")).not.toBeInTheDocument();
+  });
+
+  test("shows auth-start failures inline inside the active onboarding step", async () => {
+    installInvokeMock({
+      get_feishu_gateway_settings: async () => ({
+        app_id: "cli-app",
+        app_secret: "cli-secret",
+        ingress_token: "",
+        encrypt_key: "",
+        sidecar_base_url: "",
+      }),
+      get_feishu_setup_progress: async () => ({
+        environment: {
+          node_available: true,
+          npm_available: true,
+          node_version: "v22.0.0",
+          npm_version: "10.0.0",
+          can_install_plugin: true,
+          can_start_runtime: true,
+          error: null,
+        },
+        credentials_configured: true,
+        plugin_installed: true,
+        plugin_version: "2026.3.17",
+        runtime_running: false,
+        runtime_last_error: null,
+        auth_status: "pending",
+        pending_pairings: 0,
+        default_routing_employee_name: null,
+        scoped_routing_count: 0,
+        summary_state: "awaiting_auth",
+      }),
+      start_openclaw_plugin_feishu_runtime: async () => {
+        throw "runtime failed";
+      },
+    });
+
+    render(<SettingsView onClose={() => {}} initialTab="feishu" />);
+
+    const onboardingStep = await screen.findByTestId("feishu-onboarding-step");
+
+    fireEvent.click(within(onboardingStep).getByRole("button", { name: "启动连接" }));
+
+    await waitFor(() => {
+      expect(within(onboardingStep).getByText("安装并启动飞书连接失败: runtime failed")).toBeInTheDocument();
+      expect(screen.getAllByText("安装并启动飞书连接失败: runtime failed")).toHaveLength(1);
+    });
+  });
+
+  test("uses the backend-derived create_robot branch when the primary CTA is clicked before any path chip", async () => {
+    installInvokeMock({
+      get_feishu_setup_progress: async () => ({
+        environment: {
+          node_available: true,
+          npm_available: true,
+          node_version: "v22.0.0",
+          npm_version: "10.0.0",
+          can_install_plugin: true,
+          can_start_runtime: true,
+          error: null,
+        },
+        credentials_configured: false,
+        plugin_installed: false,
+        plugin_version: null,
+        runtime_running: false,
+        runtime_last_error: null,
+        auth_status: "pending",
+        pending_pairings: 0,
+        default_routing_employee_name: null,
+        scoped_routing_count: 0,
+        summary_state: "ready_to_bind",
+      }),
+      get_openclaw_lark_installer_session_status: async () => ({
+        running: false,
+        mode: "create",
+        started_at: null,
+        last_output_at: null,
+        last_error: null,
+        prompt_hint: null,
+        recent_output: [],
+      }),
+    });
+
+    render(<SettingsView onClose={() => {}} initialTab="feishu" />);
+
+    const onboardingStep = await screen.findByTestId("feishu-onboarding-step");
+
+    expect(screen.getByTestId("feishu-onboarding-state")).toHaveTextContent("新建机器人");
+
+    fireEvent.click(within(onboardingStep).getByRole("button", { name: "新建机器人向导（高级）" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("start_openclaw_lark_installer_session", {
+        mode: "create",
+        appId: null,
+        appSecret: null,
+      });
+    });
+  });
+
+  test("shows install/start failures inline inside the authorization onboarding step", async () => {
+    installInvokeMock({
+      get_feishu_setup_progress: async () => ({
+        environment: {
+          node_available: true,
+          npm_available: true,
+          node_version: "v22.0.0",
+          npm_version: "10.0.0",
+          can_install_plugin: true,
+          can_start_runtime: true,
+          error: null,
+        },
+        credentials_configured: true,
+        plugin_installed: false,
+        plugin_version: null,
+        runtime_running: false,
+        runtime_last_error: null,
+        auth_status: "pending",
+        pending_pairings: 0,
+        default_routing_employee_name: null,
+        scoped_routing_count: 0,
+        summary_state: "awaiting_auth",
+      }),
+      list_openclaw_plugin_channel_hosts: async () => [],
+      install_openclaw_plugin_from_npm: async () => {
+        throw new Error("npm offline");
+      },
+    });
+
+    render(<SettingsView onClose={() => {}} initialTab="feishu" />);
+
+    const onboardingStep = await screen.findByTestId("feishu-onboarding-step");
+
+    fireEvent.click(within(onboardingStep).getByRole("button", { name: "安装并启动" }));
+
+    await waitFor(() => {
+      expect(within(onboardingStep).getByText("安装并启动飞书连接失败: Error: npm offline")).toBeInTheDocument();
+      expect(screen.getAllByText("安装并启动飞书连接失败: Error: npm offline")).toHaveLength(1);
+    });
+  });
+
+  test("uses the authorization primary action instead of becoming a no-op", async () => {
+    installInvokeMock({
+      get_feishu_setup_progress: async () => ({
+        environment: {
+          node_available: true,
+          npm_available: true,
+          node_version: "v22.0.0",
+          npm_version: "10.0.0",
+          can_install_plugin: true,
+          can_start_runtime: true,
+          error: null,
+        },
+        credentials_configured: true,
+        plugin_installed: true,
+        plugin_version: "2026.3.17",
+        runtime_running: false,
+        runtime_last_error: null,
+        auth_status: "pending",
+        pending_pairings: 0,
+        default_routing_employee_name: null,
+        scoped_routing_count: 0,
+        summary_state: "awaiting_auth",
+      }),
+      start_openclaw_plugin_feishu_runtime: async () => {
+        throw new Error("runtime boom");
+      },
+    });
+
+    render(<SettingsView onClose={() => {}} initialTab="feishu" />);
+
+    const onboardingStep = await screen.findByTestId("feishu-onboarding-step");
+
+    fireEvent.click(within(onboardingStep).getByRole("button", { name: "启动连接" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("start_openclaw_plugin_feishu_runtime", {
+        pluginId: "openclaw-lark",
+        accountId: null,
+      });
+      expect(within(onboardingStep).getByText("安装并启动飞书连接失败: Error: runtime boom")).toBeInTheDocument();
+      expect(screen.getAllByText("安装并启动飞书连接失败: Error: runtime boom")).toHaveLength(1);
     });
   });
 
@@ -436,10 +1183,10 @@ describe("SettingsView connector visibility", () => {
     render(<SettingsView onClose={() => {}} initialTab="feishu" onOpenEmployees={onOpenEmployees} />);
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "去设置接待员工" })).toBeInTheDocument();
+      expect(within(screen.getByTestId("feishu-onboarding-step")).getByRole("button", { name: "去设置接待员工" })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "去设置接待员工" }));
+    fireEvent.click(within(screen.getByTestId("feishu-onboarding-step")).getByRole("button", { name: "去设置接待员工" }));
 
     expect(onOpenEmployees).toHaveBeenCalledTimes(1);
   });
@@ -464,10 +1211,10 @@ describe("SettingsView connector visibility", () => {
     render(<SettingsView onClose={() => {}} initialTab="feishu" />);
 
     await waitFor(() => {
-      expect(screen.getByText("高级设置")).toBeInTheDocument();
+      expect(screen.getByText("高级设置与控制台")).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByText("高级设置"));
+    fireEvent.click(screen.getByText("高级设置与控制台"));
 
     await waitFor(() => {
       expect(screen.getByText("消息与展示")).toBeInTheDocument();
@@ -481,9 +1228,10 @@ describe("SettingsView connector visibility", () => {
     render(<SettingsView onClose={() => {}} initialTab="feishu" />);
 
     await waitFor(() => {
-      expect(screen.getByText("连接详情")).toBeInTheDocument();
+      expect(screen.getByText("高级设置与控制台")).toBeInTheDocument();
     });
 
+    fireEvent.click(screen.getByText("高级设置与控制台"));
     fireEvent.click(screen.getByText("连接详情"));
 
     await waitFor(() => {
@@ -525,7 +1273,19 @@ describe("SettingsView connector visibility", () => {
     });
 
     expect(screen.getAllByText("还差默认员工").length).toBeGreaterThan(0);
-    expect(screen.getByRole("button", { name: "去设置接待员工" })).toBeInTheDocument();
+    expect(
+      within(screen.getByTestId("feishu-onboarding-step")).getByRole("button", {
+        name: "请从员工中心继续",
+      }),
+    ).toBeDisabled();
+  });
+
+  test("shows a continue onboarding entry when setup is incomplete", async () => {
+    render(<SettingsView onClose={() => {}} initialTab="feishu" />);
+
+    await waitFor(() => {
+      expect(within(screen.getByTestId("feishu-onboarding-step")).getByRole("button", { name: "启动连接" })).toBeInTheDocument();
+    });
   });
 
   test("shows ready-to-receive state when default routing employee exists", async () => {
@@ -559,7 +1319,417 @@ describe("SettingsView connector visibility", () => {
       expect(screen.getAllByText("已可接待").length).toBeGreaterThan(0);
     });
 
-    expect(screen.getByText("默认接待员工和 2 条群聊范围规则都已生效。")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "调整接待设置" })).toBeInTheDocument();
+    expect(screen.getAllByText("默认接待员工和 2 条群聊范围规则都已生效。").length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("button", { name: "调整接待设置" }).length).toBeGreaterThan(0);
+  });
+
+  test("exposes a guided step order for unfinished Feishu setup", () => {
+    const onboarding = buildFeishuOnboardingState({
+      summaryState: "plugin_not_installed",
+      installerMode: "link",
+    });
+
+    expect(onboarding.skipped).toBe(false);
+    expect(onboarding.currentStep).toBe("plugin");
+    expect(onboarding.stepOrder).toEqual(["environment", "plugin", "existing_robot", "authorize", "approve_pairing", "routing"]);
+    expect(onboarding.canContinue).toBe(false);
+  });
+
+  test("prefers the explicit summary state over setup progress state", () => {
+    const onboarding = buildFeishuOnboardingState({
+      summaryState: "awaiting_auth",
+      setupProgress: {
+        environment: {
+          node_available: true,
+          npm_available: true,
+          node_version: "v22.0.0",
+          npm_version: "10.0.0",
+          can_install_plugin: true,
+          can_start_runtime: true,
+          error: null,
+        },
+        credentials_configured: true,
+        plugin_installed: true,
+        plugin_version: null,
+        runtime_running: true,
+        runtime_last_error: null,
+        auth_status: "approved",
+        pending_pairings: 0,
+        default_routing_employee_name: null,
+        scoped_routing_count: 0,
+        summary_state: "plugin_not_installed",
+      },
+    });
+
+    expect(onboarding.currentStep).toBe("authorize");
+    expect(onboarding.stepOrder).toEqual(["environment", "plugin", "existing_robot", "authorize", "approve_pairing", "routing"]);
+  });
+
+  test("defaults branch selection to create robot once plugin install is ready", () => {
+    const existingRobot = buildFeishuOnboardingState({
+      summaryState: "ready_to_bind",
+      installerMode: "link",
+    });
+    const createRobot = buildFeishuOnboardingState({
+      summaryState: "ready_to_bind",
+      installerMode: "create",
+    });
+
+    expect(existingRobot.currentStep).toBe("create_robot");
+    expect(existingRobot.mode).toBe("create_robot");
+    expect(createRobot.currentStep).toBe("create_robot");
+    expect(createRobot.mode).toBe("create_robot");
+  });
+
+  test("treats ready_to_bind as branch selection instead of falling back to environment", () => {
+    const onboarding = buildFeishuOnboardingState({
+      summaryState: "ready_to_bind",
+      installerMode: null,
+    });
+
+    expect(onboarding.currentStep).toBe("create_robot");
+    expect(onboarding.stepOrder).toEqual(["environment", "plugin", "create_robot", "authorize", "approve_pairing", "routing"]);
+    expect(onboarding.mode).toBe("create_robot");
+  });
+
+  test("routes plugin_starting into the authorization step instead of dropping back to environment", () => {
+    const onboarding = buildFeishuOnboardingState({
+      summaryState: "plugin_starting",
+      installerMode: "create",
+    });
+
+    expect(onboarding.currentStep).toBe("authorize");
+    expect(onboarding.stepOrder).toEqual(["environment", "plugin", "create_robot", "authorize", "approve_pairing", "routing"]);
+  });
+
+  test("routes pending pairing approval into its own onboarding step", () => {
+    const onboarding = buildFeishuOnboardingState({
+      summaryState: "awaiting_pairing_approval",
+      setupProgress: {
+        runtime_running: true,
+        auth_status: "pending",
+        pending_pairings: 1,
+      },
+      installerMode: "create",
+    });
+
+    expect(onboarding.currentStep).toBe("approve_pairing");
+    expect(onboarding.stepOrder).toEqual(["environment", "plugin", "create_robot", "authorize", "approve_pairing", "routing"]);
+  });
+
+  test("refreshes pending pairing approval while the feishu tab stays open", async () => {
+    let progressCalls = 0;
+    let pairingCalls = 0;
+    installInvokeMock({
+      get_feishu_setup_progress: async () => {
+        progressCalls += 1;
+        if (progressCalls < 2) {
+          return {
+            environment: {
+              node_available: true,
+              npm_available: true,
+              node_version: "v22.0.0",
+              npm_version: "10.0.0",
+              can_install_plugin: true,
+              can_start_runtime: true,
+              error: null,
+            },
+            credentials_configured: true,
+            plugin_installed: true,
+            plugin_version: "2026.3.17",
+            runtime_running: true,
+            runtime_last_error: null,
+            auth_status: "approved",
+            pending_pairings: 0,
+            default_routing_employee_name: "太子",
+            scoped_routing_count: 0,
+            summary_state: "ready",
+          };
+        }
+        return {
+          environment: {
+            node_available: true,
+            npm_available: true,
+            node_version: "v22.0.0",
+            npm_version: "10.0.0",
+            can_install_plugin: true,
+            can_start_runtime: true,
+            error: null,
+          },
+          credentials_configured: true,
+          plugin_installed: true,
+          plugin_version: "2026.3.17",
+          runtime_running: true,
+          runtime_last_error: null,
+          auth_status: "approved",
+          pending_pairings: 1,
+          default_routing_employee_name: "太子",
+          scoped_routing_count: 0,
+          summary_state: "awaiting_pairing_approval",
+        };
+      },
+      list_feishu_pairing_requests: async () => {
+        pairingCalls += 1;
+        if (pairingCalls < 2) {
+          return [];
+        }
+        return [
+          {
+            id: "pairing-refresh",
+            channel: "feishu",
+            account_id: "default",
+            sender_id: "ou_refresh",
+            chat_id: "ou_refresh",
+            code: "REFRESH1",
+            status: "pending",
+            created_at: "2026-03-19T10:00:00Z",
+            updated_at: "2026-03-19T10:00:00Z",
+            resolved_at: null,
+            resolved_by_user: "",
+          },
+        ];
+      },
+    });
+
+    render(<SettingsView onClose={() => {}} initialTab="feishu" />);
+
+    expect(await screen.findByText("飞书已接通，正在接收消息")).toBeInTheDocument();
+    const initialProgressCalls = progressCalls;
+    const initialPairingCalls = pairingCalls;
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5200));
+    });
+
+    expect(progressCalls).toBeGreaterThan(initialProgressCalls);
+    expect(pairingCalls).toBeGreaterThan(initialPairingCalls);
+  }, 12000);
+
+  test("shows plugin-install guidance before branch selection on a fresh machine", async () => {
+    installInvokeMock({
+      get_feishu_gateway_settings: async () => ({
+        app_id: "",
+        app_secret: "",
+        ingress_token: "",
+        encrypt_key: "",
+        sidecar_base_url: "",
+      }),
+      get_feishu_setup_progress: async () => ({
+        environment: {
+          node_available: true,
+          npm_available: true,
+          node_version: "v22.0.0",
+          npm_version: "10.0.0",
+          can_install_plugin: true,
+          can_start_runtime: true,
+          error: null,
+        },
+        credentials_configured: false,
+        plugin_installed: false,
+        plugin_version: null,
+        runtime_running: false,
+        runtime_last_error: null,
+        auth_status: "unknown",
+        pending_pairings: 0,
+        default_routing_employee_name: null,
+        scoped_routing_count: 0,
+        summary_state: "plugin_not_installed",
+      }),
+      get_openclaw_lark_installer_session_status: async () => ({
+        running: false,
+        mode: null,
+        started_at: null,
+        last_output_at: null,
+        last_error: null,
+        prompt_hint: null,
+        recent_output: [],
+      }),
+    });
+
+    render(<SettingsView onClose={() => {}} initialTab="feishu" />);
+
+    const onboardingStep = await screen.findByTestId("feishu-onboarding-step");
+
+    expect(screen.getByText("运行环境")).toBeInTheDocument();
+    expect(screen.getAllByText("已准备好").length).toBeGreaterThan(0);
+    expect(screen.getByText("先安装飞书官方插件，再继续机器人接入")).toBeInTheDocument();
+    expect(screen.getByText("先安装飞书官方插件。安装完成后，再继续新建机器人或绑定已有机器人。")).toBeInTheDocument();
+    expect(within(onboardingStep).getByRole("button", { name: "安装官方插件" })).toBeInTheDocument();
+    expect(within(onboardingStep).queryByRole("button", { name: "新建机器人" })).not.toBeInTheDocument();
+  });
+
+  test("installs the official plugin from the guided plugin step before branching", async () => {
+    installInvokeMock({
+      get_feishu_setup_progress: async () => ({
+        environment: {
+          node_available: true,
+          npm_available: true,
+          node_version: "v22.0.0",
+          npm_version: "10.0.0",
+          can_install_plugin: true,
+          can_start_runtime: true,
+          error: null,
+        },
+        credentials_configured: false,
+        plugin_installed: false,
+        plugin_version: null,
+        runtime_running: false,
+        runtime_last_error: null,
+        auth_status: "unknown",
+        pending_pairings: 0,
+        default_routing_employee_name: null,
+        scoped_routing_count: 0,
+        summary_state: "plugin_not_installed",
+      }),
+      install_openclaw_plugin_from_npm: async () => ({
+        plugin_id: "openclaw-lark",
+        npm_spec: "@larksuite/openclaw-lark",
+        version: "2026.3.17",
+        install_path: "D:/plugins/openclaw-lark",
+        source_type: "npm",
+        manifest_json: "{}",
+        installed_at: "2026-03-21T00:00:00Z",
+        updated_at: "2026-03-21T00:00:00Z",
+      }),
+    });
+
+    render(<SettingsView onClose={() => {}} initialTab="feishu" />);
+
+    const onboardingStep = await screen.findByTestId("feishu-onboarding-step");
+    fireEvent.click(within(onboardingStep).getByRole("button", { name: "安装官方插件" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("install_openclaw_plugin_from_npm", {
+        pluginId: "openclaw-lark",
+        npmSpec: "@larksuite/openclaw-lark",
+      });
+    });
+  });
+
+  test("shows the next-step notice after the create installer finishes successfully", async () => {
+    installInvokeMock({
+      get_feishu_setup_progress: async () => ({
+        environment: {
+          node_available: true,
+          npm_available: true,
+          node_version: "v22.0.0",
+          npm_version: "10.0.0",
+          can_install_plugin: true,
+          can_start_runtime: true,
+          error: null,
+        },
+        credentials_configured: false,
+        plugin_installed: true,
+        plugin_version: "2026.3.17",
+        runtime_running: false,
+        runtime_last_error: null,
+        auth_status: "unknown",
+        pending_pairings: 0,
+        default_routing_employee_name: null,
+        scoped_routing_count: 0,
+        summary_state: "ready_to_bind",
+      }),
+      get_openclaw_lark_installer_session_status: async () => ({
+        running: false,
+        mode: "create",
+        started_at: "2026-03-21T00:00:00Z",
+        last_output_at: "2026-03-21T00:00:10Z",
+        last_error: null,
+        prompt_hint: null,
+        recent_output: [
+          "[stderr] Success! Bot configured.",
+          "[system] official installer finished",
+        ],
+      }),
+    });
+
+    render(<SettingsView onClose={() => {}} initialTab="feishu" />);
+
+    expect(await screen.findByText("机器人创建已完成，请点击“启动连接”继续完成授权。")).toBeInTheDocument();
+  });
+
+  test("shows pairing approval guidance and approves the pending request from the guided step", async () => {
+    installInvokeMock({
+      get_feishu_setup_progress: async () => ({
+        environment: {
+          node_available: true,
+          npm_available: true,
+          node_version: "v22.0.0",
+          npm_version: "10.0.0",
+          can_install_plugin: true,
+          can_start_runtime: true,
+          error: null,
+        },
+        credentials_configured: true,
+        plugin_installed: true,
+        plugin_version: "2026.3.17",
+        runtime_running: true,
+        runtime_last_error: null,
+        auth_status: "pending",
+        pending_pairings: 1,
+        default_routing_employee_name: null,
+        scoped_routing_count: 0,
+        summary_state: "awaiting_pairing_approval",
+      }),
+    });
+
+    render(<SettingsView onClose={() => {}} initialTab="feishu" />);
+
+    expect(await screen.findByText("批准飞书接入请求")).toBeInTheDocument();
+    expect(screen.getAllByText("批准这次接入").length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getAllByRole("button", { name: "批准这次接入" })[0]!);
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("approve_feishu_pairing_request", {
+        requestId: "pairing-1",
+        resolvedByUser: "settings-ui",
+      });
+    });
+  });
+
+  test("explains that approved connections will auto-restore when runtime is not running", async () => {
+    installInvokeMock({
+      get_feishu_setup_progress: async () => ({
+        environment: {
+          node_available: true,
+          npm_available: true,
+          node_version: "v22.0.0",
+          npm_version: "10.0.0",
+          can_install_plugin: true,
+          can_start_runtime: true,
+          error: null,
+        },
+        credentials_configured: true,
+        plugin_installed: true,
+        plugin_version: "2026.3.17",
+        runtime_running: false,
+        runtime_last_error: null,
+        auth_status: "approved",
+        pending_pairings: 0,
+        default_routing_employee_name: "太子",
+        scoped_routing_count: 0,
+        summary_state: "plugin_starting",
+      }),
+    });
+
+    render(<SettingsView onClose={() => {}} initialTab="feishu" />);
+
+    expect(await screen.findByText("正在恢复飞书连接")).toBeInTheDocument();
+    expect(
+      screen.getByText("WorkClaw 会自动尝试恢复上次已接通的飞书连接；如果恢复失败，再手动点击“启动连接”。"),
+    ).toBeInTheDocument();
+  });
+
+  test("keeps the rest of the app accessible when Feishu setup is skipped", () => {
+    const skipped = buildFeishuOnboardingState({
+      summaryState: "skipped",
+      skipped: true,
+    });
+
+    expect(skipped.skipped).toBe(true);
+    expect(skipped.canContinue).toBe(true);
+    expect(skipped.currentStep).toBe("skipped");
+    expect(skipped.stepOrder).toEqual(["skipped"]);
   });
 });

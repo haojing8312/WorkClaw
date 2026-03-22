@@ -29,7 +29,8 @@
     "active": true,
     "targets": "all",
     "resources": [
-      "resources/sidecar-runtime/**/*"
+      "resources/sidecar-runtime/**/*",
+      "../plugin-host/**/*"
     ],
     "windows": {
       "nsis": {

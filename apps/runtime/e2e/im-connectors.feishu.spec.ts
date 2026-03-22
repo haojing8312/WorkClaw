@@ -99,8 +99,8 @@ async function installTauriMocks(page: Page): Promise<void> {
           return [];
         case "get_feishu_gateway_settings":
           return {
-            app_id: "cli-app",
-            app_secret: "cli-secret",
+            app_id: "",
+            app_secret: "",
             ingress_token: "",
             encrypt_key: "",
             sidecar_base_url: "",
@@ -153,16 +153,16 @@ async function installTauriMocks(page: Page): Promise<void> {
               can_start_runtime: true,
               error: null,
             },
-            credentials_configured: true,
-            plugin_installed: true,
-            plugin_version: "2026.3.17",
+            credentials_configured: false,
+            plugin_installed: false,
+            plugin_version: null,
             runtime_running: false,
             runtime_last_error: null,
-            auth_status: "pending",
+            auth_status: "unknown",
             pending_pairings: 0,
             default_routing_employee_name: null,
             scoped_routing_count: 0,
-            summary_state: "awaiting_auth",
+            summary_state: "plugin_not_installed",
           };
         case "get_openclaw_plugin_feishu_runtime_status":
           return {
@@ -188,21 +188,7 @@ async function installTauriMocks(page: Page): Promise<void> {
             recent_output: [],
           };
         case "list_openclaw_plugin_channel_hosts":
-          return [
-            {
-              plugin_id: "openclaw-lark",
-              npm_spec: "@larksuite/openclaw-lark",
-              version: "2026.3.17",
-              channel: "feishu",
-              display_name: "Feishu",
-              capabilities: ["pairing", "threads", "outbound"],
-              reload_config_prefixes: ["channels.feishu"],
-              target_hint: "<chatId|user:openId|chat:chatId>",
-              docs_path: "/channels/feishu",
-              status: "ready",
-              error: null,
-            },
-          ];
+          return [];
         case "list_feishu_pairing_requests":
           return [];
         case "get_openclaw_plugin_feishu_channel_snapshot":
@@ -346,10 +332,8 @@ test("settings shows task-first feishu setup anchors while keeping routing data 
   await expect(page.getByRole("button", { name: "模型连接" })).toBeVisible();
 
   await page.getByRole("button", { name: "渠道连接器" }).click();
-  await expect(page.getByText("检查运行环境", { exact: true })).toBeVisible();
-  await expect(page.getByText("绑定已有机器人", { exact: true })).toBeVisible();
-  await expect(page.getByText("完成飞书授权", { exact: true })).toBeVisible();
-  await expect(page.getByText("接待设置", { exact: true })).toBeVisible();
+  await expect(page.getByText("先安装飞书官方插件，再继续机器人接入", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "安装官方插件" })).toBeVisible();
   await expect(page.getByText("Verification Token")).toHaveCount(0);
   await expect(page.getByText("Encrypt Key")).toHaveCount(0);
 

@@ -12,22 +12,25 @@ use crate::commands::im_gateway::{process_im_event, FeishuCallbackResult};
 use crate::commands::openclaw_gateway::resolve_openclaw_route_with_pool;
 use crate::commands::openclaw_plugins::get_openclaw_plugin_feishu_channel_snapshot_with_pool;
 use crate::commands::openclaw_plugins::{
+    send_openclaw_plugin_feishu_runtime_outbound_message_in_state,
     OpenClawPluginChannelAccountSnapshot, OpenClawPluginChannelSnapshotResult,
+    OpenClawPluginFeishuOutboundSendRequest, OpenClawPluginFeishuRuntimeState,
 };
 use crate::commands::skills::DbState;
-use crate::im::feishu_adapter::{build_feishu_markdown_message, build_feishu_text_message};
+use crate::diagnostics::{self, ManagedDiagnosticsState};
+use crate::im::feishu_adapter::build_feishu_markdown_message;
 use crate::im::feishu_formatter::format_role_message;
 use crate::im::runtime_bridge::{
     build_im_role_dispatch_request_for_channel, build_im_role_event_payload_for_channel,
     ImRoleDispatchRequest, ImRoleEventPayload,
 };
 use crate::im::types::{ImEvent, ImEventType};
-use crate::sidecar::SidecarManager;
 use reqwest::Client;
 use sha2::{Digest, Sha256};
 use sqlx::FromRow;
 use sqlx::SqlitePool;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::OnceLock;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::Emitter;
@@ -491,6 +494,27 @@ fn select_feishu_channel_account_snapshot<'a>(
     snapshot.snapshot.accounts.first()
 }
 
+fn resolve_feishu_pairing_account_id(
+    event: &ImEvent,
+    snapshot: Option<&OpenClawPluginChannelSnapshotResult>,
+) -> String {
+    if let Some(account_id) = snapshot
+        .and_then(|value| select_feishu_channel_account_snapshot(value, event))
+        .map(|account| account.account_id.trim())
+        .filter(|value| !value.is_empty())
+    {
+        return account_id.to_string();
+    }
+
+    event
+        .account_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("default")
+        .to_string()
+}
+
 fn evaluate_openclaw_feishu_gate(
     event: &ImEvent,
     snapshot: &OpenClawPluginChannelSnapshotResult,
@@ -657,15 +681,25 @@ fn generate_feishu_pairing_code() -> String {
         .to_ascii_uppercase()
 }
 
+fn normalize_explicit_feishu_pairing_code(code: Option<&str>) -> Option<String> {
+    let normalized = code
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .filter(|value| !value.eq_ignore_ascii_case("PAIRING"))?;
+    Some(normalized.to_ascii_uppercase())
+}
+
 pub(crate) async fn upsert_feishu_pairing_request_with_pool(
     pool: &SqlitePool,
     account_id: &str,
     sender_id: &str,
     chat_id: &str,
+    explicit_code: Option<&str>,
 ) -> Result<(FeishuPairingRequestRecord, bool), String> {
     let normalized_account_id = account_id.trim();
     let normalized_sender_id = sender_id.trim();
     let normalized_chat_id = chat_id.trim();
+    let normalized_explicit_code = normalize_explicit_feishu_pairing_code(explicit_code);
     if normalized_account_id.is_empty() || normalized_sender_id.is_empty() {
         return Err("pairing request requires account_id and sender_id".to_string());
     }
@@ -688,12 +722,16 @@ pub(crate) async fn upsert_feishu_pairing_request_with_pool(
         } else {
             normalized_chat_id.to_string()
         };
+        let next_code = normalized_explicit_code
+            .clone()
+            .unwrap_or_else(|| existing.code.clone());
         sqlx::query(
             "UPDATE feishu_pairing_requests
-             SET chat_id = ?, updated_at = ?
+             SET chat_id = ?, code = ?, updated_at = ?
              WHERE id = ?",
         )
         .bind(&next_chat_id)
+        .bind(&next_code)
         .bind(&now)
         .bind(&existing.id)
         .execute(pool)
@@ -703,6 +741,7 @@ pub(crate) async fn upsert_feishu_pairing_request_with_pool(
         return Ok((
             FeishuPairingRequestRecord {
                 chat_id: next_chat_id,
+                code: next_code,
                 updated_at: now,
                 ..existing
             },
@@ -711,7 +750,7 @@ pub(crate) async fn upsert_feishu_pairing_request_with_pool(
     }
 
     let id = Uuid::new_v4().to_string();
-    let code = generate_feishu_pairing_code();
+    let code = normalized_explicit_code.unwrap_or_else(generate_feishu_pairing_code);
     let now = chrono::Utc::now().to_rfc3339();
     sqlx::query(
         "INSERT INTO feishu_pairing_requests (
@@ -799,12 +838,10 @@ async fn maybe_create_feishu_pairing_request_with_pool(
     if !is_direct_feishu_chat(event) {
         return Ok(None);
     }
-    let account_id = event
-        .account_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("default");
+    let snapshot = get_openclaw_plugin_feishu_channel_snapshot_with_pool(pool, "openclaw-lark")
+        .await
+        .ok();
+    let account_id = resolve_feishu_pairing_account_id(event, snapshot.as_ref());
     let Some(sender_id) = event
         .sender_id
         .as_deref()
@@ -814,9 +851,14 @@ async fn maybe_create_feishu_pairing_request_with_pool(
         return Ok(None);
     };
 
-    let (record, created) =
-        upsert_feishu_pairing_request_with_pool(pool, account_id, sender_id, &event.thread_id)
-            .await?;
+    let (record, created) = upsert_feishu_pairing_request_with_pool(
+        pool,
+        &account_id,
+        sender_id,
+        &event.thread_id,
+        None,
+    )
+    .await?;
     if created && !record.chat_id.trim().is_empty() {
         let _ = send_feishu_text_message_with_pool(
             pool,
@@ -829,7 +871,7 @@ async fn maybe_create_feishu_pairing_request_with_pool(
     Ok(Some(record))
 }
 
-pub(crate) async fn validate_feishu_auth_with_pool(
+pub async fn validate_feishu_auth_with_pool(
     pool: &SqlitePool,
     auth_token: Option<String>,
 ) -> Result<(), String> {
@@ -970,7 +1012,7 @@ pub fn calculate_feishu_signature(
     format!("{:x}", digest)
 }
 
-pub(crate) async fn validate_feishu_signature_with_pool(
+pub async fn validate_feishu_signature_with_pool(
     pool: &SqlitePool,
     payload: &str,
     timestamp: Option<String>,
@@ -1141,25 +1183,21 @@ fn parse_feishu_approval_command(text: Option<&str>) -> Option<FeishuApprovalCom
     })
 }
 
-async fn send_feishu_text_message_with_pool(
+pub async fn send_feishu_text_message_with_pool(
     pool: &SqlitePool,
     chat_id: &str,
     text: &str,
-    sidecar_base_url: Option<String>,
+    _sidecar_base_url: Option<String>,
 ) -> Result<String, String> {
-    let (resolved_app_id, resolved_app_secret) =
-        resolve_feishu_app_credentials(pool, None, None).await?;
-    let resolved_sidecar_base_url = resolve_feishu_sidecar_base_url(pool, sidecar_base_url).await?;
-
-    let mut payload = build_feishu_text_message(chat_id, text);
-    if let Some(v) = resolved_app_id {
-        payload["app_id"] = serde_json::Value::String(v);
-    }
-    if let Some(v) = resolved_app_secret {
-        payload["app_secret"] = serde_json::Value::String(v);
-    }
-
-    send_feishu_via_sidecar(payload, resolved_sidecar_base_url).await
+    let runtime_state = resolve_registered_feishu_runtime_state_for_outbound()?;
+    send_feishu_text_message_via_official_runtime_with_pool(
+        pool,
+        &runtime_state,
+        chat_id,
+        text,
+        None,
+    )
+    .await
 }
 
 async fn lookup_feishu_thread_for_session_with_pool(
@@ -1266,7 +1304,75 @@ fn build_feishu_approval_resolution_text(
     }
 }
 
-pub(crate) async fn notify_feishu_approval_requested_with_pool(
+fn feishu_runtime_outbound_state_slot() -> &'static Mutex<Option<OpenClawPluginFeishuRuntimeState>>
+{
+    static SLOT: OnceLock<Mutex<Option<OpenClawPluginFeishuRuntimeState>>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(None))
+}
+
+pub fn remember_feishu_runtime_state_for_outbound(
+    runtime_state: &OpenClawPluginFeishuRuntimeState,
+) {
+    if let Ok(mut guard) = feishu_runtime_outbound_state_slot().lock() {
+        *guard = Some(runtime_state.clone());
+    }
+}
+
+pub fn clear_feishu_runtime_state_for_outbound() {
+    if let Ok(mut guard) = feishu_runtime_outbound_state_slot().lock() {
+        *guard = None;
+    }
+}
+
+fn resolve_registered_feishu_runtime_state_for_outbound(
+) -> Result<OpenClawPluginFeishuRuntimeState, String> {
+    feishu_runtime_outbound_state_slot()
+        .lock()
+        .map_err(|_| "failed to lock feishu runtime registration".to_string())?
+        .clone()
+        .ok_or_else(|| "official feishu runtime is not registered for outbound sends".to_string())
+}
+
+async fn send_feishu_text_message_via_official_runtime_with_pool(
+    pool: &SqlitePool,
+    runtime_state: &OpenClawPluginFeishuRuntimeState,
+    chat_id: &str,
+    text: &str,
+    account_id: Option<String>,
+) -> Result<String, String> {
+    let resolved_account_id = match account_id {
+        Some(value) => {
+            let trimmed = value.trim().to_string();
+            if trimmed.is_empty() {
+                resolve_default_feishu_account_id_with_pool(pool)
+                    .await?
+                    .unwrap_or_else(|| "default".to_string())
+            } else {
+                trimmed
+            }
+        }
+        None => resolve_default_feishu_account_id_with_pool(pool)
+            .await?
+            .unwrap_or_else(|| "default".to_string()),
+    };
+
+    let result = send_openclaw_plugin_feishu_runtime_outbound_message_in_state(
+        runtime_state,
+        OpenClawPluginFeishuOutboundSendRequest {
+            request_id: Uuid::new_v4().to_string(),
+            account_id: resolved_account_id,
+            target: chat_id.trim().to_string(),
+            thread_id: Some(chat_id.trim().to_string()),
+            text: text.trim().to_string(),
+            mode: "text".to_string(),
+        },
+    )?;
+
+    serde_json::to_string(&result)
+        .map_err(|error| format!("failed to serialize outbound send result: {error}"))
+}
+
+pub async fn notify_feishu_approval_requested_with_pool(
     pool: &SqlitePool,
     session_id: &str,
     record: &PendingApprovalRecord,
@@ -1339,7 +1445,7 @@ pub(crate) async fn notify_feishu_approval_resolved_with_pool(
     Ok(())
 }
 
-pub(crate) async fn maybe_handle_feishu_approval_command_with_pool(
+pub async fn maybe_handle_feishu_approval_command_with_pool(
     pool: &SqlitePool,
     approvals: &ApprovalManager,
     event: &ImEvent,
@@ -1539,6 +1645,9 @@ pub async fn handle_feishu_event(
 ) -> Result<FeishuGatewayResult, String> {
     validate_feishu_auth_with_pool(&db.0, auth_token).await?;
     validate_feishu_signature_with_pool(&db.0, &payload, timestamp, nonce, signature).await?;
+    if let Some(runtime_state) = app.try_state::<OpenClawPluginFeishuRuntimeState>() {
+        remember_feishu_runtime_state_for_outbound(runtime_state.inner());
+    }
     match parse_feishu_payload(&payload)? {
         ParsedFeishuPayload::Challenge(challenge) => Ok(FeishuGatewayResult {
             accepted: true,
@@ -1831,63 +1940,80 @@ pub async fn send_feishu_via_sidecar(
 
 #[tauri::command]
 pub async fn send_feishu_text_message(
+    app: tauri::AppHandle,
     chat_id: String,
     text: String,
-    app_id: Option<String>,
-    app_secret: Option<String>,
-    sidecar_base_url: Option<String>,
+    _app_id: Option<String>,
+    _app_secret: Option<String>,
+    _sidecar_base_url: Option<String>,
     db: State<'_, DbState>,
-    sidecar_manager: State<'_, Arc<SidecarManager>>,
+    runtime_state: State<'_, OpenClawPluginFeishuRuntimeState>,
 ) -> Result<String, String> {
-    let (resolved_app_id, resolved_app_secret) =
-        resolve_feishu_app_credentials(&db.0, app_id, app_secret).await?;
-    let resolved_sidecar_base_url =
-        resolve_feishu_sidecar_base_url(&db.0, sidecar_base_url).await?;
-    let sidecar_base_url_label = resolved_sidecar_base_url
-        .as_deref()
-        .unwrap_or("http://localhost:8765");
+    remember_feishu_runtime_state_for_outbound(runtime_state.inner());
+    let account_id = resolve_default_feishu_account_id_with_pool(&db.0)
+        .await?
+        .unwrap_or_else(|| "default".to_string());
+    let runtime_label = "official-plugin-runtime";
+    let diagnostics_state = app.try_state::<ManagedDiagnosticsState>();
 
-    if let Err(error) = sidecar_manager.health_check().await {
-        eprintln!(
-            "[feishu/send] sidecar health check failed before send: {}",
-            error
+    if let Some(diagnostics_state) = diagnostics_state.as_ref() {
+        let _ = diagnostics::write_log_record(
+            &diagnostics_state.0.paths,
+            diagnostics::LogLevel::Info,
+            "feishu",
+            "send_message_dispatch_start",
+            "feishu outbound dispatch started",
+            Some(serde_json::json!({
+                "chat_id": chat_id.trim(),
+                "account_id": account_id.trim(),
+                "runtime": runtime_label,
+                "text_preview": text.trim().chars().take(80).collect::<String>(),
+            })),
         );
-        if let Err(start_error) = sidecar_manager.start().await {
-            eprintln!(
-                "[feishu/send] sidecar restart failed for target {}: {}",
-                chat_id.trim(),
-                start_error
-            );
-            return Err(format!("sidecar unavailable: {}", start_error));
-        }
     }
-
-    let mut payload = build_feishu_text_message(&chat_id, &text);
-    if let Some(v) = resolved_app_id {
-        payload["app_id"] = serde_json::Value::String(v);
-    }
-    if let Some(v) = resolved_app_secret {
-        payload["app_secret"] = serde_json::Value::String(v);
-    }
-    eprintln!(
-        "[feishu/send] dispatch target={} base_url={} content_preview={}",
-        chat_id.trim(),
-        sidecar_base_url_label.trim(),
-        text.trim().chars().take(80).collect::<String>()
-    );
-    let result = send_feishu_via_sidecar(payload, resolved_sidecar_base_url.clone()).await;
+    let result = send_feishu_text_message_via_official_runtime_with_pool(
+        &db.0,
+        runtime_state.inner(),
+        &chat_id,
+        &text,
+        Some(account_id.clone()),
+    )
+    .await;
     match &result {
-        Ok(_) => eprintln!(
-            "[feishu/send] dispatch succeeded target={} base_url={}",
-            chat_id.trim(),
-            sidecar_base_url_label.trim()
-        ),
-        Err(error) => eprintln!(
-            "[feishu/send] dispatch failed target={} base_url={} error={}",
-            chat_id.trim(),
-            sidecar_base_url_label.trim(),
-            error
-        ),
+        Ok(response) => {
+            if let Some(diagnostics_state) = diagnostics_state.as_ref() {
+                let _ = diagnostics::write_log_record(
+                    &diagnostics_state.0.paths,
+                    diagnostics::LogLevel::Info,
+                    "feishu",
+                    "send_message_dispatch_succeeded",
+                    "feishu outbound dispatch succeeded",
+                    Some(serde_json::json!({
+                        "chat_id": chat_id.trim(),
+                        "account_id": account_id.trim(),
+                        "runtime": runtime_label,
+                        "response_preview": response.chars().take(160).collect::<String>(),
+                    })),
+                );
+            }
+        }
+        Err(error) => {
+            if let Some(diagnostics_state) = diagnostics_state.as_ref() {
+                let _ = diagnostics::write_log_record(
+                    &diagnostics_state.0.paths,
+                    diagnostics::LogLevel::Error,
+                    "feishu",
+                    "send_message_dispatch_failed",
+                    "feishu outbound dispatch failed",
+                    Some(serde_json::json!({
+                        "chat_id": chat_id.trim(),
+                        "account_id": account_id.trim(),
+                        "runtime": runtime_label,
+                        "error": error.to_string(),
+                    })),
+                );
+            }
+        }
     }
     result
 }
@@ -2392,9 +2518,9 @@ mod tests {
         apply_default_feishu_account_id, evaluate_openclaw_feishu_gate,
         generate_feishu_pairing_code, list_feishu_pairing_allow_from_with_pool,
         parse_feishu_payload, resolve_fallback_default_feishu_account_id,
-        resolve_feishu_pairing_request_with_pool, resolve_ws_role_id, sanitize_ws_inbound_text,
-        upsert_feishu_pairing_request_with_pool, FeishuInboundGateDecision, FeishuWsEventRecord,
-        ParsedFeishuPayload,
+        resolve_feishu_pairing_account_id, resolve_feishu_pairing_request_with_pool,
+        resolve_ws_role_id, sanitize_ws_inbound_text, upsert_feishu_pairing_request_with_pool,
+        FeishuInboundGateDecision, FeishuWsEventRecord, ParsedFeishuPayload,
     };
     use crate::commands::employee_agents::AgentEmployee;
     use crate::commands::openclaw_plugins::{
@@ -2731,6 +2857,33 @@ mod tests {
     }
 
     #[test]
+    fn resolve_feishu_pairing_account_id_prefers_selected_snapshot_account() {
+        let snapshot = sample_channel_snapshot(
+            "default",
+            vec![],
+            serde_json::json!({
+                "dmPolicy": "pairing"
+            }),
+        );
+        let event = crate::im::types::ImEvent {
+            channel: "feishu".to_string(),
+            event_type: crate::im::types::ImEventType::MessageCreated,
+            thread_id: "oc_chat".to_string(),
+            event_id: None,
+            message_id: None,
+            text: Some("你好".to_string()),
+            role_id: None,
+            account_id: Some("tenant_key".to_string()),
+            sender_id: Some("ou_sender".to_string()),
+            chat_type: Some("p2p".to_string()),
+            tenant_id: Some("tenant_key".to_string()),
+        };
+
+        let resolved = resolve_feishu_pairing_account_id(&event, Some(&snapshot));
+        assert_eq!(resolved, "default");
+    }
+
+    #[test]
     fn evaluate_openclaw_feishu_gate_allows_allowlisted_direct_sender() {
         let snapshot = sample_channel_snapshot(
             "default",
@@ -2870,13 +3023,18 @@ mod tests {
         let pool = setup_pairing_pool().await;
 
         let (first, created_first) =
-            upsert_feishu_pairing_request_with_pool(&pool, "default", "ou_sender", "oc_chat")
+            upsert_feishu_pairing_request_with_pool(&pool, "default", "ou_sender", "oc_chat", None)
                 .await
                 .expect("create first request");
-        let (second, created_second) =
-            upsert_feishu_pairing_request_with_pool(&pool, "default", "ou_sender", "oc_chat_new")
-                .await
-                .expect("reuse pending request");
+        let (second, created_second) = upsert_feishu_pairing_request_with_pool(
+            &pool,
+            "default",
+            "ou_sender",
+            "oc_chat_new",
+            None,
+        )
+        .await
+        .expect("reuse pending request");
 
         assert!(created_first);
         assert!(!created_second);
@@ -2890,7 +3048,7 @@ mod tests {
         let pool = setup_pairing_pool().await;
 
         let (request, _) =
-            upsert_feishu_pairing_request_with_pool(&pool, "default", "ou_sender", "")
+            upsert_feishu_pairing_request_with_pool(&pool, "default", "ou_sender", "", None)
                 .await
                 .expect("create request");
         let resolved = resolve_feishu_pairing_request_with_pool(
@@ -2916,7 +3074,7 @@ mod tests {
         let pool = setup_pairing_pool().await;
 
         let (request, _) =
-            upsert_feishu_pairing_request_with_pool(&pool, "default", "ou_sender", "")
+            upsert_feishu_pairing_request_with_pool(&pool, "default", "ou_sender", "", None)
                 .await
                 .expect("create request");
         let resolved = resolve_feishu_pairing_request_with_pool(
@@ -2941,11 +3099,11 @@ mod tests {
         let pool = setup_pairing_pool().await;
 
         let (first, _) =
-            upsert_feishu_pairing_request_with_pool(&pool, "default", "ou_sender_a", "")
+            upsert_feishu_pairing_request_with_pool(&pool, "default", "ou_sender_a", "", None)
                 .await
                 .expect("create first request");
         let (_second, _) =
-            upsert_feishu_pairing_request_with_pool(&pool, "default", "ou_sender_b", "")
+            upsert_feishu_pairing_request_with_pool(&pool, "default", "ou_sender_b", "", None)
                 .await
                 .expect("create second request");
         let _ = resolve_feishu_pairing_request_with_pool(
@@ -2976,9 +3134,10 @@ mod tests {
     async fn approve_new_pending_request_still_succeeds_when_sender_has_old_approved_record() {
         let pool = setup_pairing_pool().await;
 
-        let (first, _) = upsert_feishu_pairing_request_with_pool(&pool, "default", "ou_sender", "")
-            .await
-            .expect("create first request");
+        let (first, _) =
+            upsert_feishu_pairing_request_with_pool(&pool, "default", "ou_sender", "", None)
+                .await
+                .expect("create first request");
         let _ = resolve_feishu_pairing_request_with_pool(
             &pool,
             &first.id,
@@ -2989,7 +3148,7 @@ mod tests {
         .expect("approve first request");
 
         let (second, _) =
-            upsert_feishu_pairing_request_with_pool(&pool, "default", "ou_sender", "")
+            upsert_feishu_pairing_request_with_pool(&pool, "default", "ou_sender", "", None)
                 .await
                 .expect("create second pending request");
         let resolved = resolve_feishu_pairing_request_with_pool(
@@ -3009,6 +3168,47 @@ mod tests {
                 .expect("list approved requests");
         assert_eq!(approved.len(), 2);
     }
+
+    #[tokio::test]
+    async fn upsert_feishu_pairing_request_persists_explicit_runtime_code() {
+        let pool = setup_pairing_pool().await;
+
+        let (request, created) = upsert_feishu_pairing_request_with_pool(
+            &pool,
+            "default",
+            "ou_sender",
+            "",
+            Some("dl1m1d25"),
+        )
+        .await
+        .expect("create request with runtime code");
+
+        assert!(created);
+        assert_eq!(request.code, "DL1M1D25");
+    }
+
+    #[tokio::test]
+    async fn upsert_feishu_pairing_request_updates_pending_code_from_runtime_event() {
+        let pool = setup_pairing_pool().await;
+
+        let (first, _) =
+            upsert_feishu_pairing_request_with_pool(&pool, "default", "ou_sender", "", None)
+                .await
+                .expect("create initial request");
+        let (second, created) = upsert_feishu_pairing_request_with_pool(
+            &pool,
+            "default",
+            "ou_sender",
+            "",
+            Some("4965d3b0"),
+        )
+        .await
+        .expect("reuse pending request with runtime code");
+
+        assert!(!created);
+        assert_eq!(first.id, second.id);
+        assert_eq!(second.code, "4965D3B0");
+    }
 }
 
 pub(crate) async fn dispatch_feishu_inbound_to_workclaw_with_pool_and_app(
@@ -3017,6 +3217,9 @@ pub(crate) async fn dispatch_feishu_inbound_to_workclaw_with_pool_and_app(
     event: &ImEvent,
     approval_manager: Option<&ApprovalManager>,
 ) -> Result<FeishuCallbackResult, String> {
+    if let Some(runtime_state) = app.try_state::<OpenClawPluginFeishuRuntimeState>() {
+        remember_feishu_runtime_state_for_outbound(runtime_state.inner());
+    }
     let result = process_im_event(pool, event.clone()).await?;
     if result.deduped {
         return Ok(result);

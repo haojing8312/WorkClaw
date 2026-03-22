@@ -5,6 +5,7 @@ import { MODEL_PROVIDER_CATALOG } from "../model-provider-catalog";
 const invokeMock = vi.fn();
 const MODEL_SETUP_HINT_DISMISSED_KEY = "workclaw:model-setup-hint-dismissed";
 const INITIAL_MODEL_SETUP_COMPLETED_KEY = "workclaw:initial-model-setup-completed";
+const QUICK_FEISHU_SETUP_SKIPPED_KEY = "workclaw:quick-feishu-setup-skipped";
 let mockModels: Array<{
   id: string;
   name: string;
@@ -73,7 +74,7 @@ vi.mock("../components/experts/ExpertCreateView", () => ({
 vi.mock("../components/SettingsView", () => ({
   SettingsView: (props: any) => (
     <div data-testid="settings-view">
-      settings-view
+      settings-view:{props.initialTab}
       <button onClick={props.onClose}>close-settings</button>
       {props.showDevModelSetupTools ? (
         <>
@@ -772,8 +773,63 @@ describe("App model setup hint", () => {
     });
 
     await waitFor(() => {
+      expect(screen.getByText("飞书接入（可选）")).toBeInTheDocument();
+      expect(screen.getByTestId("quick-feishu-setup-skip")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId("quick-feishu-setup-skip"));
+
+    await waitFor(() => {
       expect(screen.queryByTestId("model-setup-gate")).not.toBeInTheDocument();
       expect(screen.queryByTestId("quick-model-setup-dialog")).not.toBeInTheDocument();
+    });
+    expect(window.localStorage.getItem(QUICK_FEISHU_SETUP_SKIPPED_KEY)).toBe("1");
+  });
+
+  test("opens settings on the feishu tab from the optional quick setup step", async () => {
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("model-setup-gate")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId("model-setup-gate-open-quick-setup"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("quick-model-setup-dialog")).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByTestId("quick-model-setup-api-key"), {
+      target: { value: "sk-test-open-feishu-step" },
+    });
+    fireEvent.click(screen.getByTestId("quick-model-setup-save"));
+
+    await waitFor(() => {
+      expect(screen.getByText("快速选择搜索引擎")).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByLabelText("快速选择搜索引擎"), {
+      target: { value: "brave" },
+    });
+    fireEvent.change(screen.getByLabelText("名称"), {
+      target: { value: "Brave Search" },
+    });
+    fireEvent.change(screen.getByLabelText("API Key"), {
+      target: { value: "bs-test-open-feishu-step" },
+    });
+    fireEvent.click(screen.getByText("完成配置"));
+
+    await waitFor(() => {
+      expect(screen.getByText("飞书接入（可选）")).toBeInTheDocument();
+      expect(screen.getByTestId("quick-feishu-setup-open-settings")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId("quick-feishu-setup-open-settings"));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("quick-model-setup-dialog")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("model-setup-gate")).not.toBeInTheDocument();
+      expect(screen.getByTestId("settings-view")).toHaveTextContent("settings-view:feishu");
     });
   });
 

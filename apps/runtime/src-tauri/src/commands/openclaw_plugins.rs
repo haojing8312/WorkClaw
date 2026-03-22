@@ -5,12 +5,15 @@ use crate::commands::feishu_gateway::{
 };
 use crate::commands::skills::DbState;
 use crate::im::types::{ImEvent, ImEventType};
+use crate::windows_process::hide_console_window;
 use reqwest::Client;
 use sqlx::SqlitePool;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+use std::collections::{HashMap, HashSet};
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -217,6 +220,60 @@ pub struct FeishuSetupProgress {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenClawPluginFeishuOutboundSendRequest {
+    pub request_id: String,
+    pub account_id: String,
+    pub target: String,
+    pub thread_id: Option<String>,
+    pub text: String,
+    pub mode: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenClawPluginFeishuOutboundDeliveryResult {
+    pub delivered: bool,
+    pub channel: String,
+    pub account_id: String,
+    pub target: String,
+    pub thread_id: Option<String>,
+    pub text: String,
+    pub mode: String,
+    pub message_id: String,
+    pub chat_id: String,
+    pub sequence: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenClawPluginFeishuOutboundSendResult {
+    pub request_id: String,
+    pub request: OpenClawPluginFeishuOutboundSendRequest,
+    pub result: OpenClawPluginFeishuOutboundDeliveryResult,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenClawPluginFeishuOutboundCommandErrorEvent {
+    pub request_id: Option<String>,
+    pub command: Option<String>,
+    pub error: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct OpenClawPluginFeishuOutboundSendCommandPayload {
+    request_id: String,
+    command: String,
+    account_id: String,
+    target: String,
+    thread_id: Option<String>,
+    text: String,
+    mode: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct OpenClawPluginFeishuAdvancedSettings {
     pub groups_json: String,
     pub dms_json: String,
@@ -341,6 +398,11 @@ pub struct OpenClawPluginFeishuRuntimeState(pub Arc<Mutex<OpenClawPluginFeishuRu
 #[derive(Default)]
 pub struct OpenClawPluginFeishuRuntimeStore {
     process: Option<Arc<Mutex<Option<Child>>>>,
+    stdin: Option<Arc<Mutex<ChildStdin>>>,
+    pending_outbound_send_results: HashMap<
+        String,
+        std::sync::mpsc::SyncSender<Result<OpenClawPluginFeishuOutboundSendResult, String>>,
+    >,
     status: OpenClawPluginFeishuRuntimeStatus,
 }
 
@@ -492,10 +554,39 @@ pub async fn delete_openclaw_plugin_install_with_pool(
 }
 
 fn resolve_plugin_host_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
+    let manifest_root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")))
-        .join("plugin-host")
+        .to_path_buf();
+
+    fn packaged_plugin_host_candidates(base_dir: &Path) -> Vec<PathBuf> {
+        vec![
+            base_dir.join("resources").join("plugin-host"),
+            base_dir.join("_up_").join("plugin-host"),
+            base_dir.join("plugin-host"),
+        ]
+    }
+
+    let dev_dir = manifest_root.join("plugin-host");
+    if dev_dir.exists() {
+        return dev_dir;
+    }
+
+    let mut candidates = Vec::new();
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            candidates.extend(packaged_plugin_host_candidates(exe_dir));
+        }
+    }
+
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.extend(packaged_plugin_host_candidates(&cwd));
+    }
+
+    candidates
+        .into_iter()
+        .find(|candidate| candidate.exists())
+        .unwrap_or_else(|| manifest_root.join("plugin-host"))
 }
 
 fn resolve_plugin_host_inspect_script() -> PathBuf {
@@ -518,8 +609,162 @@ fn normalize_command_version_output(output: &[u8]) -> Option<String> {
         .map(str::to_string)
 }
 
-fn probe_command_version(command: &str, args: &[&str]) -> Result<Option<String>, String> {
-    match Command::new(command).args(args).output() {
+#[cfg(target_os = "windows")]
+fn expand_windows_env_tokens(value: &str) -> String {
+    let mut result = String::with_capacity(value.len());
+    let mut chars = value.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch != '%' {
+            result.push(ch);
+            continue;
+        }
+        let mut name = String::new();
+        while let Some(next) = chars.peek().copied() {
+            chars.next();
+            if next == '%' {
+                break;
+            }
+            name.push(next);
+        }
+        if name.is_empty() {
+            result.push('%');
+            continue;
+        }
+        if let Some(expanded) = std::env::var_os(&name) {
+            result.push_str(&expanded.to_string_lossy());
+        } else {
+            result.push('%');
+            result.push_str(&name);
+            result.push('%');
+        }
+    }
+    result
+}
+
+#[cfg(target_os = "windows")]
+fn parse_windows_path_entries(raw: &str) -> Vec<PathBuf> {
+    raw.split(';')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(expand_windows_env_tokens)
+        .filter(|entry| !entry.trim().is_empty())
+        .map(PathBuf::from)
+        .collect()
+}
+
+#[cfg(target_os = "windows")]
+fn parse_windows_registry_path_output(output: &str) -> Vec<PathBuf> {
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if !trimmed.to_ascii_lowercase().starts_with("path") {
+            continue;
+        }
+        let Some(type_start) = trimmed.find("REG_") else {
+            continue;
+        };
+        let after_name = trimmed[type_start..].trim();
+        let mut parts = after_name.splitn(2, char::is_whitespace);
+        let _value_type = parts.next();
+        let value = parts.next().unwrap_or("").trim();
+        if value.is_empty() {
+            return Vec::new();
+        }
+        return parse_windows_path_entries(value);
+    }
+    Vec::new()
+}
+
+#[cfg(target_os = "windows")]
+fn read_windows_registry_path_entries(scope: &str) -> Vec<PathBuf> {
+    let mut command = Command::new("reg");
+    command.args(["query", scope, "/v", "Path"]);
+    hide_console_window(&mut command);
+    match command.output() {
+        Ok(output) if output.status.success() => {
+            parse_windows_registry_path_output(&String::from_utf8_lossy(&output.stdout))
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn dedupe_path_entries(entries: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf> {
+    let mut deduped = Vec::new();
+    let mut seen = HashSet::new();
+    for entry in entries {
+        let key = if cfg!(target_os = "windows") {
+            entry.to_string_lossy().to_lowercase()
+        } else {
+            entry.to_string_lossy().to_string()
+        };
+        if seen.insert(key) {
+            deduped.push(entry);
+        }
+    }
+    deduped
+}
+
+fn build_effective_path_entries(
+    current_path: Option<&OsStr>,
+    prepend: &[PathBuf],
+    extra_entries: &[PathBuf],
+) -> Vec<PathBuf> {
+    let current_entries = current_path
+        .map(std::env::split_paths)
+        .into_iter()
+        .flatten()
+        .filter(|entry| !entry.as_os_str().is_empty());
+    dedupe_path_entries(
+        prepend
+            .iter()
+            .cloned()
+            .chain(current_entries)
+            .chain(extra_entries.iter().cloned()),
+    )
+}
+
+#[cfg(target_os = "windows")]
+fn collect_windows_registry_path_entries() -> Vec<PathBuf> {
+    dedupe_path_entries(
+        read_windows_registry_path_entries(r"HKCU\Environment")
+            .into_iter()
+            .chain(read_windows_registry_path_entries(
+                r"HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
+            )),
+    )
+}
+
+#[cfg(not(target_os = "windows"))]
+fn collect_windows_registry_path_entries() -> Vec<PathBuf> {
+    Vec::new()
+}
+
+fn effective_command_path_entries(prepend: &[PathBuf]) -> Vec<PathBuf> {
+    build_effective_path_entries(
+        std::env::var_os("PATH").as_deref(),
+        prepend,
+        &collect_windows_registry_path_entries(),
+    )
+}
+
+fn apply_command_search_path(command: &mut Command, prepend: &[PathBuf]) {
+    let entries = effective_command_path_entries(prepend);
+    if entries.is_empty() {
+        return;
+    }
+    if let Ok(joined) = std::env::join_paths(entries) {
+        command.env("PATH", joined);
+    }
+}
+
+fn probe_command_version_with_program(
+    command: &Path,
+    args: &[&str],
+) -> Result<Option<String>, String> {
+    let mut process = Command::new(command);
+    process.args(args);
+    apply_command_search_path(&mut process, &[]);
+    hide_console_window(&mut process);
+    match process.output() {
         Ok(output) => {
             if output.status.success() {
                 Ok(normalize_command_version_output(&output.stdout)
@@ -527,13 +772,84 @@ fn probe_command_version(command: &str, args: &[&str]) -> Result<Option<String>,
             } else {
                 let detail = normalize_command_version_output(&output.stderr)
                     .or_else(|| normalize_command_version_output(&output.stdout))
-                    .unwrap_or_else(|| format!("{command} exited with status {}", output.status));
+                    .unwrap_or_else(|| {
+                        format!("{} exited with status {}", command.display(), output.status)
+                    });
                 Err(detail)
             }
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error.to_string()),
     }
+}
+
+fn probe_command_version(command: &str, args: &[&str]) -> Result<Option<String>, String> {
+    probe_command_version_with_program(Path::new(command), args)
+}
+
+#[cfg(target_os = "windows")]
+fn collect_windows_node_command_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    candidates.push(PathBuf::from("node"));
+    candidates.push(PathBuf::from("node.exe"));
+
+    for key in ["NVM_SYMLINK", "NVM_HOME"] {
+        if let Some(value) = std::env::var_os(key) {
+            let base = PathBuf::from(value);
+            if !base.as_os_str().is_empty() {
+                candidates.push(base.join("node.exe"));
+            }
+        }
+    }
+
+    if let Some(program_files) = std::env::var_os("ProgramFiles") {
+        candidates.push(PathBuf::from(program_files).join("nodejs").join("node.exe"));
+    }
+    if let Some(program_files_x86) = std::env::var_os("ProgramFiles(x86)") {
+        candidates.push(PathBuf::from(program_files_x86).join("nodejs").join("node.exe"));
+    }
+    if let Some(local_app_data) = std::env::var_os("LocalAppData") {
+        candidates.push(
+            PathBuf::from(local_app_data)
+                .join("Programs")
+                .join("nodejs")
+                .join("node.exe"),
+        );
+    }
+
+    for entry in effective_command_path_entries(&[]) {
+        if entry.as_os_str().is_empty() {
+            continue;
+        }
+        candidates.push(entry.join("node.exe"));
+        candidates.push(entry.join("node"));
+    }
+
+    dedupe_path_entries(candidates)
+}
+
+#[cfg(target_os = "windows")]
+fn probe_windows_node_version(args: &[&str]) -> Result<Option<String>, String> {
+    let mut last_error = None;
+    for candidate in collect_windows_node_command_candidates() {
+        match probe_command_version_with_program(&candidate, args) {
+            Ok(Some(version)) => return Ok(Some(version)),
+            Ok(None) => continue,
+            Err(error) => {
+                last_error = Some(format!("{}: {error}", candidate.display()));
+            }
+        }
+    }
+    if let Some(error) = last_error {
+        Err(error)
+    } else {
+        Ok(None)
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn probe_windows_node_version(args: &[&str]) -> Result<Option<String>, String> {
+    probe_command_version("node", args)
 }
 
 fn derive_feishu_plugin_environment_status(
@@ -586,7 +902,7 @@ fn derive_feishu_plugin_environment_status(
 
 fn get_feishu_plugin_environment_status_internal() -> FeishuPluginEnvironmentStatus {
     derive_feishu_plugin_environment_status(
-        probe_command_version("node", &["--version"]),
+        probe_windows_node_version(&["--version"]),
         probe_command_version(resolve_npm_command(), &["--version"]),
         resolve_plugin_host_run_feishu_script().exists(),
     )
@@ -675,6 +991,7 @@ fn derive_feishu_setup_summary_state(
     runtime_running: bool,
     runtime_last_error: Option<&str>,
     auth_status: &str,
+    pending_pairings: usize,
     default_routing_employee_name: Option<&str>,
     scoped_routing_count: usize,
 ) -> String {
@@ -688,14 +1005,17 @@ fn derive_feishu_setup_summary_state(
     {
         return "runtime_error".to_string();
     }
-    if !credentials_configured {
-        return "ready_to_bind".to_string();
-    }
     if !plugin_installed {
         return "plugin_not_installed".to_string();
     }
+    if !credentials_configured {
+        return "ready_to_bind".to_string();
+    }
     if !runtime_running {
         return "plugin_starting".to_string();
+    }
+    if pending_pairings > 0 {
+        return "awaiting_pairing_approval".to_string();
     }
     if auth_status != "approved" {
         return "awaiting_auth".to_string();
@@ -747,6 +1067,7 @@ async fn get_feishu_setup_progress_with_pool(
         runtime_status.running,
         runtime_status.last_error.as_deref(),
         &auth_status,
+        pending_pairings,
         default_routing_employee_name.as_deref(),
         scoped_routing_count,
     );
@@ -764,6 +1085,13 @@ async fn get_feishu_setup_progress_with_pool(
         scoped_routing_count,
         summary_state,
     })
+}
+
+fn should_auto_restore_feishu_runtime(progress: &FeishuSetupProgress) -> bool {
+    progress.plugin_installed
+        && progress.credentials_configured
+        && !progress.runtime_running
+        && progress.auth_status == "approved"
 }
 
 #[cfg(target_os = "windows")]
@@ -795,6 +1123,339 @@ fn resolve_openclaw_shim_root(app: &AppHandle) -> Result<PathBuf, String> {
 
 fn build_openclaw_shim_state_file_path(shim_root: &Path) -> PathBuf {
     shim_root.join("state.json")
+}
+
+fn resolve_controlled_openclaw_state_root(app: &AppHandle) -> Result<PathBuf, String> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("failed to resolve app_data_dir: {e}"))?;
+    Ok(app_data_dir.join("openclaw-state"))
+}
+
+fn ensure_controlled_openclaw_state_projection(
+    state_root: &Path,
+    plugin_install_path: &Path,
+) -> Result<(), String> {
+    let plugin_projection_dir = state_root.join("extensions").join("openclaw-lark");
+    let projected_node_modules = plugin_projection_dir.join("node_modules");
+    let source_node_modules = plugin_install_path
+        .parent()
+        .and_then(|parent| parent.parent())
+        .map(|parent| parent.join("node_modules"));
+
+    fs::create_dir_all(&projected_node_modules).map_err(|error| {
+        format!(
+            "failed to prepare controlled OpenClaw plugin projection {}: {error}",
+            projected_node_modules.display()
+        )
+    })?;
+
+    if let Some(source_node_modules) = source_node_modules {
+        let marker_path = projected_node_modules.join(".workclaw-origin.txt");
+        let marker = format!(
+            "source={}\nplugin_install={}\n",
+            source_node_modules.display(),
+            plugin_install_path.display()
+        );
+        fs::write(&marker_path, marker).map_err(|error| {
+            format!(
+                "failed to write controlled OpenClaw projection marker {}: {error}",
+                marker_path.display()
+            )
+        })?;
+    }
+
+    Ok(())
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct OpenClawShimRecordedCommand {
+    #[serde(default)]
+    args: Vec<String>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct OpenClawShimStateSnapshot {
+    #[serde(default)]
+    config: serde_json::Value,
+    #[serde(default)]
+    commands: Vec<OpenClawShimRecordedCommand>,
+}
+
+fn read_openclaw_shim_state_snapshot(shim_root: &Path) -> Result<OpenClawShimStateSnapshot, String> {
+    let state_path = build_openclaw_shim_state_file_path(shim_root);
+    if !state_path.exists() {
+        return Ok(OpenClawShimStateSnapshot::default());
+    }
+
+    let raw = fs::read_to_string(&state_path)
+        .map_err(|error| format!("failed to read openclaw shim state: {error}"))?;
+    if raw.trim().is_empty() {
+        return Ok(OpenClawShimStateSnapshot::default());
+    }
+
+    serde_json::from_str::<OpenClawShimStateSnapshot>(&raw)
+        .map_err(|error| format!("failed to parse openclaw shim state: {error}"))
+}
+
+fn get_json_path_string(value: &serde_json::Value, path: &[&str]) -> Option<String> {
+    let mut current = value;
+    for segment in path {
+        current = current.get(*segment)?;
+    }
+
+    current
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn derive_feishu_credentials_from_shim_snapshot(
+    snapshot: &OpenClawShimStateSnapshot,
+) -> Option<(String, String)> {
+    let credential_paths: [(&[&str], &[&str]); 3] = [
+        (
+            &["channels", "feishu", "appId"],
+            &["channels", "feishu", "appSecret"],
+        ),
+        (
+            &["channels", "feishu", "accounts", "default", "appId"],
+            &["channels", "feishu", "accounts", "default", "appSecret"],
+        ),
+        (&["feishu", "appId"], &["feishu", "appSecret"]),
+    ];
+
+    for (app_id_path, app_secret_path) in credential_paths {
+        let app_id = get_json_path_string(&snapshot.config, &app_id_path);
+        let app_secret = get_json_path_string(&snapshot.config, &app_secret_path);
+        if let (Some(app_id), Some(app_secret)) = (app_id, app_secret) {
+            return Some((app_id, app_secret));
+        }
+    }
+
+    let mut app_id = None;
+    let mut app_secret = None;
+    for command in &snapshot.commands {
+        let args = &command.args;
+        if args.len() < 4 || args[0] != "config" || args[1] != "set" {
+            continue;
+        }
+
+        let key = args[2].trim();
+        let value = args[3].trim();
+        if key.is_empty() || value.is_empty() {
+            continue;
+        }
+
+        let normalized_key = key.to_ascii_lowercase();
+        if !normalized_key.contains("feishu") {
+            continue;
+        }
+        if normalized_key.ends_with(".appid") {
+            app_id = Some(value.to_string());
+        } else if normalized_key.ends_with(".appsecret") {
+            app_secret = Some(value.to_string());
+        }
+    }
+
+    match (app_id, app_secret) {
+        (Some(app_id), Some(app_secret)) => Some((app_id, app_secret)),
+        _ => None,
+    }
+}
+
+async fn sync_feishu_gateway_credentials_from_shim_with_pool(
+    pool: &SqlitePool,
+    shim_root: &Path,
+) -> Result<bool, String> {
+    let snapshot = read_openclaw_shim_state_snapshot(shim_root)?;
+    let Some((app_id, app_secret)) = derive_feishu_credentials_from_shim_snapshot(&snapshot) else {
+        return Ok(false);
+    };
+
+    let current_app_id = get_app_setting(pool, "feishu_app_id")
+        .await?
+        .unwrap_or_default();
+    let current_app_secret = get_app_setting(pool, "feishu_app_secret")
+        .await?
+        .unwrap_or_default();
+
+    if current_app_id.trim() == app_id.trim() && current_app_secret.trim() == app_secret.trim() {
+        return Ok(false);
+    }
+
+    set_app_setting(pool, "feishu_app_id", app_id.trim()).await?;
+    set_app_setting(pool, "feishu_app_secret", app_secret.trim()).await?;
+    Ok(true)
+}
+
+fn get_json_path<'a>(value: &'a serde_json::Value, path: &[&str]) -> Option<&'a serde_json::Value> {
+    let mut current = value;
+    for segment in path {
+        current = current.get(*segment)?;
+    }
+    Some(current)
+}
+
+fn resolve_openclaw_state_secret_ref(
+    config: &serde_json::Value,
+    state_root: &Path,
+    secret_ref: &serde_json::Value,
+) -> Option<String> {
+    let source = secret_ref.get("source")?.as_str()?.trim();
+    let id = secret_ref.get("id")?.as_str()?.trim();
+    if source.eq_ignore_ascii_case("env") {
+        if let Some(value) = std::env::var_os(id).and_then(|value| value.into_string().ok()) {
+            let trimmed = value.trim().to_string();
+            if !trimmed.is_empty() {
+                return Some(trimmed);
+            }
+        }
+
+        let env_path = state_root.join(".env");
+        let raw = fs::read_to_string(env_path).ok()?;
+        for line in raw.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            let Some((key, value)) = trimmed.split_once('=') else {
+                continue;
+            };
+            if key.trim() == id {
+                let secret = value.trim().to_string();
+                if !secret.is_empty() {
+                    return Some(secret);
+                }
+            }
+        }
+        return None;
+    }
+
+    if !source.eq_ignore_ascii_case("file") {
+        return None;
+    }
+
+    let provider_name = secret_ref.get("provider")?.as_str()?.trim();
+    let provider = get_json_path(config, &["secrets", "providers", provider_name])?;
+    let provider_path = provider.get("path")?.as_str()?.trim();
+    if provider_path.is_empty() {
+        return None;
+    }
+    let home_dir = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from);
+    let file_path = if provider_path.starts_with("~/") {
+        home_dir?.join(provider_path.trim_start_matches("~/"))
+    } else {
+        PathBuf::from(provider_path)
+    };
+    let raw = fs::read_to_string(file_path).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&raw).ok()?;
+
+    if provider
+        .get("mode")
+        .and_then(|entry| entry.as_str())
+        .map(|mode| mode == "singleValue")
+        .unwrap_or(false)
+    {
+        return json
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+    }
+
+    let mut current = &json;
+    for segment in id.trim_start_matches('/').split('/') {
+        if segment.is_empty() {
+            continue;
+        }
+        let unescaped = segment.replace("~1", "/").replace("~0", "~");
+        current = current.get(unescaped)?;
+    }
+    current
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn derive_feishu_credentials_from_openclaw_state_config(
+    config: &serde_json::Value,
+    state_root: &Path,
+) -> Option<(String, String)> {
+    let feishu = get_json_path(config, &["channels", "feishu"])?;
+    let app_id = feishu
+        .get("appId")
+        .and_then(|entry| entry.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)?;
+
+    let app_secret_value = feishu.get("appSecret")?;
+    let app_secret = match app_secret_value {
+        serde_json::Value::String(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            trimmed.to_string()
+        }
+        serde_json::Value::Object(_) => resolve_openclaw_state_secret_ref(config, state_root, app_secret_value)?,
+        _ => return None,
+    };
+
+    Some((app_id, app_secret))
+}
+
+async fn sync_feishu_gateway_credentials_from_openclaw_state_with_pool(
+    pool: &SqlitePool,
+    state_root: &Path,
+) -> Result<bool, String> {
+    let config_path = state_root.join("openclaw.json");
+    if !config_path.exists() {
+        return Ok(false);
+    }
+
+    let raw = fs::read_to_string(&config_path).map_err(|error| {
+        format!(
+            "failed to read controlled OpenClaw config {}: {error}",
+            config_path.display()
+        )
+    })?;
+    if raw.trim().is_empty() {
+        return Ok(false);
+    }
+    let config: serde_json::Value = serde_json::from_str(&raw).map_err(|error| {
+        format!(
+            "failed to parse controlled OpenClaw config {}: {error}",
+            config_path.display()
+        )
+    })?;
+
+    let Some((app_id, app_secret)) =
+        derive_feishu_credentials_from_openclaw_state_config(&config, state_root)
+    else {
+        return Ok(false);
+    };
+
+    let current_app_id = get_app_setting(pool, "feishu_app_id")
+        .await?
+        .unwrap_or_default();
+    let current_app_secret = get_app_setting(pool, "feishu_app_secret")
+        .await?
+        .unwrap_or_default();
+
+    if current_app_id.trim() == app_id.trim() && current_app_secret.trim() == app_secret.trim() {
+        return Ok(false);
+    }
+
+    set_app_setting(pool, "feishu_app_id", app_id.trim()).await?;
+    set_app_setting(pool, "feishu_app_secret", app_secret.trim()).await?;
+    Ok(true)
 }
 
 fn build_openclaw_shim_script(state_file: &Path) -> String {
@@ -911,6 +1572,13 @@ if (args[0] === "gateway" && (args[1] === "restart" || args[1] === "start" || ar
   process.exit(0);
 }}
 
+if ((args[0] === "plugins" || args[0] === "plugin") && (args[1] === "install" || args[1] === "uninstall") && typeof args[2] === "string") {{
+  recordCommand(state, args);
+  saveState(state);
+  console.log(`plugin ${{args[1]}} satisfied via WorkClaw shim: ${{args[2]}}`);
+  process.exit(0);
+}}
+
 if (args[0] === "pairing" && args[1] === "approve" && typeof args[2] === "string" && typeof args[3] === "string") {{
   recordCommand(state, args);
   saveState(state);
@@ -964,12 +1632,7 @@ fn ensure_openclaw_cli_shim(shim_root: &Path) -> Result<PathBuf, String> {
 }
 
 fn prepend_env_path(command: &mut Command, shim_dir: &Path) {
-    let current = std::env::var_os("PATH").unwrap_or_default();
-    let mut paths = vec![shim_dir.to_path_buf()];
-    paths.extend(std::env::split_paths(&current));
-    if let Ok(joined) = std::env::join_paths(paths) {
-        command.env("PATH", joined);
-    }
+    apply_command_search_path(command, &[shim_dir.to_path_buf()]);
 }
 
 fn now_rfc3339() -> String {
@@ -998,6 +1661,21 @@ fn infer_installer_prompt_hint(line: &str) -> Option<String> {
     }
     if normalized.contains("scan with feishu to create your bot") || line.contains("扫码") {
         return Some("请使用飞书扫码完成机器人创建".to_string());
+    }
+    if normalized.contains("fetching configuration results") || line.contains("正在获取你的机器人配置结果") {
+        return Some("正在等待飞书官方接口返回机器人 App ID / App Secret，请稍候。".to_string());
+    }
+    if normalized.contains("[debug] poll result:") && normalized.contains("authorization_pending") {
+        return Some("飞书官方接口仍在等待这次扫码配置完成回传结果（authorization_pending）。".to_string());
+    }
+    if normalized.contains("[debug] poll result:") && normalized.contains("slow_down") {
+        return Some("飞书官方接口要求放慢轮询频率，仍在继续等待配置结果。".to_string());
+    }
+    if normalized.contains("[debug] poll result:") && normalized.contains("expired_token") {
+        return Some("这次扫码会话已过期，请重新启动新建机器人向导。".to_string());
+    }
+    if normalized.contains("[debug] poll result:") && normalized.contains("access_denied") {
+        return Some("飞书端已拒绝本次授权，请重新发起新建机器人向导。".to_string());
     }
     None
 }
@@ -1119,6 +1797,306 @@ fn merge_feishu_runtime_status_event(
             }
         }
         _ => {}
+    }
+}
+
+fn trim_recent_runtime_logs(status: &mut OpenClawPluginFeishuRuntimeStatus) {
+    if status.recent_logs.len() > 40 {
+        let overflow = status.recent_logs.len() - 40;
+        status.recent_logs.drain(0..overflow);
+    }
+}
+
+fn build_feishu_runtime_outbound_send_command_payload(
+    request: &OpenClawPluginFeishuOutboundSendRequest,
+) -> Result<OpenClawPluginFeishuOutboundSendCommandPayload, String> {
+    let request_id = normalize_required(&request.request_id, "request_id")?;
+    let account_id = app_setting_string_or_default(Some(request.account_id.clone()), "default");
+    let target = normalize_required(&request.target, "target")?;
+    let text = request.text.trim().to_string();
+    let mode = app_setting_string_or_default(Some(request.mode.clone()), "text");
+
+    Ok(OpenClawPluginFeishuOutboundSendCommandPayload {
+        request_id,
+        command: "send_message".to_string(),
+        account_id,
+        target,
+        thread_id: request
+            .thread_id
+            .as_ref()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
+        text,
+        mode,
+    })
+}
+
+fn register_pending_feishu_runtime_outbound_send_waiter(
+    state: &OpenClawPluginFeishuRuntimeState,
+    request_id: &str,
+) -> Result<std::sync::mpsc::Receiver<Result<OpenClawPluginFeishuOutboundSendResult, String>>, String>
+{
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    let mut guard = state
+        .0
+        .lock()
+        .map_err(|_| "failed to lock feishu runtime state".to_string())?;
+    if guard.pending_outbound_send_results.contains_key(request_id) {
+        return Err(format!("duplicate outbound requestId: {request_id}"));
+    }
+    guard
+        .pending_outbound_send_results
+        .insert(request_id.to_string(), sender);
+    guard.status.last_event_at = Some(now_rfc3339());
+    guard
+        .status
+        .recent_logs
+        .push(format!("[outbound] queued send_message requestId={request_id}"));
+    trim_recent_runtime_logs(&mut guard.status);
+    Ok(receiver)
+}
+
+fn deliver_pending_feishu_runtime_outbound_send_result(
+    state: &OpenClawPluginFeishuRuntimeState,
+    result: OpenClawPluginFeishuOutboundSendResult,
+) -> bool {
+    let request_id = result.request_id.clone();
+    let sender = {
+        let mut guard = match state.0.lock() {
+            Ok(guard) => guard,
+            Err(_) => return false,
+        };
+        guard.status.last_event_at = Some(now_rfc3339());
+        guard
+            .status
+            .recent_logs
+            .push(format!("[outbound] send_result requestId={request_id}"));
+        trim_recent_runtime_logs(&mut guard.status);
+        guard.pending_outbound_send_results.remove(&request_id)
+    };
+
+    match sender {
+        Some(sender) => sender.send(Ok(result)).is_ok(),
+        None => {
+            if let Ok(mut guard) = state.0.lock() {
+                guard.status.recent_logs.push(format!(
+                    "[warn] runtime: unhandled outbound send_result requestId={request_id}"
+                ));
+                trim_recent_runtime_logs(&mut guard.status);
+            }
+            false
+        }
+    }
+}
+
+fn deliver_pending_feishu_runtime_outbound_command_error(
+    state: &OpenClawPluginFeishuRuntimeState,
+    error_event: OpenClawPluginFeishuOutboundCommandErrorEvent,
+) -> bool {
+    let error_message = error_event.error.trim().to_string();
+    let Some(request_id) = error_event
+        .request_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        let failed = fail_pending_feishu_runtime_outbound_send_waiters(
+            state,
+            if error_message.is_empty() {
+                "official feishu runtime reported an outbound command error".to_string()
+            } else {
+                format!("official feishu runtime command error: {error_message}")
+            },
+        );
+        return failed > 0;
+    };
+
+    let sender = {
+        let mut guard = match state.0.lock() {
+            Ok(guard) => guard,
+            Err(_) => return false,
+        };
+        guard.status.last_event_at = Some(now_rfc3339());
+        guard.status.last_error = Some(error_message.clone());
+        guard.status.recent_logs.push(format!(
+            "[outbound] command_error requestId={request_id}: {error_message}"
+        ));
+        trim_recent_runtime_logs(&mut guard.status);
+        guard.pending_outbound_send_results.remove(request_id)
+    };
+
+    match sender {
+        Some(sender) => sender
+            .send(Err(format!(
+                "official feishu runtime command error: {error_message}"
+            )))
+            .is_ok(),
+        None => false,
+    }
+}
+
+fn fail_pending_feishu_runtime_outbound_send_waiters(
+    state: &OpenClawPluginFeishuRuntimeState,
+    error: String,
+) -> usize {
+    let senders = {
+        let mut guard = match state.0.lock() {
+            Ok(guard) => guard,
+            Err(_) => return 0,
+        };
+        guard.status.last_event_at = Some(now_rfc3339());
+        guard.status.recent_logs.push(format!("[outbound] {error}"));
+        trim_recent_runtime_logs(&mut guard.status);
+        std::mem::take(&mut guard.pending_outbound_send_results)
+    };
+
+    let mut count = 0;
+    for (_request_id, sender) in senders {
+        let _ = sender.send(Err(error.clone()));
+        count += 1;
+    }
+    count
+}
+
+fn parse_openclaw_plugin_feishu_runtime_send_result_event(
+    value: &serde_json::Value,
+) -> Result<OpenClawPluginFeishuOutboundSendResult, String> {
+    let event = value
+        .get("event")
+        .and_then(|entry| entry.as_str())
+        .unwrap_or_default();
+    if event != "send_result" {
+        return Err(format!("unexpected outbound event: {event}"));
+    }
+    serde_json::from_value::<OpenClawPluginFeishuOutboundSendResult>(value.clone())
+        .map_err(|error| format!("invalid send_result event: {error}"))
+}
+
+fn parse_openclaw_plugin_feishu_runtime_command_error_event(
+    value: &serde_json::Value,
+) -> Result<OpenClawPluginFeishuOutboundCommandErrorEvent, String> {
+    let event = value
+        .get("event")
+        .and_then(|entry| entry.as_str())
+        .unwrap_or_default();
+    if event != "command_error" {
+        return Err(format!("unexpected outbound event: {event}"));
+    }
+    serde_json::from_value::<OpenClawPluginFeishuOutboundCommandErrorEvent>(value.clone())
+        .map_err(|error| format!("invalid command_error event: {error}"))
+}
+
+pub fn handle_openclaw_plugin_feishu_runtime_send_result_event(
+    state: &OpenClawPluginFeishuRuntimeState,
+    value: &serde_json::Value,
+) -> bool {
+    match parse_openclaw_plugin_feishu_runtime_send_result_event(value) {
+        Ok(result) => deliver_pending_feishu_runtime_outbound_send_result(state, result),
+        Err(error) => {
+            if let Ok(mut guard) = state.0.lock() {
+                guard.status.last_error = Some(error.clone());
+                guard
+                    .status
+                    .recent_logs
+                    .push(format!("[error] runtime: {error}"));
+                trim_recent_runtime_logs(&mut guard.status);
+                guard.status.last_event_at = Some(now_rfc3339());
+            }
+            false
+        }
+    }
+}
+
+pub fn handle_openclaw_plugin_feishu_runtime_command_error_event(
+    state: &OpenClawPluginFeishuRuntimeState,
+    value: &serde_json::Value,
+) -> bool {
+    match parse_openclaw_plugin_feishu_runtime_command_error_event(value) {
+        Ok(error_event) => {
+            deliver_pending_feishu_runtime_outbound_command_error(state, error_event)
+        }
+        Err(error) => {
+            if let Ok(mut guard) = state.0.lock() {
+                guard.status.last_error = Some(error.clone());
+                guard
+                    .status
+                    .recent_logs
+                    .push(format!("[error] runtime: {error}"));
+                trim_recent_runtime_logs(&mut guard.status);
+                guard.status.last_event_at = Some(now_rfc3339());
+            }
+            false
+        }
+    }
+}
+
+pub fn send_openclaw_plugin_feishu_runtime_outbound_message_in_state(
+    state: &OpenClawPluginFeishuRuntimeState,
+    request: OpenClawPluginFeishuOutboundSendRequest,
+) -> Result<OpenClawPluginFeishuOutboundSendResult, String> {
+    let payload = build_feishu_runtime_outbound_send_command_payload(&request)?;
+    let payload_json = serde_json::to_string(&payload)
+        .map_err(|error| format!("failed to serialize outbound send command: {error}"))?;
+
+    let stdin = {
+        let guard = state
+            .0
+            .lock()
+            .map_err(|_| "failed to lock feishu runtime state".to_string())?;
+        if !guard.status.running {
+            return Err("official feishu runtime is not running".to_string());
+        }
+        guard
+            .stdin
+            .clone()
+            .ok_or_else(|| "official feishu runtime is not accepting outbound commands".to_string())?
+    };
+
+    let receiver = register_pending_feishu_runtime_outbound_send_waiter(state, &payload.request_id)?;
+
+    if let Err(error) = {
+        let mut stdin_guard = stdin
+            .lock()
+            .map_err(|_| "failed to lock feishu runtime stdin".to_string())?;
+        stdin_guard
+            .write_all(payload_json.as_bytes())
+            .and_then(|_| stdin_guard.write_all(b"\n"))
+            .and_then(|_| stdin_guard.flush())
+    } {
+        let _ = fail_pending_feishu_runtime_outbound_send_waiters(
+            state,
+            format!("failed to write outbound command: {error}"),
+        );
+        return Err(format!("failed to write outbound command: {error}"));
+    }
+
+    match receiver.recv_timeout(Duration::from_secs(30)) {
+        Ok(Ok(result)) => Ok(result),
+        Ok(Err(error)) => Err(error),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            let _ = {
+                if let Ok(mut guard) = state.0.lock() {
+                    guard
+                        .pending_outbound_send_results
+                        .remove(&payload.request_id);
+                    guard.status.recent_logs.push(format!(
+                        "[warn] runtime: outbound send timed out requestId={}",
+                        payload.request_id
+                    ));
+                    trim_recent_runtime_logs(&mut guard.status);
+                    guard.status.last_event_at = Some(now_rfc3339());
+                }
+                Ok::<(), ()>(())
+            };
+            Err(format!(
+                "timed out waiting for outbound send_result for requestId {}",
+                payload.request_id
+            ))
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(format!(
+            "official feishu runtime disconnected before outbound send_result for requestId {}",
+            payload.request_id
+        )),
     }
 }
 
@@ -1816,7 +2794,11 @@ fn handle_feishu_runtime_pairing_request_event(
     };
 
     match tauri::async_runtime::block_on(upsert_feishu_pairing_request_with_pool(
-        pool, account_id, sender_id, "",
+        pool,
+        account_id,
+        sender_id,
+        "",
+        Some(code),
     )) {
         Ok((record, created)) => {
             status.last_event_at = Some(now_rfc3339());
@@ -2043,13 +3025,17 @@ pub async fn inspect_openclaw_plugin_with_pool(
     }
 
     let plugin_host_dir = resolve_plugin_host_dir();
-    let output = Command::new("node")
+    let mut command = Command::new("node");
+    command
         .current_dir(&plugin_host_dir)
         .arg(script_path)
         .arg("--plugin-root")
         .arg(&install.install_path)
         .arg("--fixture-name")
-        .arg(&install.plugin_id)
+        .arg(&install.plugin_id);
+    apply_command_search_path(&mut command, &[]);
+    hide_console_window(&mut command);
+    let output = command
         .output()
         .map_err(|e| format!("failed to launch plugin host inspect script: {e}"))?;
 
@@ -2079,7 +3065,8 @@ pub async fn get_openclaw_plugin_feishu_channel_snapshot_with_pool(
     }
 
     let plugin_host_dir = resolve_plugin_host_dir();
-    let output = Command::new("node")
+    let mut command = Command::new("node");
+    command
         .current_dir(&plugin_host_dir)
         .arg(script_path)
         .arg("--plugin-root")
@@ -2089,7 +3076,10 @@ pub async fn get_openclaw_plugin_feishu_channel_snapshot_with_pool(
         .arg("--channel-snapshot")
         .arg("feishu")
         .arg("--config-json")
-        .arg(config_json.to_string())
+        .arg(config_json.to_string());
+    apply_command_search_path(&mut command, &[]);
+    hide_console_window(&mut command);
+    let output = command
         .output()
         .map_err(|e| format!("failed to launch plugin host snapshot script: {e}"))?;
 
@@ -2324,16 +3314,24 @@ pub async fn start_openclaw_plugin_feishu_runtime_with_pool(
         .arg(&normalized_account_id)
         .arg("--config-json")
         .arg(config_json.to_string())
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    apply_command_search_path(&mut command, &[]);
+    hide_console_window(&mut command);
 
     let mut child = command
         .spawn()
         .map_err(|e| format!("failed to launch official feishu runtime: {e}"))?;
     let pid = child.id();
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "failed to capture official feishu runtime stdin".to_string())?;
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
     let child_slot = Arc::new(Mutex::new(Some(child)));
+    let stdin_slot = Arc::new(Mutex::new(stdin));
 
     {
         let mut guard = state
@@ -2341,6 +3339,7 @@ pub async fn start_openclaw_plugin_feishu_runtime_with_pool(
             .lock()
             .map_err(|_| "failed to lock feishu runtime state".to_string())?;
         guard.process = Some(child_slot.clone());
+        guard.stdin = Some(stdin_slot.clone());
         guard.status = OpenClawPluginFeishuRuntimeStatus {
             plugin_id: normalized_plugin_id.clone(),
             account_id: normalized_account_id.clone(),
@@ -2385,6 +3384,60 @@ pub async fn start_openclaw_plugin_feishu_runtime_with_pool(
                         .get("event")
                         .and_then(|entry| entry.as_str())
                         .unwrap_or_default();
+                    if event == "send_request" {
+                        guard.status.recent_logs.push(
+                            value
+                                .get("requestId")
+                                .and_then(|entry| entry.as_str())
+                                .map(|request_id| {
+                                    format!("[outbound] send_request requestId={request_id}")
+                                })
+                                .unwrap_or_else(|| {
+                                    "[outbound] send_request received".to_string()
+                                }),
+                        );
+                        trim_recent_runtime_logs(&mut guard.status);
+                        guard.status.last_event_at = Some(now_rfc3339());
+                        continue;
+                    }
+                    if event == "send_result" {
+                        drop(guard);
+                        let handled =
+                            handle_openclaw_plugin_feishu_runtime_send_result_event(
+                                &state_clone,
+                                &value,
+                            );
+                        if !handled {
+                            if let Ok(mut guard) = state_clone.0.lock() {
+                                guard.status.recent_logs.push(
+                                    "[warn] runtime: unhandled outbound send_result event"
+                                        .to_string(),
+                                );
+                                trim_recent_runtime_logs(&mut guard.status);
+                                guard.status.last_event_at = Some(now_rfc3339());
+                            }
+                        }
+                        continue;
+                    }
+                    if event == "command_error" {
+                        drop(guard);
+                        let handled =
+                            handle_openclaw_plugin_feishu_runtime_command_error_event(
+                                &state_clone,
+                                &value,
+                            );
+                        if !handled {
+                            if let Ok(mut guard) = state_clone.0.lock() {
+                                guard.status.recent_logs.push(
+                                    "[warn] runtime: unhandled outbound command_error event"
+                                        .to_string(),
+                                );
+                                trim_recent_runtime_logs(&mut guard.status);
+                                guard.status.last_event_at = Some(now_rfc3339());
+                            }
+                        }
+                        continue;
+                    }
                     if event == "pairing_request" {
                         handle_feishu_runtime_pairing_request_event(
                             &pool_clone,
@@ -2505,8 +3558,20 @@ pub async fn start_openclaw_plugin_feishu_runtime_with_pool(
 
             match exit_status {
                 Some((success, code, command_error)) => {
-                    if let Ok(mut guard) = state_clone.0.lock() {
+                    let failure_message = if let Some(error) = command_error.as_ref() {
+                        format!("official feishu runtime wait failed: {error}")
+                    } else {
+                        match code {
+                            Some(value) if value >= 0 => {
+                                format!("official feishu runtime exited with code {value}")
+                            }
+                            _ => "official feishu runtime exited unexpectedly".to_string(),
+                        }
+                    };
+                    let should_fail_waiters = if let Ok(mut guard) = state_clone.0.lock() {
                         guard.process = None;
+                        guard.stdin = None;
+                        let should_fail_waiters = !guard.pending_outbound_send_results.is_empty();
                         guard.status.running = false;
                         guard.status.pid = None;
                         guard.status.last_stop_at = Some(now_rfc3339());
@@ -2519,17 +3584,18 @@ pub async fn start_openclaw_plugin_feishu_runtime_with_pool(
                                 .trim()
                                 .is_empty()
                         {
-                            guard.status.last_error = Some(if let Some(error) = command_error {
-                                format!("official feishu runtime wait failed: {error}")
-                            } else {
-                                match code {
-                                    Some(value) if value >= 0 => {
-                                        format!("official feishu runtime exited with code {value}")
-                                    }
-                                    _ => "official feishu runtime exited unexpectedly".to_string(),
-                                }
-                            });
+                            guard.status.last_error = Some(failure_message.clone());
                         }
+                        should_fail_waiters
+                    } else {
+                        false
+                    };
+                    if should_fail_waiters {
+                        let _ = fail_pending_feishu_runtime_outbound_send_waiters(
+                            &state_clone,
+                            "official feishu runtime exited before outbound result was delivered"
+                                .to_string(),
+                        );
                     }
                     break;
                 }
@@ -2543,15 +3609,40 @@ pub async fn start_openclaw_plugin_feishu_runtime_with_pool(
     Ok(current_feishu_runtime_status(state))
 }
 
+pub async fn maybe_restore_openclaw_plugin_feishu_runtime_with_pool(
+    pool: &SqlitePool,
+    state: &OpenClawPluginFeishuRuntimeState,
+    app: tauri::AppHandle,
+) -> Result<bool, String> {
+    let progress = get_feishu_setup_progress_with_pool(pool, state).await?;
+    if !should_auto_restore_feishu_runtime(&progress) {
+        return Ok(false);
+    }
+
+    start_openclaw_plugin_feishu_runtime_with_pool(
+        pool,
+        state,
+        "openclaw-lark",
+        None,
+        Some(app),
+    )
+    .await
+    .map(|_| true)
+}
+
 pub fn stop_openclaw_plugin_feishu_runtime_in_state(
     state: &OpenClawPluginFeishuRuntimeState,
 ) -> Result<OpenClawPluginFeishuRuntimeStatus, String> {
-    let process = {
+    let (process, _stdin, should_fail_waiters) = {
         let mut guard = state
             .0
             .lock()
             .map_err(|_| "failed to lock feishu runtime state".to_string())?;
-        guard.process.take()
+        (
+            guard.process.take(),
+            guard.stdin.take(),
+            !guard.pending_outbound_send_results.is_empty(),
+        )
     };
 
     if let Some(slot) = process {
@@ -2570,6 +3661,19 @@ pub fn stop_openclaw_plugin_feishu_runtime_in_state(
     guard.status.running = false;
     guard.status.pid = None;
     guard.status.last_stop_at = Some(now_rfc3339());
+    drop(guard);
+
+    if should_fail_waiters {
+        let _ = fail_pending_feishu_runtime_outbound_send_waiters(
+            state,
+            "official feishu runtime stopped before outbound result was delivered".to_string(),
+        );
+    }
+
+    let guard = state
+        .0
+        .lock()
+        .map_err(|_| "failed to lock feishu runtime state".to_string())?;
     Ok(guard.status.clone())
 }
 
@@ -2610,8 +3714,10 @@ fn list_matching_feishu_runtime_pids(
         account_id = quote_powershell_literal(account_id),
     );
 
-    let output = Command::new("powershell")
-        .args(["-NoProfile", "-Command", &script])
+    let mut command = Command::new("powershell");
+    command.args(["-NoProfile", "-Command", &script]);
+    hide_console_window(&mut command);
+    let output = command
         .output()
         .map_err(|error| format!("failed to inspect feishu runtime processes: {error}"))?;
 
@@ -2642,8 +3748,10 @@ fn list_matching_feishu_runtime_pids(
 fn kill_process_tree_by_pid(pid: u32) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        Command::new("taskkill")
-            .args(["/T", "/F", "/PID", &pid.to_string()])
+        let mut command = Command::new("taskkill");
+        command.args(["/T", "/F", "/PID", &pid.to_string()]);
+        hide_console_window(&mut command);
+        command
             .output()
             .map_err(|error| format!("failed to terminate runtime pid {pid}: {error}"))?;
         Ok(())
@@ -2868,6 +3976,7 @@ pub async fn start_openclaw_lark_installer_session_with_pool(
     let _ = stop_openclaw_lark_installer_session_in_state(state);
 
     let install = get_openclaw_plugin_install_by_id_with_pool(pool, "openclaw-lark").await?;
+    let plugin_install_path = Path::new(&install.install_path);
     let bin_path = Path::new(&install.install_path)
         .join("bin")
         .join("openclaw-lark.js");
@@ -2880,22 +3989,27 @@ pub async fn start_openclaw_lark_installer_session_with_pool(
 
     let shim_root = resolve_openclaw_shim_root(app)?;
     let shim_dir = ensure_openclaw_cli_shim(&shim_root)?;
+    let controlled_openclaw_state_root = resolve_controlled_openclaw_state_root(app)?;
+    ensure_controlled_openclaw_state_projection(&controlled_openclaw_state_root, plugin_install_path)?;
 
     let mut command = Command::new("node");
     command
-        .current_dir(Path::new(&install.install_path))
+        .current_dir(plugin_install_path)
         .arg(&bin_path)
         .arg("install")
+        .arg("--debug")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    hide_console_window(&mut command);
     prepend_env_path(&mut command, &shim_dir);
     command
         .env(
             "WORKCLAW_OPENCLAW_SHIM_STATE_FILE",
             build_openclaw_shim_state_file_path(&shim_dir),
         )
-        .env("WORKCLAW_OPENCLAW_SHIM_VERSION", OPENCLAW_SHIM_VERSION);
+        .env("WORKCLAW_OPENCLAW_SHIM_VERSION", OPENCLAW_SHIM_VERSION)
+        .env("OPENCLAW_STATE_DIR", &controlled_openclaw_state_root);
 
     let mut child = command
         .spawn()
@@ -3159,9 +4273,16 @@ pub async fn get_feishu_plugin_environment_status() -> Result<FeishuPluginEnviro
 
 #[tauri::command]
 pub async fn get_feishu_setup_progress(
+    app: tauri::AppHandle,
     db: State<'_, DbState>,
     runtime: State<'_, OpenClawPluginFeishuRuntimeState>,
 ) -> Result<FeishuSetupProgress, String> {
+    if let Ok(shim_root) = resolve_openclaw_shim_root(&app) {
+        let _ = sync_feishu_gateway_credentials_from_shim_with_pool(&db.0, &shim_root).await;
+    }
+    if let Ok(state_root) = resolve_controlled_openclaw_state_root(&app) {
+        let _ = sync_feishu_gateway_credentials_from_openclaw_state_with_pool(&db.0, &state_root).await;
+    }
     get_feishu_setup_progress_with_pool(&db.0, runtime.inner()).await
 }
 
@@ -3394,8 +4515,16 @@ pub async fn start_openclaw_lark_installer_session(
 
 #[tauri::command]
 pub async fn get_openclaw_lark_installer_session_status(
+    app: tauri::AppHandle,
+    db: State<'_, DbState>,
     installer: State<'_, OpenClawLarkInstallerSessionState>,
 ) -> Result<OpenClawLarkInstallerSessionStatus, String> {
+    if let Ok(shim_root) = resolve_openclaw_shim_root(&app) {
+        let _ = sync_feishu_gateway_credentials_from_shim_with_pool(&db.0, &shim_root).await;
+    }
+    if let Ok(state_root) = resolve_controlled_openclaw_state_root(&app) {
+        let _ = sync_feishu_gateway_credentials_from_openclaw_state_with_pool(&db.0, &state_root).await;
+    }
     Ok(current_openclaw_lark_installer_session_status(
         installer.inner(),
     ))
@@ -3505,12 +4634,16 @@ pub async fn install_openclaw_plugin_from_npm(
     fs::write(workspace_dir.join("package.json"), workspace_package_json)
         .map_err(|e| format!("failed to write plugin workspace package.json: {e}"))?;
 
-    let output = Command::new(resolve_npm_command())
+    let mut command = Command::new(resolve_npm_command());
+    command
         .current_dir(&workspace_dir)
         .arg("install")
         .arg("--no-save")
         .arg("--no-package-lock")
-        .arg(&normalized_npm_spec)
+        .arg(&normalized_npm_spec);
+    apply_command_search_path(&mut command, &[]);
+    hide_console_window(&mut command);
+    let output = command
         .output()
         .map_err(|e| format!("failed to launch npm install for official plugin: {e}"))?;
 
@@ -4405,6 +5538,24 @@ mod tests {
     }
 
     #[test]
+    fn installer_prompt_hint_explains_poll_waiting_states() {
+        assert_eq!(
+            infer_installer_prompt_hint(
+                "Fetching configuration results (正在获取你的机器人配置结果)..."
+            )
+            .as_deref(),
+            Some("正在等待飞书官方接口返回机器人 App ID / App Secret，请稍候。")
+        );
+        assert_eq!(
+            infer_installer_prompt_hint(
+                "[DEBUG] Poll result: {\"error\":\"authorization_pending\"}"
+            )
+            .as_deref(),
+            Some("飞书官方接口仍在等待这次扫码配置完成回传结果（authorization_pending）。")
+        );
+    }
+
+    #[test]
     fn derives_environment_status_when_node_and_npm_are_available() {
         let status = derive_feishu_plugin_environment_status(
             Ok(Some("v22.0.0".to_string())),
@@ -4475,6 +5626,7 @@ mod tests {
             false,
             None,
             "unknown",
+            0,
             None,
             0,
         );
@@ -4482,7 +5634,7 @@ mod tests {
     }
 
     #[test]
-    fn derives_setup_summary_state_for_missing_credentials() {
+    fn derives_setup_summary_state_for_missing_plugin_install_before_credentials() {
         let summary = derive_feishu_setup_summary_state(
             &FeishuPluginEnvironmentStatus {
                 node_available: true,
@@ -4498,33 +5650,35 @@ mod tests {
             false,
             None,
             "unknown",
-            None,
             0,
-        );
-        assert_eq!(summary, "ready_to_bind");
-    }
-
-    #[test]
-    fn derives_setup_summary_state_for_missing_plugin_install() {
-        let summary = derive_feishu_setup_summary_state(
-            &FeishuPluginEnvironmentStatus {
-                node_available: true,
-                npm_available: true,
-                node_version: Some("v22".to_string()),
-                npm_version: Some("10".to_string()),
-                can_install_plugin: true,
-                can_start_runtime: true,
-                error: None,
-            },
-            true,
-            false,
-            false,
-            None,
-            "unknown",
             None,
             0,
         );
         assert_eq!(summary, "plugin_not_installed");
+    }
+
+    #[test]
+    fn derives_setup_summary_state_for_missing_credentials_after_plugin_install() {
+        let summary = derive_feishu_setup_summary_state(
+            &FeishuPluginEnvironmentStatus {
+                node_available: true,
+                npm_available: true,
+                node_version: Some("v22".to_string()),
+                npm_version: Some("10".to_string()),
+                can_install_plugin: true,
+                can_start_runtime: true,
+                error: None,
+            },
+            false,
+            true,
+            false,
+            None,
+            "unknown",
+            0,
+            None,
+            0,
+        );
+        assert_eq!(summary, "ready_to_bind");
     }
 
     #[test]
@@ -4544,10 +5698,35 @@ mod tests {
             true,
             None,
             "pending",
+            0,
             None,
             0,
         );
         assert_eq!(summary, "awaiting_auth");
+    }
+
+    #[test]
+    fn derives_setup_summary_state_for_pending_pairing_approval() {
+        let summary = derive_feishu_setup_summary_state(
+            &FeishuPluginEnvironmentStatus {
+                node_available: true,
+                npm_available: true,
+                node_version: Some("v22".to_string()),
+                npm_version: Some("10".to_string()),
+                can_install_plugin: true,
+                can_start_runtime: true,
+                error: None,
+            },
+            true,
+            true,
+            true,
+            None,
+            "pending",
+            1,
+            None,
+            0,
+        );
+        assert_eq!(summary, "awaiting_pairing_approval");
     }
 
     #[test]
@@ -4567,6 +5746,7 @@ mod tests {
             true,
             None,
             "approved",
+            0,
             None,
             0,
         );
@@ -4590,10 +5770,65 @@ mod tests {
             true,
             None,
             "approved",
+            0,
             Some("财务刚"),
             1,
         );
         assert_eq!(summary, "ready");
+    }
+
+    #[test]
+    fn auto_restore_feishu_runtime_when_previous_connection_was_fully_approved() {
+        let progress = FeishuSetupProgress {
+            environment: FeishuPluginEnvironmentStatus {
+                node_available: true,
+                npm_available: true,
+                node_version: Some("v22".to_string()),
+                npm_version: Some("10".to_string()),
+                can_install_plugin: true,
+                can_start_runtime: true,
+                error: None,
+            },
+            credentials_configured: true,
+            plugin_installed: true,
+            plugin_version: Some("1.0.0".to_string()),
+            runtime_running: false,
+            runtime_last_error: None,
+            auth_status: "approved".to_string(),
+            pending_pairings: 0,
+            default_routing_employee_name: Some("太子".to_string()),
+            scoped_routing_count: 0,
+            summary_state: "plugin_starting".to_string(),
+        };
+
+        assert!(should_auto_restore_feishu_runtime(&progress));
+    }
+
+    #[test]
+    fn does_not_auto_restore_feishu_runtime_before_authorization_is_complete() {
+        let progress = FeishuSetupProgress {
+            environment: FeishuPluginEnvironmentStatus {
+                node_available: true,
+                npm_available: true,
+                node_version: Some("v22".to_string()),
+                npm_version: Some("10".to_string()),
+                can_install_plugin: true,
+                can_start_runtime: true,
+                error: None,
+            },
+            credentials_configured: true,
+            plugin_installed: true,
+            plugin_version: Some("1.0.0".to_string()),
+            runtime_running: false,
+            runtime_last_error: None,
+            auth_status: "pending".to_string(),
+            pending_pairings: 0,
+            default_routing_employee_name: None,
+            scoped_routing_count: 0,
+            summary_state: "awaiting_auth".to_string(),
+        };
+
+        assert!(!should_auto_restore_feishu_runtime(&progress));
     }
 
     #[test]
@@ -4606,6 +5841,12 @@ mod tests {
                 "args[0] === \"gateway\" && (args[1] === \"restart\" || args[1] === \"start\" || args[1] === \"stop\")"
             )
         );
+        assert!(
+            script.contains(
+                "(args[0] === \"plugins\" || args[0] === \"plugin\") && (args[1] === \"install\" || args[1] === \"uninstall\")"
+            )
+        );
+        assert!(script.contains("plugin ${args[1]} satisfied via WorkClaw shim"));
         assert!(script.contains("args[0] === \"pairing\" && args[1] === \"approve\""));
         assert!(script.contains(OPENCLAW_SHIM_VERSION));
     }
@@ -4623,6 +5864,191 @@ mod tests {
     }
 
     #[test]
+    fn derive_feishu_credentials_from_shim_snapshot_reads_config_projection() {
+        let snapshot = OpenClawShimStateSnapshot {
+            config: serde_json::json!({
+                "channels": {
+                    "feishu": {
+                        "appId": "cli_created",
+                        "appSecret": "secret_created"
+                    }
+                }
+            }),
+            commands: vec![],
+        };
+
+        let credentials =
+            derive_feishu_credentials_from_shim_snapshot(&snapshot).expect("credentials from config");
+
+        assert_eq!(credentials.0, "cli_created");
+        assert_eq!(credentials.1, "secret_created");
+    }
+
+    #[test]
+    fn derive_feishu_credentials_from_shim_snapshot_falls_back_to_recorded_commands() {
+        let snapshot = OpenClawShimStateSnapshot {
+            config: serde_json::json!({}),
+            commands: vec![
+                OpenClawShimRecordedCommand {
+                    args: vec![
+                        "config".to_string(),
+                        "set".to_string(),
+                        "channels.feishu.appId".to_string(),
+                        "cli_from_command".to_string(),
+                    ],
+                },
+                OpenClawShimRecordedCommand {
+                    args: vec![
+                        "config".to_string(),
+                        "set".to_string(),
+                        "channels.feishu.appSecret".to_string(),
+                        "secret_from_command".to_string(),
+                    ],
+                },
+            ],
+        };
+
+        let credentials =
+            derive_feishu_credentials_from_shim_snapshot(&snapshot).expect("credentials from commands");
+
+        assert_eq!(credentials.0, "cli_from_command");
+        assert_eq!(credentials.1, "secret_from_command");
+    }
+
+    #[tokio::test]
+    async fn sync_feishu_gateway_credentials_from_shim_updates_app_settings() {
+        let pool = setup_memory_pool().await;
+        let temp = tempfile::tempdir().expect("tempdir");
+        let shim_root = temp.path().join("openclaw-cli-shim");
+        std::fs::create_dir_all(&shim_root).expect("create shim root");
+        std::fs::write(
+            build_openclaw_shim_state_file_path(&shim_root),
+            serde_json::json!({
+                "config": {
+                    "channels": {
+                        "feishu": {
+                            "appId": "cli_synced",
+                            "appSecret": "secret_synced"
+                        }
+                    }
+                },
+                "commands": []
+            })
+            .to_string(),
+        )
+        .expect("write shim state");
+
+        let updated = sync_feishu_gateway_credentials_from_shim_with_pool(&pool, &shim_root)
+            .await
+            .expect("sync shim credentials");
+
+        assert!(updated);
+        assert_eq!(
+            get_app_setting(&pool, "feishu_app_id")
+                .await
+                .expect("load app id")
+                .as_deref(),
+            Some("cli_synced")
+        );
+        assert_eq!(
+            get_app_setting(&pool, "feishu_app_secret")
+                .await
+                .expect("load app secret")
+                .as_deref(),
+            Some("secret_synced")
+        );
+    }
+
+    #[test]
+    fn derive_feishu_credentials_from_openclaw_state_config_reads_plaintext_credentials() {
+        let state_root = Path::new("C:\\workclaw\\openclaw-state");
+        let config = serde_json::json!({
+            "channels": {
+                "feishu": {
+                    "appId": "cli_created_from_state",
+                    "appSecret": "secret_created_from_state"
+                }
+            }
+        });
+
+        let credentials = derive_feishu_credentials_from_openclaw_state_config(&config, state_root)
+            .expect("credentials from controlled state config");
+
+        assert_eq!(credentials.0, "cli_created_from_state");
+        assert_eq!(credentials.1, "secret_created_from_state");
+    }
+
+    #[tokio::test]
+    async fn sync_feishu_gateway_credentials_from_controlled_state_reads_env_secret() {
+        let pool = setup_memory_pool().await;
+        let temp = tempfile::tempdir().expect("tempdir");
+        let state_root = temp.path().join("openclaw-state");
+        std::fs::create_dir_all(&state_root).expect("create state root");
+        std::fs::write(
+            state_root.join(".env"),
+            "LARK_APP_SECRET=secret_from_env\n",
+        )
+        .expect("write env file");
+        std::fs::write(
+            state_root.join("openclaw.json"),
+            serde_json::json!({
+                "channels": {
+                    "feishu": {
+                        "appId": "cli_from_state",
+                        "appSecret": {
+                            "source": "env",
+                            "provider": "default",
+                            "id": "LARK_APP_SECRET"
+                        }
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .expect("write controlled state config");
+
+        let updated = sync_feishu_gateway_credentials_from_openclaw_state_with_pool(&pool, &state_root)
+            .await
+            .expect("sync credentials from controlled state");
+
+        assert!(updated);
+        assert_eq!(
+            get_app_setting(&pool, "feishu_app_id")
+                .await
+                .expect("load app id")
+                .as_deref(),
+            Some("cli_from_state")
+        );
+        assert_eq!(
+            get_app_setting(&pool, "feishu_app_secret")
+                .await
+                .expect("load app secret")
+                .as_deref(),
+            Some("secret_from_env")
+        );
+    }
+
+    #[test]
+    fn resolve_plugin_host_dir_finds_packaged_up_directory() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let exe_dir = temp.path().join("runtime-bin");
+        let up_plugin_host = exe_dir.join("_up_").join("plugin-host");
+        std::fs::create_dir_all(&up_plugin_host).expect("create packaged plugin host");
+        std::fs::write(up_plugin_host.join("marker.txt"), "ok").expect("write marker");
+
+        let candidates = [
+            exe_dir.join("resources").join("plugin-host"),
+            exe_dir.join("_up_").join("plugin-host"),
+            exe_dir.join("plugin-host"),
+        ];
+        let resolved = candidates
+            .into_iter()
+            .find(|candidate| candidate.exists())
+            .expect("resolved packaged plugin host");
+        assert_eq!(resolved, up_plugin_host);
+    }
+
+    #[test]
     fn prepend_env_path_places_shim_first() {
         let mut command = Command::new("node");
         let shim_dir = Path::new("C:\\shim");
@@ -4636,6 +6062,234 @@ mod tests {
             .next()
             .expect("first PATH segment");
         assert_eq!(first, shim_dir);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn build_effective_path_entries_keeps_prepend_and_adds_registry_paths() {
+        let prepend = vec![PathBuf::from(r"C:\shim")];
+        let current_path = std::ffi::OsString::from(r"C:\gui-node;C:\common");
+        let extra_entries = vec![PathBuf::from(r"C:\user-node"), PathBuf::from(r"C:\common")];
+
+        let paths = build_effective_path_entries(Some(&current_path), &prepend, &extra_entries);
+
+        assert_eq!(paths.first(), Some(&PathBuf::from(r"C:\shim")));
+        assert!(paths.contains(&PathBuf::from(r"C:\gui-node")));
+        assert!(paths.contains(&PathBuf::from(r"C:\user-node")));
+        assert_eq!(
+            paths
+                .iter()
+                .filter(|entry| entry == &&PathBuf::from(r"C:\common"))
+                .count(),
+            1
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn parse_windows_registry_path_output_expands_env_segments() {
+        std::env::set_var("LOCALAPPDATA", r"C:\Users\Alice\AppData\Local");
+        let parsed = parse_windows_registry_path_output(
+            "HKEY_CURRENT_USER\\Environment\n    Path    REG_EXPAND_SZ    %LOCALAPPDATA%\\Programs\\nodejs;C:\\Tools\\Node\n",
+        );
+
+        assert_eq!(
+            parsed,
+            vec![
+                PathBuf::from(r"C:\Users\Alice\AppData\Local\Programs\nodejs"),
+                PathBuf::from(r"C:\Tools\Node"),
+            ]
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_node_candidates_include_nvm_and_common_install_locations() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let nvm_link = temp.path().join("nvm-link");
+        let nvm_home = temp.path().join("nvm-home");
+        std::fs::create_dir_all(&nvm_link).expect("create nvm_link");
+        std::fs::create_dir_all(&nvm_home).expect("create nvm_home");
+        std::env::set_var("NVM_SYMLINK", &nvm_link);
+        std::env::set_var("NVM_HOME", &nvm_home);
+
+        let candidates = collect_windows_node_command_candidates();
+        assert!(candidates.iter().any(|path| path.ends_with(Path::new("node.exe"))));
+        assert!(candidates.iter().any(|path| path == &nvm_link.join("node.exe")));
+        assert!(candidates.iter().any(|path| path == &nvm_home.join("node.exe")));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_node_candidates_are_deduped_case_insensitively() {
+        std::env::set_var("PATH", r"C:\Node;C:\node");
+        let candidates = collect_windows_node_command_candidates();
+        let lowered: std::collections::HashSet<String> = candidates
+            .iter()
+            .map(|candidate| candidate.to_string_lossy().to_lowercase())
+            .collect();
+        assert_eq!(lowered.len(), candidates.len());
+    }
+
+    #[tokio::test]
+    async fn outbound_send_writes_command_and_receives_structured_send_result() {
+        use std::collections::HashMap;
+        use std::io::{BufRead, BufReader};
+        use std::process::{Command, Stdio};
+        use std::sync::{Arc, Mutex};
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let script_path = temp.path().join("echo-send-result.mjs");
+        std::fs::write(
+            &script_path,
+            r#"
+import readline from 'node:readline';
+const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+rl.on('line', (line) => {
+  const payload = JSON.parse(line);
+  process.stdout.write(JSON.stringify({
+    event: 'send_result',
+    requestId: payload.requestId,
+    request: payload,
+    result: {
+      delivered: true,
+      channel: 'feishu',
+      accountId: payload.accountId,
+      target: payload.target,
+      threadId: payload.threadId,
+      text: payload.text,
+      mode: payload.mode,
+      messageId: 'om_outbound_1',
+      chatId: payload.target,
+      sequence: 1,
+    },
+  }) + '\n');
+});
+"#,
+        )
+        .expect("write echo runtime script");
+
+        let mut child = Command::new("node")
+            .arg(&script_path)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn echo runtime");
+        let stdout = child.stdout.take().expect("runtime stdout");
+        let runtime_stdin = Arc::new(Mutex::new(child.stdin.take().expect("runtime stdin")));
+        let state = OpenClawPluginFeishuRuntimeState(Arc::new(Mutex::new(
+            OpenClawPluginFeishuRuntimeStore {
+                process: Some(Arc::new(Mutex::new(Some(child)))),
+                stdin: Some(runtime_stdin.clone()),
+                status: OpenClawPluginFeishuRuntimeStatus {
+                    running: true,
+                    ..Default::default()
+                },
+                pending_outbound_send_results: HashMap::new(),
+            },
+        )));
+
+        let state_clone = state.clone();
+        let stdout_thread = std::thread::spawn(move || {
+            let reader = BufReader::new(stdout);
+            for line in reader.lines().map_while(Result::ok) {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+                    continue;
+                };
+                let _ = handle_openclaw_plugin_feishu_runtime_send_result_event(
+                    &state_clone,
+                    &value,
+                );
+            }
+        });
+
+        let result = send_openclaw_plugin_feishu_runtime_outbound_message_in_state(
+            &state,
+            OpenClawPluginFeishuOutboundSendRequest {
+                request_id: "request-1".to_string(),
+                account_id: "default".to_string(),
+            target: "oc_chat_123".to_string(),
+            thread_id: Some("oc_chat_123".to_string()),
+            text: "你好".to_string(),
+            mode: "text".to_string(),
+        },
+        )
+        .expect("send outbound message");
+
+        assert_eq!(result.request_id, "request-1");
+        assert_eq!(result.request.account_id, "default");
+        assert_eq!(result.request.target, "oc_chat_123");
+        assert_eq!(result.result.delivered, true);
+        assert_eq!(result.result.channel, "feishu");
+        assert_eq!(result.result.message_id, "om_outbound_1");
+        assert_eq!(result.result.chat_id, "oc_chat_123");
+
+        {
+            let mut guard = state.0.lock().expect("runtime state lock");
+            guard.stdin = None;
+        }
+        drop(runtime_stdin);
+        {
+            let guard = state.0.lock().expect("runtime state lock");
+            if let Some(slot) = guard.process.as_ref() {
+                if let Ok(mut child_guard) = slot.lock() {
+                    if let Some(mut child) = child_guard.take() {
+                        let _ = child.wait();
+                    }
+                }
+            }
+        }
+
+        stdout_thread.join().expect("stdout reader");
+    }
+
+    #[test]
+    fn outbound_command_error_fails_pending_request_immediately() {
+        use std::collections::HashMap;
+        use std::sync::{Arc, Mutex};
+
+        let request_id = "request-command-error";
+        let state = OpenClawPluginFeishuRuntimeState(Arc::new(Mutex::new(
+            OpenClawPluginFeishuRuntimeStore {
+                process: None,
+                stdin: None,
+                status: OpenClawPluginFeishuRuntimeStatus {
+                    running: true,
+                    ..Default::default()
+                },
+                pending_outbound_send_results: HashMap::new(),
+            },
+        )));
+
+        let receiver = register_pending_feishu_runtime_outbound_send_waiter(&state, request_id)
+            .expect("register pending outbound waiter");
+
+        let handled = handle_openclaw_plugin_feishu_runtime_command_error_event(
+            &state,
+            &serde_json::json!({
+                "event": "command_error",
+                "requestId": request_id,
+                "command": "send_message",
+                "error": "outbound target is required",
+            }),
+        );
+
+        assert!(handled, "expected command_error event to resolve pending waiter");
+        let result = receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("receive command_error result");
+        match result {
+            Ok(_) => panic!("expected outbound command to fail"),
+            Err(error) => assert!(
+                error.contains("outbound target is required"),
+                "unexpected command_error: {error}"
+            ),
+        }
     }
 
     #[test]

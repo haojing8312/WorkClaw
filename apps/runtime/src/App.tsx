@@ -101,6 +101,7 @@ const BUILTIN_GENERAL_SKILL_ID = "builtin-general";
 const BUILTIN_EMPLOYEE_CREATOR_SKILL_ID = "builtin-employee-creator";
 const MODEL_SETUP_HINT_DISMISSED_KEY = "workclaw:model-setup-hint-dismissed";
 const INITIAL_MODEL_SETUP_COMPLETED_KEY = "workclaw:initial-model-setup-completed";
+const QUICK_FEISHU_SETUP_SKIPPED_KEY = "workclaw:quick-feishu-setup-skipped";
 const LAST_SELECTED_SESSION_ID_KEY = "workclaw:last-selected-session-id";
 const LAST_SELECTED_SESSION_SNAPSHOT_KEY = "workclaw:last-selected-session-snapshot";
 const DEFAULT_OPERATION_PERMISSION_MODE: "standard" | "full_access" = "standard";
@@ -178,6 +179,7 @@ type ImBridgeSessionContext = {
   waitingForAnswer: boolean;
   streamFlushTimer: ReturnType<typeof setTimeout> | null;
   fallbackReplyTimer: ReturnType<typeof setTimeout> | null;
+  lastDispatchAt: number;
   lastStreamFlushAt: number;
   streamFlushInFlight: boolean;
 };
@@ -782,7 +784,7 @@ export default function App() {
   });
   const [showQuickModelSetup, setShowQuickModelSetup] = useState(false);
   const [forceShowModelSetupGate, setForceShowModelSetupGate] = useState(false);
-  const [quickSetupStep, setQuickSetupStep] = useState<"model" | "search">("model");
+  const [quickSetupStep, setQuickSetupStep] = useState<"model" | "search" | "feishu">("model");
   const [quickModelPresetKey, setQuickModelPresetKey] = useState(DEFAULT_QUICK_MODEL_PROVIDER.id);
   const [quickModelForm, setQuickModelForm] = useState(() => ({
     ...buildModelFormFromCatalogItem(DEFAULT_QUICK_MODEL_PROVIDER),
@@ -801,6 +803,16 @@ export default function App() {
   const [quickSearchTestResult, setQuickSearchTestResult] = useState<boolean | null>(null);
   const [quickSearchError, setQuickSearchError] = useState("");
   const [quickSearchApiKeyVisible, setQuickSearchApiKeyVisible] = useState(false);
+  const [hasSkippedQuickFeishuSetup, setHasSkippedQuickFeishuSetup] = useState(() => {
+    if (typeof window === "undefined") {
+      return false;
+    }
+    try {
+      return window.localStorage.getItem(QUICK_FEISHU_SETUP_SKIPPED_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
   const quickModelTestDisplay = quickModelTestResult ? getModelErrorDisplay(quickModelTestResult) : null;
   const shouldShowQuickModelRawMessage = Boolean(
     quickModelTestDisplay?.rawMessage &&
@@ -858,6 +870,10 @@ export default function App() {
   const initialSelectedSessionSnapshotRef = useRef<SessionInfo | null>(initialSelectedSessionSnapshot);
   const hasResolvedInitialPersistedSessionRef = useRef(false);
   const employeesRef = useRef<AgentEmployee[]>([]);
+  const selectedSkillIdRef = useRef<string | null>(selectedSkillId);
+  const loadSessionsRef = useRef<
+    ((skillId: string, options?: { requestId?: number; attempt?: number }) => Promise<void>) | null
+  >(null);
   const quickModelApiKeyInputRef = useRef<HTMLInputElement | null>(null);
   const isBlockingInitialModelSetup = !showSettings && !hasCompletedInitialModelSetup;
   const isQuickSetupBusy =
@@ -1095,6 +1111,10 @@ export default function App() {
   }, [employees]);
 
   useEffect(() => {
+    selectedSkillIdRef.current = selectedSkillId;
+  }, [selectedSkillId]);
+
+  useEffect(() => {
     if (!showQuickModelSetup || typeof window === "undefined") {
       return;
     }
@@ -1160,6 +1180,8 @@ export default function App() {
     const outboundImDedup = new Map<string, number>();
     const STREAM_CHUNK_SIZE = 120;
     const STREAM_FLUSH_INTERVAL_MS = 1200;
+    const IM_FALLBACK_REPLY_POLL_INTERVAL_MS = 1200;
+    const IM_FALLBACK_REPLY_MAX_POLLS = 6;
     const FEISHU_RETRY_DELAYS_MS = [1000, 3000, 8000];
     const FEISHU_MAX_ATTEMPTS = FEISHU_RETRY_DELAYS_MS.length + 1;
     const IM_OUTBOUND_DEDUP_WINDOW_MS = 2500;
@@ -1223,14 +1245,73 @@ export default function App() {
       ctx.fallbackReplyTimer = null;
     };
 
+    const scheduleImFallbackReplyPoll = (sessionId: string, attempt: number) => {
+      const ctx = sessionContexts.get(sessionId);
+      if (!ctx || ctx.fallbackReplyTimer || ctx.streamSentCount > 0) return;
+      if (attempt > IM_FALLBACK_REPLY_MAX_POLLS) return;
+      ctx.fallbackReplyTimer = setTimeout(() => {
+        const latest = sessionContexts.get(sessionId);
+        if (!latest) return;
+        latest.fallbackReplyTimer = null;
+        if (latest.streamSentCount > 0) {
+          return;
+        }
+        void (async () => {
+          const messages = await invoke<Message[]>("get_messages", {
+            sessionId,
+          });
+          const latestAssistant = [...messages]
+            .reverse()
+            .find((m) => {
+              if (m.role !== "assistant") return false;
+              if ((m.content || "").trim().length === 0) return false;
+              const createdAt = Date.parse(String(m.created_at || ""));
+              return Number.isFinite(createdAt) && createdAt >= latest.lastDispatchAt;
+            });
+          if (latestAssistant) {
+            await sendTextToImThread(
+              latest.sourceChannel,
+              latest.threadId,
+              formatFeishuRoleMessage(latest.roleName, latestAssistant.content.slice(0, 1800)),
+            );
+            latest.streamSentCount += 1;
+            return;
+          }
+          scheduleImFallbackReplyPoll(sessionId, attempt + 1);
+        })().catch((error) => {
+          console.error("IM 兜底回复转发失败:", error);
+          scheduleImFallbackReplyPoll(sessionId, attempt + 1);
+        });
+      }, IM_FALLBACK_REPLY_POLL_INTERVAL_MS);
+    };
+
     const invokeFeishuSend = async (threadId: string, text: string) => {
-      await invoke("send_feishu_text_message", {
-        chatId: threadId,
-        text,
-        appId: null,
-        appSecret: null,
-        sidecarBaseUrl: null,
+      void reportFrontendDiagnostic({
+        kind: "feishu_outbound_dispatch_start",
+        message: `target=${threadId.trim()} text_preview=${text.trim().slice(0, 80)}`,
+        href: typeof window !== "undefined" ? window.location?.href : undefined,
       });
+      try {
+        await invoke("send_feishu_text_message", {
+          chatId: threadId,
+          text,
+          appId: null,
+          appSecret: null,
+          sidecarBaseUrl: null,
+        });
+        void reportFrontendDiagnostic({
+          kind: "feishu_outbound_dispatch_success",
+          message: `target=${threadId.trim()} text_preview=${text.trim().slice(0, 80)}`,
+          href: typeof window !== "undefined" ? window.location?.href : undefined,
+        });
+      } catch (error) {
+        void reportFrontendDiagnostic({
+          kind: "feishu_outbound_dispatch_failed",
+          message: `target=${threadId.trim()} error=${extractErrorMessage(error, "feishu dispatch failed")}`,
+          href: typeof window !== "undefined" ? window.location?.href : undefined,
+        });
+        throw error;
+      }
     };
 
     const invokeWecomSend = async (threadId: string, text: string) => {
@@ -1239,6 +1320,20 @@ export default function App() {
         text,
         sidecar_base_url: null,
       });
+    };
+
+    const shouldRetryFeishuOutbound = (error: unknown) => {
+      const message = extractErrorMessage(error, "").trim().toLowerCase();
+      if (!message) {
+        return true;
+      }
+      if (message.includes("timed out waiting for outbound send_result")) {
+        return false;
+      }
+      if (message.includes("official feishu runtime command error")) {
+        return false;
+      }
+      return true;
     };
 
     const scheduleFeishuRetry = (
@@ -1255,6 +1350,11 @@ export default function App() {
           threadId,
           extractErrorMessage(lastError, "unknown error")
         );
+        void reportFrontendDiagnostic({
+          kind: "feishu_outbound_retry_exhausted",
+          message: `target=${threadId.trim()} error=${extractErrorMessage(lastError, "unknown error")}`,
+          href: typeof window !== "undefined" ? window.location?.href : undefined,
+        });
         return;
       }
       if (feishuRetryTimers.has(key)) return;
@@ -1281,7 +1381,11 @@ export default function App() {
       try {
         await invokeFeishuSend(chatId, messageText);
       } catch (error) {
-        scheduleFeishuRetry(chatId, messageText, 2, error);
+        if (shouldRetryFeishuOutbound(error)) {
+          scheduleFeishuRetry(chatId, messageText, 2, error);
+          return;
+        }
+        clearFeishuRetryTimer(key);
       }
     };
 
@@ -1312,6 +1416,14 @@ export default function App() {
     ) => {
       const ctx = sessionContexts.get(sessionId);
       if (!ctx) return;
+      if (ctx.sourceChannel.trim().toLowerCase() === "feishu") {
+        if (ctx.streamFlushTimer) {
+          clearTimeout(ctx.streamFlushTimer);
+          ctx.streamFlushTimer = null;
+        }
+        ctx.streamBuffer = "";
+        return;
+      }
       if (ctx.streamFlushInFlight) return;
       const force = Boolean(options?.force);
       const chunk = ctx.streamBuffer.trim();
@@ -1383,6 +1495,7 @@ export default function App() {
         waitingForAnswer: existing?.waitingForAnswer ?? false,
         streamFlushTimer: existing?.streamFlushTimer ?? null,
         fallbackReplyTimer: existing?.fallbackReplyTimer ?? null,
+        lastDispatchAt: existing?.lastDispatchAt ?? 0,
         lastStreamFlushAt: existing?.lastStreamFlushAt ?? 0,
         streamFlushInFlight: existing?.streamFlushInFlight ?? false,
       };
@@ -1398,42 +1511,23 @@ export default function App() {
           ctx.waitingForAnswer = false;
           await invoke("answer_user_question", { answer: dispatchPrompt });
         } else {
+          ctx.lastDispatchAt = Date.now();
           await invoke("send_message", {
             request: {
               sessionId: payload.session_id,
               parts: [{ type: "text", text: dispatchPrompt }],
             },
           });
+          const activeSkillId = selectedSkillIdRef.current;
+          if (activeSkillId) {
+            void loadSessionsRef.current?.(activeSkillId);
+          }
         }
 
         await flushImStream(payload.session_id, { force: true });
         if (ctx.streamSentCount === 0) {
           clearImFallbackReplyTimer(payload.session_id);
-          ctx.fallbackReplyTimer = setTimeout(() => {
-            const latest = sessionContexts.get(payload.session_id);
-            if (!latest || latest.streamSentCount > 0) {
-              if (latest) {
-                latest.fallbackReplyTimer = null;
-              }
-              return;
-            }
-            latest.fallbackReplyTimer = null;
-            void (async () => {
-              const messages = await invoke<Message[]>("get_messages", {
-                sessionId: payload.session_id,
-              });
-              const latestAssistant = [...messages]
-                .reverse()
-                .find((m) => m.role === "assistant" && m.content?.trim().length > 0);
-              if (latestAssistant) {
-                await sendTextToImThread(
-                  latest.sourceChannel,
-                  latest.threadId,
-                  formatFeishuRoleMessage(latest.roleName, latestAssistant.content.slice(0, 1800)),
-                );
-              }
-            })();
-          }, 1200);
+          scheduleImFallbackReplyPoll(payload.session_id, 1);
         }
       } catch (e) {
         console.error("IM 分发执行失败:", e);
@@ -1457,6 +1551,9 @@ export default function App() {
     }>("stream-token", ({ payload }) => {
       const ctx = sessionContexts.get(payload.session_id);
       if (!ctx) return;
+      if (ctx.sourceChannel.trim().toLowerCase() === "feishu") {
+        return;
+      }
       clearImFallbackReplyTimer(payload.session_id);
       if (payload.done) {
         void flushImStream(payload.session_id, { force: true });
@@ -1628,6 +1725,10 @@ export default function App() {
       });
     }
   }
+
+  useEffect(() => {
+    loadSessionsRef.current = loadSessions;
+  });
 
   useEffect(() => {
     persistLastSelectedSessionId(selectedSessionId);
@@ -2311,9 +2412,11 @@ export default function App() {
     try {
       window.localStorage.removeItem(INITIAL_MODEL_SETUP_COMPLETED_KEY);
       window.localStorage.removeItem(MODEL_SETUP_HINT_DISMISSED_KEY);
+      window.localStorage.removeItem(QUICK_FEISHU_SETUP_SKIPPED_KEY);
     } catch {
       // ignore
     }
+    setHasSkippedQuickFeishuSetup(false);
   }
 
   function openSettingsForModelSetup() {
@@ -2524,6 +2627,10 @@ export default function App() {
         apiKey: quickSearchForm.api_key.trim(),
       });
       await loadSearchConfigs();
+      if (isBlockingInitialModelSetup && !hasSkippedQuickFeishuSetup) {
+        setQuickSetupStep("feishu");
+        return;
+      }
       setShowQuickModelSetup(false);
       setForceShowModelSetupGate(false);
       setQuickSetupStep("model");
@@ -2547,6 +2654,33 @@ export default function App() {
     setQuickSearchError("");
     setQuickSearchTestResult(null);
     setQuickSearchApiKeyVisible(false);
+  }
+
+  function skipQuickFeishuSetup() {
+    if (isQuickSetupBusy) {
+      return;
+    }
+    setHasSkippedQuickFeishuSetup(true);
+    if (typeof window !== "undefined") {
+      try {
+        window.localStorage.setItem(QUICK_FEISHU_SETUP_SKIPPED_KEY, "1");
+      } catch {
+        // ignore
+      }
+    }
+    setShowQuickModelSetup(false);
+    setForceShowModelSetupGate(false);
+    setQuickSetupStep("model");
+  }
+
+  function openQuickFeishuSetupFromDialog() {
+    if (isQuickSetupBusy) {
+      return;
+    }
+    setShowQuickModelSetup(false);
+    setForceShowModelSetupGate(false);
+    setQuickSetupStep("model");
+    openSettingsAtTab("feishu");
   }
 
   async function handleStartTaskWithEmployee(employeeId: string) {
@@ -2990,12 +3124,18 @@ export default function App() {
                   <div className="flex items-start justify-between gap-4">
                     <div>
                       <div id="quick-model-setup-title" className="text-xl font-semibold text-[var(--sm-text)]">
-                        {quickSetupStep === "model" ? "快速配置模型" : "搜索引擎"}
+                        {quickSetupStep === "model"
+                          ? "快速配置模型"
+                          : quickSetupStep === "search"
+                            ? "搜索引擎"
+                            : "飞书接入（可选）"}
                       </div>
                       <div className="mt-2 text-sm leading-6 text-[var(--sm-text-muted)]">
                         {quickSetupStep === "model"
                           ? "先完成模型接入，保存后自动进入搜索引擎配置。"
-                          : "补齐搜索配置后，智能体即可在首次使用时直接联网检索。"}
+                          : quickSetupStep === "search"
+                            ? "补齐搜索配置后，智能体即可在首次使用时直接联网检索。"
+                            : "飞书不是阻塞项。你可以现在继续配置，也可以先进入 WorkClaw，后面再从设置里补上。"}
                       </div>
                     </div>
                       <button
@@ -3038,6 +3178,53 @@ export default function App() {
                         onSecondaryAction={!isBlockingInitialModelSetup ? skipQuickSearchSetup : undefined}
                         secondaryActionLabel={!isBlockingInitialModelSetup ? "跳过搜索，稍后再配" : undefined}
                       />
+                    </div>
+                  )}
+                  {quickSetupStep === "feishu" && (
+                    <div className="mt-6 space-y-4">
+                      <div className="rounded-3xl border border-[var(--sm-border)] bg-[var(--sm-surface-muted)] p-5">
+                        <div className="text-sm font-semibold text-[var(--sm-text)]">飞书接入已准备好进入下一步</div>
+                        <div className="mt-2 text-sm leading-6 text-[var(--sm-text-muted)]">
+                          模型和搜索已经配置完成。现在可以继续打开飞书接入向导，也可以暂时跳过，稍后再到“设置 &gt; 渠道连接器 &gt; 飞书”补配。
+                        </div>
+                        <div className="mt-4 flex flex-wrap gap-2">
+                          <span className="inline-flex items-center rounded-full bg-white px-3 py-1 text-xs text-[var(--sm-text-muted)]">
+                            可跳过
+                          </span>
+                          <span className="inline-flex items-center rounded-full bg-white px-3 py-1 text-xs text-[var(--sm-text-muted)]">
+                            后续可在设置中重开
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="rounded-2xl border border-[var(--sm-border)] bg-white px-4 py-4">
+                        <div className="text-sm font-medium text-[var(--sm-text)]">建议顺序</div>
+                        <div className="mt-3 space-y-2 text-sm text-[var(--sm-text-muted)]">
+                          <div>1. 检查运行环境</div>
+                          <div>2. 安装飞书官方插件</div>
+                          <div>3. 绑定已有机器人或新建机器人</div>
+                          <div>4. 完成授权并设置接待员工</div>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                        <button
+                          type="button"
+                          data-testid="quick-feishu-setup-open-settings"
+                          onClick={openQuickFeishuSetupFromDialog}
+                          className="sm-btn sm-btn-primary h-11 rounded-xl"
+                        >
+                          现在配置飞书
+                        </button>
+                        <button
+                          type="button"
+                          data-testid="quick-feishu-setup-skip"
+                          onClick={skipQuickFeishuSetup}
+                          className="sm-btn sm-btn-secondary h-11 rounded-xl"
+                        >
+                          暂时跳过，先开始使用
+                        </button>
+                      </div>
                     </div>
                   )}
                   {quickSetupStep === "model" && (
