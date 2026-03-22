@@ -30,13 +30,13 @@ import {
 } from "./employeeHubOverview";
 import { EmployeeFeishuAssociationSection } from "./EmployeeFeishuAssociationSection";
 
-interface Props {
+export interface EmployeeHubViewProps {
   employees: AgentEmployee[];
   skills: SkillManifest[];
   initialTab?: EmployeeHubTab;
   selectedEmployeeId: string | null;
   onSelectEmployee: (id: string) => void;
-  onSaveEmployee: (input: UpsertAgentEmployeeInput) => Promise<void>;
+  onSaveEmployee?: (input: UpsertAgentEmployeeInput) => Promise<void>;
   onRefreshEmployees?: () => Promise<AgentEmployee[] | void> | AgentEmployee[] | void;
   onDeleteEmployee: (employeeId: string) => Promise<void>;
   onSetAsMainAndEnter: (employeeId: string) => void;
@@ -60,7 +60,7 @@ type GroupTemplateConfig = {
   roles?: GroupTemplateRole[];
 };
 
-type EmployeeHubTab = "overview" | "employees" | "teams" | "runs" | "settings";
+export type EmployeeHubTab = "overview" | "employees" | "teams" | "runs" | "settings";
 
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
@@ -117,7 +117,7 @@ export function EmployeeHubView({
   highlightEmployeeId,
   highlightMessage,
   onDismissHighlight,
-}: Props) {
+}: EmployeeHubViewProps) {
   const [activeTab, setActiveTab] = useState<EmployeeHubTab>(initialTab ?? (selectedEmployeeId ? "employees" : "overview"));
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
