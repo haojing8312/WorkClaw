@@ -66,4 +66,20 @@ describe("SettingsView desktop/system tab", () => {
     expect(screen.getByRole("button", { name: "清理缓存与日志" })).toBeInTheDocument();
     expect(screen.queryByTestId("settings-model-provider-preset")).not.toBeInTheDocument();
   });
+
+  test("preserves desktop edits when switching away and back", async () => {
+    render(<SettingsView onClose={() => {}} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "桌面 / 系统" }));
+
+    const languageSelect = await screen.findByLabelText("默认语言");
+    fireEvent.change(languageSelect, { target: { value: "en-US" } });
+    expect((languageSelect as HTMLSelectElement).value).toBe("en-US");
+
+    fireEvent.click(screen.getByRole("button", { name: "模型连接" }));
+    expect(screen.queryByLabelText("默认语言")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "桌面 / 系统" }));
+    expect(await screen.findByLabelText("默认语言")).toHaveValue("en-US");
+  });
 });
