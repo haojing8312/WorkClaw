@@ -21,6 +21,71 @@ describe("SettingsView semantic theme", () => {
       if (command === "list_provider_configs") return Promise.resolve([]);
       if (command === "get_capability_routing_policy") return Promise.resolve(null);
       if (command === "list_capability_route_templates") return Promise.resolve([]);
+      if (command === "get_feishu_gateway_settings") {
+        return Promise.resolve({
+          app_id: "",
+          app_secret: "",
+          ingress_token: "",
+          encrypt_key: "",
+          sidecar_base_url: "",
+        });
+      }
+      if (command === "get_openclaw_plugin_feishu_advanced_settings") {
+        return Promise.resolve({
+          groups_json: "",
+          dms_json: "",
+          footer_json: "",
+          account_overrides_json: "",
+          render_mode: "",
+          streaming: "",
+          text_chunk_limit: "",
+          chunk_mode: "",
+          reply_in_thread: "",
+          group_session_scope: "",
+          topic_session_mode: "",
+          markdown_mode: "",
+          markdown_table_mode: "",
+          heartbeat_visibility: "",
+          heartbeat_interval_ms: "",
+          media_max_mb: "",
+          http_timeout_ms: "",
+          config_writes: "",
+          webhook_host: "",
+          webhook_port: "",
+          dynamic_agent_creation_enabled: "",
+          dynamic_agent_creation_workspace_template: "",
+          dynamic_agent_creation_agent_dir_template: "",
+          dynamic_agent_creation_max_agents: "",
+        });
+      }
+      if (command === "get_openclaw_lark_installer_session_status") {
+        return Promise.resolve({
+          running: false,
+          mode: null,
+          started_at: null,
+          last_output_at: null,
+          last_error: null,
+          prompt_hint: null,
+          recent_output: [],
+        });
+      }
+      if (command === "get_feishu_setup_progress") {
+        return Promise.resolve({
+          environment: null,
+          summary_state: "skipped",
+          runtime_running: false,
+          auth_status: "approved",
+          pending_pairings: 0,
+          plugin_installed: false,
+          plugin_version: "",
+          default_routing_employee_name: "",
+          scoped_routing_count: 0,
+          runtime_last_error: null,
+        });
+      }
+      if (command === "list_openclaw_plugin_channel_hosts") return Promise.resolve([]);
+      if (command === "list_feishu_pairing_requests") return Promise.resolve([]);
+      if (command === "get_openclaw_plugin_feishu_runtime_status") return Promise.resolve(null);
       return Promise.resolve(null);
     });
   });
@@ -58,6 +123,15 @@ describe("SettingsView semantic theme", () => {
     fireEvent.click(screen.getByRole("button", { name: "MCP 服务器" }));
     fireEvent.change(screen.getByRole("combobox"), { target: { value: "brave-search" } });
     expect(screen.getByPlaceholderText("请输入 BRAVE_API_KEY")).toBeInTheDocument();
+  });
+
+  test("honors initialTab and keeps the close affordance visible", async () => {
+    render(<SettingsView onClose={() => {}} initialTab="feishu" />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "渠道连接器" })).toHaveClass("text-[var(--sm-primary-strong)]");
+    });
+    expect(screen.getByRole("button", { name: "返回" })).toBeInTheDocument();
   });
 
   test("shows first-use dev tools only when explicitly enabled", async () => {

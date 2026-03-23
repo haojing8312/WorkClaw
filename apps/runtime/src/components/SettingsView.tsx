@@ -10,6 +10,8 @@ import {
 } from "../model-provider-catalog";
 import { openExternalUrl } from "../utils/openExternalUrl";
 import { SearchConfigForm } from "./SearchConfigForm";
+import { SettingsShell } from "./settings/SettingsShell";
+import { SettingsTabNav, type SettingsTabName } from "./settings/SettingsTabNav";
 import {
   applySearchPresetToForm,
   EMPTY_SEARCH_CONFIG_FORM,
@@ -90,7 +92,7 @@ function getErrorMessage(error: unknown, fallback: string): string {
 interface Props {
   onClose: () => void;
   onOpenEmployees?: () => void;
-  initialTab?: "models" | "desktop" | "capabilities" | "health" | "mcp" | "search" | "routing" | "feishu";
+  initialTab?: SettingsTabName;
   showDevModelSetupTools?: boolean;
   onDevResetFirstUseOnboarding?: () => void;
   onDevOpenQuickModelSetup?: () => void;
@@ -712,9 +714,7 @@ export function SettingsView({
   const [mcpForm, setMcpForm] = useState({ name: "", command: "", args: "", env: "" });
   const [mcpError, setMcpError] = useState("");
   const [showMcpEnvJson, setShowMcpEnvJson] = useState(false);
-  const [activeTab, setActiveTab] = useState<
-    "models" | "desktop" | "capabilities" | "health" | "mcp" | "search" | "routing" | "feishu"
-  >(initialTab);
+  const [activeTab, setActiveTab] = useState<SettingsTabName>(initialTab);
 
   // 搜索引擎配置
   const [searchConfigs, setSearchConfigs] = useState<ModelConfig[]>([]);
@@ -2793,78 +2793,19 @@ export function SettingsView({
   }
 
   return (
-    <div className="sm-surface-muted flex h-full flex-col overflow-y-auto p-6">
-      <div className="flex items-center justify-between mb-6">
-        <div className="flex items-center gap-4">
-          <button
-            onClick={() => setActiveTab("models")}
-              className={"sm-btn h-8 px-2 rounded-none border-b-2 text-sm font-medium transition-colors " +
-              (activeTab === "models" ? "text-[var(--sm-primary-strong)] border-[var(--sm-primary)]" : "sm-text-muted border-transparent hover:text-[var(--sm-text)]")}
-          >
-            模型连接
-          </button>
-          <button
-            onClick={() => setActiveTab("desktop")}
-              className={"sm-btn h-8 px-2 rounded-none border-b-2 text-sm font-medium transition-colors " +
-              (activeTab === "desktop" ? "text-[var(--sm-primary-strong)] border-[var(--sm-primary)]" : "sm-text-muted border-transparent hover:text-[var(--sm-text)]")}
-          >
-            桌面 / 系统
-          </button>
-          {SHOW_CAPABILITY_ROUTING_SETTINGS && (
-            <button
-              onClick={() => setActiveTab("capabilities")}
-                className={"sm-btn h-8 px-2 rounded-none border-b-2 text-sm font-medium transition-colors " +
-                (activeTab === "capabilities" ? "text-[var(--sm-primary-strong)] border-[var(--sm-primary)]" : "sm-text-muted border-transparent hover:text-[var(--sm-text)]")}
-            >
-              能力路由
-            </button>
-          )}
-          {SHOW_HEALTH_SETTINGS && (
-            <button
-              onClick={() => setActiveTab("health")}
-                className={"sm-btn h-8 px-2 rounded-none border-b-2 text-sm font-medium transition-colors " +
-                (activeTab === "health" ? "text-[var(--sm-primary-strong)] border-[var(--sm-primary)]" : "sm-text-muted border-transparent hover:text-[var(--sm-text)]")}
-            >
-              健康检查
-            </button>
-          )}
-          {SHOW_MCP_SETTINGS && (
-            <button
-              onClick={() => setActiveTab("mcp")}
-                className={"sm-btn h-8 px-2 rounded-none border-b-2 text-sm font-medium transition-colors " +
-                (activeTab === "mcp" ? "text-[var(--sm-primary-strong)] border-[var(--sm-primary)]" : "sm-text-muted border-transparent hover:text-[var(--sm-text)]")}
-            >
-              MCP 服务器
-            </button>
-          )}
-          <button
-            onClick={() => setActiveTab("search")}
-              className={"sm-btn h-8 px-2 rounded-none border-b-2 text-sm font-medium transition-colors " +
-              (activeTab === "search" ? "text-[var(--sm-primary-strong)] border-[var(--sm-primary)]" : "sm-text-muted border-transparent hover:text-[var(--sm-text)]")}
-          >
-            搜索引擎
-          </button>
-          <button
-            onClick={() => setActiveTab("feishu")}
-              className={"sm-btn h-8 px-2 rounded-none border-b-2 text-sm font-medium transition-colors " +
-              (activeTab === "feishu" ? "text-[var(--sm-primary-strong)] border-[var(--sm-primary)]" : "sm-text-muted border-transparent hover:text-[var(--sm-text)]")}
-          >
-            渠道连接器
-          </button>
-          {SHOW_AUTO_ROUTING_SETTINGS && (
-            <button
-              onClick={() => setActiveTab("routing")}
-                className={"sm-btn h-8 px-2 rounded-none border-b-2 text-sm font-medium transition-colors " +
-                (activeTab === "routing" ? "text-[var(--sm-primary-strong)] border-[var(--sm-primary)]" : "sm-text-muted border-transparent hover:text-[var(--sm-text)]")}
-            >
-              自动路由
-            </button>
-          )}
-        </div>
-        <button onClick={onClose} className="sm-btn sm-btn-ghost h-9 rounded-lg px-4 text-sm">
-          返回
-        </button>
-      </div>
+    <SettingsShell
+      onClose={onClose}
+      tabs={
+        <SettingsTabNav
+          activeTab={activeTab}
+          onSelectTab={setActiveTab}
+          showCapabilityRoutingSettings={SHOW_CAPABILITY_ROUTING_SETTINGS}
+          showHealthSettings={SHOW_HEALTH_SETTINGS}
+          showMcpSettings={SHOW_MCP_SETTINGS}
+          showAutoRoutingSettings={SHOW_AUTO_ROUTING_SETTINGS}
+        />
+      }
+    >
 
       {(activeTab === "models" || activeTab === "desktop") && (<>
       {activeTab === "models" && models.length > 0 && (
@@ -4992,6 +4933,6 @@ export function SettingsView({
         onCancel={handleCancelOperationPermissionMode}
       />
 
-    </div>
+    </SettingsShell>
   );
 }
