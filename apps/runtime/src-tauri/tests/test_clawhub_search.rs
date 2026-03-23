@@ -44,6 +44,7 @@ async fn search_clawhub_skills_uses_library_query_when_search_api_returns_empty(
     let (_pool, _tmp) = helpers::setup_test_db().await;
     let (base, handle) = spawn_clawhub_search_server().await;
     std::env::set_var("CLAWHUB_API_BASE", &base);
+    std::env::set_var("SKILLHUB_CATALOG_URL", "http://127.0.0.1:1/skills.json");
 
     let items = search_clawhub_skills("superpower".to_string(), Some(1), Some(10))
         .await
@@ -53,5 +54,6 @@ async fn search_clawhub_skills_uses_library_query_when_search_api_returns_empty(
     assert_eq!(items[0].slug, "superpowers-mode");
     assert_eq!(items[0].name, "Superpowers Mode");
 
+    std::env::remove_var("SKILLHUB_CATALOG_URL");
     handle.await.expect("mock server task");
 }
