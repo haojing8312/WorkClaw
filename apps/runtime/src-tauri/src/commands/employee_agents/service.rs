@@ -4,14 +4,16 @@ use super::repo::{
     delete_feishu_bindings_for_agent, find_displaced_default_feishu_agent_ids,
     find_displaced_scoped_feishu_agent_ids, find_employee_db_id_by_employee_id,
     find_employee_session_seed_row, find_existing_session_skill_id, find_group_step_session_row,
-    find_latest_thread_session_id, find_model_config_row, find_recent_group_step_session_id,
-    find_plan_revision_seed, find_recent_route_session_id, find_thread_session_record,
+    find_group_run_start_config, find_latest_thread_session_id, find_model_config_row,
+    find_recent_group_step_session_id, find_plan_revision_seed, find_recent_route_session_id,
+    find_thread_session_record,
     find_group_run_execute_step_context, find_group_run_finalize_state, find_group_run_snapshot_row,
     find_group_run_review_state, find_group_run_state, find_latest_assistant_message_content,
     find_pending_review_step,
     get_employee_association_row, get_employee_group_entry_row, get_group_run_session_id,
     insert_feishu_binding, insert_group_run_assistant_message, insert_group_run_event,
-    insert_inbound_event_link, insert_plan_revision_step, insert_session_message, insert_session_seed,
+    insert_group_run_record, insert_group_run_step_seed, insert_inbound_event_link,
+    insert_plan_revision_step, insert_session_message, insert_session_seed, insert_tx_session_message,
     list_agent_employee_rows,
     list_agent_scope_rows, list_failed_execute_assignees, list_failed_group_run_steps,
     list_group_run_event_snapshot_rows, list_group_run_execute_outputs,
@@ -31,9 +33,9 @@ use super::repo::{
     UpsertAgentEmployeeRecordInput,
 };
 use super::{
-    AgentEmployee, EmployeeInboundDispatchSession, EnsuredEmployeeSession,
+    AgentEmployee, EmployeeGroupRunResult, EmployeeInboundDispatchSession, EnsuredEmployeeSession,
     SaveFeishuEmployeeAssociationInput,
-    UpsertAgentEmployeeInput,
+    StartEmployeeGroupRunInput, UpsertAgentEmployeeInput,
 };
 use crate::agent::permissions::PermissionMode;
 use crate::agent::run_guard::{parse_run_stop_reason, RunStopReasonKind};
@@ -1430,6 +1432,172 @@ pub(super) async fn review_group_run_step_with_pool(
 
     tx.commit().await.map_err(|e| e.to_string())?;
     Ok(())
+}
+
+pub(super) async fn start_employee_group_run_internal_with_pool(
+    pool: &SqlitePool,
+    input: StartEmployeeGroupRunInput,
+    preferred_session_id: Option<&str>,
+    persist_user_message: bool,
+) -> Result<EmployeeGroupRunResult, String> {
+    let group_id = input.group_id.trim().to_string();
+    if group_id.is_empty() {
+        return Err("group_id is required".to_string());
+    }
+    let user_goal = input.user_goal.trim().to_string();
+    if user_goal.is_empty() {
+        return Err("user_goal is required".to_string());
+    }
+
+    let config = find_group_run_start_config(pool, &group_id)
+        .await?
+        .ok_or_else(|| "employee group not found".to_string())?;
+
+    let member_employee_ids =
+        serde_json::from_str::<Vec<String>>(&config.member_employee_ids_json).unwrap_or_default();
+    let rules = super::list_employee_group_rules_with_pool(pool, &group_id).await?;
+    let planner_employee_id = super::resolve_group_planner_employee_id(
+        &config.entry_employee_id,
+        &config.coordinator_employee_id,
+        &rules,
+    );
+    let reviewer_employee_id = super::resolve_group_reviewer_employee_id(
+        &config.review_mode,
+        &planner_employee_id,
+        &rules,
+    );
+    let (execute_targets, _) = super::select_group_execute_dispatch_targets(
+        &rules,
+        &member_employee_ids,
+        &[
+            config.coordinator_employee_id.clone(),
+            planner_employee_id.clone(),
+            config.entry_employee_id.clone(),
+        ],
+    );
+
+    let plan = crate::agent::group_orchestrator::build_group_run_plan(
+        crate::agent::group_orchestrator::GroupRunRequest {
+            group_id: group_id.clone(),
+            coordinator_employee_id: config.coordinator_employee_id.clone(),
+            planner_employee_id: Some(planner_employee_id.clone()),
+            reviewer_employee_id: reviewer_employee_id.clone(),
+            member_employee_ids,
+            execute_targets,
+            user_goal: user_goal.clone(),
+            execution_window: input.execution_window,
+            timeout_employee_ids: input.timeout_employee_ids,
+            max_retry_per_step: input.max_retry_per_step,
+        },
+    );
+    let initial_report = plan.final_report.clone();
+    let initial_state = plan.state.clone();
+    let initial_round = plan.current_round;
+    let now = chrono::Utc::now().to_rfc3339();
+    let run_id = Uuid::new_v4().to_string();
+    let (session_id, session_skill_id) = ensure_group_run_session_with_pool(
+        pool,
+        &config.coordinator_employee_id,
+        &config.name,
+        &now,
+        preferred_session_id,
+    )
+    .await?;
+
+    let waiting_for_employee_id = reviewer_employee_id
+        .as_deref()
+        .filter(|employee_id| !employee_id.trim().is_empty())
+        .unwrap_or(config.coordinator_employee_id.as_str())
+        .to_string();
+
+    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
+    insert_group_run_record(
+        &mut tx,
+        &run_id,
+        &group_id,
+        &session_id,
+        &user_goal,
+        &initial_state,
+        initial_round,
+        &plan.current_phase,
+        &config.coordinator_employee_id,
+        &waiting_for_employee_id,
+        &now,
+    )
+    .await?;
+
+    if persist_user_message {
+        insert_tx_session_message(&mut tx, &session_id, "user", &user_goal, &now).await?;
+    }
+
+    for event in &plan.events {
+        insert_group_run_event(
+            &mut tx,
+            &run_id,
+            "",
+            &event.event_type,
+            &event.payload_json,
+            &now,
+        )
+        .await?;
+    }
+
+    for step in plan.steps {
+        let step_id = Uuid::new_v4().to_string();
+        let dispatch_source_employee_id = step.dispatch_source_employee_id.clone();
+        insert_group_run_step_seed(
+            &mut tx,
+            &run_id,
+            &step_id,
+            step.round_no,
+            &step.assignee_employee_id,
+            &dispatch_source_employee_id,
+            &step.phase,
+            &step.step_type,
+            &user_goal,
+            &step.output,
+            &step.status,
+            step.requires_review,
+            &step.review_status,
+            &now,
+        )
+        .await?;
+        insert_group_run_event(
+            &mut tx,
+            &run_id,
+            &step_id,
+            "step_created",
+            &serde_json::json!({
+                "phase": step.phase,
+                "step_type": step.step_type,
+                "assignee_employee_id": step.assignee_employee_id,
+                "dispatch_source_employee_id": dispatch_source_employee_id,
+                "status": step.status
+            })
+            .to_string(),
+            &now,
+        )
+        .await?;
+    }
+
+    tx.commit().await.map_err(|e| e.to_string())?;
+
+    let snapshot = super::continue_employee_group_run_with_pool(pool, &run_id).await?;
+    if snapshot.state != "done" {
+        append_group_run_assistant_message_with_pool(pool, &session_id, &initial_report).await?;
+    }
+    let final_snapshot = get_employee_group_run_snapshot_by_run_id_with_pool(pool, &run_id).await?;
+
+    Ok(EmployeeGroupRunResult {
+        run_id,
+        group_id,
+        session_id,
+        session_skill_id,
+        state: final_snapshot.state,
+        current_round: final_snapshot.current_round,
+        final_report: final_snapshot.final_report,
+        steps: final_snapshot.steps,
+    })
 }
 
 pub(super) async fn get_group_run_session_id_with_pool(

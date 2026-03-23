@@ -109,6 +109,14 @@ pub(super) struct EmployeeSessionSeedRow {
     pub default_work_dir: String,
 }
 
+pub(super) struct GroupRunStartConfigRow {
+    pub name: String,
+    pub coordinator_employee_id: String,
+    pub member_employee_ids_json: String,
+    pub review_mode: String,
+    pub entry_employee_id: String,
+}
+
 pub(super) struct ModelConfigRow {
     pub api_format: String,
     pub base_url: String,
@@ -626,6 +634,36 @@ pub(super) async fn find_group_step_session_row(
     }))
 }
 
+pub(super) async fn find_group_run_start_config(
+    pool: &SqlitePool,
+    group_id: &str,
+) -> Result<Option<GroupRunStartConfigRow>, String> {
+    let row = sqlx::query(
+        "SELECT name,
+                coordinator_employee_id,
+                member_employee_ids_json,
+                COALESCE(review_mode, 'none'),
+                COALESCE(entry_employee_id, '')
+         FROM employee_groups WHERE id = ?",
+    )
+    .bind(group_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(row.map(|record| GroupRunStartConfigRow {
+        name: record.try_get("name").expect("group start name"),
+        coordinator_employee_id: record
+            .try_get("coordinator_employee_id")
+            .expect("group start coordinator_employee_id"),
+        member_employee_ids_json: record
+            .try_get("member_employee_ids_json")
+            .expect("group start member_employee_ids_json"),
+        review_mode: record.try_get(3).expect("group start review_mode"),
+        entry_employee_id: record.try_get(4).expect("group start entry_employee_id"),
+    }))
+}
+
 pub(super) async fn find_existing_session_skill_id(
     pool: &SqlitePool,
     session_id: &str,
@@ -1003,6 +1041,123 @@ pub(super) async fn insert_group_run_event(
     .bind(event_type)
     .bind(payload_json)
     .bind(created_at)
+    .execute(&mut **tx)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub(super) async fn insert_group_run_record(
+    tx: &mut Transaction<'_, Sqlite>,
+    run_id: &str,
+    group_id: &str,
+    session_id: &str,
+    user_goal: &str,
+    initial_state: &str,
+    initial_round: i64,
+    current_phase: &str,
+    coordinator_employee_id: &str,
+    waiting_for_employee_id: &str,
+    now: &str,
+) -> Result<(), String> {
+    sqlx::query(
+        "INSERT INTO group_runs (
+            id, group_id, session_id, user_goal, state, current_round, current_phase, entry_session_id,
+            main_employee_id, review_round, status_reason, template_version, waiting_for_employee_id, waiting_for_user,
+            created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(run_id)
+    .bind(group_id)
+    .bind(session_id)
+    .bind(user_goal)
+    .bind(initial_state)
+    .bind(initial_round)
+    .bind(current_phase)
+    .bind(session_id)
+    .bind(coordinator_employee_id)
+    .bind(0_i64)
+    .bind("")
+    .bind("")
+    .bind(waiting_for_employee_id)
+    .bind(0_i64)
+    .bind(now)
+    .bind(now)
+    .execute(&mut **tx)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub(super) async fn insert_tx_session_message(
+    tx: &mut Transaction<'_, Sqlite>,
+    session_id: &str,
+    role: &str,
+    content: &str,
+    created_at: &str,
+) -> Result<(), String> {
+    sqlx::query(
+        "INSERT INTO messages (id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(uuid::Uuid::new_v4().to_string())
+    .bind(session_id)
+    .bind(role)
+    .bind(content)
+    .bind(created_at)
+    .execute(&mut **tx)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub(super) async fn insert_group_run_step_seed(
+    tx: &mut Transaction<'_, Sqlite>,
+    run_id: &str,
+    step_id: &str,
+    round_no: i64,
+    assignee_employee_id: &str,
+    dispatch_source_employee_id: &str,
+    phase: &str,
+    step_type: &str,
+    user_goal: &str,
+    output: &str,
+    status: &str,
+    requires_review: bool,
+    review_status: &str,
+    now: &str,
+) -> Result<(), String> {
+    sqlx::query(
+        "INSERT INTO group_run_steps (
+            id, run_id, round_no, parent_step_id, assignee_employee_id, dispatch_source_employee_id,
+            phase, step_type, step_kind, input, input_summary, output, output_summary, status,
+            requires_review, review_status, attempt_no, session_id, visibility, started_at, finished_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(step_id)
+    .bind(run_id)
+    .bind(round_no)
+    .bind("")
+    .bind(assignee_employee_id)
+    .bind(dispatch_source_employee_id)
+    .bind(phase)
+    .bind(step_type)
+    .bind(step_type)
+    .bind(user_goal)
+    .bind(if step_type == "plan" {
+        "已生成结构化计划"
+    } else {
+        ""
+    })
+    .bind(output)
+    .bind(output)
+    .bind(status)
+    .bind(if requires_review { 1_i64 } else { 0_i64 })
+    .bind(review_status)
+    .bind(0_i64)
+    .bind("")
+    .bind("internal")
+    .bind(now)
+    .bind(now)
     .execute(&mut **tx)
     .await
     .map_err(|e| e.to_string())?;
