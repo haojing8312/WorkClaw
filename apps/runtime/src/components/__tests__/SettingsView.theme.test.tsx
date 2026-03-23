@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { SettingsView } from "../SettingsView";
 
 const invokeMock = vi.fn();
@@ -120,8 +120,12 @@ describe("SettingsView semantic theme", () => {
       expect(screen.getByText("快速选择搜索引擎")).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "MCP 服务器" }));
-    fireEvent.change(screen.getByRole("combobox"), { target: { value: "brave-search" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "MCP 服务器" }));
+    });
+    await act(async () => {
+      fireEvent.change(screen.getByRole("combobox"), { target: { value: "brave-search" } });
+    });
     expect(screen.getByPlaceholderText("请输入 BRAVE_API_KEY")).toBeInTheDocument();
   });
 

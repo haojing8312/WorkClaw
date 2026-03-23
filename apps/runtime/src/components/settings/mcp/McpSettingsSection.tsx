@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { MCP_PRESETS, addMcpServer, listMcpServers, parseMcpEnvJson, removeMcpServer, type McpFormState, type McpServerRecord } from "./mcpSettingsService";
 
 const EMPTY_MCP_FORM: McpFormState = { name: "", command: "", args: "", env: "" };
@@ -8,46 +8,35 @@ export function McpSettingsSection() {
   const [mcpForm, setMcpForm] = useState(EMPTY_MCP_FORM);
   const [mcpError, setMcpError] = useState("");
   const [showMcpEnvJson, setShowMcpEnvJson] = useState(false);
-  const mcpServersRef = useRef<McpServerRecord[]>([]);
 
-  useEffect(() => {
-    mcpServersRef.current = mcpServers;
-  }, [mcpServers]);
+  async function refreshMcpServers() {
+    try {
+      const list = await listMcpServers();
+      setMcpServers((current) => (current.length === 0 && list.length === 0 ? current : list));
+    } catch (cause) {
+      console.error("加载 MCP 服务器失败:", cause);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
 
-    async function loadMcpServers() {
+    async function loadInitialMcpServers() {
       try {
         const list = await listMcpServers();
         if (!cancelled) {
-          if (mcpServersRef.current.length === 0 && list.length === 0) {
-            return;
-          }
-          setMcpServers(list);
+          setMcpServers((current) => (current.length === 0 && list.length === 0 ? current : list));
         }
       } catch (cause) {
         console.error("加载 MCP 服务器失败:", cause);
       }
     }
 
-    void loadMcpServers();
+    void loadInitialMcpServers();
     return () => {
       cancelled = true;
     };
   }, []);
-
-  async function refreshMcpServers() {
-    try {
-      const list = await listMcpServers();
-      if (mcpServersRef.current.length === 0 && list.length === 0) {
-        return;
-      }
-      setMcpServers(list);
-    } catch (cause) {
-      console.error("加载 MCP 服务器失败:", cause);
-    }
-  }
 
   function applyMcpPreset(value: string) {
     const preset = MCP_PRESETS.find((item) => item.value === value);
