@@ -28,6 +28,35 @@ pub(super) struct EmployeeAssociationRow {
     pub enabled_scopes_json: String,
 }
 
+pub(super) struct EmployeeGroupEntryRow {
+    pub entry_employee_id: String,
+    pub coordinator_employee_id: String,
+}
+
+pub(super) struct ThreadSessionRecord {
+    pub session_id: String,
+    pub session_exists: bool,
+}
+
+pub(super) struct SessionSeedInput<'a> {
+    pub id: &'a str,
+    pub skill_id: &'a str,
+    pub title: &'a str,
+    pub created_at: &'a str,
+    pub model_id: &'a str,
+    pub work_dir: &'a str,
+    pub employee_id: &'a str,
+}
+
+pub(super) struct ThreadSessionLinkInput<'a> {
+    pub thread_id: &'a str,
+    pub employee_db_id: &'a str,
+    pub session_id: &'a str,
+    pub route_session_key: &'a str,
+    pub created_at: &'a str,
+    pub updated_at: &'a str,
+}
+
 pub(super) async fn list_agent_employee_rows(
     pool: &SqlitePool,
 ) -> Result<Vec<AgentEmployeeRow>, String> {
@@ -158,6 +187,28 @@ pub(super) async fn get_employee_association_row(
     }))
 }
 
+pub(super) async fn get_employee_group_entry_row(
+    pool: &SqlitePool,
+    group_id: &str,
+) -> Result<Option<EmployeeGroupEntryRow>, String> {
+    let row = sqlx::query(
+        "SELECT COALESCE(entry_employee_id, ''), coordinator_employee_id
+         FROM employee_groups
+         WHERE id = ?",
+    )
+    .bind(group_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(row.map(|record| EmployeeGroupEntryRow {
+        entry_employee_id: record.try_get(0).expect("group entry row entry_employee_id"),
+        coordinator_employee_id: record
+            .try_get(1)
+            .expect("group entry row coordinator_employee_id"),
+    }))
+}
+
 pub(super) async fn clear_default_employee_flag(
     tx: &mut Transaction<'_, Sqlite>,
 ) -> Result<(), String> {
@@ -280,6 +331,135 @@ pub(super) async fn update_employee_enabled_scopes(
     .execute(&mut **tx)
     .await
     .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub(super) async fn find_latest_thread_session_id(
+    pool: &SqlitePool,
+    thread_id: &str,
+) -> Result<Option<String>, String> {
+    let row = sqlx::query(
+        "SELECT ts.session_id
+         FROM im_thread_sessions ts
+         INNER JOIN sessions s ON s.id = ts.session_id
+         WHERE ts.thread_id = ?
+         ORDER BY ts.updated_at DESC
+         LIMIT 1",
+    )
+    .bind(thread_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(row.map(|record| record.try_get(0).expect("latest thread session id")))
+}
+
+pub(super) async fn find_thread_session_record(
+    pool: &SqlitePool,
+    thread_id: &str,
+    employee_db_id: &str,
+) -> Result<Option<ThreadSessionRecord>, String> {
+    let row = sqlx::query(
+        "SELECT ts.session_id,
+                CASE WHEN s.id IS NULL THEN 0 ELSE 1 END AS session_exists
+         FROM im_thread_sessions ts
+         LEFT JOIN sessions s ON s.id = ts.session_id
+         WHERE ts.thread_id = ? AND ts.employee_id = ?
+         LIMIT 1",
+    )
+    .bind(thread_id)
+    .bind(employee_db_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(row.map(|record| ThreadSessionRecord {
+        session_id: record.try_get(0).expect("thread session record session_id"),
+        session_exists: record
+            .try_get::<i64, _>(1)
+            .expect("thread session record session_exists")
+            != 0,
+    }))
+}
+
+pub(super) async fn upsert_thread_session_link(
+    pool: &SqlitePool,
+    input: &ThreadSessionLinkInput<'_>,
+) -> Result<(), String> {
+    sqlx::query(
+        "INSERT INTO im_thread_sessions (thread_id, employee_id, session_id, route_session_key, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(thread_id, employee_id) DO UPDATE SET
+            session_id = excluded.session_id,
+            route_session_key = excluded.route_session_key,
+            updated_at = excluded.updated_at",
+    )
+    .bind(input.thread_id)
+    .bind(input.employee_db_id)
+    .bind(input.session_id)
+    .bind(input.route_session_key)
+    .bind(input.created_at)
+    .bind(input.updated_at)
+    .execute(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub(super) async fn find_recent_route_session_id(
+    pool: &SqlitePool,
+    employee_db_id: &str,
+    route_session_key: &str,
+) -> Result<Option<String>, String> {
+    let row = sqlx::query(
+        "SELECT ts.session_id
+         FROM im_thread_sessions ts
+         INNER JOIN sessions s ON s.id = ts.session_id
+         WHERE ts.employee_id = ? AND ts.route_session_key = ?
+         ORDER BY ts.updated_at DESC
+         LIMIT 1",
+    )
+    .bind(employee_db_id)
+    .bind(route_session_key)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(row.map(|record| record.try_get(0).expect("recent route session id")))
+}
+
+pub(super) async fn insert_session_seed(
+    pool: &SqlitePool,
+    input: &SessionSeedInput<'_>,
+) -> Result<(), String> {
+    sqlx::query(
+        "INSERT INTO sessions (id, skill_id, title, created_at, model_id, permission_mode, work_dir, employee_id)
+         VALUES (?, ?, ?, ?, ?, 'standard', ?, ?)",
+    )
+    .bind(input.id)
+    .bind(input.skill_id)
+    .bind(input.title)
+    .bind(input.created_at)
+    .bind(input.model_id)
+    .bind(input.work_dir)
+    .bind(input.employee_id)
+    .execute(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub(super) async fn update_session_employee_id(
+    pool: &SqlitePool,
+    session_id: &str,
+    employee_id: &str,
+) -> Result<(), String> {
+    sqlx::query("UPDATE sessions SET employee_id = ? WHERE id = ?")
+        .bind(employee_id)
+        .bind(session_id)
+        .execute(pool)
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 

@@ -3,13 +3,22 @@ use super::repo::{
     delete_displaced_default_feishu_bindings, delete_displaced_scoped_feishu_bindings,
     delete_feishu_bindings_for_agent, find_displaced_default_feishu_agent_ids,
     find_displaced_scoped_feishu_agent_ids, find_employee_db_id_by_employee_id,
-    get_employee_association_row, insert_feishu_binding, list_agent_employee_rows,
-    list_agent_scope_rows, list_skill_ids_for_employee, replace_employee_skill_bindings,
-    update_employee_enabled_scopes, upsert_agent_employee_record, InsertFeishuBindingInput,
+    find_latest_thread_session_id, find_recent_route_session_id, find_thread_session_record,
+    get_employee_association_row, get_employee_group_entry_row, insert_feishu_binding,
+    insert_session_seed, list_agent_employee_rows, list_agent_scope_rows,
+    list_skill_ids_for_employee, replace_employee_skill_bindings, update_employee_enabled_scopes,
+    update_session_employee_id, upsert_agent_employee_record, upsert_thread_session_link,
+    InsertFeishuBindingInput, SessionSeedInput, ThreadSessionLinkInput,
     UpsertAgentEmployeeRecordInput,
 };
-use super::{AgentEmployee, SaveFeishuEmployeeAssociationInput, UpsertAgentEmployeeInput};
+use super::{
+    AgentEmployee, EnsuredEmployeeSession, SaveFeishuEmployeeAssociationInput,
+    UpsertAgentEmployeeInput,
+};
+use crate::commands::im_routing::{list_im_routing_bindings_with_pool, ImRoutingBinding};
+use crate::commands::models::resolve_default_model_id_with_pool;
 use crate::commands::runtime_preferences::resolve_default_work_dir_with_pool;
+use crate::im::types::ImEvent;
 use sqlx::{Sqlite, SqlitePool, Transaction};
 use std::path::PathBuf;
 use uuid::Uuid;
@@ -325,4 +334,277 @@ pub(super) async fn save_feishu_employee_association_with_pool(
 
     tx.commit().await.map_err(|e| e.to_string())?;
     Ok(())
+}
+
+pub(super) async fn resolve_target_employees_for_event(
+    pool: &SqlitePool,
+    event: &ImEvent,
+) -> Result<Vec<AgentEmployee>, String> {
+    fn text_mentioned(text_lower: &str, alias: &str) -> bool {
+        let normalized = alias.trim().to_lowercase();
+        if normalized.is_empty() {
+            return false;
+        }
+        text_lower.contains(&format!("@{}", normalized))
+    }
+
+    let all_enabled = list_agent_employees_with_pool(pool)
+        .await?
+        .into_iter()
+        .filter(|employee| employee.enabled && super::employee_scope_matches_event(employee, event))
+        .collect::<Vec<_>>();
+
+    if let Some(role_id) = event
+        .role_id
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
+        let targeted = all_enabled
+            .iter()
+            .filter(|employee| {
+                employee.feishu_open_id == role_id
+                    || employee.role_id == role_id
+                    || employee.employee_id == role_id
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if !targeted.is_empty() {
+            return Ok(targeted);
+        }
+    }
+
+    if let Some(text) = event
+        .text
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
+        let text_lower = text.to_lowercase();
+        let targeted = all_enabled
+            .iter()
+            .filter(|employee| {
+                text_mentioned(&text_lower, &employee.name)
+                    || text_mentioned(&text_lower, &employee.employee_id)
+                    || text_mentioned(&text_lower, &employee.role_id)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if !targeted.is_empty() {
+            return Ok(vec![targeted[0].clone()]);
+        }
+    }
+
+    let defaults = all_enabled
+        .iter()
+        .filter(|employee| employee.is_default)
+        .cloned()
+        .collect::<Vec<_>>();
+    if !defaults.is_empty() {
+        return Ok(vec![defaults[0].clone()]);
+    }
+
+    Ok(all_enabled.iter().take(1).cloned().collect())
+}
+
+pub(super) async fn resolve_team_entry_employee_for_event_with_pool(
+    pool: &SqlitePool,
+    event: &ImEvent,
+) -> Result<Option<AgentEmployee>, String> {
+    let bindings = list_im_routing_bindings_with_pool(pool).await?;
+    let matched_binding = bindings.into_iter().find(|binding| {
+        !binding.team_id.trim().is_empty() && im_binding_matches_event(binding, event)
+    });
+    let Some(binding) = matched_binding else {
+        return Ok(None);
+    };
+
+    let Some(group_row) = get_employee_group_entry_row(pool, binding.team_id.trim()).await? else {
+        return Ok(None);
+    };
+
+    let preferred_employee_id = if group_row.entry_employee_id.trim().is_empty() {
+        group_row.coordinator_employee_id
+    } else {
+        group_row.entry_employee_id
+    };
+
+    Ok(list_agent_employees_with_pool(pool)
+        .await?
+        .into_iter()
+        .find(|employee| {
+            employee.enabled
+                && super::employee_scope_matches_event(employee, event)
+                && (employee
+                    .employee_id
+                    .eq_ignore_ascii_case(preferred_employee_id.trim())
+                    || employee
+                        .role_id
+                        .eq_ignore_ascii_case(preferred_employee_id.trim())
+                    || employee.id.eq_ignore_ascii_case(preferred_employee_id.trim()))
+        }))
+}
+
+pub(super) async fn ensure_employee_sessions_for_event_with_pool(
+    pool: &SqlitePool,
+    event: &ImEvent,
+) -> Result<Vec<EnsuredEmployeeSession>, String> {
+    let employees = if let Some(team_entry_employee) =
+        resolve_team_entry_employee_for_event_with_pool(pool, event).await?
+    {
+        vec![team_entry_employee]
+    } else {
+        resolve_target_employees_for_event(pool, event).await?
+    };
+    if employees.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let default_model_id = resolve_default_model_id_with_pool(pool)
+        .await?
+        .ok_or_else(|| "no model config found".to_string())?;
+
+    let mut shared_thread_session_id = find_latest_thread_session_id(pool, &event.thread_id).await?;
+    let mut results = Vec::with_capacity(employees.len());
+
+    for employee in employees {
+        let route_session_key = super::build_route_session_key(event, &employee);
+        let existing = find_thread_session_record(pool, &event.thread_id, &employee.id).await?;
+
+        let (session_id, created) = if let Some(existing) = existing {
+            if existing.session_exists {
+                (existing.session_id, false)
+            } else if let Some(shared_session_id) = shared_thread_session_id.clone() {
+                let now = chrono::Utc::now().to_rfc3339();
+                upsert_thread_session_link(
+                    pool,
+                    &ThreadSessionLinkInput {
+                        thread_id: &event.thread_id,
+                        employee_db_id: &employee.id,
+                        session_id: &shared_session_id,
+                        route_session_key: &route_session_key,
+                        created_at: &now,
+                        updated_at: &now,
+                    },
+                )
+                .await?;
+                (shared_session_id, false)
+            } else {
+                create_employee_route_session(
+                    pool,
+                    event,
+                    &employee,
+                    &default_model_id,
+                    &route_session_key,
+                )
+                .await?
+            }
+        } else if let Some(shared_session_id) = shared_thread_session_id.clone() {
+            let now = chrono::Utc::now().to_rfc3339();
+            upsert_thread_session_link(
+                pool,
+                &ThreadSessionLinkInput {
+                    thread_id: &event.thread_id,
+                    employee_db_id: &employee.id,
+                    session_id: &shared_session_id,
+                    route_session_key: &route_session_key,
+                    created_at: &now,
+                    updated_at: &now,
+                },
+            )
+            .await?;
+            (shared_session_id, false)
+        } else if let Some(session_id) =
+            find_recent_route_session_id(pool, &employee.id, &route_session_key).await?
+        {
+            let now = chrono::Utc::now().to_rfc3339();
+            upsert_thread_session_link(
+                pool,
+                &ThreadSessionLinkInput {
+                    thread_id: &event.thread_id,
+                    employee_db_id: &employee.id,
+                    session_id: &session_id,
+                    route_session_key: &route_session_key,
+                    created_at: &now,
+                    updated_at: &now,
+                },
+            )
+            .await?;
+            (session_id, false)
+        } else {
+            create_employee_route_session(
+                pool,
+                event,
+                &employee,
+                &default_model_id,
+                &route_session_key,
+            )
+            .await?
+        };
+
+        if shared_thread_session_id.is_none() {
+            shared_thread_session_id = Some(session_id.clone());
+        }
+
+        let _ = update_session_employee_id(pool, &session_id, employee.employee_id.trim()).await;
+
+        results.push(EnsuredEmployeeSession {
+            employee_id: employee.id.clone(),
+            role_id: employee.role_id.clone(),
+            employee_name: employee.name.clone(),
+            session_id,
+            created,
+        });
+    }
+
+    Ok(results)
+}
+
+async fn create_employee_route_session(
+    pool: &SqlitePool,
+    event: &ImEvent,
+    employee: &AgentEmployee,
+    default_model_id: &str,
+    route_session_key: &str,
+) -> Result<(String, bool), String> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let session_id = Uuid::new_v4().to_string();
+    let skill_id = if employee.primary_skill_id.trim().is_empty() {
+        "builtin-general".to_string()
+    } else {
+        employee.primary_skill_id.clone()
+    };
+
+    insert_session_seed(
+        pool,
+        &SessionSeedInput {
+            id: &session_id,
+            skill_id: &skill_id,
+            title: &format!("IM:{}@{}", employee.name, event.thread_id),
+            created_at: &now,
+            model_id: default_model_id,
+            work_dir: employee.default_work_dir.trim(),
+            employee_id: employee.employee_id.trim(),
+        },
+    )
+    .await?;
+
+    upsert_thread_session_link(
+        pool,
+        &ThreadSessionLinkInput {
+            thread_id: &event.thread_id,
+            employee_db_id: &employee.id,
+            session_id: &session_id,
+            route_session_key,
+            created_at: &now,
+            updated_at: &now,
+        },
+    )
+    .await?;
+
+    Ok((session_id, true))
+}
+
+fn im_binding_matches_event(binding: &ImRoutingBinding, event: &ImEvent) -> bool {
+    super::im_binding_matches_event(binding, event)
 }
