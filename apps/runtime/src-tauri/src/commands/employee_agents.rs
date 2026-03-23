@@ -3133,103 +3133,14 @@ pub async fn pause_employee_group_run_with_pool(
     run_id: &str,
     reason: &str,
 ) -> Result<(), String> {
-    let now = chrono::Utc::now().to_rfc3339();
-    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
-    let result = sqlx::query(
-        "UPDATE group_runs
-         SET state = 'paused',
-             status_reason = ?,
-             updated_at = ?
-         WHERE id = ? AND state NOT IN ('done', 'failed', 'cancelled', 'paused')",
-    )
-    .bind(reason.trim())
-    .bind(&now)
-    .bind(run_id)
-    .execute(&mut *tx)
-    .await
-    .map_err(|e| e.to_string())?;
-    if result.rows_affected() == 0 {
-        return Err("group run is not pausable".to_string());
-    }
-    sqlx::query(
-        "INSERT INTO group_run_events (id, run_id, step_id, event_type, payload_json, created_at)
-         VALUES (?, ?, '', 'run_paused', ?, ?)",
-    )
-    .bind(Uuid::new_v4().to_string())
-    .bind(run_id)
-    .bind(
-        serde_json::json!({
-            "reason": reason.trim(),
-        })
-        .to_string(),
-    )
-    .bind(&now)
-    .execute(&mut *tx)
-    .await
-    .map_err(|e| e.to_string())?;
-    tx.commit().await.map_err(|e| e.to_string())?;
-    Ok(())
+    service::pause_employee_group_run_with_pool(pool, run_id, reason).await
 }
 
 pub async fn resume_employee_group_run_with_pool(
     pool: &SqlitePool,
     run_id: &str,
 ) -> Result<(), String> {
-    let run_row = sqlx::query(
-        "SELECT state, COALESCE(current_phase, 'plan')
-         FROM group_runs
-         WHERE id = ?",
-    )
-    .bind(run_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| e.to_string())?
-    .ok_or_else(|| "group run not found".to_string())?;
-    let state: String = run_row.try_get(0).map_err(|e| e.to_string())?;
-    let current_phase: String = run_row.try_get(1).map_err(|e| e.to_string())?;
-    if state != "paused" {
-        return Err("group run is not paused".to_string());
-    }
-
-    let resumed_state = match current_phase.as_str() {
-        "execute" => "executing",
-        "review" => "waiting_review",
-        _ => "planning",
-    };
-    let now = chrono::Utc::now().to_rfc3339();
-    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
-    sqlx::query(
-        "UPDATE group_runs
-         SET state = ?,
-             status_reason = '',
-             updated_at = ?
-         WHERE id = ?",
-    )
-    .bind(resumed_state)
-    .bind(&now)
-    .bind(run_id)
-    .execute(&mut *tx)
-    .await
-    .map_err(|e| e.to_string())?;
-    sqlx::query(
-        "INSERT INTO group_run_events (id, run_id, step_id, event_type, payload_json, created_at)
-         VALUES (?, ?, '', 'run_resumed', ?, ?)",
-    )
-    .bind(Uuid::new_v4().to_string())
-    .bind(run_id)
-    .bind(
-        serde_json::json!({
-            "state": resumed_state,
-            "phase": current_phase,
-        })
-        .to_string(),
-    )
-    .bind(&now)
-    .execute(&mut *tx)
-    .await
-    .map_err(|e| e.to_string())?;
-    tx.commit().await.map_err(|e| e.to_string())?;
-    Ok(())
+    service::resume_employee_group_run_with_pool(pool, run_id).await
 }
 
 pub async fn reassign_group_run_step_with_pool(
@@ -3523,69 +3434,14 @@ pub async fn cancel_employee_group_run_with_pool(
     pool: &SqlitePool,
     run_id: &str,
 ) -> Result<(), String> {
-    let now = chrono::Utc::now().to_rfc3339();
-    sqlx::query(
-        "UPDATE group_runs
-         SET state = 'cancelled', updated_at = ?
-         WHERE id = ? AND state NOT IN ('done', 'failed', 'cancelled')",
-    )
-    .bind(&now)
-    .bind(run_id)
-    .execute(pool)
-    .await
-    .map_err(|e| e.to_string())?;
-    Ok(())
+    service::cancel_employee_group_run_with_pool(pool, run_id).await
 }
 
 pub async fn retry_employee_group_run_failed_steps_with_pool(
     pool: &SqlitePool,
     run_id: &str,
 ) -> Result<(), String> {
-    let failed_rows = sqlx::query(
-        "SELECT id, output FROM group_run_steps WHERE run_id = ? AND status = 'failed'",
-    )
-    .bind(run_id)
-    .fetch_all(pool)
-    .await
-    .map_err(|e| e.to_string())?;
-    if failed_rows.is_empty() {
-        return Err("no failed steps to retry".to_string());
-    }
-
-    let now = chrono::Utc::now().to_rfc3339();
-    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
-    for row in failed_rows {
-        let step_id: String = row.try_get("id").map_err(|e| e.to_string())?;
-        let old_output: String = row.try_get("output").map_err(|e| e.to_string())?;
-        let retried_output = if old_output.trim().is_empty() {
-            "重试后完成".to_string()
-        } else {
-            format!("{old_output}\n重试后完成")
-        };
-        sqlx::query(
-            "UPDATE group_run_steps
-             SET status = 'completed', output = ?, finished_at = ?
-             WHERE id = ?",
-        )
-        .bind(retried_output)
-        .bind(&now)
-        .bind(step_id)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| e.to_string())?;
-    }
-    sqlx::query(
-        "UPDATE group_runs
-         SET state = 'done', current_round = current_round + 1, updated_at = ?
-         WHERE id = ?",
-    )
-    .bind(&now)
-    .bind(run_id)
-    .execute(&mut *tx)
-    .await
-    .map_err(|e| e.to_string())?;
-    tx.commit().await.map_err(|e| e.to_string())?;
-    Ok(())
+    service::retry_employee_group_run_failed_steps_with_pool(pool, run_id).await
 }
 
 fn employee_scope_matches_event(employee: &AgentEmployee, event: &ImEvent) -> bool {

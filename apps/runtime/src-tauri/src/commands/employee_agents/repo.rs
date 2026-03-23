@@ -67,6 +67,16 @@ pub(super) struct InboundEventLinkInput<'a> {
     pub created_at: &'a str,
 }
 
+pub(super) struct GroupRunStateRow {
+    pub state: String,
+    pub current_phase: String,
+}
+
+pub(super) struct FailedGroupRunStepRow {
+    pub step_id: String,
+    pub output: String,
+}
+
 pub(super) async fn list_agent_employee_rows(
     pool: &SqlitePool,
 ) -> Result<Vec<AgentEmployeeRow>, String> {
@@ -489,6 +499,169 @@ pub(super) async fn insert_inbound_event_link(
     .bind(input.im_message_id)
     .bind(input.created_at)
     .execute(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub(super) async fn pause_group_run(
+    tx: &mut Transaction<'_, Sqlite>,
+    run_id: &str,
+    reason: &str,
+    now: &str,
+) -> Result<u64, String> {
+    let result = sqlx::query(
+        "UPDATE group_runs
+         SET state = 'paused',
+             status_reason = ?,
+             updated_at = ?
+         WHERE id = ? AND state NOT IN ('done', 'failed', 'cancelled', 'paused')",
+    )
+    .bind(reason)
+    .bind(now)
+    .bind(run_id)
+    .execute(&mut **tx)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(result.rows_affected())
+}
+
+pub(super) async fn find_group_run_state(
+    pool: &SqlitePool,
+    run_id: &str,
+) -> Result<Option<GroupRunStateRow>, String> {
+    let row = sqlx::query(
+        "SELECT state, COALESCE(current_phase, 'plan')
+         FROM group_runs
+         WHERE id = ?",
+    )
+    .bind(run_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(row.map(|record| GroupRunStateRow {
+        state: record.try_get(0).expect("group run state"),
+        current_phase: record.try_get(1).expect("group run current_phase"),
+    }))
+}
+
+pub(super) async fn resume_group_run(
+    tx: &mut Transaction<'_, Sqlite>,
+    run_id: &str,
+    resumed_state: &str,
+    now: &str,
+) -> Result<(), String> {
+    sqlx::query(
+        "UPDATE group_runs
+         SET state = ?,
+             status_reason = '',
+             updated_at = ?
+         WHERE id = ?",
+    )
+    .bind(resumed_state)
+    .bind(now)
+    .bind(run_id)
+    .execute(&mut **tx)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub(super) async fn insert_group_run_event(
+    tx: &mut Transaction<'_, Sqlite>,
+    run_id: &str,
+    step_id: &str,
+    event_type: &str,
+    payload_json: &str,
+    created_at: &str,
+) -> Result<(), String> {
+    sqlx::query(
+        "INSERT INTO group_run_events (id, run_id, step_id, event_type, payload_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .bind(uuid::Uuid::new_v4().to_string())
+    .bind(run_id)
+    .bind(step_id)
+    .bind(event_type)
+    .bind(payload_json)
+    .bind(created_at)
+    .execute(&mut **tx)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub(super) async fn cancel_group_run(
+    pool: &SqlitePool,
+    run_id: &str,
+    now: &str,
+) -> Result<(), String> {
+    sqlx::query(
+        "UPDATE group_runs
+         SET state = 'cancelled', updated_at = ?
+         WHERE id = ? AND state NOT IN ('done', 'failed', 'cancelled')",
+    )
+    .bind(now)
+    .bind(run_id)
+    .execute(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub(super) async fn list_failed_group_run_steps(
+    pool: &SqlitePool,
+    run_id: &str,
+) -> Result<Vec<FailedGroupRunStepRow>, String> {
+    let rows = sqlx::query("SELECT id, output FROM group_run_steps WHERE run_id = ? AND status = 'failed'")
+        .bind(run_id)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| FailedGroupRunStepRow {
+            step_id: row.try_get("id").expect("failed step id"),
+            output: row.try_get("output").expect("failed step output"),
+        })
+        .collect())
+}
+
+pub(super) async fn complete_failed_group_run_step(
+    tx: &mut Transaction<'_, Sqlite>,
+    step_id: &str,
+    output: &str,
+    now: &str,
+) -> Result<(), String> {
+    sqlx::query(
+        "UPDATE group_run_steps
+         SET status = 'completed', output = ?, finished_at = ?
+         WHERE id = ?",
+    )
+    .bind(output)
+    .bind(now)
+    .bind(step_id)
+    .execute(&mut **tx)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub(super) async fn mark_group_run_done_after_retry(
+    tx: &mut Transaction<'_, Sqlite>,
+    run_id: &str,
+    now: &str,
+) -> Result<(), String> {
+    sqlx::query(
+        "UPDATE group_runs
+         SET state = 'done', current_round = current_round + 1, updated_at = ?
+         WHERE id = ?",
+    )
+    .bind(now)
+    .bind(run_id)
+    .execute(&mut **tx)
     .await
     .map_err(|e| e.to_string())?;
     Ok(())

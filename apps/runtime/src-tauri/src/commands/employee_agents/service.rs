@@ -4,11 +4,14 @@ use super::repo::{
     delete_feishu_bindings_for_agent, find_displaced_default_feishu_agent_ids,
     find_displaced_scoped_feishu_agent_ids, find_employee_db_id_by_employee_id,
     find_latest_thread_session_id, find_recent_route_session_id, find_thread_session_record,
-    get_employee_association_row, get_employee_group_entry_row, insert_feishu_binding,
-    insert_inbound_event_link, insert_session_seed, list_agent_employee_rows, list_agent_scope_rows,
-    list_skill_ids_for_employee, replace_employee_skill_bindings, update_employee_enabled_scopes,
+    find_group_run_state, get_employee_association_row, get_employee_group_entry_row,
+    insert_feishu_binding, insert_group_run_event, insert_inbound_event_link, insert_session_seed,
+    list_agent_employee_rows, list_agent_scope_rows, list_failed_group_run_steps,
+    list_skill_ids_for_employee, mark_group_run_done_after_retry, pause_group_run,
+    replace_employee_skill_bindings, resume_group_run, update_employee_enabled_scopes,
     update_session_employee_id, upsert_agent_employee_record, upsert_thread_session_link,
-    InboundEventLinkInput, InsertFeishuBindingInput, SessionSeedInput, ThreadSessionLinkInput,
+    cancel_group_run, complete_failed_group_run_step, InboundEventLinkInput,
+    InsertFeishuBindingInput, SessionSeedInput, ThreadSessionLinkInput,
     UpsertAgentEmployeeRecordInput,
 };
 use super::{
@@ -629,6 +632,98 @@ pub(super) async fn bridge_inbound_event_to_employee_sessions_with_pool(
     }
 
     Ok(bridged)
+}
+
+pub(super) async fn pause_employee_group_run_with_pool(
+    pool: &SqlitePool,
+    run_id: &str,
+    reason: &str,
+) -> Result<(), String> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
+    let affected = pause_group_run(&mut tx, run_id, reason.trim(), &now).await?;
+    if affected == 0 {
+        return Err("group run is not pausable".to_string());
+    }
+    insert_group_run_event(
+        &mut tx,
+        run_id,
+        "",
+        "run_paused",
+        &serde_json::json!({ "reason": reason.trim() }).to_string(),
+        &now,
+    )
+    .await?;
+    tx.commit().await.map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub(super) async fn resume_employee_group_run_with_pool(
+    pool: &SqlitePool,
+    run_id: &str,
+) -> Result<(), String> {
+    let run_row = find_group_run_state(pool, run_id)
+        .await?
+        .ok_or_else(|| "group run not found".to_string())?;
+    if run_row.state != "paused" {
+        return Err("group run is not paused".to_string());
+    }
+
+    let resumed_state = match run_row.current_phase.as_str() {
+        "execute" => "executing",
+        "review" => "waiting_review",
+        _ => "planning",
+    };
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
+    resume_group_run(&mut tx, run_id, resumed_state, &now).await?;
+    insert_group_run_event(
+        &mut tx,
+        run_id,
+        "",
+        "run_resumed",
+        &serde_json::json!({
+            "state": resumed_state,
+            "phase": run_row.current_phase,
+        })
+        .to_string(),
+        &now,
+    )
+    .await?;
+    tx.commit().await.map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub(super) async fn cancel_employee_group_run_with_pool(
+    pool: &SqlitePool,
+    run_id: &str,
+) -> Result<(), String> {
+    let now = chrono::Utc::now().to_rfc3339();
+    cancel_group_run(pool, run_id, &now).await
+}
+
+pub(super) async fn retry_employee_group_run_failed_steps_with_pool(
+    pool: &SqlitePool,
+    run_id: &str,
+) -> Result<(), String> {
+    let failed_rows = list_failed_group_run_steps(pool, run_id).await?;
+    if failed_rows.is_empty() {
+        return Err("no failed steps to retry".to_string());
+    }
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
+    for row in failed_rows {
+        let retried_output = if row.output.trim().is_empty() {
+            "重试后完成".to_string()
+        } else {
+            format!("{}\n重试后完成", row.output)
+        };
+        complete_failed_group_run_step(&mut tx, &row.step_id, &retried_output, &now).await?;
+    }
+    mark_group_run_done_after_retry(&mut tx, run_id, &now).await?;
+    tx.commit().await.map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 async fn create_employee_route_session(
