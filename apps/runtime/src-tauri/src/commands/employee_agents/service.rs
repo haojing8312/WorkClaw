@@ -3,7 +3,8 @@ use super::repo::{
     delete_displaced_default_feishu_bindings, delete_displaced_scoped_feishu_bindings,
     delete_feishu_bindings_for_agent, find_displaced_default_feishu_agent_ids,
     find_displaced_scoped_feishu_agent_ids, find_employee_db_id_by_employee_id,
-    find_group_step_session_row, find_latest_thread_session_id, find_model_config_row,
+    find_employee_session_seed_row, find_existing_session_skill_id, find_group_step_session_row,
+    find_latest_thread_session_id, find_model_config_row, find_recent_group_step_session_id,
     find_recent_route_session_id, find_thread_session_record,
     find_group_run_execute_step_context, find_group_run_finalize_state, find_group_run_snapshot_row,
     find_group_run_state, find_latest_assistant_message_content, find_pending_review_step,
@@ -1205,6 +1206,116 @@ pub(super) async fn execute_group_step_in_employee_context_with_pool(
     insert_session_message(pool, session_id, "assistant", &assistant_output, &finished_at).await?;
 
     Ok(assistant_output)
+}
+
+pub(super) async fn ensure_group_run_session_with_pool(
+    pool: &SqlitePool,
+    coordinator_employee_id: &str,
+    group_name: &str,
+    now: &str,
+    preferred_session_id: Option<&str>,
+) -> Result<(String, String), String> {
+    let employee_row = find_employee_session_seed_row(pool, coordinator_employee_id)
+        .await?
+        .ok_or_else(|| "coordinator employee not found".to_string())?;
+
+    let session_skill_id = if employee_row.primary_skill_id.trim().is_empty() {
+        "builtin-general".to_string()
+    } else {
+        employee_row.primary_skill_id.trim().to_string()
+    };
+
+    if let Some(existing_session_id) = preferred_session_id
+        .map(str::trim)
+        .filter(|session_id| !session_id.is_empty())
+    {
+        let existing_skill_id = find_existing_session_skill_id(pool, existing_session_id)
+            .await?
+            .ok_or_else(|| "preferred group run session not found".to_string())?;
+        let existing_skill_id = if existing_skill_id.trim().is_empty() {
+            session_skill_id.clone()
+        } else {
+            existing_skill_id.trim().to_string()
+        };
+        return Ok((existing_session_id.to_string(), existing_skill_id));
+    }
+
+    let model_id = resolve_default_model_id_with_pool(pool)
+        .await?
+        .ok_or_else(|| "model config not found".to_string())?;
+
+    let session_id = Uuid::new_v4().to_string();
+    insert_session_seed(
+        pool,
+        &SessionSeedInput {
+            id: &session_id,
+            skill_id: &session_skill_id,
+            title: &format!("群组协作：{}", group_name.trim()),
+            created_at: now,
+            model_id: &model_id,
+            work_dir: &employee_row.default_work_dir,
+            employee_id: coordinator_employee_id,
+        },
+    )
+    .await?;
+
+    Ok((session_id, session_skill_id))
+}
+
+pub(super) async fn append_group_run_assistant_message_with_pool(
+    pool: &SqlitePool,
+    session_id: &str,
+    content: &str,
+) -> Result<(), String> {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return Ok(());
+    }
+
+    let now = chrono::Utc::now().to_rfc3339();
+    insert_session_message(pool, session_id, "assistant", trimmed, &now).await
+}
+
+pub(super) async fn ensure_group_step_session_with_pool(
+    pool: &SqlitePool,
+    run_id: &str,
+    assignee_employee_id: &str,
+    now: &str,
+) -> Result<String, String> {
+    if let Some(session_id) = find_recent_group_step_session_id(pool, run_id, assignee_employee_id).await? {
+        return Ok(session_id);
+    }
+
+    let employee_row = find_employee_session_seed_row(pool, assignee_employee_id)
+        .await?
+        .ok_or_else(|| "assignee employee not found".to_string())?;
+
+    let session_skill_id = if employee_row.primary_skill_id.trim().is_empty() {
+        "builtin-general".to_string()
+    } else {
+        employee_row.primary_skill_id.trim().to_string()
+    };
+
+    let model_id = resolve_default_model_id_with_pool(pool)
+        .await?
+        .ok_or_else(|| "model config not found".to_string())?;
+
+    let session_id = Uuid::new_v4().to_string();
+    insert_session_seed(
+        pool,
+        &SessionSeedInput {
+            id: &session_id,
+            skill_id: &session_skill_id,
+            title: &format!("群组执行:{}@{}", run_id, assignee_employee_id),
+            created_at: now,
+            model_id: &model_id,
+            work_dir: &employee_row.default_work_dir,
+            employee_id: assignee_employee_id,
+        },
+    )
+    .await?;
+
+    Ok(session_id)
 }
 
 pub(super) async fn get_group_run_session_id_with_pool(

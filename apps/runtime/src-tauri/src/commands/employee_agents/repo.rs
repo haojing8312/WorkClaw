@@ -104,6 +104,11 @@ pub(super) struct GroupStepSessionRow {
     pub work_dir: String,
 }
 
+pub(super) struct EmployeeSessionSeedRow {
+    pub primary_skill_id: String,
+    pub default_work_dir: String,
+}
+
 pub(super) struct ModelConfigRow {
     pub api_format: String,
     pub base_url: String,
@@ -608,6 +613,67 @@ pub(super) async fn find_group_step_session_row(
         model_id: record.try_get(1).expect("group step session model_id"),
         work_dir: record.try_get(2).expect("group step session work_dir"),
     }))
+}
+
+pub(super) async fn find_existing_session_skill_id(
+    pool: &SqlitePool,
+    session_id: &str,
+) -> Result<Option<String>, String> {
+    let row = sqlx::query_as::<_, (String,)>(
+        "SELECT COALESCE(skill_id, '') FROM sessions WHERE id = ?",
+    )
+    .bind(session_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(row.map(|(skill_id,)| skill_id))
+}
+
+pub(super) async fn find_employee_session_seed_row(
+    pool: &SqlitePool,
+    employee_id: &str,
+) -> Result<Option<EmployeeSessionSeedRow>, String> {
+    let row = sqlx::query(
+        "SELECT primary_skill_id, default_work_dir
+         FROM agent_employees
+         WHERE lower(employee_id) = lower(?) OR lower(role_id) = lower(?)
+         ORDER BY is_default DESC, updated_at DESC
+         LIMIT 1",
+    )
+    .bind(employee_id)
+    .bind(employee_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(row.map(|record| EmployeeSessionSeedRow {
+        primary_skill_id: record
+            .try_get("primary_skill_id")
+            .expect("employee session seed primary_skill_id"),
+        default_work_dir: record
+            .try_get("default_work_dir")
+            .expect("employee session seed default_work_dir"),
+    }))
+}
+
+pub(super) async fn find_recent_group_step_session_id(
+    pool: &SqlitePool,
+    run_id: &str,
+    assignee_employee_id: &str,
+) -> Result<Option<String>, String> {
+    let row = sqlx::query_as::<_, (String,)>(
+        "SELECT session_id
+         FROM group_run_steps
+         WHERE run_id = ? AND assignee_employee_id = ? AND TRIM(session_id) <> ''
+         ORDER BY finished_at DESC, started_at DESC
+         LIMIT 1",
+    )
+    .bind(run_id)
+    .bind(assignee_employee_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(row.map(|(session_id,)| session_id))
 }
 
 pub(super) async fn find_model_config_row(

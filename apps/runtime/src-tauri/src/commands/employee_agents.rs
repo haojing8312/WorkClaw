@@ -2,7 +2,6 @@ use crate::agent::run_guard::{
     RunBudgetPolicy, RunBudgetScope,
 };
 use crate::agent::skill_config::SkillConfig;
-use crate::commands::models::resolve_default_model_id_with_pool;
 use crate::commands::skills::DbState;
 use crate::im::types::ImEvent;
 use serde_json::{json, Value};
@@ -1735,74 +1734,14 @@ async fn ensure_group_run_session_with_pool(
     now: &str,
     preferred_session_id: Option<&str>,
 ) -> Result<(String, String), String> {
-    let employee_row = sqlx::query(
-        "SELECT primary_skill_id, default_work_dir
-         FROM agent_employees
-         WHERE lower(employee_id) = lower(?) OR lower(role_id) = lower(?)
-         ORDER BY is_default DESC, updated_at DESC
-         LIMIT 1",
+    service::ensure_group_run_session_with_pool(
+        pool,
+        coordinator_employee_id,
+        group_name,
+        now,
+        preferred_session_id,
     )
-    .bind(coordinator_employee_id)
-    .bind(coordinator_employee_id)
-    .fetch_optional(pool)
     .await
-    .map_err(|e| e.to_string())?
-    .ok_or_else(|| "coordinator employee not found".to_string())?;
-
-    let skill_id_raw: String = employee_row
-        .try_get("primary_skill_id")
-        .map_err(|e| e.to_string())?;
-    let default_work_dir: String = employee_row
-        .try_get("default_work_dir")
-        .map_err(|e| e.to_string())?;
-    let session_skill_id = if skill_id_raw.trim().is_empty() {
-        "builtin-general".to_string()
-    } else {
-        skill_id_raw.trim().to_string()
-    };
-
-    if let Some(existing_session_id) = preferred_session_id
-        .map(str::trim)
-        .filter(|session_id| !session_id.is_empty())
-    {
-        let existing_skill_row = sqlx::query_as::<_, (String,)>(
-            "SELECT COALESCE(skill_id, '') FROM sessions WHERE id = ?",
-        )
-        .bind(existing_session_id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "preferred group run session not found".to_string())?;
-        let existing_skill_id = if existing_skill_row.0.trim().is_empty() {
-            session_skill_id.clone()
-        } else {
-            existing_skill_row.0.trim().to_string()
-        };
-        return Ok((existing_session_id.to_string(), existing_skill_id));
-    }
-
-    let model_id = resolve_default_model_id_with_pool(pool)
-        .await?
-        .ok_or_else(|| "model config not found".to_string())?;
-
-    let session_id = Uuid::new_v4().to_string();
-    let title = format!("群组协作：{}", group_name.trim());
-    sqlx::query(
-        "INSERT INTO sessions (id, skill_id, title, created_at, model_id, permission_mode, work_dir, employee_id)
-         VALUES (?, ?, ?, ?, ?, 'standard', ?, ?)",
-    )
-    .bind(&session_id)
-    .bind(&session_skill_id)
-    .bind(title)
-    .bind(now)
-    .bind(model_id)
-    .bind(default_work_dir)
-    .bind(coordinator_employee_id)
-    .execute(pool)
-    .await
-    .map_err(|e| e.to_string())?;
-
-    Ok((session_id, session_skill_id))
 }
 
 async fn append_group_run_assistant_message_with_pool(
@@ -1810,24 +1749,7 @@ async fn append_group_run_assistant_message_with_pool(
     session_id: &str,
     content: &str,
 ) -> Result<(), String> {
-    let trimmed = content.trim();
-    if trimmed.is_empty() {
-        return Ok(());
-    }
-
-    let now = chrono::Utc::now().to_rfc3339();
-    sqlx::query(
-        "INSERT INTO messages (id, session_id, role, content, created_at)
-         VALUES (?, ?, 'assistant', ?, ?)",
-    )
-    .bind(Uuid::new_v4().to_string())
-    .bind(session_id)
-    .bind(trimmed)
-    .bind(&now)
-    .execute(pool)
-    .await
-    .map_err(|e| e.to_string())?;
-    Ok(())
+    service::append_group_run_assistant_message_with_pool(pool, session_id, content).await
 }
 
 async fn ensure_group_step_session_with_pool(
@@ -1836,70 +1758,7 @@ async fn ensure_group_step_session_with_pool(
     assignee_employee_id: &str,
     now: &str,
 ) -> Result<String, String> {
-    if let Some((session_id,)) = sqlx::query_as::<_, (String,)>(
-        "SELECT session_id
-         FROM group_run_steps
-         WHERE run_id = ? AND assignee_employee_id = ? AND TRIM(session_id) <> ''
-         ORDER BY finished_at DESC, started_at DESC
-         LIMIT 1",
-    )
-    .bind(run_id)
-    .bind(assignee_employee_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| e.to_string())?
-    {
-        return Ok(session_id);
-    }
-
-    let employee_row = sqlx::query(
-        "SELECT primary_skill_id, default_work_dir
-         FROM agent_employees
-         WHERE lower(employee_id) = lower(?) OR lower(role_id) = lower(?)
-         ORDER BY is_default DESC, updated_at DESC
-         LIMIT 1",
-    )
-    .bind(assignee_employee_id)
-    .bind(assignee_employee_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| e.to_string())?
-    .ok_or_else(|| "assignee employee not found".to_string())?;
-
-    let skill_id_raw: String = employee_row
-        .try_get("primary_skill_id")
-        .map_err(|e| e.to_string())?;
-    let default_work_dir: String = employee_row
-        .try_get("default_work_dir")
-        .map_err(|e| e.to_string())?;
-    let session_skill_id = if skill_id_raw.trim().is_empty() {
-        "builtin-general".to_string()
-    } else {
-        skill_id_raw.trim().to_string()
-    };
-
-    let model_id = resolve_default_model_id_with_pool(pool)
-        .await?
-        .ok_or_else(|| "model config not found".to_string())?;
-
-    let session_id = Uuid::new_v4().to_string();
-    let title = format!("群组执行:{}@{}", run_id, assignee_employee_id);
-    sqlx::query(
-        "INSERT INTO sessions (id, skill_id, title, created_at, model_id, permission_mode, work_dir, employee_id)
-         VALUES (?, ?, ?, ?, ?, 'standard', ?, ?)",
-    )
-    .bind(&session_id)
-    .bind(&session_skill_id)
-    .bind(title)
-    .bind(now)
-    .bind(model_id)
-    .bind(default_work_dir)
-    .bind(assignee_employee_id)
-    .execute(pool)
-    .await
-    .map_err(|e| e.to_string())?;
-
-    Ok(session_id)
+    service::ensure_group_step_session_with_pool(pool, run_id, assignee_employee_id, now).await
 }
 
 fn load_group_step_profile_markdown(employee: &AgentEmployee) -> String {
