@@ -4,20 +4,24 @@ use super::repo::{
     delete_feishu_bindings_for_agent, find_displaced_default_feishu_agent_ids,
     find_displaced_scoped_feishu_agent_ids, find_employee_db_id_by_employee_id,
     find_latest_thread_session_id, find_recent_route_session_id, find_thread_session_record,
-    find_group_run_execute_step_context, find_group_run_state, find_pending_review_step,
-    get_employee_association_row, get_employee_group_entry_row, insert_feishu_binding,
-    insert_group_run_event, insert_inbound_event_link, insert_session_seed,
-    list_agent_employee_rows, list_agent_scope_rows, list_failed_execute_assignees,
-    list_failed_group_run_steps, list_pending_execute_step_ids, list_skill_ids_for_employee,
-    mark_group_run_done_after_retry, mark_group_run_executing, mark_group_run_failed,
-    mark_group_run_step_completed, mark_group_run_step_dispatched, mark_group_run_step_failed,
-    mark_group_run_waiting_review, pause_group_run, replace_employee_skill_bindings,
-    reset_group_run_step_for_reassignment, resume_group_run, review_requested_event_exists,
-    update_employee_enabled_scopes, update_group_run_after_reassignment,
-    update_session_employee_id, upsert_agent_employee_record, upsert_thread_session_link,
-    cancel_group_run, clear_group_run_execute_waiting_state, complete_failed_group_run_step,
-    employee_exists_for_reassignment, find_group_run_step_reassign_row, InboundEventLinkInput,
-    InsertFeishuBindingInput, SessionSeedInput, ThreadSessionLinkInput,
+    find_group_run_execute_step_context, find_group_run_finalize_state, find_group_run_snapshot_row,
+    find_group_run_state, find_latest_assistant_message_content, find_pending_review_step,
+    get_employee_association_row, get_employee_group_entry_row, get_group_run_session_id,
+    insert_feishu_binding, insert_group_run_assistant_message, insert_group_run_event,
+    insert_inbound_event_link, insert_session_seed, list_agent_employee_rows,
+    list_agent_scope_rows, list_failed_execute_assignees, list_failed_group_run_steps,
+    list_group_run_event_snapshot_rows, list_group_run_execute_outputs,
+    list_group_run_step_snapshot_rows, list_pending_execute_step_ids, list_skill_ids_for_employee,
+    load_group_run_blocking_counts, mark_group_run_done_after_retry, mark_group_run_executing,
+    mark_group_run_failed, mark_group_run_finalized, mark_group_run_step_completed,
+    mark_group_run_step_dispatched, mark_group_run_step_failed, mark_group_run_waiting_review,
+    pause_group_run, replace_employee_skill_bindings, reset_group_run_step_for_reassignment,
+    resume_group_run, review_requested_event_exists, update_employee_enabled_scopes,
+    update_group_run_after_reassignment, update_session_employee_id, upsert_agent_employee_record,
+    upsert_thread_session_link, cancel_group_run, clear_group_run_execute_waiting_state,
+    complete_failed_group_run_step, employee_exists_for_reassignment,
+    find_group_run_step_reassign_row, GroupRunEventSnapshotRow, GroupRunStepSnapshotRow,
+    InboundEventLinkInput, InsertFeishuBindingInput, SessionSeedInput, ThreadSessionLinkInput,
     UpsertAgentEmployeeRecordInput,
 };
 use super::{
@@ -1012,6 +1016,152 @@ pub(super) async fn list_pending_execute_steps_for_continue(
     run_id: &str,
 ) -> Result<Vec<String>, String> {
     list_pending_execute_step_ids(pool, run_id).await
+}
+
+pub(super) async fn maybe_finalize_group_run_with_pool(
+    pool: &SqlitePool,
+    run_id: &str,
+) -> Result<(), String> {
+    let (execute_blocking, review_blocking) = load_group_run_blocking_counts(pool, run_id).await?;
+    if execute_blocking > 0 || review_blocking > 0 {
+        return Ok(());
+    }
+
+    let run_row = find_group_run_finalize_state(pool, run_id)
+        .await?
+        .ok_or_else(|| "group run not found".to_string())?;
+    if run_row.state == "done" {
+        return Ok(());
+    }
+
+    let execute_rows = list_group_run_execute_outputs(pool, run_id).await?;
+    let mut summary_lines = vec![
+        format!("计划：围绕“{}”的团队执行已完成。", run_row.user_goal.trim()),
+        "执行：".to_string(),
+    ];
+    for (assignee_employee_id, output) in execute_rows {
+        summary_lines.push(format!("- {}: {}", assignee_employee_id, output.trim()));
+    }
+    summary_lines.push("汇报：团队协作已完成，可继续进入人工复核或直接对外回复。".to_string());
+    let final_report = summary_lines.join("\n");
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
+    insert_group_run_assistant_message(&mut tx, &run_row.session_id, &final_report, &now).await?;
+    mark_group_run_finalized(&mut tx, run_id, &now).await?;
+    insert_group_run_event(
+        &mut tx,
+        run_id,
+        "",
+        "run_completed",
+        &serde_json::json!({
+            "state": "done",
+            "phase": "finalize",
+            "summary": final_report,
+        })
+        .to_string(),
+        &now,
+    )
+    .await?;
+    tx.commit().await.map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub(super) async fn get_group_run_session_id_with_pool(
+    pool: &SqlitePool,
+    run_id: &str,
+) -> Result<String, String> {
+    get_group_run_session_id(pool, run_id)
+        .await?
+        .ok_or_else(|| "group run not found".to_string())
+}
+
+pub(super) async fn get_employee_group_run_snapshot_by_run_id_with_pool(
+    pool: &SqlitePool,
+    run_id: &str,
+) -> Result<super::EmployeeGroupRunSnapshot, String> {
+    let session_id = get_group_run_session_id_with_pool(pool, run_id).await?;
+    get_employee_group_run_snapshot_with_pool(pool, &session_id)
+        .await?
+        .ok_or_else(|| "group run snapshot not found".to_string())
+}
+
+pub(super) async fn get_employee_group_run_snapshot_with_pool(
+    pool: &SqlitePool,
+    session_id: &str,
+) -> Result<Option<super::EmployeeGroupRunSnapshot>, String> {
+    let Some(run_row) = find_group_run_snapshot_row(pool, session_id).await? else {
+        return Ok(None);
+    };
+
+    let steps = list_group_run_step_snapshot_rows(pool, &run_row.run_id)
+        .await?
+        .into_iter()
+        .map(map_group_run_step_snapshot)
+        .collect::<Vec<_>>();
+    let events = list_group_run_event_snapshot_rows(pool, &run_row.run_id)
+        .await?
+        .into_iter()
+        .map(map_group_run_event_snapshot)
+        .collect::<Vec<_>>();
+    let completed = steps.iter().filter(|step| step.status == "completed").count();
+    let final_report = find_latest_assistant_message_content(pool, &run_row.session_id)
+        .await?
+        .filter(|content| !content.trim().is_empty())
+        .unwrap_or_else(|| {
+            format!(
+                "计划：围绕“{}”共 {} 步。\n执行：已完成 {} 步。\n汇报：当前状态={}",
+                run_row.user_goal,
+                steps.len(),
+                completed,
+                run_row.state
+            )
+        });
+
+    Ok(Some(super::EmployeeGroupRunSnapshot {
+        run_id: run_row.run_id,
+        group_id: run_row.group_id,
+        session_id: run_row.session_id,
+        state: run_row.state,
+        current_round: run_row.current_round,
+        current_phase: run_row.current_phase,
+        review_round: run_row.review_round,
+        status_reason: run_row.status_reason,
+        waiting_for_employee_id: run_row.waiting_for_employee_id,
+        waiting_for_user: run_row.waiting_for_user,
+        final_report,
+        steps,
+        events,
+    }))
+}
+
+fn map_group_run_step_snapshot(
+    row: GroupRunStepSnapshotRow,
+) -> super::EmployeeGroupRunStep {
+    super::EmployeeGroupRunStep {
+        id: row.id,
+        round_no: row.round_no,
+        step_type: row.step_type,
+        assignee_employee_id: row.assignee_employee_id,
+        dispatch_source_employee_id: row.dispatch_source_employee_id,
+        session_id: row.session_id,
+        attempt_no: row.attempt_no,
+        status: row.status,
+        output_summary: row.output_summary,
+        output: row.output,
+    }
+}
+
+fn map_group_run_event_snapshot(
+    row: GroupRunEventSnapshotRow,
+) -> super::EmployeeGroupRunEvent {
+    super::EmployeeGroupRunEvent {
+        id: row.id,
+        step_id: row.step_id,
+        event_type: row.event_type,
+        payload_json: row.payload_json,
+        created_at: row.created_at,
+    }
 }
 
 async fn create_employee_route_session(

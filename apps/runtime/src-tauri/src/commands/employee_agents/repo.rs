@@ -103,6 +103,47 @@ pub(super) struct PendingReviewStepRow {
     pub assignee_employee_id: String,
 }
 
+pub(super) struct GroupRunFinalizeStateRow {
+    pub session_id: String,
+    pub user_goal: String,
+    pub state: String,
+}
+
+pub(super) struct GroupRunSnapshotRow {
+    pub run_id: String,
+    pub group_id: String,
+    pub session_id: String,
+    pub state: String,
+    pub current_round: i64,
+    pub user_goal: String,
+    pub current_phase: String,
+    pub review_round: i64,
+    pub status_reason: String,
+    pub waiting_for_employee_id: String,
+    pub waiting_for_user: bool,
+}
+
+pub(super) struct GroupRunStepSnapshotRow {
+    pub id: String,
+    pub round_no: i64,
+    pub step_type: String,
+    pub assignee_employee_id: String,
+    pub dispatch_source_employee_id: String,
+    pub session_id: String,
+    pub attempt_no: i64,
+    pub status: String,
+    pub output_summary: String,
+    pub output: String,
+}
+
+pub(super) struct GroupRunEventSnapshotRow {
+    pub id: String,
+    pub step_id: String,
+    pub event_type: String,
+    pub payload_json: String,
+    pub created_at: String,
+}
+
 pub(super) async fn list_agent_employee_rows(
     pool: &SqlitePool,
 ) -> Result<Vec<AgentEmployeeRow>, String> {
@@ -1079,6 +1120,250 @@ pub(super) async fn list_pending_execute_step_ids(
     .fetch_all(pool)
     .await
     .map_err(|e| e.to_string())
+}
+
+pub(super) async fn load_group_run_blocking_counts(
+    pool: &SqlitePool,
+    run_id: &str,
+) -> Result<(i64, i64), String> {
+    let row = sqlx::query(
+        "SELECT
+            SUM(CASE WHEN step_type = 'execute' AND status IN ('pending', 'running', 'failed') THEN 1 ELSE 0 END) AS execute_blocking,
+            SUM(CASE WHEN step_type = 'review' AND status IN ('pending', 'running') THEN 1 ELSE 0 END) AS review_blocking
+         FROM group_run_steps
+         WHERE run_id = ?",
+    )
+    .bind(run_id)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok((
+        row.try_get::<Option<i64>, _>("execute_blocking")
+            .map_err(|e| e.to_string())?
+            .unwrap_or(0),
+        row.try_get::<Option<i64>, _>("review_blocking")
+            .map_err(|e| e.to_string())?
+            .unwrap_or(0),
+    ))
+}
+
+pub(super) async fn find_group_run_finalize_state(
+    pool: &SqlitePool,
+    run_id: &str,
+) -> Result<Option<GroupRunFinalizeStateRow>, String> {
+    let row = sqlx::query(
+        "SELECT session_id, user_goal, state
+         FROM group_runs
+         WHERE id = ?",
+    )
+    .bind(run_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(row.map(|record| GroupRunFinalizeStateRow {
+        session_id: record.try_get(0).expect("finalize state session_id"),
+        user_goal: record.try_get(1).expect("finalize state user_goal"),
+        state: record.try_get(2).expect("finalize state state"),
+    }))
+}
+
+pub(super) async fn list_group_run_execute_outputs(
+    pool: &SqlitePool,
+    run_id: &str,
+) -> Result<Vec<(String, String)>, String> {
+    let rows = sqlx::query(
+        "SELECT assignee_employee_id, output
+         FROM group_run_steps
+         WHERE run_id = ? AND step_type = 'execute'
+         ORDER BY round_no ASC, finished_at ASC, id ASC",
+    )
+    .bind(run_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            (
+                row.try_get(0).expect("execute output assignee"),
+                row.try_get(1).expect("execute output content"),
+            )
+        })
+        .collect())
+}
+
+pub(super) async fn insert_group_run_assistant_message(
+    tx: &mut Transaction<'_, Sqlite>,
+    session_id: &str,
+    content: &str,
+    now: &str,
+) -> Result<(), String> {
+    sqlx::query(
+        "INSERT INTO messages (id, session_id, role, content, created_at)
+         VALUES (?, ?, 'assistant', ?, ?)",
+    )
+    .bind(uuid::Uuid::new_v4().to_string())
+    .bind(session_id)
+    .bind(content)
+    .bind(now)
+    .execute(&mut **tx)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub(super) async fn mark_group_run_finalized(
+    tx: &mut Transaction<'_, Sqlite>,
+    run_id: &str,
+    now: &str,
+) -> Result<(), String> {
+    sqlx::query(
+        "UPDATE group_runs
+         SET state = 'done',
+             current_phase = 'finalize',
+             waiting_for_employee_id = '',
+             waiting_for_user = 0,
+             status_reason = '',
+             updated_at = ?
+         WHERE id = ?",
+    )
+    .bind(now)
+    .bind(run_id)
+    .execute(&mut **tx)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub(super) async fn get_group_run_session_id(
+    pool: &SqlitePool,
+    run_id: &str,
+) -> Result<Option<String>, String> {
+    let row = sqlx::query("SELECT session_id FROM group_runs WHERE id = ?")
+        .bind(run_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(row.map(|record| record.try_get(0).expect("group run session id")))
+}
+
+pub(super) async fn find_group_run_snapshot_row(
+    pool: &SqlitePool,
+    session_id: &str,
+) -> Result<Option<GroupRunSnapshotRow>, String> {
+    let row = sqlx::query(
+        "SELECT id, group_id, session_id, state, current_round, user_goal,
+                COALESCE(current_phase, 'plan'), COALESCE(review_round, 0),
+                COALESCE(status_reason, ''), COALESCE(waiting_for_employee_id, ''),
+                COALESCE(waiting_for_user, 0)
+         FROM group_runs
+         WHERE session_id = ?
+         ORDER BY created_at DESC
+         LIMIT 1",
+    )
+    .bind(session_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(row.map(|record| GroupRunSnapshotRow {
+        run_id: record.try_get("id").expect("snapshot run_id"),
+        group_id: record.try_get("group_id").expect("snapshot group_id"),
+        session_id: record.try_get("session_id").expect("snapshot session_id"),
+        state: record.try_get("state").expect("snapshot state"),
+        current_round: record.try_get("current_round").expect("snapshot current_round"),
+        user_goal: record.try_get("user_goal").expect("snapshot user_goal"),
+        current_phase: record.try_get(6).expect("snapshot current_phase"),
+        review_round: record.try_get(7).expect("snapshot review_round"),
+        status_reason: record.try_get(8).expect("snapshot status_reason"),
+        waiting_for_employee_id: record
+            .try_get(9)
+            .expect("snapshot waiting_for_employee_id"),
+        waiting_for_user: record
+            .try_get::<i64, _>(10)
+            .expect("snapshot waiting_for_user")
+            != 0,
+    }))
+}
+
+pub(super) async fn list_group_run_step_snapshot_rows(
+    pool: &SqlitePool,
+    run_id: &str,
+) -> Result<Vec<GroupRunStepSnapshotRow>, String> {
+    let rows = sqlx::query(
+        "SELECT id, round_no, step_type, assignee_employee_id,
+                COALESCE(dispatch_source_employee_id, ''), COALESCE(session_id, ''),
+                COALESCE(attempt_no, 1), status, COALESCE(output_summary, ''), output
+         FROM group_run_steps
+         WHERE run_id = ?
+         ORDER BY round_no ASC, started_at ASC, id ASC",
+    )
+    .bind(run_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(rows
+        .into_iter()
+        .map(|row| GroupRunStepSnapshotRow {
+            id: row.try_get("id").expect("step snapshot id"),
+            round_no: row.try_get("round_no").expect("step snapshot round_no"),
+            step_type: row.try_get("step_type").expect("step snapshot step_type"),
+            assignee_employee_id: row
+                .try_get("assignee_employee_id")
+                .expect("step snapshot assignee"),
+            dispatch_source_employee_id: row
+                .try_get(4)
+                .expect("step snapshot dispatch_source"),
+            session_id: row.try_get(5).expect("step snapshot session_id"),
+            attempt_no: row.try_get(6).expect("step snapshot attempt_no"),
+            status: row.try_get(7).expect("step snapshot status"),
+            output_summary: row.try_get(8).expect("step snapshot output_summary"),
+            output: row.try_get(9).expect("step snapshot output"),
+        })
+        .collect())
+}
+
+pub(super) async fn list_group_run_event_snapshot_rows(
+    pool: &SqlitePool,
+    run_id: &str,
+) -> Result<Vec<GroupRunEventSnapshotRow>, String> {
+    let rows = sqlx::query(
+        "SELECT id, COALESCE(step_id, ''), event_type, COALESCE(payload_json, '{}'), created_at
+         FROM group_run_events
+         WHERE run_id = ?
+         ORDER BY created_at ASC, id ASC",
+    )
+    .bind(run_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(rows
+        .into_iter()
+        .map(|row| GroupRunEventSnapshotRow {
+            id: row.try_get("id").expect("event snapshot id"),
+            step_id: row.try_get(1).expect("event snapshot step_id"),
+            event_type: row.try_get("event_type").expect("event snapshot event_type"),
+            payload_json: row.try_get(3).expect("event snapshot payload_json"),
+            created_at: row.try_get("created_at").expect("event snapshot created_at"),
+        })
+        .collect())
+}
+
+pub(super) async fn find_latest_assistant_message_content(
+    pool: &SqlitePool,
+    session_id: &str,
+) -> Result<Option<String>, String> {
+    let row = sqlx::query(
+        "SELECT content
+         FROM messages
+         WHERE session_id = ? AND role = 'assistant'
+         ORDER BY created_at DESC, id DESC
+         LIMIT 1",
+    )
+    .bind(session_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(row.map(|record| record.try_get(0).expect("latest assistant content")))
 }
 
 pub(super) async fn delete_feishu_bindings_for_agent(
