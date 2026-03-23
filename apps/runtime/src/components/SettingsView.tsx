@@ -6,6 +6,7 @@ import { ModelsSettingsSection } from "./settings/models/ModelsSettingsSection";
 import { DesktopSettingsSection } from "./settings/desktop/DesktopSettingsSection";
 import { SearchSettingsSection } from "./settings/search/SearchSettingsSection";
 import { McpSettingsSection } from "./settings/mcp/McpSettingsSection";
+import { RoutingSettingsSection } from "./settings/routing/RoutingSettingsSection";
 import { SettingsTabNav, type SettingsTabName } from "./settings/SettingsTabNav";
 import {
   listModelConfigs,
@@ -59,12 +60,6 @@ interface Props {
   showDevModelSetupTools?: boolean;
   onDevResetFirstUseOnboarding?: () => void;
   onDevOpenQuickModelSetup?: () => void;
-}
-
-interface RoutingSettings {
-  max_call_depth: number;
-  node_timeout_seconds: number;
-  retry_count: number;
 }
 
 const ROUTING_CAPABILITIES = [
@@ -613,13 +608,6 @@ export function SettingsView({
 }: Props) {
   const [models, setModels] = useState<ModelConfig[]>([]);
   const [activeTab, setActiveTab] = useState<SettingsTabName>(initialTab);
-  const [routeSettings, setRouteSettings] = useState<RoutingSettings>({
-    max_call_depth: 4,
-    node_timeout_seconds: 60,
-    retry_count: 0,
-  });
-  const [routeSaveState, setRouteSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
-  const [routeError, setRouteError] = useState("");
 
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
 
@@ -730,9 +718,6 @@ export function SettingsView({
 
   useEffect(() => {
     void loadSharedModelData();
-    if (SHOW_AUTO_ROUTING_SETTINGS) {
-      loadRoutingSettings();
-    }
     if (SHOW_CAPABILITY_ROUTING_SETTINGS) {
       loadCapabilityRoutingPolicy("chat");
       loadRouteTemplates("chat");
@@ -800,16 +785,6 @@ export function SettingsView({
 
     return () => window.clearInterval(timer);
   }, [activeTab]);
-
-  async function loadRoutingSettings() {
-    try {
-      const settings = await invoke<RoutingSettings>("get_routing_settings");
-      setRouteSettings(settings);
-    } catch (e) {
-      setRouteError("加载自动路由设置失败: " + String(e));
-      setRouteSaveState("error");
-    }
-  }
 
   async function loadCapabilityRoutingPolicy(capability: string) {
     try {
@@ -1564,25 +1539,6 @@ export function SettingsView({
         missingText = `；缺少服务标识（任选其一）: ${match[1]}`;
       }
       setPolicyError(`应用路由模板失败: ${raw}${missingText}；当前已启用: ${enabledText}。请先到“模型连接”补齐并启用。`);
-    }
-  }
-
-  async function handleSaveRoutingSettings() {
-    setRouteSaveState("saving");
-    setRouteError("");
-    try {
-      await invoke("set_routing_settings", {
-        settings: {
-          max_call_depth: Math.max(2, Math.min(8, routeSettings.max_call_depth)),
-          node_timeout_seconds: Math.max(5, Math.min(600, routeSettings.node_timeout_seconds)),
-          retry_count: Math.max(0, Math.min(2, routeSettings.retry_count)),
-        },
-      });
-      setRouteSaveState("saved");
-      setTimeout(() => setRouteSaveState("idle"), 1200);
-    } catch (e) {
-      setRouteError("保存自动路由设置失败: " + String(e));
-      setRouteSaveState("error");
     }
   }
 
@@ -3227,55 +3183,7 @@ export function SettingsView({
       )}
 
 
-      {SHOW_AUTO_ROUTING_SETTINGS && activeTab === "routing" && (
-        <div className="bg-white rounded-lg p-4 space-y-3">
-          <div className="text-xs font-medium text-gray-500 mb-2">子 Skill 自动路由</div>
-          <div>
-            <label className={labelCls}>最大调用深度 (2-8)</label>
-            <input
-              className={inputCls}
-              type="number"
-              min={2}
-              max={8}
-              value={routeSettings.max_call_depth}
-              onChange={(e) => setRouteSettings((s) => ({ ...s, max_call_depth: Number(e.target.value || 4) }))}
-            />
-          </div>
-          <div>
-            <label className={labelCls}>节点超时秒数 (5-600)</label>
-            <input
-              className={inputCls}
-              type="number"
-              min={5}
-              max={600}
-              value={routeSettings.node_timeout_seconds}
-              onChange={(e) => setRouteSettings((s) => ({ ...s, node_timeout_seconds: Number(e.target.value || 60) }))}
-            />
-          </div>
-          <div>
-            <label className={labelCls}>失败重试次数 (0-2)</label>
-            <input
-              className={inputCls}
-              type="number"
-              min={0}
-              max={2}
-              value={routeSettings.retry_count}
-              onChange={(e) => setRouteSettings((s) => ({ ...s, retry_count: Number(e.target.value || 0) }))}
-            />
-          </div>
-          {routeError && <div className="bg-red-50 text-red-600 text-xs px-2 py-1 rounded">{routeError}</div>}
-          {routeSaveState === "saved" && (
-            <div className="bg-green-50 text-green-600 text-xs px-2 py-1 rounded">已保存</div>
-          )}
-          <button
-            onClick={handleSaveRoutingSettings}
-            disabled={routeSaveState === "saving"}
-            className="w-full bg-blue-500 hover:bg-blue-600 disabled:opacity-50 text-white text-sm py-1.5 rounded-lg transition-all active:scale-[0.97]"
-          >
-            {routeSaveState === "saving" ? "保存中..." : "保存自动路由设置"}
-          </button>
-        </div>
-      )}
+      {SHOW_AUTO_ROUTING_SETTINGS && activeTab === "routing" && <RoutingSettingsSection />}
 
     </SettingsShell>
   );
