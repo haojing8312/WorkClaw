@@ -100,8 +100,7 @@ pub(crate) use relay_service::{resolve_ws_role_id, sanitize_ws_inbound_text};
 use pairing_service::resolve_feishu_pairing_request_with_pool;
 #[cfg(test)]
 use pairing_service::{
-    generate_feishu_pairing_code, list_feishu_pairing_allow_from_with_pool,
-    resolve_feishu_pairing_account_id, upsert_feishu_pairing_request_with_pool,
+    generate_feishu_pairing_code, resolve_feishu_pairing_account_id,
 };
 use relay_service::{
     get_feishu_employee_connection_statuses_with_pool, get_feishu_event_relay_status_in_state,

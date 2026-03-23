@@ -4,8 +4,9 @@ use super::{
     parse_feishu_payload, resolve_fallback_default_feishu_account_id,
     resolve_feishu_pairing_account_id, resolve_feishu_pairing_request_with_pool,
     resolve_ws_role_id, sanitize_ws_inbound_text, upsert_feishu_pairing_request_with_pool,
-    FeishuInboundGateDecision, FeishuWsEventRecord, ParsedFeishuPayload,
+    FeishuWsEventRecord, ParsedFeishuPayload,
 };
+use super::types::FeishuInboundGateDecision;
 use crate::commands::employee_agents::AgentEmployee;
 use crate::commands::openclaw_plugins::{
     OpenClawPluginChannelAccountSnapshot, OpenClawPluginChannelSnapshot,
