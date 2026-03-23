@@ -1133,6 +1133,18 @@ fn resolve_controlled_openclaw_state_root(app: &AppHandle) -> Result<PathBuf, St
     Ok(app_data_dir.join("openclaw-state"))
 }
 
+fn build_plugin_host_fixture_root_from_app_data_dir(app_data_dir: &Path) -> PathBuf {
+    app_data_dir.join("plugin-host-fixtures")
+}
+
+fn resolve_plugin_host_fixture_root(app: &AppHandle) -> Result<PathBuf, String> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("failed to resolve app_data_dir: {e}"))?;
+    Ok(build_plugin_host_fixture_root_from_app_data_dir(&app_data_dir))
+}
+
 fn ensure_controlled_openclaw_state_projection(
     state_root: &Path,
     plugin_install_path: &Path,
@@ -3011,9 +3023,10 @@ async fn get_openclaw_plugin_install_by_id_with_pool(
     })
 }
 
-pub async fn inspect_openclaw_plugin_with_pool(
+async fn inspect_openclaw_plugin_with_pool_and_app(
     pool: &SqlitePool,
     plugin_id: &str,
+    app: Option<&AppHandle>,
 ) -> Result<OpenClawPluginInspectionResult, String> {
     let install = get_openclaw_plugin_install_by_id_with_pool(pool, plugin_id).await?;
     let script_path = resolve_plugin_host_inspect_script();
@@ -3033,6 +3046,11 @@ pub async fn inspect_openclaw_plugin_with_pool(
         .arg(&install.install_path)
         .arg("--fixture-name")
         .arg(&install.plugin_id);
+    if let Some(app) = app {
+        command
+            .arg("--fixture-root")
+            .arg(resolve_plugin_host_fixture_root(app)?);
+    }
     apply_command_search_path(&mut command, &[]);
     hide_console_window(&mut command);
     let output = command
@@ -3050,9 +3068,17 @@ pub async fn inspect_openclaw_plugin_with_pool(
         .map_err(|e| format!("failed to parse plugin host inspect json: {e}"))
 }
 
-pub async fn get_openclaw_plugin_feishu_channel_snapshot_with_pool(
+pub async fn inspect_openclaw_plugin_with_pool(
     pool: &SqlitePool,
     plugin_id: &str,
+) -> Result<OpenClawPluginInspectionResult, String> {
+    inspect_openclaw_plugin_with_pool_and_app(pool, plugin_id, None).await
+}
+
+async fn get_openclaw_plugin_feishu_channel_snapshot_with_pool_and_app(
+    pool: &SqlitePool,
+    plugin_id: &str,
+    app: Option<&AppHandle>,
 ) -> Result<OpenClawPluginChannelSnapshotResult, String> {
     let install = get_openclaw_plugin_install_by_id_with_pool(pool, plugin_id).await?;
     let config_json = build_feishu_openclaw_config_with_pool(pool).await?;
@@ -3077,6 +3103,11 @@ pub async fn get_openclaw_plugin_feishu_channel_snapshot_with_pool(
         .arg("feishu")
         .arg("--config-json")
         .arg(config_json.to_string());
+    if let Some(app) = app {
+        command
+            .arg("--fixture-root")
+            .arg(resolve_plugin_host_fixture_root(app)?);
+    }
     apply_command_search_path(&mut command, &[]);
     hide_console_window(&mut command);
     let output = command
@@ -3092,6 +3123,13 @@ pub async fn get_openclaw_plugin_feishu_channel_snapshot_with_pool(
 
     serde_json::from_slice::<OpenClawPluginChannelSnapshotResult>(&output.stdout)
         .map_err(|e| format!("failed to parse plugin host channel snapshot json: {e}"))
+}
+
+pub async fn get_openclaw_plugin_feishu_channel_snapshot_with_pool(
+    pool: &SqlitePool,
+    plugin_id: &str,
+) -> Result<OpenClawPluginChannelSnapshotResult, String> {
+    get_openclaw_plugin_feishu_channel_snapshot_with_pool_and_app(pool, plugin_id, None).await
 }
 
 fn derive_channel_capabilities(channel: &OpenClawPluginChannelInspection) -> Vec<String> {
@@ -3193,14 +3231,15 @@ fn inspection_to_channel_hosts(
         .collect()
 }
 
-pub async fn list_openclaw_plugin_channel_hosts_with_pool(
+async fn list_openclaw_plugin_channel_hosts_with_pool_and_app(
     pool: &SqlitePool,
+    app: Option<&AppHandle>,
 ) -> Result<Vec<OpenClawPluginChannelHost>, String> {
     let installs = list_openclaw_plugin_installs_with_pool(pool).await?;
     let mut hosts = Vec::new();
 
     for install in installs {
-        match inspect_openclaw_plugin_with_pool(pool, &install.plugin_id).await {
+        match inspect_openclaw_plugin_with_pool_and_app(pool, &install.plugin_id, app).await {
             Ok(inspection) => {
                 hosts.extend(inspection_to_channel_hosts(&install, &inspection));
             }
@@ -3223,6 +3262,12 @@ pub async fn list_openclaw_plugin_channel_hosts_with_pool(
     }
 
     Ok(hosts)
+}
+
+pub async fn list_openclaw_plugin_channel_hosts_with_pool(
+    pool: &SqlitePool,
+) -> Result<Vec<OpenClawPluginChannelHost>, String> {
+    list_openclaw_plugin_channel_hosts_with_pool_and_app(pool, None).await
 }
 
 pub async fn start_openclaw_plugin_feishu_runtime_with_pool(
@@ -3317,6 +3362,11 @@ pub async fn start_openclaw_plugin_feishu_runtime_with_pool(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if let Some(app) = app.as_ref() {
+        command
+            .arg("--fixture-root")
+            .arg(resolve_plugin_host_fixture_root(app)?);
+    }
     apply_command_search_path(&mut command, &[]);
     hide_console_window(&mut command);
 
@@ -4579,24 +4629,28 @@ pub async fn delete_openclaw_plugin_install(
 #[tauri::command]
 pub async fn inspect_openclaw_plugin(
     plugin_id: String,
+    app: AppHandle,
     db: State<'_, DbState>,
 ) -> Result<OpenClawPluginInspectionResult, String> {
-    inspect_openclaw_plugin_with_pool(&db.0, &plugin_id).await
+    inspect_openclaw_plugin_with_pool_and_app(&db.0, &plugin_id, Some(&app)).await
 }
 
 #[tauri::command]
 pub async fn list_openclaw_plugin_channel_hosts(
+    app: AppHandle,
     db: State<'_, DbState>,
 ) -> Result<Vec<OpenClawPluginChannelHost>, String> {
-    list_openclaw_plugin_channel_hosts_with_pool(&db.0).await
+    list_openclaw_plugin_channel_hosts_with_pool_and_app(&db.0, Some(&app)).await
 }
 
 #[tauri::command]
 pub async fn get_openclaw_plugin_feishu_channel_snapshot(
     plugin_id: String,
+    app: AppHandle,
     db: State<'_, DbState>,
 ) -> Result<OpenClawPluginChannelSnapshotResult, String> {
-    get_openclaw_plugin_feishu_channel_snapshot_with_pool(&db.0, &plugin_id).await
+    get_openclaw_plugin_feishu_channel_snapshot_with_pool_and_app(&db.0, &plugin_id, Some(&app))
+        .await
 }
 
 #[tauri::command]
@@ -6046,6 +6100,16 @@ mod tests {
             .find(|candidate| candidate.exists())
             .expect("resolved packaged plugin host");
         assert_eq!(resolved, up_plugin_host);
+    }
+
+    #[test]
+    fn build_plugin_host_fixture_root_uses_app_data_dir() {
+        let app_data_dir = Path::new(r"C:\Users\Alice\AppData\Roaming\dev.workclaw.runtime");
+        let fixture_root = build_plugin_host_fixture_root_from_app_data_dir(app_data_dir);
+        assert_eq!(
+            fixture_root,
+            PathBuf::from(r"C:\Users\Alice\AppData\Roaming\dev.workclaw.runtime\plugin-host-fixtures")
+        );
     }
 
     #[test]

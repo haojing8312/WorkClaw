@@ -5,12 +5,12 @@ import { pathToFileURL } from "node:url";
 const workspaceRuntimeDir = path.resolve(process.cwd(), "..");
 const pluginHostDir = path.resolve(workspaceRuntimeDir, "plugin-host");
 const shimPluginSdkRoot = path.join(pluginHostDir, "openclaw", "plugin-sdk");
-const fixtureWorkspaceRoot = path.join(workspaceRuntimeDir, ".workclaw-plugin-host-fixtures");
 
 function parseArgs(argv) {
   const args = {
     pluginRoot: "",
     fixtureName: "plugin-start-account-smoke",
+    fixtureRoot: "",
     accountId: "default",
     configJson: "",
     configFile: "",
@@ -26,6 +26,11 @@ function parseArgs(argv) {
     }
     if (arg === "--fixture-name") {
       args.fixtureName = argv[index + 1] ?? args.fixtureName;
+      index += 1;
+      continue;
+    }
+    if (arg === "--fixture-root") {
+      args.fixtureRoot = argv[index + 1] ?? "";
       index += 1;
       continue;
     }
@@ -55,6 +60,14 @@ function parseArgs(argv) {
   }
 
   return args;
+}
+
+function resolveFixtureWorkspaceRoot(fixtureRoot) {
+  const explicitRoot = typeof fixtureRoot === "string" && fixtureRoot.trim() ? fixtureRoot.trim() : "";
+  if (explicitRoot) {
+    return path.resolve(explicitRoot);
+  }
+  return path.join(workspaceRuntimeDir, ".workclaw-plugin-host-fixtures");
 }
 
 function normalizeRegistrationMode(value) {
@@ -276,7 +289,7 @@ function findNearestNodeModulesDir(startPath) {
   }
 }
 
-function prepareFixture(pluginRoot, fixtureName) {
+function prepareFixture(pluginRoot, fixtureWorkspaceRoot, fixtureName) {
   const targetRoot = path.join(fixtureWorkspaceRoot, fixtureName);
   fs.rmSync(targetRoot, { recursive: true, force: true });
   fs.mkdirSync(path.dirname(targetRoot), { recursive: true });
@@ -293,8 +306,9 @@ function prepareFixture(pluginRoot, fixtureName) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  const fixtureWorkspaceRoot = resolveFixtureWorkspaceRoot(args.fixtureRoot);
   const pluginRoot = path.resolve(args.pluginRoot);
-  const preparedRoot = prepareFixture(pluginRoot, args.fixtureName);
+  const preparedRoot = prepareFixture(pluginRoot, fixtureWorkspaceRoot, args.fixtureName);
   const manifest = resolvePluginManifest(preparedRoot);
   const entryPath = resolvePluginEntry(preparedRoot, manifest);
   const registry = createPluginRegistry();
