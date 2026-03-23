@@ -2,13 +2,65 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Extract employee profile CRUD from `apps/runtime/src-tauri/src/commands/employee_agents.rs` into command, service, and repository layers while preserving current Tauri behavior.
+**Goal:** Turn `apps/runtime/src-tauri/src/commands/employee_agents.rs` into the first formal Rust command-splitting template by extracting employee profile CRUD, group/team management, group-run entry flow, and command helper responsibilities into focused child modules while preserving current Tauri behavior.
 
-**Architecture:** Keep the existing Tauri command interface stable and move only employee profile management into a new `employee_agents` submodule. The command layer remains the mutation entrypoint and still performs Feishu reconciliation, while service and repo layers absorb validation, orchestration, and SQL.
+**Architecture:** Keep the existing Tauri command interface stable and split the employee domain into focused child modules under `employee_agents/`. The root command file should end as a thin Tauri shell with public wrappers and visible reconcile side effects, while child modules own profile CRUD, routing/session logic, group/team management, group-run entry/action/snapshot flows, and memory command logic.
 
 **Tech Stack:** Rust, Tauri commands, sqlx, SQLite, WorkClaw runtime tests
 
 ---
+
+## Outcome
+
+This plan has now been executed in stages:
+
+- profile CRUD was split into `profile_service.rs` and `profile_repo.rs`
+- Feishu association, routing, session, and group-run action/state/query logic were split into dedicated child modules
+- memory and Tauri command implementation bodies were moved into dedicated child modules
+- group/team management was moved into `group_management.rs`
+- group-run entry and execute-step helpers were moved into `group_run_entry.rs`
+- the root file was reduced to 799 lines and is now below the `800` split-design threshold
+
+## Delivered Module Set
+
+- `employee_agents.rs`
+- `service.rs`
+- `repo.rs`
+- `profile_service.rs`
+- `profile_repo.rs`
+- `feishu_service.rs`
+- `routing_service.rs`
+- `session_service.rs`
+- `group_run_service.rs`
+- `group_run_snapshot_service.rs`
+- `group_run_action_service.rs`
+- `group_management.rs`
+- `group_run_entry.rs`
+- `memory_commands.rs`
+- `tauri_commands.rs`
+
+## Verification Achieved
+
+- focused cargo tests were added and run for:
+  - employee profile fallback behavior
+  - repo ordering semantics
+  - Feishu association input validation
+  - event routing priority
+  - empty-session early return
+  - group-run state validation
+  - group-run snapshot not-found behavior
+  - retry/reassign/review guard conditions
+  - team mode validation
+  - assistant-text extraction helper behavior
+- `pnpm test:rust-fast` was repeatedly run and stayed green throughout the split
+
+## Follow-on Work
+
+1. Treat `employee_agents` as the canonical Rust-side splitting template.
+2. Update any remaining design/backlog references so they no longer describe this module as unfinished.
+3. Start the next large-file effort on `feishu_gateway.rs` using the same pattern.
+
+## Historical Task Log
 
 ### Task 1: Create the employee profile module skeleton
 
@@ -22,6 +74,7 @@
 - Add a local `mod service;`
 - Add a local `mod repo;`
 - Re-export only the functions the root command file needs
+- Do not let the skeleton become a dumping ground for unrelated employee features
 
 **Step 2: Compile with placeholder functions**
 
@@ -94,6 +147,7 @@ Expected: FAIL before implementation is complete
 - Preserve duplicate checks
 - Preserve workdir creation behavior
 - Preserve `is_default` behavior
+- Keep business decisions in service rather than leaking them back into repo helpers
 
 **Step 4: Move SQL writes into repo**
 
@@ -170,6 +224,7 @@ git commit -m "refactor(runtime): extract employee delete service"
 
 - Ensure only employee profile CRUD moved
 - Confirm group-run, IM, Feishu-association, and memory logic stayed untouched
+- Confirm the root file still owns only command entrypoints, response shaping, and visible command-boundary side effects
 
 **Step 3: Run verification**
 
@@ -188,3 +243,17 @@ Expected: PASS
 git add apps/runtime/src-tauri/src/commands/employee_agents.rs apps/runtime/src-tauri/src/commands/employee_agents/service.rs apps/runtime/src-tauri/src/commands/employee_agents/repo.rs
 git commit -m "refactor(runtime): thin employee agent commands"
 ```
+
+### Task 6: Extend the split beyond profile CRUD
+
+- Extract `feishu_service.rs`, `routing_service.rs`, `session_service.rs`
+- Extract `group_run_service.rs`, `group_run_snapshot_service.rs`, `group_run_action_service.rs`
+- Extract `group_management.rs`, `group_run_entry.rs`
+- Extract `memory_commands.rs` and `tauri_commands.rs`
+- Keep the root file as a thin wrapper layer for Tauri command visibility
+
+### Final Result
+
+- `employee_agents.rs` now serves as a thin command/root layer
+- the module is safe to treat as the first formal Rust large-file governance sample
+- next active target should be `feishu_gateway.rs`

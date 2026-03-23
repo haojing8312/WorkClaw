@@ -1,841 +1,78 @@
 use super::repo::{
-    clear_default_employee_flag, count_feishu_bindings_for_agent, delete_agent_employee_record,
-    delete_displaced_default_feishu_bindings, delete_displaced_scoped_feishu_bindings,
-    delete_feishu_bindings_for_agent, find_displaced_default_feishu_agent_ids,
-    find_displaced_scoped_feishu_agent_ids, find_employee_db_id_by_employee_id,
     find_employee_session_seed_row, find_existing_session_skill_id, find_group_step_session_row,
-    find_group_run_start_config, find_latest_thread_session_id, find_model_config_row,
-    find_recent_group_step_session_id, find_plan_revision_seed, find_recent_route_session_id,
-    find_thread_session_record,
-    find_group_run_execute_step_context, find_group_run_finalize_state, find_group_run_snapshot_row,
-    find_group_run_review_state, find_group_run_state, find_latest_assistant_message_content,
+    find_group_run_start_config, find_model_config_row, find_recent_group_step_session_id,
+    find_group_run_execute_step_context, find_group_run_finalize_state, find_group_run_state,
     find_pending_review_step,
-    get_employee_association_row, get_employee_group_entry_row, get_group_run_session_id,
-    insert_feishu_binding, insert_group_run_assistant_message, insert_group_run_event,
-    insert_group_run_record, insert_group_run_step_seed, insert_inbound_event_link,
-    insert_plan_revision_step, insert_session_message, insert_session_seed, insert_tx_session_message,
-    list_agent_employee_rows,
-    list_agent_scope_rows, list_failed_execute_assignees, list_failed_group_run_steps,
-    list_group_run_event_snapshot_rows, list_group_run_execute_outputs,
-    list_group_run_step_snapshot_rows, list_pending_execute_step_ids, list_session_message_rows,
-    list_skill_ids_for_employee, load_group_run_blocking_counts,
-    mark_group_run_done_after_retry, mark_group_run_executing,
+    insert_group_run_assistant_message, insert_group_run_event,
+    insert_group_run_record, insert_group_run_step_seed,
+    insert_session_message, insert_session_seed, insert_tx_session_message,
+    list_group_run_execute_outputs, list_pending_execute_step_ids, list_session_message_rows, load_group_run_blocking_counts,
+    mark_group_run_executing,
     mark_group_run_failed, mark_group_run_finalized, mark_group_run_step_completed,
     mark_group_run_step_dispatched, mark_group_run_step_failed, mark_group_run_waiting_review,
-    mark_group_run_review_approved, mark_group_run_review_rejected, mark_review_step_completed,
-    pause_group_run, replace_employee_skill_bindings, reset_group_run_step_for_reassignment,
-    resume_group_run, review_requested_event_exists, update_employee_enabled_scopes,
-    update_group_run_after_reassignment, update_session_employee_id, upsert_agent_employee_record,
-    upsert_thread_session_link, cancel_group_run, clear_group_run_execute_waiting_state,
-    complete_failed_group_run_step, employee_exists_for_reassignment,
-    find_group_run_step_reassign_row, GroupRunEventSnapshotRow, GroupRunStepSnapshotRow,
-    InboundEventLinkInput, InsertFeishuBindingInput, SessionSeedInput, ThreadSessionLinkInput,
-    UpsertAgentEmployeeRecordInput,
+    review_requested_event_exists, clear_group_run_execute_waiting_state, SessionSeedInput,
 };
 use super::{
-    AgentEmployee, EmployeeGroupRunResult, EmployeeInboundDispatchSession, EnsuredEmployeeSession,
-    SaveFeishuEmployeeAssociationInput,
-    StartEmployeeGroupRunInput, UpsertAgentEmployeeInput,
+    EmployeeGroupRunResult, StartEmployeeGroupRunInput,
 };
 use crate::agent::permissions::PermissionMode;
 use crate::agent::run_guard::{parse_run_stop_reason, RunStopReasonKind};
 use crate::agent::tools::{EmployeeManageTool, MemoryTool};
 use crate::agent::{AgentExecutor, ToolRegistry};
 use crate::commands::chat_runtime_io::extract_assistant_text_content;
-use crate::commands::im_routing::{list_im_routing_bindings_with_pool, ImRoutingBinding};
 use crate::commands::models::resolve_default_model_id_with_pool;
-use crate::commands::runtime_preferences::resolve_default_work_dir_with_pool;
-use crate::im::types::ImEvent;
 use serde_json::Value;
-use sqlx::{Sqlite, SqlitePool, Transaction};
+use sqlx::SqlitePool;
 use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
 
-pub(super) fn normalize_enabled_scopes_for_storage(enabled_scopes: &[String]) -> Vec<String> {
-    let normalized = enabled_scopes
-        .iter()
-        .map(|v| v.trim())
-        .filter(|v| !v.is_empty())
-        .map(|v| v.to_lowercase())
-        .collect::<Vec<_>>();
-    if normalized.is_empty() {
-        vec!["app".to_string()]
-    } else {
-        normalized
-    }
-}
-
-pub(super) fn resolve_employee_agent_id(
-    employee_id: &str,
-    role_id: &str,
-    openclaw_agent_id: &str,
-) -> String {
-    let openclaw_agent_id = openclaw_agent_id.trim();
-    if !openclaw_agent_id.is_empty() {
-        return openclaw_agent_id.to_string();
-    }
-    let employee_id = employee_id.trim();
-    if !employee_id.is_empty() {
-        return employee_id.to_string();
-    }
-    role_id.trim().to_string()
-}
-
-pub(super) async fn list_agent_employees_with_pool(
-    pool: &SqlitePool,
-) -> Result<Vec<AgentEmployee>, String> {
-    let rows = list_agent_employee_rows(pool).await?;
-    let mut result = Vec::with_capacity(rows.len());
-
-    for row in rows {
-        let skill_ids = list_skill_ids_for_employee(pool, &row.id).await?;
-        let enabled_scopes = serde_json::from_str::<Vec<String>>(&row.enabled_scopes_json)
-            .unwrap_or_else(|_| vec!["app".to_string()]);
-        let employee_id = if row.employee_id.trim().is_empty() {
-            row.role_id.clone()
-        } else {
-            row.employee_id
-        };
-
-        result.push(AgentEmployee {
-            id: row.id,
-            employee_id,
-            name: row.name,
-            role_id: row.role_id,
-            persona: row.persona,
-            feishu_open_id: row.feishu_open_id,
-            feishu_app_id: row.feishu_app_id,
-            feishu_app_secret: row.feishu_app_secret,
-            primary_skill_id: row.primary_skill_id,
-            default_work_dir: row.default_work_dir,
-            openclaw_agent_id: row.openclaw_agent_id,
-            routing_priority: row.routing_priority,
-            enabled_scopes,
-            enabled: row.enabled,
-            is_default: row.is_default,
-            skill_ids,
-            created_at: row.created_at,
-            updated_at: row.updated_at,
-        });
-    }
-
-    Ok(result)
-}
-
-pub(super) async fn upsert_agent_employee_with_pool(
-    pool: &SqlitePool,
-    input: UpsertAgentEmployeeInput,
-) -> Result<String, String> {
-    if input.name.trim().is_empty() {
-        return Err("employee name is required".to_string());
-    }
-
-    let employee_id = if !input.employee_id.trim().is_empty() {
-        input.employee_id.trim().to_string()
-    } else if !input.role_id.trim().is_empty() {
-        input.role_id.trim().to_string()
-    } else if !input.openclaw_agent_id.trim().is_empty() {
-        input.openclaw_agent_id.trim().to_string()
-    } else {
-        return Err("employee employee_id is required".to_string());
-    };
-
-    let id = input.id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
-    if let Some(existing_id) = find_employee_db_id_by_employee_id(pool, &employee_id).await? {
-        if existing_id != id {
-            return Err("employee employee_id already exists".to_string());
-        }
-    }
-
-    let now = chrono::Utc::now().to_rfc3339();
-    let default_work_dir = if input.default_work_dir.trim().is_empty() {
-        let base = resolve_default_work_dir_with_pool(pool).await?;
-        let employee_dir = PathBuf::from(base)
-            .join("employees")
-            .join(&employee_id);
-        std::fs::create_dir_all(&employee_dir)
-            .map_err(|e| format!("failed to create employee work dir: {e}"))?;
-        employee_dir.to_string_lossy().to_string()
-    } else {
-        input.default_work_dir.trim().to_string()
-    };
-
-    let openclaw_agent_id = if input.openclaw_agent_id.trim().is_empty() {
-        employee_id.clone()
-    } else {
-        input.openclaw_agent_id.trim().to_string()
-    };
-    let role_id = employee_id.as_str();
-    let enabled_scopes = normalize_enabled_scopes_for_storage(&input.enabled_scopes);
-    let enabled_scopes_json = serde_json::to_string(&enabled_scopes).map_err(|e| e.to_string())?;
-    let skill_ids = input
-        .skill_ids
-        .iter()
-        .map(|v| v.trim())
-        .filter(|v| !v.is_empty())
-        .map(ToOwned::to_owned)
-        .collect::<Vec<_>>();
-
-    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
-
-    if input.is_default {
-        clear_default_employee_flag(&mut tx).await?;
-    }
-
-    upsert_agent_employee_record(
-        &mut tx,
-        &UpsertAgentEmployeeRecordInput {
-            id: &id,
-            employee_id: &employee_id,
-            name: input.name.trim(),
-            role_id,
-            persona: input.persona.trim(),
-            feishu_open_id: input.feishu_open_id.trim(),
-            feishu_app_id: input.feishu_app_id.trim(),
-            feishu_app_secret: input.feishu_app_secret.trim(),
-            primary_skill_id: input.primary_skill_id.trim(),
-            default_work_dir: &default_work_dir,
-            openclaw_agent_id: &openclaw_agent_id,
-            routing_priority: input.routing_priority,
-            enabled_scopes_json: &enabled_scopes_json,
-            enabled: input.enabled,
-            is_default: input.is_default,
-            now: &now,
-        },
-    )
-    .await?;
-
-    replace_employee_skill_bindings(&mut tx, &id, &skill_ids).await?;
-    tx.commit().await.map_err(|e| e.to_string())?;
-    Ok(id)
-}
-
-pub(super) async fn delete_agent_employee_with_pool(
-    pool: &SqlitePool,
-    employee_id: &str,
-) -> Result<(), String> {
-    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
-    delete_agent_employee_record(&mut tx, employee_id).await?;
-    tx.commit().await.map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-async fn clear_feishu_scope_for_agent_if_unbound(
-    tx: &mut Transaction<'_, Sqlite>,
-    agent_id: &str,
-    now: &str,
-) -> Result<(), String> {
-    let normalized_agent_id = agent_id.trim();
-    if normalized_agent_id.is_empty() {
-        return Ok(());
-    }
-
-    if count_feishu_bindings_for_agent(tx, normalized_agent_id).await? > 0 {
-        return Ok(());
-    }
-
-    let employee_rows = list_agent_scope_rows(tx).await?;
-    for (employee_db_id, employee_id, role_id, openclaw_agent_id, enabled_scopes_json) in employee_rows {
-        let resolved_agent_id =
-            resolve_employee_agent_id(&employee_id, &role_id, &openclaw_agent_id);
-        if !resolved_agent_id.eq_ignore_ascii_case(normalized_agent_id) {
-            continue;
-        }
-
-        let existing_scopes = serde_json::from_str::<Vec<String>>(&enabled_scopes_json)
-            .unwrap_or_else(|_| vec!["app".to_string()]);
-        let next_scopes = existing_scopes
-            .into_iter()
-            .filter(|scope| scope.trim().to_lowercase() != "feishu")
-            .collect::<Vec<_>>();
-        let next_scopes = normalize_enabled_scopes_for_storage(&next_scopes);
-        let next_scopes_json = serde_json::to_string(&next_scopes).map_err(|e| e.to_string())?;
-        update_employee_enabled_scopes(tx, &employee_db_id, &next_scopes_json, now).await?;
-    }
-
-    Ok(())
-}
-
-pub(super) async fn save_feishu_employee_association_with_pool(
-    pool: &SqlitePool,
-    input: SaveFeishuEmployeeAssociationInput,
-) -> Result<(), String> {
-    let employee_db_id = input.employee_db_id.trim();
-    if employee_db_id.is_empty() {
-        return Err("employee_db_id is required".to_string());
-    }
-
-    let mode = input.mode.trim().to_lowercase();
-    if mode != "default" && mode != "scoped" {
-        return Err("mode must be default or scoped".to_string());
-    }
-
-    let peer_kind = input.peer_kind.trim().to_lowercase();
-    if mode == "scoped" && !matches!(peer_kind.as_str(), "group" | "channel" | "direct") {
-        return Err("peer_kind must be group, channel, or direct".to_string());
-    }
-    if mode == "scoped" && input.peer_id.trim().is_empty() {
-        return Err("peer_id is required for scoped feishu association".to_string());
-    }
-
-    let employee_row = get_employee_association_row(pool, employee_db_id)
-        .await?
-        .ok_or_else(|| "employee not found".to_string())?;
-
-    let existing_scopes = serde_json::from_str::<Vec<String>>(&employee_row.enabled_scopes_json)
-        .unwrap_or_else(|_| vec!["app".to_string()]);
-    let agent_id = resolve_employee_agent_id(
-        &employee_row.employee_id,
-        &employee_row.role_id,
-        &employee_row.openclaw_agent_id,
-    );
-    if agent_id.is_empty() {
-        return Err("employee is missing agent identity".to_string());
-    }
-
-    let mut next_scopes = existing_scopes;
-    if input.enabled {
-        next_scopes.push("feishu".to_string());
-    } else {
-        next_scopes.retain(|scope| scope.trim().to_lowercase() != "feishu");
-    }
-    let next_scopes = normalize_enabled_scopes_for_storage(&next_scopes);
-    let next_scopes_json = serde_json::to_string(&next_scopes).map_err(|e| e.to_string())?;
-    let now = chrono::Utc::now().to_rfc3339();
-    let scoped_peer_id = input.peer_id.trim().to_string();
-
-    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
-    update_employee_enabled_scopes(&mut tx, employee_db_id, &next_scopes_json, &now).await?;
-    delete_feishu_bindings_for_agent(&mut tx, &agent_id).await?;
-
-    let displaced_agent_ids = if input.enabled {
-        if mode == "default" {
-            let ids = find_displaced_default_feishu_agent_ids(&mut tx, &agent_id).await?;
-            delete_displaced_default_feishu_bindings(&mut tx, &agent_id).await?;
-            ids
-        } else {
-            let ids =
-                find_displaced_scoped_feishu_agent_ids(&mut tx, &agent_id, &peer_kind, &scoped_peer_id)
-                    .await?;
-            delete_displaced_scoped_feishu_bindings(&mut tx, &agent_id, &peer_kind, &scoped_peer_id)
-                .await?;
-            ids
-        }
-    } else {
-        Vec::new()
-    };
-
-    if input.enabled {
-        let binding_id = Uuid::new_v4().to_string();
-        let binding_peer_kind = if mode == "default" {
-            "group"
-        } else {
-            peer_kind.as_str()
-        };
-        let binding_peer_id = if mode == "default" {
-            ""
-        } else {
-            scoped_peer_id.as_str()
-        };
-        let connector_meta_json =
-            serde_json::to_string(&serde_json::json!({ "connector_id": "feishu" }))
-                .map_err(|e| e.to_string())?;
-
-        insert_feishu_binding(
-            &mut tx,
-            &InsertFeishuBindingInput {
-                id: &binding_id,
-                agent_id: &agent_id,
-                peer_kind: binding_peer_kind,
-                peer_id: binding_peer_id,
-                connector_meta_json: &connector_meta_json,
-                priority: input.priority,
-                now: &now,
-            },
-        )
-        .await?;
-    }
-
-    for displaced_agent_id in displaced_agent_ids {
-        clear_feishu_scope_for_agent_if_unbound(&mut tx, &displaced_agent_id, &now).await?;
-    }
-
-    tx.commit().await.map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-pub(super) async fn resolve_target_employees_for_event(
-    pool: &SqlitePool,
-    event: &ImEvent,
-) -> Result<Vec<AgentEmployee>, String> {
-    fn text_mentioned(text_lower: &str, alias: &str) -> bool {
-        let normalized = alias.trim().to_lowercase();
-        if normalized.is_empty() {
-            return false;
-        }
-        text_lower.contains(&format!("@{}", normalized))
-    }
-
-    let all_enabled = list_agent_employees_with_pool(pool)
-        .await?
-        .into_iter()
-        .filter(|employee| employee.enabled && super::employee_scope_matches_event(employee, event))
-        .collect::<Vec<_>>();
-
-    if let Some(role_id) = event
-        .role_id
-        .as_ref()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-    {
-        let targeted = all_enabled
-            .iter()
-            .filter(|employee| {
-                employee.feishu_open_id == role_id
-                    || employee.role_id == role_id
-                    || employee.employee_id == role_id
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        if !targeted.is_empty() {
-            return Ok(targeted);
-        }
-    }
-
-    if let Some(text) = event
-        .text
-        .as_ref()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-    {
-        let text_lower = text.to_lowercase();
-        let targeted = all_enabled
-            .iter()
-            .filter(|employee| {
-                text_mentioned(&text_lower, &employee.name)
-                    || text_mentioned(&text_lower, &employee.employee_id)
-                    || text_mentioned(&text_lower, &employee.role_id)
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        if !targeted.is_empty() {
-            return Ok(vec![targeted[0].clone()]);
-        }
-    }
-
-    let defaults = all_enabled
-        .iter()
-        .filter(|employee| employee.is_default)
-        .cloned()
-        .collect::<Vec<_>>();
-    if !defaults.is_empty() {
-        return Ok(vec![defaults[0].clone()]);
-    }
-
-    Ok(all_enabled.iter().take(1).cloned().collect())
-}
-
-pub(super) async fn resolve_team_entry_employee_for_event_with_pool(
-    pool: &SqlitePool,
-    event: &ImEvent,
-) -> Result<Option<AgentEmployee>, String> {
-    let bindings = list_im_routing_bindings_with_pool(pool).await?;
-    let matched_binding = bindings.into_iter().find(|binding| {
-        !binding.team_id.trim().is_empty() && im_binding_matches_event(binding, event)
-    });
-    let Some(binding) = matched_binding else {
-        return Ok(None);
-    };
-
-    let Some(group_row) = get_employee_group_entry_row(pool, binding.team_id.trim()).await? else {
-        return Ok(None);
-    };
-
-    let preferred_employee_id = if group_row.entry_employee_id.trim().is_empty() {
-        group_row.coordinator_employee_id
-    } else {
-        group_row.entry_employee_id
-    };
-
-    Ok(list_agent_employees_with_pool(pool)
-        .await?
-        .into_iter()
-        .find(|employee| {
-            employee.enabled
-                && super::employee_scope_matches_event(employee, event)
-                && (employee
-                    .employee_id
-                    .eq_ignore_ascii_case(preferred_employee_id.trim())
-                    || employee
-                        .role_id
-                        .eq_ignore_ascii_case(preferred_employee_id.trim())
-                    || employee.id.eq_ignore_ascii_case(preferred_employee_id.trim()))
-        }))
-}
-
-pub(super) async fn ensure_employee_sessions_for_event_with_pool(
-    pool: &SqlitePool,
-    event: &ImEvent,
-) -> Result<Vec<EnsuredEmployeeSession>, String> {
-    let employees = if let Some(team_entry_employee) =
-        resolve_team_entry_employee_for_event_with_pool(pool, event).await?
-    {
-        vec![team_entry_employee]
-    } else {
-        resolve_target_employees_for_event(pool, event).await?
-    };
-    if employees.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let default_model_id = resolve_default_model_id_with_pool(pool)
-        .await?
-        .ok_or_else(|| "no model config found".to_string())?;
-
-    let mut shared_thread_session_id = find_latest_thread_session_id(pool, &event.thread_id).await?;
-    let mut results = Vec::with_capacity(employees.len());
-
-    for employee in employees {
-        let route_session_key = super::build_route_session_key(event, &employee);
-        let existing = find_thread_session_record(pool, &event.thread_id, &employee.id).await?;
-
-        let (session_id, created) = if let Some(existing) = existing {
-            if existing.session_exists {
-                (existing.session_id, false)
-            } else if let Some(shared_session_id) = shared_thread_session_id.clone() {
-                let now = chrono::Utc::now().to_rfc3339();
-                upsert_thread_session_link(
-                    pool,
-                    &ThreadSessionLinkInput {
-                        thread_id: &event.thread_id,
-                        employee_db_id: &employee.id,
-                        session_id: &shared_session_id,
-                        route_session_key: &route_session_key,
-                        created_at: &now,
-                        updated_at: &now,
-                    },
-                )
-                .await?;
-                (shared_session_id, false)
-            } else {
-                create_employee_route_session(
-                    pool,
-                    event,
-                    &employee,
-                    &default_model_id,
-                    &route_session_key,
-                )
-                .await?
-            }
-        } else if let Some(shared_session_id) = shared_thread_session_id.clone() {
-            let now = chrono::Utc::now().to_rfc3339();
-            upsert_thread_session_link(
-                pool,
-                &ThreadSessionLinkInput {
-                    thread_id: &event.thread_id,
-                    employee_db_id: &employee.id,
-                    session_id: &shared_session_id,
-                    route_session_key: &route_session_key,
-                    created_at: &now,
-                    updated_at: &now,
-                },
-            )
-            .await?;
-            (shared_session_id, false)
-        } else if let Some(session_id) =
-            find_recent_route_session_id(pool, &employee.id, &route_session_key).await?
-        {
-            let now = chrono::Utc::now().to_rfc3339();
-            upsert_thread_session_link(
-                pool,
-                &ThreadSessionLinkInput {
-                    thread_id: &event.thread_id,
-                    employee_db_id: &employee.id,
-                    session_id: &session_id,
-                    route_session_key: &route_session_key,
-                    created_at: &now,
-                    updated_at: &now,
-                },
-            )
-            .await?;
-            (session_id, false)
-        } else {
-            create_employee_route_session(
-                pool,
-                event,
-                &employee,
-                &default_model_id,
-                &route_session_key,
-            )
-            .await?
-        };
-
-        if shared_thread_session_id.is_none() {
-            shared_thread_session_id = Some(session_id.clone());
-        }
-
-        let _ = update_session_employee_id(pool, &session_id, employee.employee_id.trim()).await;
-
-        results.push(EnsuredEmployeeSession {
-            employee_id: employee.id.clone(),
-            role_id: employee.role_id.clone(),
-            employee_name: employee.name.clone(),
-            session_id,
-            created,
-        });
-    }
-
-    Ok(results)
-}
-
-pub(super) async fn link_inbound_event_to_session_with_pool(
-    pool: &SqlitePool,
-    event: &ImEvent,
-    employee_db_id: &str,
-    session_id: &str,
-) -> Result<(), String> {
-    let now = chrono::Utc::now().to_rfc3339();
-    let link_id = Uuid::new_v4().to_string();
-    insert_inbound_event_link(
-        pool,
-        &InboundEventLinkInput {
-            id: &link_id,
-            thread_id: &event.thread_id,
-            session_id,
-            employee_db_id,
-            im_event_id: event.event_id.as_deref().unwrap_or_default(),
-            im_message_id: event.message_id.as_deref().unwrap_or_default(),
-            created_at: &now,
-        },
-    )
-    .await
-}
-
-pub(super) async fn bridge_inbound_event_to_employee_sessions_with_pool(
-    pool: &SqlitePool,
-    event: &ImEvent,
-    route_decision: Option<&Value>,
-) -> Result<Vec<EmployeeInboundDispatchSession>, String> {
-    let employee_sessions = ensure_employee_sessions_for_event_with_pool(pool, event).await?;
-    let prompt = event
-        .text
-        .clone()
-        .unwrap_or_else(|| "请继续基于当前上下文推进".to_string());
-    let message_id = event.message_id.clone().unwrap_or_default();
-
-    let mut bridged = Vec::with_capacity(employee_sessions.len());
-    for session in employee_sessions {
-        let _ =
-            link_inbound_event_to_session_with_pool(pool, event, &session.employee_id, &session.session_id)
-                .await;
-        bridged.push(EmployeeInboundDispatchSession {
-            session_id: session.session_id.clone(),
-            thread_id: event.thread_id.clone(),
-            employee_id: session.employee_id,
-            role_id: session.role_id.clone(),
-            employee_name: session.employee_name,
-            route_agent_id: route_decision
-                .and_then(|value| value.get("agentId"))
-                .and_then(Value::as_str)
-                .unwrap_or(&session.role_id)
-                .to_string(),
-            route_session_key: route_decision
-                .and_then(|value| value.get("sessionKey"))
-                .and_then(Value::as_str)
-                .unwrap_or(&session.session_id)
-                .to_string(),
-            matched_by: route_decision
-                .and_then(|value| value.get("matchedBy"))
-                .and_then(Value::as_str)
-                .unwrap_or("default")
-                .to_string(),
-            prompt: prompt.clone(),
-            message_id: message_id.clone(),
-        });
-    }
-
-    Ok(bridged)
-}
-
-pub(super) async fn pause_employee_group_run_with_pool(
-    pool: &SqlitePool,
-    run_id: &str,
-    reason: &str,
-) -> Result<(), String> {
-    let now = chrono::Utc::now().to_rfc3339();
-    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
-    let affected = pause_group_run(&mut tx, run_id, reason.trim(), &now).await?;
-    if affected == 0 {
-        return Err("group run is not pausable".to_string());
-    }
-    insert_group_run_event(
-        &mut tx,
-        run_id,
-        "",
-        "run_paused",
-        &serde_json::json!({ "reason": reason.trim() }).to_string(),
-        &now,
-    )
-    .await?;
-    tx.commit().await.map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-pub(super) async fn resume_employee_group_run_with_pool(
-    pool: &SqlitePool,
-    run_id: &str,
-) -> Result<(), String> {
-    let run_row = find_group_run_state(pool, run_id)
-        .await?
-        .ok_or_else(|| "group run not found".to_string())?;
-    if run_row.state != "paused" {
-        return Err("group run is not paused".to_string());
-    }
-
-    let resumed_state = match run_row.current_phase.as_str() {
-        "execute" => "executing",
-        "review" => "waiting_review",
-        _ => "planning",
-    };
-    let now = chrono::Utc::now().to_rfc3339();
-    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
-    resume_group_run(&mut tx, run_id, resumed_state, &now).await?;
-    insert_group_run_event(
-        &mut tx,
-        run_id,
-        "",
-        "run_resumed",
-        &serde_json::json!({
-            "state": resumed_state,
-            "phase": run_row.current_phase,
-        })
-        .to_string(),
-        &now,
-    )
-    .await?;
-    tx.commit().await.map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-pub(super) async fn cancel_employee_group_run_with_pool(
-    pool: &SqlitePool,
-    run_id: &str,
-) -> Result<(), String> {
-    let now = chrono::Utc::now().to_rfc3339();
-    cancel_group_run(pool, run_id, &now).await
-}
-
-pub(super) async fn retry_employee_group_run_failed_steps_with_pool(
-    pool: &SqlitePool,
-    run_id: &str,
-) -> Result<(), String> {
-    let failed_rows = list_failed_group_run_steps(pool, run_id).await?;
-    if failed_rows.is_empty() {
-        return Err("no failed steps to retry".to_string());
-    }
-
-    let now = chrono::Utc::now().to_rfc3339();
-    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
-    for row in failed_rows {
-        let retried_output = if row.output.trim().is_empty() {
-            "重试后完成".to_string()
-        } else {
-            format!("{}\n重试后完成", row.output)
-        };
-        complete_failed_group_run_step(&mut tx, &row.step_id, &retried_output, &now).await?;
-    }
-    mark_group_run_done_after_retry(&mut tx, run_id, &now).await?;
-    tx.commit().await.map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-pub(super) async fn reassign_group_run_step_with_pool(
-    pool: &SqlitePool,
-    step_id: &str,
-    assignee_employee_id: &str,
-) -> Result<(), String> {
-    let new_assignee = assignee_employee_id.trim().to_lowercase();
-    if new_assignee.is_empty() {
-        return Err("assignee_employee_id is required".to_string());
-    }
-
-    let step_row = find_group_run_step_reassign_row(pool, step_id)
-        .await?
-        .ok_or_else(|| "group run step not found".to_string())?;
-    if step_row.step_type != "execute" {
-        return Err("only execute steps can be reassigned".to_string());
-    }
-    if step_row.status != "failed" && step_row.status != "pending" {
-        return Err("only failed or pending steps can be reassigned".to_string());
-    }
-
-    if !employee_exists_for_reassignment(pool, &new_assignee).await? {
-        return Err("target employee not found".to_string());
-    }
-
-    let (eligible_targets, has_execute_rules) = super::load_execute_reassignment_targets_with_pool(
-        pool,
-        &step_row.run_id,
-        Some(step_row.dispatch_source_employee_id.as_str()),
-    )
-    .await?;
-    if has_execute_rules && !eligible_targets.iter().any(|candidate| candidate == &new_assignee) {
-        return Err("target employee is not eligible for execute reassignment".to_string());
-    }
-
-    let now = chrono::Utc::now().to_rfc3339();
-    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
-    reset_group_run_step_for_reassignment(&mut tx, step_id, &new_assignee).await?;
-
-    let remaining_failed_assignees = list_failed_execute_assignees(&mut tx, &step_row.run_id).await?;
-    if remaining_failed_assignees.is_empty() {
-        update_group_run_after_reassignment(
-            &mut tx,
-            &step_row.run_id,
-            "executing",
-            &new_assignee,
-            "",
-            &now,
-        )
-        .await?;
-    } else {
-        let waiting_for_employee_id = remaining_failed_assignees[0].clone();
-        let status_reason = format!("{}执行失败", remaining_failed_assignees.join("、"));
-        update_group_run_after_reassignment(
-            &mut tx,
-            &step_row.run_id,
-            "failed",
-            &waiting_for_employee_id,
-            &status_reason,
-            &now,
-        )
-        .await?;
-    }
-
-    let previous_output_summary = if step_row.previous_output_summary.trim().is_empty() {
-        step_row.previous_output.chars().take(120).collect::<String>()
-    } else {
-        step_row.previous_output_summary
-    };
-    insert_group_run_event(
-        &mut tx,
-        &step_row.run_id,
-        step_id,
-        "step_reassigned",
-        &serde_json::json!({
-            "assignee_employee_id": new_assignee,
-            "dispatch_source_employee_id": step_row.dispatch_source_employee_id,
-            "previous_assignee_employee_id": step_row.previous_assignee_employee_id,
-            "previous_output_summary": previous_output_summary,
-        })
-        .to_string(),
-        &now,
-    )
-    .await?;
-    tx.commit().await.map_err(|e| e.to_string())?;
-    Ok(())
-}
+#[path = "profile_service.rs"]
+mod profile_service;
+
+#[path = "feishu_service.rs"]
+mod feishu_service;
+
+#[path = "routing_service.rs"]
+mod routing_service;
+
+#[path = "session_service.rs"]
+mod session_service;
+
+#[path = "group_run_service.rs"]
+mod group_run_service;
+
+#[path = "group_run_snapshot_service.rs"]
+mod group_run_snapshot_service;
+
+#[path = "group_run_action_service.rs"]
+mod group_run_action_service;
+
+pub(crate) use profile_service::{
+    delete_agent_employee_with_pool, list_agent_employees_with_pool,
+    normalize_enabled_scopes_for_storage, resolve_employee_agent_id,
+    upsert_agent_employee_with_pool,
+};
+pub(crate) use feishu_service::save_feishu_employee_association_with_pool;
+pub(crate) use routing_service::{
+    resolve_target_employees_for_event, resolve_team_entry_employee_for_event_with_pool,
+};
+pub(crate) use session_service::{
+    bridge_inbound_event_to_employee_sessions_with_pool,
+    ensure_employee_sessions_for_event_with_pool, link_inbound_event_to_session_with_pool,
+};
+pub(crate) use group_run_service::{
+    cancel_employee_group_run_with_pool, pause_employee_group_run_with_pool,
+    resume_employee_group_run_with_pool,
+};
+pub(crate) use group_run_snapshot_service::{
+    get_employee_group_run_snapshot_by_run_id_with_pool,
+    get_employee_group_run_snapshot_with_pool,
+};
+pub(crate) use group_run_action_service::{
+    reassign_group_run_step_with_pool, retry_employee_group_run_failed_steps_with_pool,
+    review_group_run_step_with_pool,
+};
 
 pub(super) async fn load_group_run_execute_step_context(
     pool: &SqlitePool,
@@ -1322,118 +559,6 @@ pub(super) async fn ensure_group_step_session_with_pool(
     Ok(session_id)
 }
 
-pub(super) async fn review_group_run_step_with_pool(
-    pool: &SqlitePool,
-    run_id: &str,
-    action: &str,
-    comment: &str,
-) -> Result<(), String> {
-    let normalized_action = action.trim().to_lowercase();
-    if normalized_action != "approve" && normalized_action != "reject" {
-        return Err("review action must be approve or reject".to_string());
-    }
-
-    let review_state = find_group_run_review_state(pool, run_id)
-        .await?
-        .ok_or_else(|| "group run not found".to_string())?;
-
-    let now = chrono::Utc::now().to_rfc3339();
-    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
-    let review_status = if normalized_action == "approve" {
-        "approved"
-    } else {
-        "rejected"
-    };
-    mark_review_step_completed(
-        &mut tx,
-        &review_state.review_step_id,
-        comment,
-        review_status,
-        &now,
-    )
-    .await?;
-
-    if normalized_action == "reject" {
-        let next_review_round = review_state.review_round + 1;
-        let revision_seed = find_plan_revision_seed(&mut tx, run_id)
-            .await?
-            .unwrap_or_else(|| super::repo::PlanRevisionSeedRow {
-                input: String::new(),
-                assignee_employee_id: review_state.main_employee_id.clone(),
-            });
-        let revision_assignee_employee_id = if revision_seed.assignee_employee_id.trim().is_empty() {
-            review_state.main_employee_id.clone()
-        } else {
-            revision_seed.assignee_employee_id.trim().to_lowercase()
-        };
-        let revision_step_id = Uuid::new_v4().to_string();
-        insert_plan_revision_step(
-            &mut tx,
-            &revision_step_id,
-            run_id,
-            &review_state.review_step_id,
-            &revision_assignee_employee_id,
-            &revision_seed.input,
-            comment,
-            next_review_round,
-        )
-        .await?;
-        mark_group_run_review_rejected(
-            &mut tx,
-            run_id,
-            next_review_round,
-            comment,
-            &revision_assignee_employee_id,
-            &now,
-        )
-        .await?;
-        insert_group_run_event(
-            &mut tx,
-            run_id,
-            &review_state.review_step_id,
-            "review_rejected",
-            &serde_json::json!({
-                "reason": comment,
-                "review_round": next_review_round,
-            })
-            .to_string(),
-            &now,
-        )
-        .await?;
-        insert_group_run_event(
-            &mut tx,
-            run_id,
-            &revision_step_id,
-            "step_created",
-            &serde_json::json!({
-                "phase": "plan",
-                "step_type": "plan",
-                "status": "pending",
-            })
-            .to_string(),
-            &now,
-        )
-        .await?;
-    } else {
-        mark_group_run_review_approved(&mut tx, run_id, &now).await?;
-        insert_group_run_event(
-            &mut tx,
-            run_id,
-            &review_state.review_step_id,
-            "review_passed",
-            &serde_json::json!({
-                "comment": comment,
-            })
-            .to_string(),
-            &now,
-        )
-        .await?;
-    }
-
-    tx.commit().await.map_err(|e| e.to_string())?;
-    Ok(())
-}
-
 pub(super) async fn start_employee_group_run_internal_with_pool(
     pool: &SqlitePool,
     input: StartEmployeeGroupRunInput,
@@ -1600,148 +725,416 @@ pub(super) async fn start_employee_group_run_internal_with_pool(
     })
 }
 
-pub(super) async fn get_group_run_session_id_with_pool(
-    pool: &SqlitePool,
-    run_id: &str,
-) -> Result<String, String> {
-    get_group_run_session_id(pool, run_id)
-        .await?
-        .ok_or_else(|| "group run not found".to_string())
-}
-
-pub(super) async fn get_employee_group_run_snapshot_by_run_id_with_pool(
-    pool: &SqlitePool,
-    run_id: &str,
-) -> Result<super::EmployeeGroupRunSnapshot, String> {
-    let session_id = get_group_run_session_id_with_pool(pool, run_id).await?;
-    get_employee_group_run_snapshot_with_pool(pool, &session_id)
-        .await?
-        .ok_or_else(|| "group run snapshot not found".to_string())
-}
-
-pub(super) async fn get_employee_group_run_snapshot_with_pool(
-    pool: &SqlitePool,
-    session_id: &str,
-) -> Result<Option<super::EmployeeGroupRunSnapshot>, String> {
-    let Some(run_row) = find_group_run_snapshot_row(pool, session_id).await? else {
-        return Ok(None);
+#[cfg(test)]
+mod tests {
+    use super::super::repo::AgentEmployeeRow;
+    use super::super::SaveFeishuEmployeeAssociationInput;
+    use super::feishu_service::save_feishu_employee_association_with_pool;
+    use super::profile_service::build_agent_employee;
+    use super::routing_service::resolve_target_employees_for_event;
+    use super::session_service::ensure_employee_sessions_for_event_with_pool;
+    use super::group_run_service::resume_employee_group_run_with_pool;
+    use super::group_run_snapshot_service::get_group_run_session_id_with_pool;
+    use super::group_run_action_service::{
+        reassign_group_run_step_with_pool, retry_employee_group_run_failed_steps_with_pool,
+        review_group_run_step_with_pool,
     };
+    use crate::im::types::{ImEvent, ImEventType};
+    use sqlx::SqlitePool;
 
-    let steps = list_group_run_step_snapshot_rows(pool, &run_row.run_id)
-        .await?
-        .into_iter()
-        .map(map_group_run_step_snapshot)
-        .collect::<Vec<_>>();
-    let events = list_group_run_event_snapshot_rows(pool, &run_row.run_id)
-        .await?
-        .into_iter()
-        .map(map_group_run_event_snapshot)
-        .collect::<Vec<_>>();
-    let completed = steps.iter().filter(|step| step.status == "completed").count();
-    let final_report = find_latest_assistant_message_content(pool, &run_row.session_id)
-        .await?
-        .filter(|content| !content.trim().is_empty())
-        .unwrap_or_else(|| {
-            format!(
-                "计划：围绕“{}”共 {} 步。\n执行：已完成 {} 步。\n汇报：当前状态={}",
-                run_row.user_goal,
-                steps.len(),
-                completed,
-                run_row.state
+    #[test]
+    fn build_agent_employee_falls_back_to_role_id_and_default_scope() {
+        let employee = build_agent_employee(
+            AgentEmployeeRow {
+                id: "emp-1".to_string(),
+                employee_id: String::new(),
+                name: "Planner".to_string(),
+                role_id: "planner".to_string(),
+                persona: "Owns planning".to_string(),
+                feishu_open_id: String::new(),
+                feishu_app_id: String::new(),
+                feishu_app_secret: String::new(),
+                primary_skill_id: "builtin-general".to_string(),
+                default_work_dir: "D:/work".to_string(),
+                openclaw_agent_id: "planner".to_string(),
+                routing_priority: 100,
+                enabled_scopes_json: "not-json".to_string(),
+                enabled: true,
+                is_default: true,
+                created_at: "2026-03-23T00:00:00Z".to_string(),
+                updated_at: "2026-03-23T00:00:00Z".to_string(),
+            },
+            vec!["skill-a".to_string(), "skill-b".to_string()],
+        );
+
+        assert_eq!(employee.employee_id, "planner");
+        assert_eq!(employee.enabled_scopes, vec!["app".to_string()]);
+        assert_eq!(
+            employee.skill_ids,
+            vec!["skill-a".to_string(), "skill-b".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn save_feishu_employee_association_rejects_invalid_mode() {
+        let pool = SqlitePool::connect(":memory:")
+            .await
+            .expect("in-memory sqlite pool");
+
+        let err = save_feishu_employee_association_with_pool(
+            &pool,
+            SaveFeishuEmployeeAssociationInput {
+                employee_db_id: "employee-db-id".to_string(),
+                enabled: true,
+                mode: "unsupported".to_string(),
+                peer_kind: String::new(),
+                peer_id: String::new(),
+                priority: 10,
+            },
+        )
+        .await
+        .expect_err("invalid mode should fail before db lookup");
+
+        assert_eq!(err, "mode must be default or scoped");
+    }
+
+    #[tokio::test]
+    async fn resolve_target_employees_for_event_prefers_explicit_role_match() {
+        let pool = SqlitePool::connect(":memory:")
+            .await
+            .expect("in-memory sqlite pool");
+
+        sqlx::query(
+            r#"
+            CREATE TABLE agent_employees (
+                id TEXT PRIMARY KEY NOT NULL,
+                employee_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                role_id TEXT NOT NULL,
+                persona TEXT NOT NULL,
+                feishu_open_id TEXT NOT NULL,
+                feishu_app_id TEXT NOT NULL,
+                feishu_app_secret TEXT NOT NULL,
+                primary_skill_id TEXT NOT NULL,
+                default_work_dir TEXT NOT NULL,
+                openclaw_agent_id TEXT NOT NULL,
+                routing_priority INTEGER NOT NULL,
+                enabled_scopes_json TEXT NOT NULL,
+                enabled INTEGER NOT NULL,
+                is_default INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
             )
-        });
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("create agent_employees");
 
-    Ok(Some(super::EmployeeGroupRunSnapshot {
-        run_id: run_row.run_id,
-        group_id: run_row.group_id,
-        session_id: run_row.session_id,
-        state: run_row.state,
-        current_round: run_row.current_round,
-        current_phase: run_row.current_phase,
-        review_round: run_row.review_round,
-        status_reason: run_row.status_reason,
-        waiting_for_employee_id: run_row.waiting_for_employee_id,
-        waiting_for_user: run_row.waiting_for_user,
-        final_report,
-        steps,
-        events,
-    }))
-}
+        sqlx::query(
+            r#"
+            CREATE TABLE agent_employee_skills (
+                employee_id TEXT NOT NULL,
+                skill_id TEXT NOT NULL,
+                sort_order INTEGER NOT NULL
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("create agent_employee_skills");
 
-fn map_group_run_step_snapshot(
-    row: GroupRunStepSnapshotRow,
-) -> super::EmployeeGroupRunStep {
-    super::EmployeeGroupRunStep {
-        id: row.id,
-        round_no: row.round_no,
-        step_type: row.step_type,
-        assignee_employee_id: row.assignee_employee_id,
-        dispatch_source_employee_id: row.dispatch_source_employee_id,
-        session_id: row.session_id,
-        attempt_no: row.attempt_no,
-        status: row.status,
-        output_summary: row.output_summary,
-        output: row.output,
+        for (id, employee_id, name, role_id, is_default) in [
+            ("emp-default", "default-worker", "Default Worker", "default-role", 1_i64),
+            ("emp-target", "target-worker", "Target Worker", "target-role", 0_i64),
+        ] {
+            sqlx::query(
+                r#"
+                INSERT INTO agent_employees (
+                    id, employee_id, name, role_id, persona, feishu_open_id, feishu_app_id,
+                    feishu_app_secret, primary_skill_id, default_work_dir, openclaw_agent_id,
+                    routing_priority, enabled_scopes_json, enabled, is_default, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                "#,
+            )
+            .bind(id)
+            .bind(employee_id)
+            .bind(name)
+            .bind(role_id)
+            .bind("persona")
+            .bind("")
+            .bind("")
+            .bind("")
+            .bind("builtin-general")
+            .bind("D:/work")
+            .bind(employee_id)
+            .bind(100_i64)
+            .bind("[\"feishu\"]")
+            .bind(1_i64)
+            .bind(is_default)
+            .bind("2026-03-23T00:00:00Z")
+            .bind("2026-03-23T00:00:00Z")
+            .execute(&pool)
+            .await
+            .expect("insert employee");
+        }
+
+        let targeted = resolve_target_employees_for_event(
+            &pool,
+            &ImEvent {
+                channel: "feishu".to_string(),
+                event_type: ImEventType::MessageCreated,
+                thread_id: "thread-1".to_string(),
+                event_id: None,
+                message_id: None,
+                text: Some("hello team".to_string()),
+                role_id: Some("target-role".to_string()),
+                account_id: None,
+                tenant_id: None,
+                sender_id: None,
+                chat_type: None,
+            },
+        )
+        .await
+        .expect("resolve employees");
+
+        assert_eq!(targeted.len(), 1);
+        assert_eq!(targeted[0].employee_id, "target-worker");
     }
-}
 
-fn map_group_run_event_snapshot(
-    row: GroupRunEventSnapshotRow,
-) -> super::EmployeeGroupRunEvent {
-    super::EmployeeGroupRunEvent {
-        id: row.id,
-        step_id: row.step_id,
-        event_type: row.event_type,
-        payload_json: row.payload_json,
-        created_at: row.created_at,
+    #[tokio::test]
+    async fn ensure_employee_sessions_for_event_returns_empty_when_no_employee_matches() {
+        let pool = SqlitePool::connect(":memory:")
+            .await
+            .expect("in-memory sqlite pool");
+
+        sqlx::query(
+            r#"
+            CREATE TABLE agent_employees (
+                id TEXT PRIMARY KEY NOT NULL,
+                employee_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                role_id TEXT NOT NULL,
+                persona TEXT NOT NULL,
+                feishu_open_id TEXT NOT NULL,
+                feishu_app_id TEXT NOT NULL,
+                feishu_app_secret TEXT NOT NULL,
+                primary_skill_id TEXT NOT NULL,
+                default_work_dir TEXT NOT NULL,
+                openclaw_agent_id TEXT NOT NULL,
+                routing_priority INTEGER NOT NULL,
+                enabled_scopes_json TEXT NOT NULL,
+                enabled INTEGER NOT NULL,
+                is_default INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("create agent_employees");
+
+        sqlx::query(
+            r#"
+            CREATE TABLE im_routing_bindings (
+                id TEXT PRIMARY KEY NOT NULL,
+                agent_id TEXT NOT NULL,
+                channel TEXT NOT NULL,
+                account_id TEXT NOT NULL,
+                peer_kind TEXT NOT NULL,
+                peer_id TEXT NOT NULL,
+                guild_id TEXT NOT NULL,
+                team_id TEXT NOT NULL,
+                role_ids_json TEXT NOT NULL,
+                connector_meta_json TEXT,
+                priority INTEGER NOT NULL,
+                enabled INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("create im_routing_bindings");
+
+        let sessions = ensure_employee_sessions_for_event_with_pool(
+            &pool,
+            &ImEvent {
+                channel: "feishu".to_string(),
+                event_type: ImEventType::MessageCreated,
+                thread_id: "thread-empty".to_string(),
+                event_id: None,
+                message_id: None,
+                text: Some("hello".to_string()),
+                role_id: None,
+                account_id: None,
+                tenant_id: None,
+                sender_id: None,
+                chat_type: None,
+            },
+        )
+        .await
+        .expect("empty employee set should not fail");
+
+        assert!(sessions.is_empty());
     }
-}
 
-async fn create_employee_route_session(
-    pool: &SqlitePool,
-    event: &ImEvent,
-    employee: &AgentEmployee,
-    default_model_id: &str,
-    route_session_key: &str,
-) -> Result<(String, bool), String> {
-    let now = chrono::Utc::now().to_rfc3339();
-    let session_id = Uuid::new_v4().to_string();
-    let skill_id = if employee.primary_skill_id.trim().is_empty() {
-        "builtin-general".to_string()
-    } else {
-        employee.primary_skill_id.clone()
-    };
+    #[tokio::test]
+    async fn resume_employee_group_run_requires_paused_state() {
+        let pool = SqlitePool::connect(":memory:")
+            .await
+            .expect("in-memory sqlite pool");
 
-    insert_session_seed(
-        pool,
-        &SessionSeedInput {
-            id: &session_id,
-            skill_id: &skill_id,
-            title: &format!("IM:{}@{}", employee.name, event.thread_id),
-            created_at: &now,
-            model_id: default_model_id,
-            work_dir: employee.default_work_dir.trim(),
-            employee_id: employee.employee_id.trim(),
-        },
-    )
-    .await?;
+        sqlx::query(
+            r#"
+            CREATE TABLE group_runs (
+                id TEXT PRIMARY KEY NOT NULL,
+                group_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                user_goal TEXT NOT NULL,
+                state TEXT NOT NULL,
+                current_round INTEGER NOT NULL,
+                current_phase TEXT NOT NULL,
+                entry_session_id TEXT NOT NULL,
+                main_employee_id TEXT NOT NULL,
+                review_round INTEGER NOT NULL,
+                status_reason TEXT NOT NULL,
+                template_version TEXT NOT NULL,
+                waiting_for_employee_id TEXT NOT NULL,
+                waiting_for_user INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("create employee_group_runs");
 
-    upsert_thread_session_link(
-        pool,
-        &ThreadSessionLinkInput {
-            thread_id: &event.thread_id,
-            employee_db_id: &employee.id,
-            session_id: &session_id,
-            route_session_key,
-            created_at: &now,
-            updated_at: &now,
-        },
-    )
-    .await?;
+        sqlx::query(
+            r#"
+            CREATE TABLE group_run_events (
+                id TEXT PRIMARY KEY NOT NULL,
+                run_id TEXT NOT NULL,
+                step_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("create group_run_events");
 
-    Ok((session_id, true))
-}
+        sqlx::query(
+            r#"
+            INSERT INTO group_runs (
+                id, group_id, session_id, user_goal, state, current_round, current_phase,
+                entry_session_id, main_employee_id, review_round, status_reason, template_version,
+                waiting_for_employee_id, waiting_for_user, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind("run-1")
+        .bind("group-1")
+        .bind("session-1")
+        .bind("Ship feature")
+        .bind("planning")
+        .bind(1_i64)
+        .bind("plan")
+        .bind("session-1")
+        .bind("coordinator-1")
+        .bind(0_i64)
+        .bind("")
+        .bind("")
+        .bind("")
+        .bind(0_i64)
+        .bind("2026-03-23T00:00:00Z")
+        .bind("2026-03-23T00:00:00Z")
+        .execute(&pool)
+        .await
+        .expect("insert group run");
 
-fn im_binding_matches_event(binding: &ImRoutingBinding, event: &ImEvent) -> bool {
-    super::im_binding_matches_event(binding, event)
+        let err = resume_employee_group_run_with_pool(&pool, "run-1")
+            .await
+            .expect_err("non-paused run should be rejected");
+
+        assert_eq!(err, "group run is not paused");
+    }
+
+    #[tokio::test]
+    async fn get_group_run_session_id_returns_not_found_for_missing_run() {
+        let pool = SqlitePool::connect(":memory:")
+            .await
+            .expect("in-memory sqlite pool");
+
+        sqlx::query(
+            r#"
+            CREATE TABLE group_runs (
+                id TEXT PRIMARY KEY NOT NULL,
+                session_id TEXT NOT NULL
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("create group_runs");
+
+        let err = get_group_run_session_id_with_pool(&pool, "missing-run")
+            .await
+            .expect_err("missing run should fail");
+
+        assert_eq!(err, "group run not found");
+    }
+
+    #[tokio::test]
+    async fn retry_employee_group_run_failed_steps_requires_failed_rows() {
+        let pool = SqlitePool::connect(":memory:")
+            .await
+            .expect("in-memory sqlite pool");
+
+        sqlx::query(
+            "CREATE TABLE group_run_steps (id TEXT PRIMARY KEY NOT NULL, run_id TEXT NOT NULL, status TEXT NOT NULL, output TEXT NOT NULL)"
+        )
+        .execute(&pool)
+        .await
+        .expect("create group_run_steps");
+
+        let err = retry_employee_group_run_failed_steps_with_pool(&pool, "run-empty")
+            .await
+            .expect_err("retry should reject when no failed rows exist");
+
+        assert_eq!(err, "no failed steps to retry");
+    }
+
+    #[tokio::test]
+    async fn reassign_group_run_step_requires_assignee() {
+        let pool = SqlitePool::connect(":memory:")
+            .await
+            .expect("in-memory sqlite pool");
+
+        let err = reassign_group_run_step_with_pool(&pool, "step-1", "   ")
+            .await
+            .expect_err("blank assignee should fail");
+
+        assert_eq!(err, "assignee_employee_id is required");
+    }
+
+    #[tokio::test]
+    async fn review_group_run_step_requires_valid_action() {
+        let pool = SqlitePool::connect(":memory:")
+            .await
+            .expect("in-memory sqlite pool");
+
+        let err = review_group_run_step_with_pool(&pool, "run-1", "hold", "comment")
+            .await
+            .expect_err("unsupported action should fail");
+
+        assert_eq!(err, "review action must be approve or reject");
+    }
 }

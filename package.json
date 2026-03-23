@@ -7,6 +7,7 @@
     "build:app": "pnpm --dir apps/runtime/sidecar build && pnpm --filter runtime tauri build --no-sign",
     "build:runtime": "pnpm --dir apps/runtime/sidecar build && pnpm --filter runtime tauri build --no-sign",
     "doctor:windows": "node scripts/doctor-windows.mjs",
+    "report:rust-large-files": "node scripts/report-rust-large-files.mjs",
     "test:e2e:runtime": "pnpm --dir apps/runtime test:e2e",
     "release:check-version": "node scripts/check-release-version.mjs",
     "test:release": "node --test scripts/check-release-version.test.mjs",

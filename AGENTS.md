@@ -51,6 +51,15 @@ These skills should be treated as lightweight guardrails for the maintainer's ow
 - For SQLite-backed runtime data, any new query dependency on a column or table shape must ship with a backward-compatible migration or a legacy-schema fallback in the query path.
 - When changing session list, session search, IM bindings, or other startup-critical SQLite reads, add at least one regression test that uses a legacy schema and proves old databases still load.
 
+## Rust Runtime Guidance
+- For work under `apps/runtime/src-tauri/`, prefer the closer local guidance in `apps/runtime/src-tauri/AGENTS.md`.
+- Rust runtime file budgets use governance triggers rather than hard bans:
+  - `<= 500` target
+  - `501-800` warning for new business logic
+  - `801+` requires a short split plan before feature work
+- Keep the root file short; Rust-specific module placement and layering rules belong in the local Tauri guidance file.
+- `apps/runtime/src-tauri/src/commands/employee_agents.rs` is now the current Rust-side reference template for how a giant command file should be decomposed.
+
 ## Skill Priority And Coordination
 - Treat repo-local `workclaw-*` skills as the project workflow layer. They decide which WorkClaw-specific path, commands, and output contract apply.
 - Treat `superpowers` skills as the general method layer. They guide how to design, debug, verify, review, and execute work once the WorkClaw-specific path is known.
