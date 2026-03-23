@@ -3725,22 +3725,7 @@ pub async fn link_inbound_event_to_session_with_pool(
     employee_id: &str,
     session_id: &str,
 ) -> Result<(), String> {
-    let now = chrono::Utc::now().to_rfc3339();
-    sqlx::query(
-        "INSERT INTO im_message_links (id, thread_id, session_id, employee_id, direction, im_event_id, im_message_id, app_message_id, created_at)
-         VALUES (?, ?, ?, ?, 'inbound', ?, ?, '', ?)",
-    )
-    .bind(Uuid::new_v4().to_string())
-    .bind(&event.thread_id)
-    .bind(session_id)
-    .bind(employee_id)
-    .bind(event.event_id.clone().unwrap_or_default())
-    .bind(event.message_id.clone().unwrap_or_default())
-    .bind(&now)
-    .execute(pool)
-    .await
-    .map_err(|e| e.to_string())?;
-    Ok(())
+    service::link_inbound_event_to_session_with_pool(pool, event, employee_id, session_id).await
 }
 
 #[tauri::command]

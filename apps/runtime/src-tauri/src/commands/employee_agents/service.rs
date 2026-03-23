@@ -5,10 +5,10 @@ use super::repo::{
     find_displaced_scoped_feishu_agent_ids, find_employee_db_id_by_employee_id,
     find_latest_thread_session_id, find_recent_route_session_id, find_thread_session_record,
     get_employee_association_row, get_employee_group_entry_row, insert_feishu_binding,
-    insert_session_seed, list_agent_employee_rows, list_agent_scope_rows,
+    insert_inbound_event_link, insert_session_seed, list_agent_employee_rows, list_agent_scope_rows,
     list_skill_ids_for_employee, replace_employee_skill_bindings, update_employee_enabled_scopes,
     update_session_employee_id, upsert_agent_employee_record, upsert_thread_session_link,
-    InsertFeishuBindingInput, SessionSeedInput, ThreadSessionLinkInput,
+    InboundEventLinkInput, InsertFeishuBindingInput, SessionSeedInput, ThreadSessionLinkInput,
     UpsertAgentEmployeeRecordInput,
 };
 use super::{
@@ -558,6 +558,29 @@ pub(super) async fn ensure_employee_sessions_for_event_with_pool(
     }
 
     Ok(results)
+}
+
+pub(super) async fn link_inbound_event_to_session_with_pool(
+    pool: &SqlitePool,
+    event: &ImEvent,
+    employee_db_id: &str,
+    session_id: &str,
+) -> Result<(), String> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let link_id = Uuid::new_v4().to_string();
+    insert_inbound_event_link(
+        pool,
+        &InboundEventLinkInput {
+            id: &link_id,
+            thread_id: &event.thread_id,
+            session_id,
+            employee_db_id,
+            im_event_id: event.event_id.as_deref().unwrap_or_default(),
+            im_message_id: event.message_id.as_deref().unwrap_or_default(),
+            created_at: &now,
+        },
+    )
+    .await
 }
 
 async fn create_employee_route_session(

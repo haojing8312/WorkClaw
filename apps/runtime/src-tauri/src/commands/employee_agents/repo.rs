@@ -57,6 +57,16 @@ pub(super) struct ThreadSessionLinkInput<'a> {
     pub updated_at: &'a str,
 }
 
+pub(super) struct InboundEventLinkInput<'a> {
+    pub id: &'a str,
+    pub thread_id: &'a str,
+    pub session_id: &'a str,
+    pub employee_db_id: &'a str,
+    pub im_event_id: &'a str,
+    pub im_message_id: &'a str,
+    pub created_at: &'a str,
+}
+
 pub(super) async fn list_agent_employee_rows(
     pool: &SqlitePool,
 ) -> Result<Vec<AgentEmployeeRow>, String> {
@@ -460,6 +470,27 @@ pub(super) async fn update_session_employee_id(
         .execute(pool)
         .await
         .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub(super) async fn insert_inbound_event_link(
+    pool: &SqlitePool,
+    input: &InboundEventLinkInput<'_>,
+) -> Result<(), String> {
+    sqlx::query(
+        "INSERT INTO im_message_links (id, thread_id, session_id, employee_id, direction, im_event_id, im_message_id, app_message_id, created_at)
+         VALUES (?, ?, ?, ?, 'inbound', ?, ?, '', ?)",
+    )
+    .bind(input.id)
+    .bind(input.thread_id)
+    .bind(input.session_id)
+    .bind(input.employee_db_id)
+    .bind(input.im_event_id)
+    .bind(input.im_message_id)
+    .bind(input.created_at)
+    .execute(pool)
+    .await
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
