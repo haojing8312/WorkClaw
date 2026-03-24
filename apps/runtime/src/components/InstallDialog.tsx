@@ -5,6 +5,11 @@ import { ClawhubSkillSummary, SkillManifest } from "../types";
 import { RiskConfirmDialog } from "./RiskConfirmDialog";
 
 type InstallMode = "skillpack" | "local" | "clawhub" | "industry";
+type LocalImportBatchResult = {
+  installed: { dir_path: string; manifest: { id: string; name?: string } }[];
+  failed: { dir_path: string; name_hint: string; error: string }[];
+  missing_mcp: string[];
+};
 
 interface Props {
   onInstalled: (skillId: string, options?: { createSession?: boolean }) => void;
@@ -118,17 +123,24 @@ export function InstallDialog({ onInstalled, onClose }: Props) {
           setLoading(false);
           return;
         }
-        const result = await invoke<{ manifest: { id: string }; missing_mcp: string[] }>("import_local_skill", {
+        const result = await invoke<LocalImportBatchResult>("import_local_skill", {
           dirPath: localDir,
         });
-
-        if (result.missing_mcp.length > 0) {
-          setMcpWarning(result.missing_mcp);
-          onInstalled(result.manifest.id);
+        const firstInstalled = result.installed[0];
+        if (!firstInstalled) {
+          const firstError = result.failed[0]?.error ?? "未导入任何 Skill";
+          setError(firstError);
+          setLoading(false);
           return;
         }
 
-        onInstalled(result.manifest.id);
+        if (result.missing_mcp.length > 0) {
+          setMcpWarning(result.missing_mcp);
+          onInstalled(firstInstalled.manifest.id);
+          return;
+        }
+
+        onInstalled(firstInstalled.manifest.id);
         onClose();
       } else if (mode === "clawhub") {
         const skill = clawhubResults.find((item) => item.slug === selectedClawhubSlug);
@@ -202,7 +214,7 @@ export function InstallDialog({ onInstalled, onClose }: Props) {
   const installRiskImpact = mode === "skillpack"
     ? (packPath ? `文件: ${packPath}` : "请先选择 .skillpack 文件并填写用户名。")
     : mode === "local"
-    ? (localDir ? `目录: ${localDir}` : "请先选择本地技能目录。")
+    ? (localDir ? `目录: ${localDir}` : "请先选择本地 Skill 目录或 skills 根目录。")
     : mode === "clawhub"
     ? (selectedClawhubSkill ? `slug: ${selectedClawhubSkill.slug}` : "请先搜索并选择要安装的 ClawHub 技能。")
     : (industryPath ? `文件: ${industryPath}` : "请先选择 .industrypack 文件。");
@@ -272,7 +284,7 @@ export function InstallDialog({ onInstalled, onClose }: Props) {
                 onClick={pickDir}
                 className="w-full border border-dashed border-gray-300 rounded p-3 text-sm text-gray-500 hover:border-blue-400 hover:text-blue-500 transition-colors"
               >
-                {localDir ? localDir.split(/[/\\]/).pop() : "选择 Skill 目录"}
+                {localDir ? localDir.split(/[/\\]/).pop() : "选择 Skill 目录或 skills 根目录"}
               </button>
               {localDir && (
                 <div className="mt-1 text-xs text-gray-400 truncate" title={localDir}>
@@ -281,8 +293,8 @@ export function InstallDialog({ onInstalled, onClose }: Props) {
               )}
             </div>
             <div className="text-xs text-gray-400">
-              目录中需包含 <code className="text-gray-500">SKILL.md</code> 文件。
-              本地 Skill 无需加密，可直接导入使用。
+              可选择单个包含 <code className="text-gray-500">SKILL.md</code> 的 Skill 目录，
+              也可选择包含多个 Skill 的根目录。系统最多向下扫描一层子目录并批量导入。
             </div>
           </>
         )}

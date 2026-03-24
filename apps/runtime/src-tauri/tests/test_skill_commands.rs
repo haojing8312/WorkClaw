@@ -1,7 +1,15 @@
 mod helpers;
 
-use runtime_lib::commands::skills::{create_local_skill, render_local_skill_preview};
+use runtime_lib::commands::skills::{
+    create_local_skill, import_local_skills_to_pool, render_local_skill_preview,
+};
 use std::path::Path;
+
+fn write_skill(dir: &Path, name: &str, body: &str) {
+    std::fs::create_dir_all(dir).expect("create skill dir");
+    let skill_md = format!("---\nname: {name}\ndescription: test\n---\n\n{body}");
+    std::fs::write(dir.join("SKILL.md"), skill_md).expect("write skill");
+}
 
 #[tokio::test]
 async fn create_local_skill_rejects_existing_directory() {
@@ -108,5 +116,104 @@ async fn import_local_skill_rejects_duplicate_display_name() {
     assert!(
         err.contains("DUPLICATE_SKILL_NAME:Duplicate Name"),
         "unexpected error: {err}"
+    );
+}
+
+#[tokio::test]
+async fn import_local_skills_imports_selected_skill_directory() {
+    let (pool, _tmp) = helpers::setup_test_db().await;
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let skill_dir = dir.path().join("writer");
+    write_skill(&skill_dir, "Writer", "content");
+
+    let result = import_local_skills_to_pool(skill_dir.to_string_lossy().to_string(), &pool, &[])
+        .await
+        .expect("single directory import should succeed");
+
+    assert_eq!(result.installed.len(), 1);
+    assert!(result.failed.is_empty());
+    assert_eq!(result.installed[0].manifest.name, "Writer");
+}
+
+#[tokio::test]
+async fn import_local_skills_imports_multiple_skills_from_root_directory() {
+    let (pool, _tmp) = helpers::setup_test_db().await;
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let skills_root = dir.path().join("skills");
+    write_skill(&skills_root.join("writer"), "Writer", "content");
+    write_skill(&skills_root.join("planner"), "Planner", "content");
+
+    let result =
+        import_local_skills_to_pool(skills_root.to_string_lossy().to_string(), &pool, &[])
+            .await
+            .expect("root directory import should succeed");
+
+    assert_eq!(result.installed.len(), 2);
+    assert!(result.failed.is_empty());
+    let names = result
+        .installed
+        .iter()
+        .map(|item| item.manifest.name.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(names, vec!["Planner".to_string(), "Writer".to_string()]);
+}
+
+#[tokio::test]
+async fn import_local_skills_discovers_nested_skills_one_level_deep() {
+    let (pool, _tmp) = helpers::setup_test_db().await;
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let skills_root = dir.path().join("skills");
+    write_skill(&skills_root.join("group-a").join("writer"), "Writer", "content");
+    write_skill(&skills_root.join("group-b").join("planner"), "Planner", "content");
+
+    let result =
+        import_local_skills_to_pool(skills_root.to_string_lossy().to_string(), &pool, &[])
+            .await
+            .expect("nested root directory import should succeed");
+
+    assert_eq!(result.installed.len(), 2);
+    assert!(result.failed.is_empty());
+}
+
+#[tokio::test]
+async fn import_local_skills_ignores_directories_deeper_than_one_extra_level() {
+    let (pool, _tmp) = helpers::setup_test_db().await;
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let skills_root = dir.path().join("skills");
+    write_skill(
+        &skills_root.join("group-a").join("deep").join("writer"),
+        "Writer",
+        "content",
+    );
+
+    let err = import_local_skills_to_pool(skills_root.to_string_lossy().to_string(), &pool, &[])
+        .await
+        .expect_err("deeper directories should not be discovered");
+
+    assert!(
+        err.contains("未找到"),
+        "expected not found error for over-deep skill directories, got: {err}"
+    );
+}
+
+#[tokio::test]
+async fn import_local_skills_reports_partial_success_without_blocking_other_skills() {
+    let (pool, _tmp) = helpers::setup_test_db().await;
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let skills_root = dir.path().join("skills");
+    write_skill(&skills_root.join("writer-a"), "Writer", "content");
+    write_skill(&skills_root.join("writer-b"), "Writer", "content");
+
+    let result =
+        import_local_skills_to_pool(skills_root.to_string_lossy().to_string(), &pool, &[])
+            .await
+            .expect("partial success import should still return success");
+
+    assert_eq!(result.installed.len(), 1);
+    assert_eq!(result.failed.len(), 1);
+    assert!(
+        result.failed[0].error.contains("DUPLICATE_SKILL_NAME:Writer"),
+        "unexpected failure reason: {}",
+        result.failed[0].error
     );
 }

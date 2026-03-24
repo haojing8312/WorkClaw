@@ -15,10 +15,11 @@ mod industry_bundle_service;
 
 pub use types::{
     DbState, ImportResult, IndustryBundleUpdateCheck, IndustryInstallResult,
-    InstalledSkillSummary, LocalSkillPreview,
+    InstalledSkillSummary, LocalImportBatchResult, LocalImportFailedItem,
+    LocalImportInstalledItem, LocalSkillPreview,
 };
 pub use local_skill_service::{
-    ensure_skill_display_name_available, import_local_skill_to_pool,
+    ensure_skill_display_name_available, import_local_skill_to_pool, import_local_skills_to_pool,
 };
 pub use industry_bundle_service::{
     check_industry_bundle_update_from_pool, install_industry_bundle_to_pool,
@@ -57,7 +58,7 @@ pub async fn install_skill(
 pub async fn import_local_skill(
     dir_path: String,
     db: State<'_, DbState>,
-) -> Result<ImportResult, String> {
+) -> Result<LocalImportBatchResult, String> {
     local_skill_service::import_local_skill(dir_path, &db.0).await
 }
 

@@ -9,6 +9,26 @@ pub struct ImportResult {
     pub missing_mcp: Vec<String>,
 }
 
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct LocalImportInstalledItem {
+    pub dir_path: String,
+    pub manifest: SkillManifest,
+}
+
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct LocalImportFailedItem {
+    pub dir_path: String,
+    pub name_hint: String,
+    pub error: String,
+}
+
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct LocalImportBatchResult {
+    pub installed: Vec<LocalImportInstalledItem>,
+    pub failed: Vec<LocalImportFailedItem>,
+    pub missing_mcp: Vec<String>,
+}
+
 #[derive(serde::Serialize)]
 pub struct LocalSkillPreview {
     pub markdown: String,

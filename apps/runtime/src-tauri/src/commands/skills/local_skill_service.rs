@@ -2,9 +2,14 @@ use super::helpers::{
     build_local_skill_id, default_skill_base_dir, merge_tags, normalize_display_name,
     read_skill_markdown_with_fallback, render_local_skill_markdown, sanitize_slug,
 };
-use super::types::{ImportResult, LocalSkillPreview};
+use super::types::{
+    ImportResult, LocalImportBatchResult, LocalImportFailedItem, LocalImportInstalledItem,
+    LocalSkillPreview,
+};
 use chrono::Utc;
 use skillpack_rs::{verify_and_unpack, SkillManifest};
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use sqlx::SqlitePool;
 
 pub async fn ensure_skill_display_name_available(
@@ -209,11 +214,126 @@ pub async fn import_local_skill_to_pool(
     })
 }
 
+fn discover_local_skill_dirs(dir_path: &str) -> Result<Vec<PathBuf>, String> {
+    let root = Path::new(dir_path);
+    if !root.exists() {
+        return Err(format!("目录不存在: {dir_path}"));
+    }
+    if !root.is_dir() {
+        return Err(format!("所选路径不是目录: {dir_path}"));
+    }
+
+    let has_skill_md = |dir: &Path| dir.join("SKILL.md").exists() || dir.join("skill.md").exists();
+
+    if has_skill_md(root) {
+        return Ok(vec![root.to_path_buf()]);
+    }
+
+    let mut discovered = Vec::new();
+    let mut seen = HashSet::new();
+
+    let mut push_if_skill_dir = |dir: PathBuf| {
+        let normalized = dir.to_string_lossy().to_string();
+        if has_skill_md(&dir) && seen.insert(normalized) {
+            discovered.push(dir);
+        }
+    };
+
+    let mut first_level = std::fs::read_dir(root)
+        .map_err(|e| format!("读取目录失败: {}", e))?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .collect::<Vec<_>>();
+    first_level.sort();
+
+    for child in first_level {
+        if has_skill_md(&child) {
+            push_if_skill_dir(child);
+            continue;
+        }
+
+        let mut second_level = match std::fs::read_dir(&child) {
+            Ok(iter) => iter
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .filter(|path| path.is_dir())
+                .collect::<Vec<_>>(),
+            Err(_) => continue,
+        };
+        second_level.sort();
+
+        for grandchild in second_level {
+            push_if_skill_dir(grandchild);
+        }
+    }
+
+    Ok(discovered)
+}
+
+pub async fn import_local_skills_to_pool(
+    dir_path: String,
+    pool: &SqlitePool,
+    extra_tags: &[String],
+) -> Result<LocalImportBatchResult, String> {
+    let discovered = discover_local_skill_dirs(&dir_path)?;
+    if discovered.is_empty() {
+        return Err("未找到可导入的 SKILL.md 目录".to_string());
+    }
+
+    let mut installed = Vec::new();
+    let mut failed = Vec::new();
+    let mut missing_mcp_set = HashSet::new();
+
+    for skill_dir in discovered {
+        let skill_dir_path = skill_dir.to_string_lossy().to_string();
+        match import_local_skill_to_pool(skill_dir_path.clone(), pool, extra_tags).await {
+            Ok(result) => {
+                for mcp in result.missing_mcp {
+                    missing_mcp_set.insert(mcp);
+                }
+                installed.push(LocalImportInstalledItem {
+                    dir_path: skill_dir_path,
+                    manifest: result.manifest,
+                });
+            }
+            Err(error) => {
+                let name_hint = skill_dir
+                    .file_name()
+                    .map(|name| name.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "unknown-skill".to_string());
+                failed.push(LocalImportFailedItem {
+                    dir_path: skill_dir_path,
+                    name_hint,
+                    error,
+                });
+            }
+        }
+    }
+
+    if installed.is_empty() {
+        let first_error = failed
+            .first()
+            .map(|item| item.error.clone())
+            .unwrap_or_else(|| "未导入任何技能".to_string());
+        return Err(first_error);
+    }
+
+    let mut missing_mcp = missing_mcp_set.into_iter().collect::<Vec<_>>();
+    missing_mcp.sort();
+
+    Ok(LocalImportBatchResult {
+        installed,
+        failed,
+        missing_mcp,
+    })
+}
+
 pub async fn import_local_skill(
     dir_path: String,
     pool: &SqlitePool,
-) -> Result<ImportResult, String> {
-    import_local_skill_to_pool(dir_path, pool, &[]).await
+) -> Result<LocalImportBatchResult, String> {
+    import_local_skills_to_pool(dir_path, pool, &[]).await
 }
 
 pub async fn refresh_local_skill(

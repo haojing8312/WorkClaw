@@ -179,16 +179,19 @@ describe("App experts routing", () => {
           return Promise.reject(new Error("导入失败: 模板解析错误"));
         }
         return Promise.resolve({
-          manifest: {
-            id: "local-test-skill",
-            name: "测试技能",
-            description: "描述",
-            version: "local",
-            author: "",
-            recommended_model: "",
-            tags: [],
-            created_at: new Date().toISOString(),
-          },
+          installed: [{
+            manifest: {
+              id: "local-test-skill",
+              name: "测试技能",
+              description: "描述",
+              version: "local",
+              author: "",
+              recommended_model: "",
+              tags: [],
+              created_at: new Date().toISOString(),
+            },
+          }],
+          failed: [],
           missing_mcp: [],
         });
       }

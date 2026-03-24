@@ -13,6 +13,11 @@ import type {
 } from "../components/experts/ExpertCreateView";
 
 type SkillAction = "refresh" | "delete" | "check-update" | "update";
+type LocalImportBatchResult = {
+  installed: { manifest: SkillManifest }[];
+  failed: { dir_path: string; name_hint: string; error: string }[];
+  missing_mcp: string[];
+};
 
 function extractErrorMessage(error: unknown, fallback: string): string {
   if (typeof error === "string") {
@@ -39,6 +44,10 @@ function extractDuplicateSkillName(error: unknown): string | null {
     return null;
   }
   return message.split(prefix)[1]?.trim() || null;
+}
+
+function getFirstInstalledSkillId(result: LocalImportBatchResult | null | undefined): string | null {
+  return result?.installed?.[0]?.manifest?.id ?? null;
 }
 
 export function useExpertSkillCoordinator(options: {
@@ -103,15 +112,16 @@ export function useExpertSkillCoordinator(options: {
         setPendingImportDir(skillDir);
 
         try {
-          const importResult = await invoke<{ manifest: SkillManifest }>(
+          const importResult = await invoke<LocalImportBatchResult>(
             "import_local_skill",
             {
               dirPath: skillDir,
             },
           );
           await loadSkills();
-          if (importResult?.manifest?.id) {
-            setSelectedSkillId(importResult.manifest.id);
+          const importedSkillId = getFirstInstalledSkillId(importResult);
+          if (importedSkillId) {
+            setSelectedSkillId(importedSkillId);
           }
           setExpertSavedPath(null);
           setPendingImportDir(null);
@@ -152,15 +162,16 @@ export function useExpertSkillCoordinator(options: {
     setRetryingExpertImport(true);
     setExpertCreateError(null);
     try {
-      const importResult = await invoke<{ manifest: SkillManifest }>(
+      const importResult = await invoke<LocalImportBatchResult>(
         "import_local_skill",
         {
           dirPath: pendingImportDir,
         },
       );
       await loadSkills();
-      if (importResult?.manifest?.id) {
-        setSelectedSkillId(importResult.manifest.id);
+      const importedSkillId = getFirstInstalledSkillId(importResult);
+      if (importedSkillId) {
+        setSelectedSkillId(importedSkillId);
       }
       setPendingImportDir(null);
       setExpertSavedPath(null);
