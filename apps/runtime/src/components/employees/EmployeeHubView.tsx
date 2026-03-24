@@ -34,6 +34,8 @@ import { EmployeeFeishuAssociationSection } from "./EmployeeFeishuAssociationSec
 import { EmployeeOverviewSection } from "./overview/EmployeeOverviewSection";
 import { EmployeeRunsSection } from "./runs/EmployeeRunsSection";
 import { EmployeeTeamsSection } from "./teams/EmployeeTeamsSection";
+import { EmployeeMemoryToolsSection } from "./tools/EmployeeMemoryToolsSection";
+import { EmployeeProfileFilesSection } from "./tools/EmployeeProfileFilesSection";
 
 export interface EmployeeHubViewProps {
   employees: AgentEmployee[];
@@ -1028,27 +1030,11 @@ export function EmployeeHubView({
                   />
                 )}
 
-                <div className="rounded-lg border border-gray-200 p-3 space-y-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="text-xs font-medium text-gray-700">AGENTS / SOUL / USER（只读）</div>
-                    <button
-                      type="button"
-                      onClick={() => onOpenEmployeeCreatorSkill?.({ mode: "update", employeeId: selectedEmployee.id })}
-                      className="h-7 px-2.5 rounded border border-blue-200 hover:bg-blue-50 text-blue-700 text-xs"
-                    >
-                      更新画像
-                    </button>
-                  </div>
-                  {profileLoading ? <div className="text-xs text-gray-500">正在加载配置文件...</div> : profileView ? <>
-                    <div className="text-[11px] text-gray-500 break-all">目录：{profileView.profile_dir}</div>
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-2">{profileView.files.map((file) => (
-                      <div key={file.name} className="border border-gray-100 rounded p-2 space-y-1">
-                        <div className="text-xs font-medium text-gray-700">{file.name} {file.exists ? "" : "（未生成）"}</div>
-                        {file.error ? <div className="text-[11px] text-red-600">读取失败：{file.error}</div> : file.exists ? <pre className="text-[11px] text-gray-600 whitespace-pre-wrap max-h-56 overflow-y-auto">{file.content}</pre> : <div className="text-[11px] text-gray-500">尚未生成。可使用“智能体员工助手”补齐配置。</div>}
-                      </div>
-                    ))}</div>
-                  </> : <div className="text-xs text-gray-500">暂无可展示的配置文件。</div>}
-                </div>
+                <EmployeeProfileFilesSection
+                  profileLoading={profileLoading}
+                  profileView={profileView}
+                  onOpenEmployeeCreatorSkill={() => onOpenEmployeeCreatorSkill?.({ mode: "update", employeeId: selectedEmployee.id })}
+                />
 
                 <div className="flex items-center gap-2 pt-1">
                   <button disabled={saving || !selectedEmployeeId} onClick={requestRemoveCurrent} className="h-8 px-3 rounded bg-red-50 hover:bg-red-100 disabled:bg-gray-100 text-red-600 text-xs">删除员工</button>
@@ -1065,22 +1051,19 @@ export function EmployeeHubView({
               </div>
             )}
 
-            <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-3 space-y-2">
-              <div className="flex items-center justify-between gap-2"><div className="text-xs font-medium text-indigo-900">长期记忆管理</div>{memoryLoading && <div className="text-[11px] text-indigo-600">统计刷新中...</div>}</div>
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
-                <select data-testid="employee-memory-scope" className="border border-indigo-200 rounded px-2 py-1.5 text-xs bg-white" value={memoryScopeSkillId} onChange={(e) => setMemoryScopeSkillId(e.target.value)}>
-                  <option value="__all__">全部技能</option>
-                  {memorySkillScopeOptions.map((id) => <option key={id} value={id}>{id}</option>)}
-                </select>
-                <button type="button" data-testid="employee-memory-refresh" onClick={() => refreshEmployeeMemoryStats()} disabled={memoryLoading || memoryActionLoading !== null || !selectedEmployeeMemoryId} className="h-8 rounded border border-indigo-200 hover:bg-indigo-100 disabled:bg-gray-100 text-indigo-700 text-xs">刷新统计</button>
-                <button type="button" data-testid="employee-memory-export" onClick={exportEmployeeMemory} disabled={memoryLoading || memoryActionLoading !== null || !selectedEmployeeMemoryId} className="h-8 rounded border border-indigo-200 hover:bg-indigo-100 disabled:bg-gray-100 text-indigo-700 text-xs">{memoryActionLoading === "export" ? "导出中..." : "导出 JSON"}</button>
-                <button type="button" data-testid="employee-memory-clear" onClick={() => setPendingClearMemory(true)} disabled={memoryLoading || memoryActionLoading !== null || !selectedEmployeeMemoryId} className="h-8 rounded border border-red-200 hover:bg-red-50 disabled:bg-gray-100 text-red-600 text-xs">清空记忆</button>
-              </div>
-              <div className="text-xs text-indigo-800 flex items-center gap-4"><span data-testid="employee-memory-total-files">文件数：{memoryStats?.total_files ?? 0}</span><span data-testid="employee-memory-total-bytes">大小：{memoryStats?.total_bytes ?? 0}</span><span>({formatBytes(memoryStats?.total_bytes ?? 0)})</span></div>
-              <div className="max-h-32 overflow-y-auto rounded border border-indigo-100 bg-white p-2 space-y-1">
-                {(memoryStats?.skills || []).length === 0 ? <div className="text-[11px] text-gray-500">暂无长期记忆文件</div> : (memoryStats?.skills || []).map((item) => <div key={item.skill_id} data-testid={`employee-memory-skill-${item.skill_id}`} className="text-[11px] text-gray-700 flex items-center justify-between"><span>{item.skill_id}</span><span>{item.total_files} 文件 / {formatBytes(item.total_bytes)}</span></div>)}
-              </div>
-            </div>
+            <EmployeeMemoryToolsSection
+              memoryLoading={memoryLoading}
+              memoryActionLoading={memoryActionLoading}
+              memoryScopeSkillId={memoryScopeSkillId}
+              memorySkillScopeOptions={memorySkillScopeOptions}
+              selectedEmployeeMemoryId={selectedEmployeeMemoryId}
+              memoryStats={memoryStats}
+              formatBytes={formatBytes}
+              onMemoryScopeChange={setMemoryScopeSkillId}
+              onRefreshEmployeeMemoryStats={() => refreshEmployeeMemoryStats()}
+              onExportEmployeeMemory={exportEmployeeMemory}
+              onRequestClearEmployeeMemory={() => setPendingClearMemory(true)}
+            />
           </div>
         </div>
           </div>
