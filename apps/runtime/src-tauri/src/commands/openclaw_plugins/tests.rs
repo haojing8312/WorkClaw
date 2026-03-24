@@ -1,7 +1,8 @@
     use super::*;
     use super::installer_session::{
-        build_openclaw_shim_script, derive_installer_auto_input, ensure_openclaw_cli_shim,
-        infer_installer_prompt_hint, prepend_env_path,
+        build_openclaw_lark_installer_command, build_openclaw_shim_script,
+        derive_installer_auto_input, ensure_openclaw_cli_shim, infer_installer_prompt_hint,
+        prepend_env_path,
     };
     use super::plugin_host_service::{
         apply_command_search_path, build_effective_path_entries,
@@ -1205,6 +1206,70 @@
         assert!(shim_dir.join("openclaw.cmd").exists());
         #[cfg(not(windows))]
         assert!(shim_dir.join("openclaw").exists());
+    }
+
+    #[test]
+    fn installer_command_prefers_installed_bin_script_when_present() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let plugin_dir = temp.path().join("openclaw-lark");
+        let installer_script = plugin_dir.join("bin").join("openclaw-lark.js");
+        std::fs::create_dir_all(installer_script.parent().expect("installer script parent"))
+            .expect("create installer script parent");
+        std::fs::write(&installer_script, "#!/usr/bin/env node\n").expect("write installer script");
+
+        let command = build_openclaw_lark_installer_command(&plugin_dir)
+            .expect("build official installer command");
+        let args: Vec<String> = command
+            .get_args()
+            .map(|value| value.to_string_lossy().to_string())
+            .collect();
+
+        assert_eq!(args.first().map(String::as_str), Some(&*installer_script.to_string_lossy()));
+        assert_eq!(args.get(1).map(String::as_str), Some("install"));
+        assert_eq!(args.get(2).map(String::as_str), Some("--debug"));
+        assert!(
+            !args.iter().any(|value| value.contains("@larksuite/openclaw-lark")),
+            "expected direct script execution instead of npm exec fallback"
+        );
+    }
+
+    #[test]
+    fn installer_command_prefers_local_tools_bin_when_present() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let plugin_dir = temp
+            .path()
+            .join("workspace")
+            .join("node_modules")
+            .join("@larksuite")
+            .join("openclaw-lark");
+        let tools_bin = temp
+            .path()
+            .join("workspace")
+            .join("installer-tools")
+            .join("node_modules")
+            .join(".bin")
+            .join(if cfg!(windows) {
+                "feishu-plugin-onboard.cmd"
+            } else {
+                "feishu-plugin-onboard"
+            });
+        std::fs::create_dir_all(plugin_dir.join("bin")).expect("create plugin dir");
+        std::fs::create_dir_all(tools_bin.parent().expect("tools bin parent"))
+            .expect("create tools bin parent");
+        std::fs::write(&tools_bin, "@echo off\r\n").expect("write tools bin");
+
+        let command = build_openclaw_lark_installer_command(&plugin_dir)
+            .expect("build official installer command");
+        let args: Vec<String> = command
+            .get_args()
+            .map(|value| value.to_string_lossy().to_string())
+            .collect();
+
+        assert_eq!(
+            command.get_program().to_string_lossy().to_string(),
+            tools_bin.to_string_lossy().to_string()
+        );
+        assert_eq!(args, vec!["install", "--debug", "--skip-version-check"]);
     }
 
     #[test]

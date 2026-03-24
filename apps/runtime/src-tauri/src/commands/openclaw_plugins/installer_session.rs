@@ -14,8 +14,9 @@ use super::{
     append_disable_dep0190_node_option, build_openclaw_lark_tools_npx_args,
     build_openclaw_shim_state_file_path, ensure_controlled_openclaw_state_projection,
     get_openclaw_plugin_install_by_id_with_pool, hide_console_window, now_rfc3339,
-    resolve_controlled_openclaw_state_root, resolve_npx_command, resolve_openclaw_shim_root,
-    resolve_windows_node_command_path, OpenClawLarkInstallerAutoInputState,
+    resolve_controlled_openclaw_state_root, resolve_npm_command, resolve_npx_command,
+    resolve_openclaw_shim_root, resolve_windows_node_command_path,
+    OpenClawLarkInstallerAutoInputState,
     OpenClawLarkInstallerMode, OpenClawLarkInstallerSessionState,
     OpenClawLarkInstallerSessionStatus, OPENCLAW_SHIM_VERSION,
 };
@@ -204,6 +205,117 @@ pub(crate) fn prepend_env_path(command: &mut Command, shim_dir: &Path) {
     super::apply_command_search_path(command, &[shim_dir.to_path_buf()]);
 }
 
+fn resolve_installer_tools_workspace(plugin_install_path: &Path) -> Option<PathBuf> {
+    Some(
+        plugin_install_path
+            .parent()?
+            .parent()?
+            .parent()?
+            .join("installer-tools"),
+    )
+}
+
+fn installer_tools_bin_path(tools_workspace: &Path) -> PathBuf {
+    let bin_name = if cfg!(target_os = "windows") {
+        "feishu-plugin-onboard.cmd"
+    } else {
+        "feishu-plugin-onboard"
+    };
+    tools_workspace.join("node_modules").join(".bin").join(bin_name)
+}
+
+fn ensure_installer_tools_workspace(plugin_install_path: &Path) -> Result<PathBuf, String> {
+    let tools_workspace = resolve_installer_tools_workspace(plugin_install_path)
+        .ok_or_else(|| "failed to resolve installer tools workspace".to_string())?;
+    let tools_bin = installer_tools_bin_path(&tools_workspace);
+    if tools_bin.exists() {
+        return Ok(tools_workspace);
+    }
+
+    fs::create_dir_all(&tools_workspace)
+        .map_err(|e| format!("failed to create installer tools workspace: {e}"))?;
+    fs::write(
+        tools_workspace.join("package.json"),
+        "{\"name\":\"workclaw-openclaw-lark-installer-tools\",\"private\":true}",
+    )
+    .map_err(|e| format!("failed to write installer tools workspace package.json: {e}"))?;
+
+    let mut command = Command::new(resolve_npm_command());
+    command
+        .current_dir(&tools_workspace)
+        .args([
+            "install",
+            "--no-save",
+            "--no-package-lock",
+            "@larksuite/openclaw-lark-tools",
+        ]);
+    super::apply_command_search_path(&mut command, &[]);
+    hide_console_window(&mut command);
+    let output = command
+        .output()
+        .map_err(|e| format!("failed to install official installer tools: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let detail = if !stderr.is_empty() { stderr } else { stdout };
+        return Err(format!("failed to install official installer tools: {detail}"));
+    }
+
+    if !tools_bin.exists() {
+        return Err("official installer tools installed without expected launcher".to_string());
+    }
+
+    Ok(tools_workspace)
+}
+
+pub(crate) fn build_openclaw_lark_installer_command(
+    plugin_install_path: &Path,
+) -> Result<Command, String> {
+    if let Some(tools_workspace) = resolve_installer_tools_workspace(plugin_install_path) {
+        let tools_bin = installer_tools_bin_path(&tools_workspace);
+        if tools_bin.exists() {
+            let mut command = Command::new(tools_bin);
+            command.args(["install", "--debug", "--skip-version-check"]);
+            return Ok(command);
+        }
+    }
+
+    let installer_script = plugin_install_path.join("bin").join("openclaw-lark.js");
+    if installer_script.exists() {
+        let mut command = Command::new(resolve_windows_node_command_path()?);
+        command.arg(installer_script).args(["install", "--debug"]);
+        #[cfg(target_os = "windows")]
+        append_disable_dep0190_node_option(&mut command);
+        return Ok(command);
+    }
+
+    let installer_args = build_openclaw_lark_tools_npx_args(None);
+    #[cfg(target_os = "windows")]
+    {
+        let node_program = resolve_windows_node_command_path()?;
+        let npx_cli = node_program
+            .parent()
+            .map(|parent: &Path| {
+                parent
+                    .join("node_modules")
+                    .join("npm")
+                    .join("bin")
+                    .join("npx-cli.js")
+            })
+            .filter(|candidate: &PathBuf| candidate.exists());
+        if let Some(npx_cli) = npx_cli {
+            let mut command = Command::new(&node_program);
+            command.arg(npx_cli).args(&installer_args);
+            append_disable_dep0190_node_option(&mut command);
+            return Ok(command);
+        }
+    }
+
+    let mut command = Command::new(resolve_npx_command());
+    command.args(&installer_args);
+    Ok(command)
+}
+
 fn push_installer_output(status: &mut OpenClawLarkInstallerSessionStatus, line: &str) {
     status.recent_output.push(line.to_string());
     if status.recent_output.len() > 200 {
@@ -352,38 +464,9 @@ pub(crate) async fn start_openclaw_lark_installer_session_with_pool(
         &controlled_openclaw_state_root,
         plugin_install_path,
     )?;
+    let _ = ensure_installer_tools_workspace(plugin_install_path)?;
 
-    let installer_args = build_openclaw_lark_tools_npx_args(None);
-    #[cfg(target_os = "windows")]
-    let mut command = {
-        let node_program = resolve_windows_node_command_path()?;
-        let npx_cli = node_program
-            .parent()
-            .map(|parent: &Path| {
-                parent
-                    .join("node_modules")
-                    .join("npm")
-                    .join("bin")
-                    .join("npx-cli.js")
-            })
-            .filter(|candidate: &PathBuf| candidate.exists());
-        if let Some(npx_cli) = npx_cli {
-            let mut command = Command::new(&node_program);
-            command.arg(npx_cli).args(&installer_args);
-            append_disable_dep0190_node_option(&mut command);
-            command
-        } else {
-            let mut command = Command::new(resolve_npx_command());
-            command.args(&installer_args);
-            command
-        }
-    };
-    #[cfg(not(target_os = "windows"))]
-    let mut command = {
-        let mut command = Command::new(resolve_npx_command());
-        command.args(&installer_args);
-        command
-    };
+    let mut command = build_openclaw_lark_installer_command(plugin_install_path)?;
     command
         .current_dir(plugin_install_path)
         .stdin(Stdio::piped())
