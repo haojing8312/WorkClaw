@@ -46,6 +46,13 @@ pub async fn list_employee_group_rules_with_pool(
     super::group_management::list_employee_group_rules_with_pool(pool, group_id).await
 }
 
+pub async fn list_employee_group_runs_with_pool(
+    pool: &SqlitePool,
+    limit: Option<i64>,
+) -> Result<Vec<super::EmployeeGroupRunSummary>, String> {
+    super::group_management::list_employee_group_runs_with_pool(pool, limit).await
+}
+
 pub async fn continue_employee_group_run_with_pool(
     pool: &SqlitePool,
     run_id: &str,

@@ -207,6 +207,8 @@ async fn resolve_route_uses_event_channel_instead_of_feishu_default() {
             role_id: None,
             account_id: Some("tenant-discord".to_string()),
             tenant_id: Some("tenant-discord".to_string()),
+            sender_id: None,
+            chat_type: None,
         },
     )
     .await
@@ -265,6 +267,8 @@ async fn resolve_route_supports_wecom_channel_via_generic_im_sidecar_base() {
             role_id: None,
             account_id: Some("agent-1000002".to_string()),
             tenant_id: Some("corp-123".to_string()),
+            sender_id: None,
+            chat_type: None,
         },
     )
     .await
@@ -396,6 +400,8 @@ async fn route_regression_vectors_match_expected_priority() {
                 role_id: None,
                 account_id: Some(tenant_id.to_string()),
                 tenant_id: Some(tenant_id.to_string()),
+                sender_id: None,
+                chat_type: None,
             },
         )
         .await

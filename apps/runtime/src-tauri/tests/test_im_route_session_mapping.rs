@@ -54,6 +54,8 @@ async fn same_route_session_key_reuses_existing_session() {
             role_id: None,
             account_id: None,
             tenant_id: Some("tenant-a".to_string()),
+            sender_id: None,
+            chat_type: None,
         },
     )
     .await
@@ -73,6 +75,8 @@ async fn same_route_session_key_reuses_existing_session() {
             role_id: None,
             account_id: None,
             tenant_id: Some("tenant-a".to_string()),
+            sender_id: None,
+            chat_type: None,
         },
     )
     .await
@@ -162,6 +166,8 @@ async fn same_thread_reuses_session_when_mention_switches_employee() {
             role_id: None,
             account_id: None,
             tenant_id: Some("tenant-a".to_string()),
+            sender_id: None,
+            chat_type: None,
         },
     )
     .await
@@ -181,6 +187,8 @@ async fn same_thread_reuses_session_when_mention_switches_employee() {
             role_id: Some("ou_dev_team".to_string()),
             account_id: None,
             tenant_id: Some("tenant-a".to_string()),
+            sender_id: None,
+            chat_type: None,
         },
     )
     .await
@@ -254,6 +262,8 @@ async fn recreates_session_when_thread_mapping_points_to_deleted_session() {
             role_id: None,
             account_id: None,
             tenant_id: Some("tenant-a".to_string()),
+            sender_id: None,
+            chat_type: None,
         },
     )
     .await
@@ -280,6 +290,8 @@ async fn recreates_session_when_thread_mapping_points_to_deleted_session() {
             role_id: None,
             account_id: None,
             tenant_id: Some("tenant-a".to_string()),
+            sender_id: None,
+            chat_type: None,
         },
     )
     .await

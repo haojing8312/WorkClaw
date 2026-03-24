@@ -483,7 +483,7 @@ mod tests {
         assert_eq!(decoded.kind, RunStopReasonKind::MaxTurns);
         assert_eq!(decoded.title, "任务达到执行步数上限");
         assert_eq!(decoded.message, "已达到执行步数上限，系统已自动停止。");
-        assert_eq!(decoded.detail.as_deref(), Some("达到最大迭代次数 100"));
+        assert_eq!(decoded.detail.as_deref(), Some("达到最大迭代次数 12"));
     }
 
     #[test]

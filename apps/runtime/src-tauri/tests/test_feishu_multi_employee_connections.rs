@@ -3,7 +3,8 @@ mod helpers;
 use runtime_lib::commands::employee_agents::{
     upsert_agent_employee_with_pool, UpsertAgentEmployeeInput,
 };
-use runtime_lib::commands::feishu_gateway::list_enabled_employee_feishu_connections_with_pool;
+use runtime_lib::commands::feishu_gateway::test_support::
+    list_enabled_employee_feishu_connections_with_pool;
 
 #[tokio::test]
 async fn list_enabled_employee_feishu_connections_returns_all_bound_employees() {

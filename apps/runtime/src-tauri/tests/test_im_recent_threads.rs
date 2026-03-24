@@ -19,6 +19,8 @@ async fn list_recent_threads_returns_latest_per_thread() {
             role_id: None,
             account_id: None,
             tenant_id: None,
+            sender_id: None,
+            chat_type: None,
         },
     )
     .await
@@ -36,6 +38,8 @@ async fn list_recent_threads_returns_latest_per_thread() {
             role_id: None,
             account_id: None,
             tenant_id: None,
+            sender_id: None,
+            chat_type: None,
         },
     )
     .await
@@ -53,6 +57,8 @@ async fn list_recent_threads_returns_latest_per_thread() {
             role_id: None,
             account_id: None,
             tenant_id: None,
+            sender_id: None,
+            chat_type: None,
         },
     )
     .await
@@ -82,6 +88,8 @@ async fn process_im_event_defaults_empty_channel_source_to_app() {
             role_id: None,
             account_id: None,
             tenant_id: None,
+            sender_id: None,
+            chat_type: None,
         },
     )
     .await

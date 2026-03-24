@@ -7,7 +7,7 @@ fn windows_command_execution_paths_hide_console_windows() {
         "agent/tools/process_manager.rs",
         "agent/tools/screenshot.rs",
         "commands/dialog.rs",
-        "commands/runtime_preferences.rs",
+        "commands/runtime_preferences/autostart.rs",
     ];
 
     for target in targets {

@@ -1,5 +1,5 @@
 use runtime_executor_core::split_error_code_and_message;
-use runtime_lib::agent::executor::build_skill_route_event;
+use runtime_lib::agent::event_bridge::build_skill_route_event;
 use runtime_lib::commands::chat::SkillRouteEvent;
 use serde_json::Value;
 

@@ -40,6 +40,9 @@ mod settings_service;
 mod planning_service;
 #[path = "feishu_gateway/tauri_commands.rs"]
 mod tauri_commands;
+#[path = "feishu_gateway/test_support.rs"]
+#[doc(hidden)]
+pub mod test_support;
 
 pub use payload_parser::parse_feishu_payload;
 pub use repo::{

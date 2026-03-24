@@ -159,6 +159,8 @@ async fn plan_role_events_preserves_wecom_source_channel() {
         role_id: None,
         account_id: Some("agent-1000002".to_string()),
         tenant_id: Some("corp-123".to_string()),
+        sender_id: None,
+        chat_type: None,
     };
 
     let planned = plan_role_events_for_openclaw(&pool, &evt)
@@ -299,6 +301,8 @@ async fn resolve_route_prefers_peer_binding() {
             role_id: None,
             account_id: Some("tenant-a".to_string()),
             tenant_id: Some("tenant-a".to_string()),
+            sender_id: None,
+            chat_type: None,
         },
     )
     .await

@@ -1,6 +1,6 @@
 mod helpers;
 
-use runtime_lib::commands::employee_agents::list_employee_group_runs_with_pool;
+use runtime_lib::commands::employee_agents::test_support::list_employee_group_runs_with_pool;
 
 async fn table_columns(pool: &sqlx::SqlitePool, table_name: &str) -> Vec<String> {
     let pragma_sql = format!("SELECT name FROM pragma_table_info('{table_name}')");

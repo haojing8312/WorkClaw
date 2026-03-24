@@ -16,6 +16,8 @@ async fn callback_same_event_id_is_processed_once() {
         role_id: None,
         account_id: None,
         tenant_id: None,
+        sender_id: None,
+        chat_type: None,
     };
 
     let first = process_im_event(&pool, event.clone())

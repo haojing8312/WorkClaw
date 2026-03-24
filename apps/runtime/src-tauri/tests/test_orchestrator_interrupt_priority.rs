@@ -14,6 +14,8 @@ fn human_override_preempts_auto_turn() {
             role_id: None,
             account_id: None,
             tenant_id: None,
+            sender_id: None,
+            chat_type: None,
         },
         ImEvent {
             channel: "feishu".to_string(),
@@ -25,6 +27,8 @@ fn human_override_preempts_auto_turn() {
             role_id: None,
             account_id: None,
             tenant_id: None,
+            sender_id: None,
+            chat_type: None,
         },
     ];
 

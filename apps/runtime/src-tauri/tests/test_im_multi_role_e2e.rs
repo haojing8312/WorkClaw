@@ -150,6 +150,8 @@ async fn feishu_thread_multi_role_collaboration_e2e() {
             role_id: None,
             account_id: None,
             tenant_id: Some("tenant-a".to_string()),
+            sender_id: None,
+            chat_type: None,
         },
     )
     .await
