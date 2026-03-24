@@ -15,6 +15,9 @@
 - `src/commands/<domain>/repo.rs`: SQLite reads, writes, and row mapping
 - `src/commands/<domain>/gateway.rs` or `adapter.rs`: external system or provider integration
 - `src/commands/<domain>/types.rs`: internal DTOs and helper types once the root command file becomes crowded
+- `src/db/schema.rs`: current expected SQLite tables and indexes
+- `src/db/migrations.rs`: legacy upgrades, `ALTER TABLE`, and schema-repair helpers
+- `src/db/seed.rs`: repeatable startup default data and builtin sync work
 
 When a task does not naturally fit these landing zones, explain the chosen placement before editing code.
 
@@ -31,6 +34,36 @@ When a task does not naturally fit these landing zones, explain the chosen place
   - `memory_commands.rs` and `tauri_commands.rs` for command implementation bodies that the root file wraps
 - Prefer matching this shape when splitting the next giant Rust command surface unless there is a clear reason not to.
 
+- Treat `src/commands/openclaw_plugins.rs` plus the sibling directory `src/commands/openclaw_plugins/` as the current reference template for large plugin or integration command surfaces.
+- Use that module when the giant file mixes:
+  - command wrappers
+  - long-lived runtime state
+  - setup or onboarding flows
+  - install persistence
+  - plugin-host or provider environment probing
+- The current `openclaw_plugins` reference layout includes:
+  - `types.rs` for inspection, host, runtime, and installer DTOs
+  - `tauri_commands.rs` for command implementation bodies the root file wraps
+  - `settings_service.rs` and `setup_service.rs` for configuration projection and setup probing
+  - `runtime_service.rs` for long-lived Feishu runtime state and event handling
+  - `install_repo.rs` and `install_service.rs` for plugin install persistence and orchestration
+  - `plugin_host_service.rs` for plugin-host discovery, inspection, PATH/node probing, and channel capability helpers
+  - `installer_session.rs` for installer session state, shim creation, and prompt automation
+  - `tests.rs` for command-adjacent module tests that should not bloat the root file
+- Prefer this shape when the next giant Rust command file owns both integration logic and local runtime orchestration.
+
+- Treat `src/db.rs` plus the sibling directory `src/db/` as the current reference template for Rust SQLite bootstrap governance.
+- Use that module when the giant file mixes:
+  - connection bootstrap
+  - current schema creation
+  - legacy `ALTER TABLE` compatibility
+  - startup seed and builtin sync work
+- The current `db` reference layout includes:
+  - `schema.rs` for the current expected database shape
+  - `migrations.rs` for legacy schema upgrades and repair helpers
+  - `seed.rs` for repeatable startup defaults and builtin sync work
+- Prefer this shape when future runtime data work would otherwise keep accreting in `db.rs`.
+
 ## Responsibility Split
 - Commands own Tauri entrypoints, input parsing, response shaping, and handoff to deeper layers.
 - Services own business rules, validation, normalization, and multi-step orchestration.
@@ -45,7 +78,7 @@ When a task does not naturally fit these landing zones, explain the chosen place
 
 These thresholds are governance triggers, not blanket failure rules. Do not split files mechanically just to get under a number.
 
-`employee_agents.rs` has already been reduced below the `800` split-design threshold and should now be treated as a maintained sample of the intended end state.
+`employee_agents.rs`, `openclaw_plugins.rs`, and `db.rs` have already been reduced below the `800` split-design threshold and should now be treated as maintained samples of the intended end state.
 
 ## Avoid Micro-File Sprawl
 - Create a new file only when it owns a real persistence concern, integration concern, or distinct use case.
@@ -55,6 +88,9 @@ These thresholds are governance triggers, not blanket failure rules. Do not spli
 ## SQLite And Compatibility Rules
 - Any new query dependency on schema shape must keep backward compatibility through a migration or a legacy-schema fallback.
 - For startup-critical reads, session lists, IM bindings, and similar paths, add or preserve regression coverage for legacy schema behavior.
+- New tables and indexes belong in `src/db/schema.rs`.
+- New columns and legacy upgrades belong in `src/db/migrations.rs`.
+- Repeatable default records and builtin sync work belong in `src/db/seed.rs`.
 
 ## Verification Reminders
 - Use `$workclaw-implementation-strategy` before changing runtime behavior, routing, provider integration, tool permissions, sidecar protocols, IM orchestration behavior, or vendor sync boundaries.
