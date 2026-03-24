@@ -1,4 +1,4 @@
-import { Fragment, type MutableRefObject } from "react";
+import { Fragment, type MutableRefObject, useMemo } from "react";
 import { motion } from "framer-motion";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -6,6 +6,13 @@ import remarkGfm from "remark-gfm";
 import { ThinkingBlock } from "../ThinkingBlock";
 import { TaskJourneySummary } from "../chat-journey/TaskJourneySummary";
 import type { ChatMessagePart, Message, SessionRunProjection, StreamItem } from "../../types";
+import { createChatMarkdownComponents } from "./chatMarkdownComponents";
+import {
+  extractPlainTextFromStreamItems,
+  getRunFailureTechnicalToggleLabel,
+  renderChatRunFailureCard,
+  renderChatStreamItems,
+} from "./chatMessageRailHelpers";
 
 type TaskJourneyModel = ReturnType<
   typeof import("../chat-side-panel/view-model").buildTaskJourneyViewModel
@@ -21,8 +28,6 @@ type ChatMessageRailProps = {
   shouldRenderCompletedJourneySummary: (model: TaskJourneyModel) => boolean;
   failedRunsByAssistantMessageId: Map<string, SessionRunProjection[]>;
   failedRunsByUserMessageId: Map<string, SessionRunProjection[]>;
-  renderRunFailureCard: (run: SessionRunProjection) => React.ReactNode;
-  renderStreamItems: (items: StreamItem[], isStreaming: boolean) => React.ReactNode;
   renderInstallCandidates: (candidates: unknown[]) => React.ReactNode;
   extractInstallCandidates: (items: StreamItem[], text: string) => unknown[];
   renderUserContentParts: (parts: ChatMessagePart[]) => React.ReactNode;
@@ -30,6 +35,15 @@ type ChatMessageRailProps = {
   onCopyAssistantMessage: (messageKey: string, content: string) => Promise<void> | void;
   CopyActionIcon: (props: { copied: boolean }) => React.ReactNode;
   onViewFilesFromDelivery: () => void;
+  expandedRunDetailIds: string[];
+  streaming: boolean;
+  onToggleRunDetail: (runId: string) => void;
+  onContinueExecution: () => Promise<void> | void;
+  getRunFailureDisplay: (run: SessionRunProjection) => {
+    title: string;
+    message: string;
+    rawMessage: string | null;
+  };
   orphanFailedRuns: SessionRunProjection[];
   showStreamingAssistantBubble: boolean;
   showStreamingThinkingState: boolean;
@@ -43,8 +57,6 @@ type ChatMessageRailProps = {
   streamItems: StreamItem[];
   subAgentBuffer: string;
   subAgentRoleName: string;
-  streamText: string;
-  markdownComponents: Record<string, unknown>;
   askUserQuestion: string | null;
   askUserOptions: string[];
   askUserAnswer: string;
@@ -62,8 +74,6 @@ export function ChatMessageRail({
   shouldRenderCompletedJourneySummary,
   failedRunsByAssistantMessageId,
   failedRunsByUserMessageId,
-  renderRunFailureCard,
-  renderStreamItems,
   renderInstallCandidates,
   extractInstallCandidates,
   renderUserContentParts,
@@ -71,6 +81,11 @@ export function ChatMessageRail({
   onCopyAssistantMessage,
   CopyActionIcon,
   onViewFilesFromDelivery,
+  expandedRunDetailIds,
+  streaming,
+  onToggleRunDetail,
+  onContinueExecution,
+  getRunFailureDisplay,
   orphanFailedRuns,
   showStreamingAssistantBubble,
   showStreamingThinkingState,
@@ -78,14 +93,14 @@ export function ChatMessageRail({
   streamItems,
   subAgentBuffer,
   subAgentRoleName,
-  streamText,
-  markdownComponents,
   askUserQuestion,
   askUserOptions,
   askUserAnswer,
   onAskUserAnswerChange,
   onAnswerUser,
 }: ChatMessageRailProps) {
+  const markdownComponents = useMemo(() => createChatMarkdownComponents(), []);
+  const streamText = useMemo(() => extractPlainTextFromStreamItems(streamItems), [streamItems]);
   return (
     <>
       {renderedMessages.map((message, index) => {
@@ -142,15 +157,20 @@ export function ChatMessageRail({
                 )}
                 {message.role === "assistant" && message.streamItems ? (
                   <>
-                    {renderStreamItems(message.streamItems, false)}
+                    {renderChatStreamItems({
+                      items: message.streamItems,
+                      subAgentBuffer,
+                      markdownComponents,
+                    })}
                     {renderInstallCandidates(extractInstallCandidates(message.streamItems, message.content))}
                   </>
                 ) : message.role === "assistant" && message.toolCalls ? (
                   <>
-                    {renderStreamItems(
-                      message.toolCalls.map((toolCall) => ({ type: "tool_call", toolCall })),
-                      false,
-                    )}
+                    {renderChatStreamItems({
+                      items: message.toolCalls.map((toolCall) => ({ type: "tool_call", toolCall })),
+                      subAgentBuffer,
+                      markdownComponents,
+                    })}
                     <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
                       {message.content}
                     </ReactMarkdown>
@@ -185,12 +205,32 @@ export function ChatMessageRail({
                 <TaskJourneySummary model={messageJourneyModel} onViewFiles={onViewFilesFromDelivery} />
               </div>
             )}
-            {inlineFailedRuns.map((run) => renderRunFailureCard(run))}
+            {inlineFailedRuns.map((run) =>
+              renderChatRunFailureCard({
+                run,
+                streaming,
+                expandedRunDetailIds,
+                onToggleRunDetail,
+                onContinueExecution,
+                getRunFailureDisplay,
+                getRunFailureTechnicalToggleLabel,
+              }),
+            )}
           </Fragment>
         );
       })}
 
-      {orphanFailedRuns.map((run) => renderRunFailureCard(run))}
+      {orphanFailedRuns.map((run) =>
+        renderChatRunFailureCard({
+          run,
+          streaming,
+          expandedRunDetailIds,
+          onToggleRunDetail,
+          onContinueExecution,
+          getRunFailureDisplay,
+          getRunFailureTechnicalToggleLabel,
+        }),
+      )}
 
       {showStreamingAssistantBubble && (
         <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} className="flex justify-start">
@@ -207,7 +247,12 @@ export function ChatMessageRail({
                 onToggle={(streamReasoning?.content || "").trim() ? () => onToggleThinkingBlock("stream") : undefined}
               />
             )}
-            {streamItems.length > 0 && renderStreamItems(streamItems, true)}
+            {streamItems.length > 0 &&
+              renderChatStreamItems({
+                items: streamItems,
+                subAgentBuffer,
+                markdownComponents,
+              })}
             {subAgentBuffer && (
               <div
                 data-testid="sub-agent-stream-buffer"

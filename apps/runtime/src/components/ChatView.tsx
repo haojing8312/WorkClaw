@@ -10,13 +10,6 @@ import { ChatHeader } from "./chat/ChatHeader";
 import { ChatComposer } from "./chat/ChatComposer";
 import { ChatMessageRail } from "./chat/ChatMessageRail";
 import { ChatShell } from "./chat/ChatShell";
-import { createChatMarkdownComponents } from "./chat/chatMarkdownComponents";
-import {
-  extractPlainTextFromStreamItems,
-  getRunFailureTechnicalToggleLabel,
-  renderChatRunFailureCard,
-  renderChatStreamItems,
-} from "./chat/chatMessageRailHelpers";
 import {
   buildTaskJourneyViewModel,
   buildTaskPanelViewModel,
@@ -1549,10 +1542,6 @@ export function ChatView({
     Boolean(streamReasoning) || (agentState?.state === "thinking" && thinkingSupport.indicator);
   const showStreamingAssistantBubble =
     showStreamingThinkingState || streamItems.length > 0 || subAgentBuffer.length > 0;
-  const streamText = useMemo(() => extractPlainTextFromStreamItems(streamItems), [streamItems]);
-  const markdownComponents = useMemo(() => createChatMarkdownComponents(), []);
-  const renderStreamItems = (items: StreamItem[], _isStreaming: boolean) =>
-    renderChatStreamItems({ items, subAgentBuffer, markdownComponents });
   const handleToggleRunDetail = (runId: string) => {
     setExpandedRunDetailIds((prev) =>
       prev.includes(runId) ? prev.filter((item) => item !== runId) : [...prev, runId],
@@ -1563,16 +1552,6 @@ export function ChatView({
       sessionId,
       parts: [{ type: "text", text: CONTINUE_MESSAGE_TEXT }],
       maxIterations: CONTINUE_BUDGET_INCREMENT,
-    });
-  const renderRunFailureCard = (run: SessionRunProjection) =>
-    renderChatRunFailureCard({
-      run,
-      streaming,
-      expandedRunDetailIds,
-      onToggleRunDetail: handleToggleRunDetail,
-      onContinueExecution: handleContinueExecution,
-      getRunFailureDisplay,
-      getRunFailureTechnicalToggleLabel,
     });
   const liveBlockingStatus = useMemo(() => {
     if (pendingApprovals.length > 0 || agentState?.state === "waiting_approval") {
@@ -2453,8 +2432,6 @@ export function ChatView({
           shouldRenderCompletedJourneySummary={shouldRenderCompletedJourneySummary}
           failedRunsByAssistantMessageId={failedRunsByAssistantMessageId}
           failedRunsByUserMessageId={failedRunsByUserMessageId}
-          renderRunFailureCard={renderRunFailureCard}
-          renderStreamItems={renderStreamItems}
           renderInstallCandidates={renderInstallCandidates}
           extractInstallCandidates={extractInstallCandidates}
           renderUserContentParts={renderUserContentParts}
@@ -2462,6 +2439,11 @@ export function ChatView({
           onCopyAssistantMessage={handleCopyAssistantMessage}
           CopyActionIcon={CopyActionIcon}
           onViewFilesFromDelivery={handleViewFilesFromDelivery}
+          expandedRunDetailIds={expandedRunDetailIds}
+          streaming={streaming}
+          onToggleRunDetail={handleToggleRunDetail}
+          onContinueExecution={handleContinueExecution}
+          getRunFailureDisplay={getRunFailureDisplay}
           orphanFailedRuns={orphanFailedRuns}
           showStreamingAssistantBubble={showStreamingAssistantBubble}
           showStreamingThinkingState={showStreamingThinkingState}
@@ -2469,8 +2451,6 @@ export function ChatView({
           streamItems={streamItems}
           subAgentBuffer={subAgentBuffer}
           subAgentRoleName={subAgentRoleName}
-          streamText={streamText}
-          markdownComponents={markdownComponents}
           askUserQuestion={askUserQuestion}
           askUserOptions={askUserOptions}
           askUserAnswer={askUserAnswer}
