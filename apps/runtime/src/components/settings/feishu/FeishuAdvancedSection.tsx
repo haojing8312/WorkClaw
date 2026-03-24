@@ -1,4 +1,3 @@
-import type { Dispatch, SetStateAction } from "react";
 import type { OpenClawPluginFeishuAdvancedSettings } from "../../../types";
 
 type FeishuAdvancedFieldConfig = {
@@ -46,7 +45,7 @@ const FEISHU_ADVANCED_DYNAMIC_AGENT_FIELDS: FeishuAdvancedFieldConfig[] = [
 export interface FeishuAdvancedSectionProps {
   connectionDetailSummary: string;
   feishuAdvancedSettings: OpenClawPluginFeishuAdvancedSettings;
-  setFeishuAdvancedSettings: Dispatch<SetStateAction<OpenClawPluginFeishuAdvancedSettings>>;
+  onUpdateFeishuAdvancedSettings: (patch: Partial<OpenClawPluginFeishuAdvancedSettings>) => void;
   connectionStatusLabel: string;
   pluginVersionLabel: string;
   currentAccountLabel: string;
@@ -64,14 +63,10 @@ export interface FeishuAdvancedSectionProps {
 function renderFeishuAdvancedField(
   field: FeishuAdvancedFieldConfig,
   feishuAdvancedSettings: OpenClawPluginFeishuAdvancedSettings,
-  setFeishuAdvancedSettings: Dispatch<SetStateAction<OpenClawPluginFeishuAdvancedSettings>>,
+  onUpdateFeishuAdvancedSettings: (patch: Partial<OpenClawPluginFeishuAdvancedSettings>) => void,
 ) {
   const value = feishuAdvancedSettings[field.key];
-  const updateValue = (nextValue: string) =>
-    setFeishuAdvancedSettings((state) => ({
-      ...state,
-      [field.key]: nextValue,
-    }));
+  const updateValue = (nextValue: string) => onUpdateFeishuAdvancedSettings({ [field.key]: nextValue });
 
   return (
     <label key={field.key} className="space-y-1.5">
@@ -103,7 +98,7 @@ function renderFeishuAdvancedField(
 export function FeishuAdvancedSection({
   connectionDetailSummary,
   feishuAdvancedSettings,
-  setFeishuAdvancedSettings,
+  onUpdateFeishuAdvancedSettings,
   connectionStatusLabel,
   pluginVersionLabel,
   currentAccountLabel,
@@ -183,7 +178,7 @@ export function FeishuAdvancedSection({
             <div className="mt-2 text-xs text-gray-500">调整消息输出格式、分块策略和 Markdown 展示方式。</div>
             <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
               {FEISHU_ADVANCED_MESSAGE_FIELDS.map((field) =>
-                renderFeishuAdvancedField(field, feishuAdvancedSettings, setFeishuAdvancedSettings),
+                renderFeishuAdvancedField(field, feishuAdvancedSettings, onUpdateFeishuAdvancedSettings),
               )}
             </div>
           </details>
@@ -193,7 +188,7 @@ export function FeishuAdvancedSection({
             <div className="mt-2 text-xs text-gray-500">按群聊或私聊对象自定义启用状态、会话范围和回复规则。</div>
             <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
               {FEISHU_ADVANCED_ROUTING_FIELDS.map((field) =>
-                renderFeishuAdvancedField(field, feishuAdvancedSettings, setFeishuAdvancedSettings),
+                renderFeishuAdvancedField(field, feishuAdvancedSettings, onUpdateFeishuAdvancedSettings),
               )}
             </div>
           </details>
@@ -203,7 +198,7 @@ export function FeishuAdvancedSection({
             <div className="mt-2 text-xs text-gray-500">调整心跳、媒体限制、超时和插件运行行为。</div>
             <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
               {FEISHU_ADVANCED_RUNTIME_FIELDS.map((field) =>
-                renderFeishuAdvancedField(field, feishuAdvancedSettings, setFeishuAdvancedSettings),
+                renderFeishuAdvancedField(field, feishuAdvancedSettings, onUpdateFeishuAdvancedSettings),
               )}
             </div>
             <details className="mt-4 rounded-lg border border-gray-200 bg-white p-3">
@@ -211,7 +206,7 @@ export function FeishuAdvancedSection({
               <div className="mt-2 text-xs text-gray-500">只有在需要按飞书会话动态生成 Agent 时才需要调整这里。</div>
               <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
                 {FEISHU_ADVANCED_DYNAMIC_AGENT_FIELDS.map((field) =>
-                  renderFeishuAdvancedField(field, feishuAdvancedSettings, setFeishuAdvancedSettings),
+                  renderFeishuAdvancedField(field, feishuAdvancedSettings, onUpdateFeishuAdvancedSettings),
                 )}
               </div>
             </details>

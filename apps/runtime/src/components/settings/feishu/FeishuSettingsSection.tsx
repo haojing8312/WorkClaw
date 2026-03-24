@@ -1,4 +1,3 @@
-import type { Dispatch, SetStateAction } from "react";
 import type {
   FeishuGatewaySettings,
   FeishuPairingRequestRecord,
@@ -45,14 +44,14 @@ type FeishuSetupSummary = {
 export interface FeishuSettingsSectionProps {
   onOpenEmployees?: () => void;
   feishuConnectorSettings: FeishuGatewaySettings;
-  setFeishuConnectorSettings: Dispatch<SetStateAction<FeishuGatewaySettings>>;
+  onUpdateFeishuConnectorSettings: (patch: Partial<FeishuGatewaySettings>) => void;
   feishuEnvironmentStatus: FeishuPluginEnvironmentStatus | null;
   feishuSetupProgress: FeishuSetupProgress | null;
   validatingFeishuCredentials: boolean;
   feishuCredentialProbe: OpenClawPluginFeishuCredentialProbeResult | null;
   feishuInstallerSession: OpenClawLarkInstallerSessionStatus;
   feishuInstallerInput: string;
-  setFeishuInstallerInput: Dispatch<SetStateAction<string>>;
+  onUpdateFeishuInstallerInput: (value: string) => void;
   feishuInstallerBusy: boolean;
   feishuInstallerStartingMode: OpenClawLarkInstallerMode | null;
   feishuPairingActionLoading: "approve" | "deny" | null;
@@ -63,11 +62,11 @@ export interface FeishuSettingsSectionProps {
   feishuConnectorError: string;
   feishuOnboardingState: FeishuOnboardingState;
   feishuOnboardingPanelMode: "guided" | "skipped";
-  setFeishuOnboardingPanelMode: Dispatch<SetStateAction<"guided" | "skipped">>;
   feishuOnboardingSelectedPath: "existing_robot" | "create_robot" | null;
-  setFeishuOnboardingSelectedPath: Dispatch<SetStateAction<"existing_robot" | "create_robot" | null>>;
   feishuOnboardingSkippedSignature: string | null;
-  setFeishuOnboardingSkippedSignature: Dispatch<SetStateAction<string | null>>;
+  onOpenFeishuOnboardingPath: (path: "existing_robot" | "create_robot") => void;
+  onReopenFeishuOnboarding: () => void;
+  onSkipFeishuOnboarding: (signature: string) => void;
   feishuOnboardingProgressSignature: string;
   feishuOnboardingIsSkipped: boolean;
   feishuOnboardingEffectiveBranch: "existing_robot" | "create_robot" | null;
@@ -108,14 +107,14 @@ export interface FeishuSettingsSectionProps {
 export function FeishuSettingsSection({
   onOpenEmployees,
   feishuConnectorSettings,
-  setFeishuConnectorSettings,
+  onUpdateFeishuConnectorSettings,
   feishuEnvironmentStatus,
   feishuSetupProgress,
   validatingFeishuCredentials,
   feishuCredentialProbe,
   feishuInstallerSession,
   feishuInstallerInput,
-  setFeishuInstallerInput,
+  onUpdateFeishuInstallerInput,
   feishuInstallerBusy,
   feishuInstallerStartingMode,
   feishuPairingActionLoading,
@@ -126,11 +125,11 @@ export function FeishuSettingsSection({
   feishuConnectorError,
   feishuOnboardingState,
   feishuOnboardingPanelMode,
-  setFeishuOnboardingPanelMode,
   feishuOnboardingSelectedPath,
-  setFeishuOnboardingSelectedPath,
   feishuOnboardingSkippedSignature,
-  setFeishuOnboardingSkippedSignature,
+  onOpenFeishuOnboardingPath,
+  onReopenFeishuOnboarding,
+  onSkipFeishuOnboarding,
   feishuOnboardingProgressSignature,
   feishuOnboardingIsSkipped,
   feishuOnboardingEffectiveBranch,
@@ -167,6 +166,13 @@ export function FeishuSettingsSection({
   handleStopFeishuInstallerSession,
   handleSendFeishuInstallerInput,
 }: FeishuSettingsSectionProps) {
+  const feishuInstallerSummaryHint =
+    feishuInstallerSession.prompt_hint &&
+    feishuInstallerSession.prompt_hint !== feishuInstallerStartupHint &&
+    !feishuInstallerDisplayLines.includes(feishuInstallerSession.prompt_hint)
+      ? feishuInstallerSession.prompt_hint
+      : null;
+
   return (
     <div data-testid="connector-panel-feishu" className="space-y-3">
       <div className="bg-white rounded-lg p-4 space-y-4">
@@ -267,9 +273,7 @@ export function FeishuSettingsSection({
                 <button
                   type="button"
                   onClick={() => {
-                    setFeishuOnboardingSelectedPath("existing_robot");
-                    setFeishuOnboardingPanelMode("guided");
-                    setFeishuOnboardingSkippedSignature(null);
+                    onOpenFeishuOnboardingPath("existing_robot");
                   }}
                   className={`h-8 px-3 rounded border text-xs ${
                     feishuOnboardingEffectiveBranch === "existing_robot"
@@ -282,9 +286,7 @@ export function FeishuSettingsSection({
                 <button
                   type="button"
                   onClick={() => {
-                    setFeishuOnboardingSelectedPath("create_robot");
-                    setFeishuOnboardingPanelMode("guided");
-                    setFeishuOnboardingSkippedSignature(null);
+                    onOpenFeishuOnboardingPath("create_robot");
                   }}
                   className={`h-8 px-3 rounded border text-xs ${
                     feishuOnboardingEffectiveBranch === "create_robot"
@@ -310,8 +312,7 @@ export function FeishuSettingsSection({
                 type="button"
                 onClick={() => {
                   if (feishuOnboardingIsSkipped) {
-                    setFeishuOnboardingPanelMode("guided");
-                    setFeishuOnboardingSkippedSignature(null);
+                    onReopenFeishuOnboarding();
                     return;
                   }
                   if (feishuOnboardingEffectiveBranch === "create_robot") {
@@ -355,8 +356,7 @@ export function FeishuSettingsSection({
                 <button
                   type="button"
                   onClick={() => {
-                    setFeishuOnboardingPanelMode("skipped");
-                    setFeishuOnboardingSkippedSignature(feishuOnboardingProgressSignature);
+                    onSkipFeishuOnboarding(feishuOnboardingProgressSignature);
                   }}
                   className="h-8 px-3 rounded border border-blue-200 bg-white text-xs text-blue-700 hover:bg-blue-50"
                 >
@@ -467,7 +467,7 @@ export function FeishuSettingsSection({
                   <div className="rounded border border-gray-200 bg-gray-50 px-3 py-2">
                     <div className="text-[11px] text-gray-500">提示</div>
                     <div className="text-sm font-medium text-gray-900">
-                      {feishuInstallerStartupHint || feishuInstallerSession.prompt_hint || "暂无"}
+                      {feishuInstallerSummaryHint || (feishuInstallerStartupHint ? "按上方提示继续" : "查看下方输出")}
                     </div>
                   </div>
                   <div className="rounded border border-gray-200 bg-gray-50 px-3 py-2">

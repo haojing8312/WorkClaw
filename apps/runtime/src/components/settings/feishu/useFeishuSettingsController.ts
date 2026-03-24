@@ -2,9 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { openExternalUrl } from "../../../utils/openExternalUrl";
 import { type SettingsTabName } from "../SettingsTabNav";
 import {
-  buildFeishuDiagnosticSummary,
   buildFeishuOnboardingState,
+  buildFeishuDiagnosticsClipboardText,
   extractFeishuInstallerQrBlock,
+  formatCompactDateTime,
   getFeishuAuthorizationAction,
   getFeishuConnectionDetailSummary,
   getFeishuEnvironmentLabel,
@@ -15,8 +16,8 @@ import {
   resolveFeishuConnectorStatus,
   resolveFeishuGuidedInlineError,
   resolveFeishuGuidedInlineNotice,
-  resolveFeishuInstallerCompletionNotice,
   resolveFeishuInstallerFlowLabel,
+  resolveFeishuInstallerCompletionNotice,
   resolveFeishuOnboardingPanelDisplay,
   sanitizeFeishuInstallerDisplayLines,
   shouldShowFeishuInstallerGuidedPanel,
@@ -26,6 +27,7 @@ import {
 import {
   approveFeishuPairingRequest as approveFeishuPairingRequestFromService,
   denyFeishuPairingRequest as denyFeishuPairingRequestFromService,
+  getFeishuErrorMessage,
   installOpenClawLarkPlugin as installOpenClawLarkPluginFromService,
   loadFeishuAdvancedSettings as loadFeishuAdvancedSettingsFromService,
   loadFeishuGatewaySettings as loadFeishuGatewaySettingsFromService,
@@ -35,6 +37,8 @@ import {
   loadFeishuPluginChannelSnapshot as loadFeishuPluginChannelSnapshotFromService,
   loadFeishuRuntimeStatus as loadFeishuRuntimeStatusFromService,
   loadFeishuSetupProgress as loadFeishuSetupProgressFromService,
+  normalizeFeishuAdvancedSettings,
+  normalizeFeishuGatewaySettings,
   probeFeishuCredentials as probeFeishuCredentialsFromService,
   saveFeishuAdvancedSettings as saveFeishuAdvancedSettingsFromService,
   saveFeishuGatewaySettings as saveFeishuGatewaySettingsFromService,
@@ -72,65 +76,6 @@ const DEFAULT_FEISHU_INSTALLER_SESSION: OpenClawLarkInstallerSessionStatus = {
 
 interface UseFeishuSettingsControllerOptions {
   activeTab: SettingsTabName;
-}
-
-function getErrorMessage(error: unknown, fallback: string): string {
-  if (typeof error === "string") {
-    return error || fallback;
-  }
-  if (error instanceof Error) {
-    return error.message || fallback;
-  }
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "message" in error &&
-    typeof (error as { message?: unknown }).message === "string"
-  ) {
-    return (error as { message: string }).message || fallback;
-  }
-  return fallback;
-}
-
-function normalizeFeishuGatewaySettings(settings: FeishuGatewaySettings | null | undefined): FeishuGatewaySettings {
-  return {
-    app_id: settings?.app_id || "",
-    app_secret: settings?.app_secret || "",
-    ingress_token: settings?.ingress_token || "",
-    encrypt_key: settings?.encrypt_key || "",
-    sidecar_base_url: settings?.sidecar_base_url || "",
-  };
-}
-
-function normalizeFeishuAdvancedSettings(
-  settings: OpenClawPluginFeishuAdvancedSettings | null | undefined,
-): OpenClawPluginFeishuAdvancedSettings {
-  return {
-    groups_json: settings?.groups_json || "",
-    dms_json: settings?.dms_json || "",
-    footer_json: settings?.footer_json || "",
-    account_overrides_json: settings?.account_overrides_json || "",
-    render_mode: settings?.render_mode || "",
-    streaming: settings?.streaming || "",
-    text_chunk_limit: settings?.text_chunk_limit || "",
-    chunk_mode: settings?.chunk_mode || "",
-    reply_in_thread: settings?.reply_in_thread || "",
-    group_session_scope: settings?.group_session_scope || "",
-    topic_session_mode: settings?.topic_session_mode || "",
-    markdown_mode: settings?.markdown_mode || "",
-    markdown_table_mode: settings?.markdown_table_mode || "",
-    heartbeat_visibility: settings?.heartbeat_visibility || "",
-    heartbeat_interval_ms: settings?.heartbeat_interval_ms || "",
-    media_max_mb: settings?.media_max_mb || "",
-    http_timeout_ms: settings?.http_timeout_ms || "",
-    config_writes: settings?.config_writes || "",
-    webhook_host: settings?.webhook_host || "",
-    webhook_port: settings?.webhook_port || "",
-    dynamic_agent_creation_enabled: settings?.dynamic_agent_creation_enabled || "",
-    dynamic_agent_creation_workspace_template: settings?.dynamic_agent_creation_workspace_template || "",
-    dynamic_agent_creation_agent_dir_template: settings?.dynamic_agent_creation_agent_dir_template || "",
-    dynamic_agent_creation_max_agents: settings?.dynamic_agent_creation_max_agents || "",
-  };
 }
 
 export function useFeishuSettingsController({
@@ -413,19 +358,38 @@ export function useFeishuSettingsController({
     }
   }
 
-  function formatCompactDateTime(value: string | null | undefined) {
-    const normalized = String(value || "").trim();
-    if (!normalized) return "未知时间";
-    const date = new Date(normalized);
-    if (Number.isNaN(date.getTime())) {
-      return normalized;
-    }
-    const year = date.getUTCFullYear();
-    const month = String(date.getUTCMonth() + 1).padStart(2, "0");
-    const day = String(date.getUTCDate()).padStart(2, "0");
-    const hours = String(date.getUTCHours()).padStart(2, "0");
-    const minutes = String(date.getUTCMinutes()).padStart(2, "0");
-    return `${year}-${month}-${day} ${hours}:${minutes}`;
+  function updateFeishuConnectorSettings(patch: Partial<FeishuGatewaySettings>) {
+    setFeishuConnectorSettings((state) => ({
+      ...state,
+      ...patch,
+    }));
+  }
+
+  function updateFeishuAdvancedSettings(patch: Partial<OpenClawPluginFeishuAdvancedSettings>) {
+    setFeishuAdvancedSettings((state) => ({
+      ...state,
+      ...patch,
+    }));
+  }
+
+  function updateFeishuInstallerInput(value: string) {
+    setFeishuInstallerInput(value);
+  }
+
+  function openFeishuOnboardingPath(path: "existing_robot" | "create_robot") {
+    setFeishuOnboardingSelectedPath(path);
+    setFeishuOnboardingPanelMode("guided");
+    setFeishuOnboardingSkippedSignature(null);
+  }
+
+  function reopenFeishuOnboarding() {
+    setFeishuOnboardingPanelMode("guided");
+    setFeishuOnboardingSkippedSignature(null);
+  }
+
+  function skipFeishuOnboarding(signature: string) {
+    setFeishuOnboardingPanelMode("skipped");
+    setFeishuOnboardingSkippedSignature(signature);
   }
 
   async function handleValidateFeishuCredentials() {
@@ -652,44 +616,34 @@ export function useFeishuSettingsController({
     try {
       await openExternalUrl(FEISHU_OFFICIAL_PLUGIN_DOC_URL);
     } catch (error) {
-      setFeishuConnectorError(getErrorMessage(error, "打开官方文档失败，请稍后重试"));
+      setFeishuConnectorError(getFeishuErrorMessage(error, "打开官方文档失败，请稍后重试"));
     }
   }
 
   async function handleCopyFeishuDiagnostics() {
     try {
       await navigator?.clipboard?.writeText?.(
-        buildFeishuDiagnosticSummary({
-          connectorStatus: resolveFeishuConnectorStatus({
+        buildFeishuDiagnosticsClipboardText({
+          connectorStatus: {
             running: officialFeishuRuntimeStatus?.running === true,
             lastError: officialFeishuRuntimeStatus?.last_error ?? "",
             hasInstalledOfficialFeishuPlugin:
               pluginChannelHosts.length > 0 || feishuSetupProgress?.plugin_installed === true,
-          }),
+          },
           pluginVersion: feishuSetupProgress?.plugin_version || pluginChannelHosts[0]?.version || "未识别",
           defaultAccountId: Object.values(pluginChannelSnapshots)[0]?.snapshot.defaultAccountId || "未识别",
           authApproved: feishuSetupProgress?.auth_status === "approved",
           defaultRoutingEmployeeName: feishuSetupProgress?.default_routing_employee_name || "未设置",
           scopedRoutingCount: feishuSetupProgress?.scoped_routing_count ?? 0,
-          lastEventAtLabel: formatCompactDateTime(officialFeishuRuntimeStatus?.last_event_at),
-          connectionDetailSummary: getFeishuConnectionDetailSummary({
-            connectorStatus: resolveFeishuConnectorStatus({
-              running: officialFeishuRuntimeStatus?.running === true,
-              lastError: officialFeishuRuntimeStatus?.last_error ?? "",
-              hasInstalledOfficialFeishuPlugin:
-                pluginChannelHosts.length > 0 || feishuSetupProgress?.plugin_installed === true,
-            }),
-            runtimeRunning: officialFeishuRuntimeStatus?.running === true,
-            authApproved: feishuSetupProgress?.auth_status === "approved",
-            defaultRoutingEmployeeName: feishuSetupProgress?.default_routing_employee_name,
-            scopedRoutingCount: feishuSetupProgress?.scoped_routing_count,
-          }),
-          recentLogsSummary: summarizeOfficialFeishuRuntimeLogs(officialFeishuRuntimeStatus),
+          lastEventAt: officialFeishuRuntimeStatus?.last_event_at,
+          runtimeStatus: officialFeishuRuntimeStatus,
+          pluginChannelHosts: pluginChannelHosts.length,
+          pluginInstalled: feishuSetupProgress?.plugin_installed === true,
         }),
       );
       setFeishuConnectorNotice("连接诊断摘要已复制");
     } catch (error) {
-      setFeishuConnectorError(getErrorMessage(error, "复制连接诊断摘要失败，请稍后重试"));
+      setFeishuConnectorError(getFeishuErrorMessage(error, "复制连接诊断摘要失败，请稍后重试"));
     }
   }
 
@@ -711,81 +665,268 @@ export function useFeishuSettingsController({
     }
   }
 
-  return {
-    feishuConnectorSettings,
-    setFeishuConnectorSettings,
-    feishuAdvancedSettings,
-    setFeishuAdvancedSettings,
-    officialFeishuRuntimeStatus,
-    setOfficialFeishuRuntimeStatus,
-    pluginChannelHosts,
-    setPluginChannelHosts,
-    pluginChannelSnapshots,
-    setPluginChannelSnapshots,
-    pluginChannelHostsError,
-    setPluginChannelHostsError,
-    pluginChannelSnapshotsError,
-    setPluginChannelSnapshotsError,
-    feishuEnvironmentStatus,
-    setFeishuEnvironmentStatus,
-    feishuSetupProgress,
-    setFeishuSetupProgress,
-    validatingFeishuCredentials,
-    setValidatingFeishuCredentials,
-    feishuCredentialProbe,
-    setFeishuCredentialProbe,
+  const primaryPluginChannelHost =
+    pluginChannelHosts.find((host) => host.channel === "feishu") ?? pluginChannelHosts[0] ?? null;
+  const primaryPluginChannelSnapshot =
+    (primaryPluginChannelHost ? pluginChannelSnapshots[primaryPluginChannelHost.channel] : null) ??
+    Object.values(pluginChannelSnapshots)[0] ??
+    null;
+  const hasInstalledOfficialFeishuPlugin =
+    pluginChannelHosts.length > 0 || feishuSetupProgress?.plugin_installed === true;
+  const runtimeRunning =
+    officialFeishuRuntimeStatus?.running === true || feishuSetupProgress?.runtime_running === true;
+  const pendingFeishuPairingCount =
+    feishuSetupProgress?.pending_pairings ??
+    feishuPairingRequests.filter((request) => request.status === "pending").length;
+  const pendingFeishuPairingRequest =
+    feishuPairingRequests.find((request) => request.status === "pending") ?? null;
+  const feishuOnboardingState = buildFeishuOnboardingState({
+    summaryState: feishuSetupProgress?.summary_state ?? null,
+    setupProgress: feishuSetupProgress,
+    installerMode: feishuInstallerSession?.mode ?? null,
+  });
+  const feishuOnboardingProgressSignature = [
+    feishuOnboardingState.currentStep,
+    feishuOnboardingState.mode,
+    feishuOnboardingState.canContinue ? "continue" : "blocked",
+    feishuOnboardingState.skipped ? "backend-skipped" : "active",
+  ].join("|");
+  const feishuOnboardingIsSkipped =
+    feishuOnboardingState.skipped ||
+    (feishuOnboardingPanelMode === "skipped" && feishuOnboardingSkippedSignature === feishuOnboardingProgressSignature);
+  const feishuOnboardingBackendBranch =
+    feishuOnboardingState.currentStep === "existing_robot" || feishuOnboardingState.currentStep === "create_robot"
+      ? feishuOnboardingState.currentStep
+      : null;
+  const feishuOnboardingEffectiveBranch = feishuOnboardingSelectedPath ?? feishuOnboardingBackendBranch;
+  const feishuOnboardingHeaderStep = feishuOnboardingBackendBranch
+    ? feishuOnboardingEffectiveBranch ?? feishuOnboardingState.currentStep
+    : feishuOnboardingState.currentStep;
+  const feishuOnboardingHeaderMode = feishuOnboardingEffectiveBranch ?? feishuOnboardingState.mode;
+  const feishuOnboardingPanelDisplay = resolveFeishuOnboardingPanelDisplay(
+    feishuOnboardingState,
+    feishuOnboardingIsSkipped,
+    feishuOnboardingEffectiveBranch,
+  );
+  const showFeishuInstallerGuidedPanel = shouldShowFeishuInstallerGuidedPanel(
+    feishuOnboardingEffectiveBranch,
     feishuInstallerSession,
-    setFeishuInstallerSession,
-    feishuInstallerInput,
-    setFeishuInstallerInput,
-    feishuInstallerBusy,
-    setFeishuInstallerBusy,
-    feishuInstallerStartingMode,
-    setFeishuInstallerStartingMode,
-    handledFeishuInstallerCompletionRef,
-    feishuPairingRequests,
-    setFeishuPairingRequests,
-    feishuPairingRequestsError,
-    setFeishuPairingRequestsError,
-    feishuPairingActionLoading,
-    setFeishuPairingActionLoading,
-    savingFeishuConnector,
-    setSavingFeishuConnector,
-    savingFeishuAdvancedSettings,
-    setSavingFeishuAdvancedSettings,
-    retryingFeishuConnector,
-    setRetryingFeishuConnector,
-    installingOfficialFeishuPlugin,
-    setInstallingOfficialFeishuPlugin,
-    feishuConnectorNotice,
-    setFeishuConnectorNotice,
+  );
+  const feishuGuidedInlineError = resolveFeishuGuidedInlineError(
     feishuConnectorError,
-    setFeishuConnectorError,
+    feishuOnboardingHeaderStep,
+    feishuOnboardingEffectiveBranch,
+  );
+  const feishuGuidedInlineNotice = resolveFeishuGuidedInlineNotice(
+    feishuConnectorNotice,
+    feishuOnboardingHeaderStep,
+    feishuOnboardingEffectiveBranch,
+  );
+  const feishuAuthorizationInlineError = resolveFeishuAuthorizationInlineError(feishuConnectorError);
+  const feishuInstallerDisplayMode =
+    feishuInstallerSession.mode ??
+    (feishuOnboardingEffectiveBranch === "create_robot" ? "create" : feishuOnboardingEffectiveBranch ? "link" : null);
+  const feishuInstallerFlowLabel = resolveFeishuInstallerFlowLabel(feishuInstallerDisplayMode);
+  const feishuInstallerQrBlock = extractFeishuInstallerQrBlock(feishuInstallerSession.recent_output ?? []);
+  const feishuInstallerDisplayLines = sanitizeFeishuInstallerDisplayLines(feishuInstallerSession.recent_output ?? []);
+  const feishuInstallerStartupHint =
+    feishuInstallerBusy && feishuInstallerStartingMode
+      ? `正在启动${resolveFeishuInstallerFlowLabel(feishuInstallerStartingMode)}，请稍候...`
+      : feishuInstallerSession.prompt_hint || null;
+  const feishuAuthorizationAction = getFeishuAuthorizationAction({
+    runtimeRunning,
+    pluginInstalled: feishuSetupProgress?.plugin_installed === true,
+  });
+  const feishuRoutingStatus = getFeishuRoutingStatus({
+    authApproved: feishuSetupProgress?.auth_status === "approved",
+    defaultRoutingEmployeeName: feishuSetupProgress?.default_routing_employee_name,
+    scopedRoutingCount: feishuSetupProgress?.scoped_routing_count,
+  });
+  const feishuSetupSummary = getFeishuSetupSummary({
+    skipped: feishuOnboardingState.skipped,
+    summaryState: feishuSetupProgress?.summary_state ?? null,
+    runtimeRunning,
+    authApproved: feishuSetupProgress?.auth_status === "approved",
+    runtimeLastError: feishuSetupProgress?.runtime_last_error,
+    officialRuntimeLastError: officialFeishuRuntimeStatus?.last_error,
+  });
+  const feishuConnectorStatus = resolveFeishuConnectorStatus({
+    running: runtimeRunning,
+    lastError: officialFeishuRuntimeStatus?.last_error ?? "",
+    hasInstalledOfficialFeishuPlugin,
+  });
+  const feishuConnectionDetailSummary = getFeishuConnectionDetailSummary({
+    connectorStatus: feishuConnectorStatus,
+    runtimeRunning,
+    authApproved: feishuSetupProgress?.auth_status === "approved",
+    defaultRoutingEmployeeName: feishuSetupProgress?.default_routing_employee_name,
+    scopedRoutingCount: feishuSetupProgress?.scoped_routing_count,
+  });
+
+  const settingsSectionProps = {
+    feishuConnectorSettings,
+    onUpdateFeishuConnectorSettings: updateFeishuConnectorSettings,
+    feishuEnvironmentStatus,
+    feishuSetupProgress,
+    validatingFeishuCredentials,
+    feishuCredentialProbe,
+    feishuInstallerSession,
+    feishuInstallerInput,
+    onUpdateFeishuInstallerInput: updateFeishuInstallerInput,
+    feishuInstallerBusy,
+    feishuInstallerStartingMode,
+    feishuPairingActionLoading,
+    savingFeishuConnector,
+    retryingFeishuConnector,
+    installingOfficialFeishuPlugin,
+    feishuConnectorNotice,
+    feishuConnectorError,
+    feishuOnboardingState,
     feishuOnboardingPanelMode,
-    setFeishuOnboardingPanelMode,
     feishuOnboardingSelectedPath,
-    setFeishuOnboardingSelectedPath,
     feishuOnboardingSkippedSignature,
-    setFeishuOnboardingSkippedSignature,
-    loadConnectorSettings,
-    loadFeishuSetupProgress,
-    loadConnectorStatuses,
-    loadFeishuInstallerSessionStatus,
-    loadConnectorPlatformData,
-    applyOfficialFeishuRuntimeStatus,
+    onOpenFeishuOnboardingPath: openFeishuOnboardingPath,
+    onReopenFeishuOnboarding: reopenFeishuOnboarding,
+    onSkipFeishuOnboarding: skipFeishuOnboarding,
+    feishuOnboardingProgressSignature,
+    feishuOnboardingIsSkipped,
+    feishuOnboardingEffectiveBranch,
+    feishuOnboardingHeaderStep,
+    feishuOnboardingHeaderMode,
+    feishuOnboardingPanelDisplay,
+    showFeishuInstallerGuidedPanel,
+    feishuGuidedInlineError,
+    feishuGuidedInlineNotice,
+    feishuAuthorizationInlineError,
+    feishuInstallerDisplayMode,
+    feishuInstallerFlowLabel,
+    feishuInstallerQrBlock,
+    feishuInstallerDisplayLines,
+    feishuInstallerStartupHint,
+    feishuAuthorizationAction,
+    feishuRoutingStatus,
+    feishuRoutingActionAvailable: feishuSetupProgress?.auth_status === "approved",
+    feishuOnboardingPrimaryActionLabel: feishuOnboardingIsSkipped
+      ? "重新打开引导"
+      : feishuOnboardingHeaderStep === "environment"
+        ? retryingFeishuConnector
+          ? "检测中..."
+          : "重新检测环境"
+        : feishuOnboardingHeaderStep === "plugin"
+          ? installingOfficialFeishuPlugin
+            ? "安装中..."
+            : "安装官方插件"
+          : feishuOnboardingHeaderStep === "create_robot"
+            ? feishuInstallerBusy && feishuInstallerStartingMode === "create"
+              ? "启动中..."
+              : feishuOnboardingPanelDisplay.primaryActionLabel
+              : feishuOnboardingHeaderStep === "authorize"
+                ? retryingFeishuConnector || installingOfficialFeishuPlugin
+                  ? feishuAuthorizationAction.busyLabel
+                  : feishuSetupProgress?.plugin_installed
+                    ? "启动连接"
+                    : "安装并启动"
+              : feishuOnboardingHeaderStep === "approve_pairing"
+                ? feishuPairingActionLoading === "approve"
+                  ? "批准中..."
+                  : "批准这次接入"
+                : feishuOnboardingHeaderStep === "routing"
+                  ? feishuRoutingStatus.actionLabel
+                  : feishuOnboardingPanelDisplay.primaryActionLabel,
+    feishuOnboardingPrimaryActionDisabled:
+      feishuOnboardingHeaderStep === "environment"
+        ? retryingFeishuConnector
+        : feishuOnboardingHeaderStep === "plugin"
+          ? installingOfficialFeishuPlugin
+          : feishuOnboardingHeaderStep === "existing_robot"
+            ? validatingFeishuCredentials
+            : feishuOnboardingHeaderStep === "create_robot"
+              ? feishuInstallerBusy
+              : feishuOnboardingHeaderStep === "approve_pairing"
+                ? !pendingFeishuPairingRequest || feishuPairingActionLoading !== null
+                : feishuOnboardingHeaderStep === "authorize"
+                  ? retryingFeishuConnector || installingOfficialFeishuPlugin
+                  : feishuOnboardingHeaderStep === "routing"
+                    ? false
+                  : false,
+    feishuSetupSummary,
+    pendingFeishuPairingCount,
+    pendingFeishuPairingRequest,
+    getFeishuEnvironmentLabel,
+    formatCompactDateTime,
+    handleRefreshFeishuSetup,
+    handleOpenFeishuOfficialDocs,
+    handleValidateFeishuCredentials,
+    handleSaveFeishuConnector,
+    handleInstallOfficialFeishuPlugin,
+    handleInstallAndStartFeishuConnector,
+    handleResolveFeishuPairingRequest,
+    handleStartFeishuInstaller,
+    handleStopFeishuInstallerSession,
+    handleSendFeishuInstallerInput,
+  };
+
+  const advancedConsoleSectionProps = {
+    feishuConnectorSettings,
+    onUpdateFeishuConnectorSettings: updateFeishuConnectorSettings,
+    feishuEnvironmentStatus,
+    feishuSetupProgress,
+    officialFeishuRuntimeStatus,
+    feishuCredentialProbe,
+    validatingFeishuCredentials,
+    savingFeishuConnector,
+    retryingFeishuConnector,
+    installingOfficialFeishuPlugin,
+    feishuInstallerSession,
+    feishuInstallerInput,
+    onUpdateFeishuInstallerInput: updateFeishuInstallerInput,
+    feishuInstallerBusy,
+    feishuInstallerStartingMode,
+    feishuPairingActionLoading,
+    pendingFeishuPairingCount,
+    pendingFeishuPairingRequest,
+    feishuOnboardingEffectiveBranch,
+    feishuAuthorizationInlineError,
+    feishuOnboardingHeaderStep,
+    feishuInstallerDisplayMode,
+    feishuInstallerStartupHint,
+    feishuAuthorizationAction,
+    feishuRoutingStatus,
+    getFeishuEnvironmentLabel,
     formatCompactDateTime,
     handleValidateFeishuCredentials,
     handleSaveFeishuConnector,
-    handleSaveFeishuAdvancedSettings,
-    handleStartFeishuInstaller,
-    handleSendFeishuInstallerInput,
-    handleStopFeishuInstallerSession,
-    handleRetryFeishuConnector,
-    handleInstallOfficialFeishuPlugin,
-    handleResolveFeishuPairingRequest,
     handleInstallAndStartFeishuConnector,
-    handleOpenFeishuOfficialDocs,
-    handleCopyFeishuDiagnostics,
     handleRefreshFeishuSetup,
+    handleResolveFeishuPairingRequest,
+    handleStartFeishuInstaller,
+    handleStopFeishuInstallerSession,
+    handleSendFeishuInstallerInput,
+  };
+
+  const advancedSectionProps = {
+    connectionDetailSummary: feishuConnectionDetailSummary,
+    feishuAdvancedSettings,
+    onUpdateFeishuAdvancedSettings: updateFeishuAdvancedSettings,
+    connectionStatusLabel: feishuConnectorStatus.label,
+    pluginVersionLabel: feishuSetupProgress?.plugin_version || primaryPluginChannelHost?.version || "未识别",
+    currentAccountLabel: primaryPluginChannelSnapshot?.snapshot.defaultAccountId || "未识别",
+    pendingPairingCount: pendingFeishuPairingCount,
+    lastEventAtLabel: formatCompactDateTime(officialFeishuRuntimeStatus?.last_event_at),
+    recentIssueLabel: summarizeConnectorIssue(feishuConnectorStatus.error),
+    runtimeLogsLabel: summarizeOfficialFeishuRuntimeLogs(officialFeishuRuntimeStatus),
+    retryingFeishuConnector,
+    savingFeishuAdvancedSettings,
+    onRefreshFeishuSetup: handleRefreshFeishuSetup,
+    onSaveFeishuAdvancedSettings: handleSaveFeishuAdvancedSettings,
+    onCopyDiagnostics: handleCopyFeishuDiagnostics,
+  };
+
+  return {
+    sections: {
+      settingsSectionProps,
+      advancedConsoleSectionProps,
+      advancedSectionProps,
+    },
   };
 }

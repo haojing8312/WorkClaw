@@ -590,6 +590,55 @@ export function summarizeOfficialFeishuRuntimeLogs(
   return logs.slice(-3).join(" | ");
 }
 
+export function formatCompactDateTime(value: string | null | undefined) {
+  const normalized = String(value || "").trim();
+  if (!normalized) return "未知时间";
+  const date = new Date(normalized);
+  if (Number.isNaN(date.getTime())) {
+    return normalized;
+  }
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  const hours = String(date.getUTCHours()).padStart(2, "0");
+  const minutes = String(date.getUTCMinutes()).padStart(2, "0");
+  return `${year}-${month}-${day} ${hours}:${minutes}`;
+}
+
+interface FeishuDiagnosticsClipboardInput {
+  connectorStatus: FeishuConnectorStatusInput;
+  pluginVersion: string | null | undefined;
+  defaultAccountId: string | null | undefined;
+  authApproved: boolean;
+  defaultRoutingEmployeeName: string | null | undefined;
+  scopedRoutingCount: number | null | undefined;
+  lastEventAt: string | null | undefined;
+  runtimeStatus: OpenClawPluginFeishuRuntimeStatus | null | undefined;
+  pluginChannelHosts: number;
+  pluginInstalled: boolean;
+}
+
+export function buildFeishuDiagnosticsClipboardText(input: FeishuDiagnosticsClipboardInput) {
+  const connectorStatus = resolveFeishuConnectorStatus(input.connectorStatus);
+  return buildFeishuDiagnosticSummary({
+    connectorStatus,
+    pluginVersion: input.pluginVersion || "未识别",
+    defaultAccountId: input.defaultAccountId || "未识别",
+    authApproved: input.authApproved,
+    defaultRoutingEmployeeName: input.defaultRoutingEmployeeName || "未设置",
+    scopedRoutingCount: input.scopedRoutingCount ?? 0,
+    lastEventAtLabel: formatCompactDateTime(input.lastEventAt),
+    connectionDetailSummary: getFeishuConnectionDetailSummary({
+      connectorStatus,
+      runtimeRunning: input.connectorStatus.running,
+      authApproved: input.authApproved,
+      defaultRoutingEmployeeName: input.defaultRoutingEmployeeName,
+      scopedRoutingCount: input.scopedRoutingCount,
+    }),
+    recentLogsSummary: summarizeOfficialFeishuRuntimeLogs(input.runtimeStatus),
+  });
+}
+
 export function getFeishuConnectionDetailSummary(input: FeishuConnectionDetailSummaryInput) {
   if (input.connectorStatus.error.trim()) {
     return summarizeConnectorIssue(input.connectorStatus.error);
@@ -620,6 +669,7 @@ export function buildFeishuDiagnosticSummary(input: FeishuDiagnosticSummaryInput
   ];
   return lines.join("\n");
 }
+
 
 export function getFeishuSetupSummary(input: FeishuSetupSummaryInput): FeishuSetupSummary {
   if (input.skipped) {

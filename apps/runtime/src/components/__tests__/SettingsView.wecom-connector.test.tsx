@@ -491,6 +491,42 @@ describe("SettingsView connector visibility", () => {
     ).toBeGreaterThan(initialRuntimeStatusLoads);
   }, 15000);
 
+  test("stops feishu background polling after leaving the feishu tab", async () => {
+    vi.useFakeTimers();
+
+    render(<SettingsView onClose={() => {}} initialTab="feishu" />);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "模型连接" }));
+
+    const hostLoadsBefore = invokeMock.mock.calls.filter(
+      ([command]) => command === "list_openclaw_plugin_channel_hosts",
+    ).length;
+    const progressLoadsBefore = invokeMock.mock.calls.filter(
+      ([command]) => command === "get_feishu_setup_progress",
+    ).length;
+    const runtimeLoadsBefore = invokeMock.mock.calls.filter(
+      ([command]) => command === "get_openclaw_plugin_feishu_runtime_status",
+    ).length;
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+
+    expect(
+      invokeMock.mock.calls.filter(([command]) => command === "list_openclaw_plugin_channel_hosts").length,
+    ).toBe(hostLoadsBefore);
+    expect(
+      invokeMock.mock.calls.filter(([command]) => command === "get_feishu_setup_progress").length,
+    ).toBe(progressLoadsBefore);
+    expect(
+      invokeMock.mock.calls.filter(([command]) => command === "get_openclaw_plugin_feishu_runtime_status").length,
+    ).toBe(runtimeLoadsBefore);
+  }, 15000);
+
   test("renders one primary onboarding step at a time", async () => {
     render(<SettingsView onClose={() => {}} initialTab="feishu" />);
 

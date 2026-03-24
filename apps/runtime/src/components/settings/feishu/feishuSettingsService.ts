@@ -13,8 +13,38 @@ import type {
   OpenClawPluginInstallRecord,
 } from "../../../types";
 
+export function getFeishuErrorMessage(error: unknown, fallback: string) {
+  if (typeof error === "string") {
+    return error || fallback;
+  }
+  if (error instanceof Error) {
+    return error.message || fallback;
+  }
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    typeof (error as { message?: unknown }).message === "string"
+  ) {
+    return (error as { message: string }).message || fallback;
+  }
+  return fallback;
+}
+
 export function loadFeishuGatewaySettings() {
   return invoke<FeishuGatewaySettings>("get_feishu_gateway_settings");
+}
+
+export function normalizeFeishuGatewaySettings(
+  settings: FeishuGatewaySettings | null | undefined,
+): FeishuGatewaySettings {
+  return {
+    app_id: settings?.app_id || "",
+    app_secret: settings?.app_secret || "",
+    ingress_token: settings?.ingress_token || "",
+    encrypt_key: settings?.encrypt_key || "",
+    sidecar_base_url: settings?.sidecar_base_url || "",
+  };
 }
 
 export async function saveFeishuGatewaySettings(settings: FeishuGatewaySettings) {
@@ -26,6 +56,37 @@ export async function saveFeishuGatewaySettings(settings: FeishuGatewaySettings)
 
 export function loadFeishuAdvancedSettings() {
   return invoke<OpenClawPluginFeishuAdvancedSettings>("get_openclaw_plugin_feishu_advanced_settings");
+}
+
+export function normalizeFeishuAdvancedSettings(
+  settings: OpenClawPluginFeishuAdvancedSettings | null | undefined,
+): OpenClawPluginFeishuAdvancedSettings {
+  return {
+    groups_json: settings?.groups_json || "",
+    dms_json: settings?.dms_json || "",
+    footer_json: settings?.footer_json || "",
+    account_overrides_json: settings?.account_overrides_json || "",
+    render_mode: settings?.render_mode || "",
+    streaming: settings?.streaming || "",
+    text_chunk_limit: settings?.text_chunk_limit || "",
+    chunk_mode: settings?.chunk_mode || "",
+    reply_in_thread: settings?.reply_in_thread || "",
+    group_session_scope: settings?.group_session_scope || "",
+    topic_session_mode: settings?.topic_session_mode || "",
+    markdown_mode: settings?.markdown_mode || "",
+    markdown_table_mode: settings?.markdown_table_mode || "",
+    heartbeat_visibility: settings?.heartbeat_visibility || "",
+    heartbeat_interval_ms: settings?.heartbeat_interval_ms || "",
+    media_max_mb: settings?.media_max_mb || "",
+    http_timeout_ms: settings?.http_timeout_ms || "",
+    config_writes: settings?.config_writes || "",
+    webhook_host: settings?.webhook_host || "",
+    webhook_port: settings?.webhook_port || "",
+    dynamic_agent_creation_enabled: settings?.dynamic_agent_creation_enabled || "",
+    dynamic_agent_creation_workspace_template: settings?.dynamic_agent_creation_workspace_template || "",
+    dynamic_agent_creation_agent_dir_template: settings?.dynamic_agent_creation_agent_dir_template || "",
+    dynamic_agent_creation_max_agents: settings?.dynamic_agent_creation_max_agents || "",
+  };
 }
 
 export function saveFeishuAdvancedSettings(settings: OpenClawPluginFeishuAdvancedSettings) {
