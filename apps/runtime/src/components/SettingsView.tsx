@@ -2711,6 +2711,7 @@ export function SettingsView({
         </details>
 
           <FeishuAdvancedSection
+            connectionDetailSummary={getFeishuConnectionDetailSummary()}
             feishuAdvancedSettings={feishuAdvancedSettings}
             setFeishuAdvancedSettings={setFeishuAdvancedSettings}
             connectionStatusLabel={resolveFeishuConnectorStatus().label}
@@ -2720,7 +2721,9 @@ export function SettingsView({
             lastEventAtLabel={formatCompactDateTime(officialFeishuRuntimeStatus?.last_event_at)}
             recentIssueLabel={summarizeConnectorIssue(resolveFeishuConnectorStatus().error)}
             runtimeLogsLabel={summarizeOfficialFeishuRuntimeLogs(officialFeishuRuntimeStatus)}
+            retryingFeishuConnector={retryingFeishuConnector}
             savingFeishuAdvancedSettings={savingFeishuAdvancedSettings}
+            onRefreshFeishuSetup={handleRefreshFeishuSetup}
             onSaveFeishuAdvancedSettings={handleSaveFeishuAdvancedSettings}
             onCopyDiagnostics={handleCopyFeishuDiagnostics}
           />

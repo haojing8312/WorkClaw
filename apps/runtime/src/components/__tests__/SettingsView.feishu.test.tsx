@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { SettingsView } from "../SettingsView";
 
 const invokeMock = vi.fn();
@@ -58,6 +58,11 @@ describe("SettingsView connector tab", () => {
     expect(screen.getAllByText("飞书接入概览").length).toBeGreaterThan(0);
     expect(screen.getByText("员工关联入口")).toBeInTheDocument();
     expect(screen.getByText("查看飞书连接是否已启动并可接收事件。")).toBeInTheDocument();
+    expect(screen.getByText("连接详情")).toBeInTheDocument();
+    expect(screen.getByText("高级设置")).toBeInTheDocument();
+    const connectionDetails = screen.getByText("连接详情").closest("details") ?? document.body;
+    expect(within(connectionDetails).getByRole("button", { name: "重新检测" })).toBeInTheDocument();
+    expect(within(connectionDetails).getByRole("button", { name: "复制诊断摘要" })).toBeInTheDocument();
     expect(screen.queryByTestId("connector-panel-wecom")).not.toBeInTheDocument();
     expect(screen.queryByText("企业微信")).not.toBeInTheDocument();
     expect(screen.queryByText("消息处理规则")).not.toBeInTheDocument();

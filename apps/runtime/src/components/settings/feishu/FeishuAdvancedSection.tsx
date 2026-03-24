@@ -44,6 +44,7 @@ const FEISHU_ADVANCED_DYNAMIC_AGENT_FIELDS: FeishuAdvancedFieldConfig[] = [
 ];
 
 interface FeishuAdvancedSectionProps {
+  connectionDetailSummary: string;
   feishuAdvancedSettings: OpenClawPluginFeishuAdvancedSettings;
   setFeishuAdvancedSettings: Dispatch<SetStateAction<OpenClawPluginFeishuAdvancedSettings>>;
   connectionStatusLabel: string;
@@ -53,7 +54,9 @@ interface FeishuAdvancedSectionProps {
   lastEventAtLabel: string;
   recentIssueLabel: string;
   runtimeLogsLabel: string;
+  retryingFeishuConnector: boolean;
   savingFeishuAdvancedSettings: boolean;
+  onRefreshFeishuSetup: () => Promise<void>;
   onSaveFeishuAdvancedSettings: () => Promise<void>;
   onCopyDiagnostics: () => Promise<void>;
 }
@@ -98,6 +101,7 @@ function renderFeishuAdvancedField(
 }
 
 export function FeishuAdvancedSection({
+  connectionDetailSummary,
   feishuAdvancedSettings,
   setFeishuAdvancedSettings,
   connectionStatusLabel,
@@ -107,21 +111,27 @@ export function FeishuAdvancedSection({
   lastEventAtLabel,
   recentIssueLabel,
   runtimeLogsLabel,
+  retryingFeishuConnector,
   savingFeishuAdvancedSettings,
+  onRefreshFeishuSetup,
   onSaveFeishuAdvancedSettings,
   onCopyDiagnostics,
 }: FeishuAdvancedSectionProps) {
   return (
-    <details className="rounded-lg border border-gray-200 bg-white p-4">
-      <summary className="cursor-pointer text-sm font-medium text-gray-900">高级设置</summary>
-      <div className="mt-2 text-xs text-gray-500">这里可以调整消息格式、接待规则和其他进阶选项。默认设置通常已经够用。</div>
-      <div className="mt-3 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-        建议先完成接入和接待配置，再按需调整这里的参数；不确定时保持默认值通常更稳妥。
-      </div>
-      <details className="mt-4 rounded-lg border border-gray-100 bg-gray-50 p-3">
+    <>
+      <details className="rounded-lg border border-gray-200 bg-white p-4">
         <summary className="cursor-pointer text-sm font-medium text-gray-900">连接详情</summary>
         <div className="mt-2 text-xs text-gray-500">这里展示当前连接是否正常、最近一次事件，以及排查问题时最有用的诊断摘要。</div>
+        <div className="mt-3 rounded-lg border border-blue-100 bg-blue-50 px-3 py-3 text-sm text-blue-900">{connectionDetailSummary}</div>
         <div className="mt-3 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => void onRefreshFeishuSetup()}
+            disabled={retryingFeishuConnector}
+            className="h-8 px-3 rounded border border-gray-200 bg-white text-xs text-gray-700 hover:bg-gray-50 disabled:bg-gray-100"
+          >
+            {retryingFeishuConnector ? "检测中..." : "重新检测"}
+          </button>
           <button
             type="button"
             onClick={() => void onCopyDiagnostics()}
@@ -161,57 +171,64 @@ export function FeishuAdvancedSection({
           <div className="mt-2 text-xs text-gray-700 whitespace-pre-wrap break-all">{runtimeLogsLabel}</div>
         </details>
       </details>
-      <div className="mt-4 space-y-4">
-        <details open className="rounded-lg border border-gray-100 bg-gray-50/70 p-3">
-          <summary className="cursor-pointer text-sm font-medium text-gray-900">消息与展示</summary>
-          <div className="mt-2 text-xs text-gray-500">调整消息输出格式、分块策略和 Markdown 展示方式。</div>
-          <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
-            {FEISHU_ADVANCED_MESSAGE_FIELDS.map((field) =>
-              renderFeishuAdvancedField(field, feishuAdvancedSettings, setFeishuAdvancedSettings),
-            )}
-          </div>
-        </details>
-
-        <details className="rounded-lg border border-gray-100 bg-gray-50/70 p-3">
-          <summary className="cursor-pointer text-sm font-medium text-gray-900">群聊与私聊规则</summary>
-          <div className="mt-2 text-xs text-gray-500">按群聊或私聊对象自定义启用状态、会话范围和回复规则。</div>
-          <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
-            {FEISHU_ADVANCED_ROUTING_FIELDS.map((field) =>
-              renderFeishuAdvancedField(field, feishuAdvancedSettings, setFeishuAdvancedSettings),
-            )}
-          </div>
-        </details>
-
-        <details className="rounded-lg border border-gray-100 bg-gray-50/70 p-3">
-          <summary className="cursor-pointer text-sm font-medium text-gray-900">运行与行为</summary>
-          <div className="mt-2 text-xs text-gray-500">调整心跳、媒体限制、超时和插件运行行为。</div>
-          <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
-            {FEISHU_ADVANCED_RUNTIME_FIELDS.map((field) =>
-              renderFeishuAdvancedField(field, feishuAdvancedSettings, setFeishuAdvancedSettings),
-            )}
-          </div>
-          <details className="mt-4 rounded-lg border border-gray-200 bg-white p-3">
-            <summary className="cursor-pointer text-sm font-medium text-gray-800">动态 Agent 相关</summary>
-            <div className="mt-2 text-xs text-gray-500">只有在需要按飞书会话动态生成 Agent 时才需要调整这里。</div>
+      <details className="rounded-lg border border-gray-200 bg-white p-4">
+        <summary className="cursor-pointer text-sm font-medium text-gray-900">高级设置</summary>
+        <div className="mt-2 text-xs text-gray-500">这里可以调整消息格式、接待规则和其他进阶选项。默认设置通常已经够用。</div>
+        <div className="mt-3 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          建议先完成接入和接待配置，再按需调整这里的参数；不确定时保持默认值通常更稳妥。
+        </div>
+        <div className="mt-4 space-y-4">
+          <details open className="rounded-lg border border-gray-100 bg-gray-50/70 p-3">
+            <summary className="cursor-pointer text-sm font-medium text-gray-900">消息与展示</summary>
+            <div className="mt-2 text-xs text-gray-500">调整消息输出格式、分块策略和 Markdown 展示方式。</div>
             <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
-              {FEISHU_ADVANCED_DYNAMIC_AGENT_FIELDS.map((field) =>
+              {FEISHU_ADVANCED_MESSAGE_FIELDS.map((field) =>
                 renderFeishuAdvancedField(field, feishuAdvancedSettings, setFeishuAdvancedSettings),
               )}
             </div>
           </details>
-        </details>
 
-        <div className="flex justify-end">
-          <button
-            type="button"
-            onClick={() => void onSaveFeishuAdvancedSettings()}
-            disabled={savingFeishuAdvancedSettings}
-            className="sm-btn sm-btn-primary h-9 rounded-lg px-4 text-sm disabled:opacity-60"
-          >
-            {savingFeishuAdvancedSettings ? "保存中..." : "保存高级配置"}
-          </button>
+          <details className="rounded-lg border border-gray-100 bg-gray-50/70 p-3">
+            <summary className="cursor-pointer text-sm font-medium text-gray-900">群聊与私聊规则</summary>
+            <div className="mt-2 text-xs text-gray-500">按群聊或私聊对象自定义启用状态、会话范围和回复规则。</div>
+            <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
+              {FEISHU_ADVANCED_ROUTING_FIELDS.map((field) =>
+                renderFeishuAdvancedField(field, feishuAdvancedSettings, setFeishuAdvancedSettings),
+              )}
+            </div>
+          </details>
+
+          <details className="rounded-lg border border-gray-100 bg-gray-50/70 p-3">
+            <summary className="cursor-pointer text-sm font-medium text-gray-900">运行与行为</summary>
+            <div className="mt-2 text-xs text-gray-500">调整心跳、媒体限制、超时和插件运行行为。</div>
+            <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
+              {FEISHU_ADVANCED_RUNTIME_FIELDS.map((field) =>
+                renderFeishuAdvancedField(field, feishuAdvancedSettings, setFeishuAdvancedSettings),
+              )}
+            </div>
+            <details className="mt-4 rounded-lg border border-gray-200 bg-white p-3">
+              <summary className="cursor-pointer text-sm font-medium text-gray-800">动态 Agent 相关</summary>
+              <div className="mt-2 text-xs text-gray-500">只有在需要按飞书会话动态生成 Agent 时才需要调整这里。</div>
+              <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
+                {FEISHU_ADVANCED_DYNAMIC_AGENT_FIELDS.map((field) =>
+                  renderFeishuAdvancedField(field, feishuAdvancedSettings, setFeishuAdvancedSettings),
+                )}
+              </div>
+            </details>
+          </details>
+
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={() => void onSaveFeishuAdvancedSettings()}
+              disabled={savingFeishuAdvancedSettings}
+              className="sm-btn sm-btn-primary h-9 rounded-lg px-4 text-sm disabled:opacity-60"
+            >
+              {savingFeishuAdvancedSettings ? "保存中..." : "保存高级配置"}
+            </button>
+          </div>
         </div>
-      </div>
-    </details>
+      </details>
+    </>
   );
 }
