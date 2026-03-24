@@ -18,17 +18,24 @@ import {
   UpsertAgentEmployeeInput,
 } from "../../types";
 import { RiskConfirmDialog } from "../RiskConfirmDialog";
+import { EmployeeHubTabNav, type EmployeeHubTab as EmployeeHubTabNavItem } from "./EmployeeHubTabNav";
 import {
+  EmployeeGroupExecutionMode,
+  EmployeeGroupReviewMode,
+  EmployeeGroupVisibilityMode,
   EmployeeHubEmployeeFilter,
   EmployeeHubRunFilter,
   EmployeeHubTeamFilter,
-  buildEmployeeHubMetrics,
-  buildEmployeeHubPendingItems,
   matchesEmployeeHubEmployeeFilter,
   matchesEmployeeHubRunFilter,
   matchesEmployeeHubTeamFilter,
 } from "./employeeHubOverview";
 import { EmployeeFeishuAssociationSection } from "./EmployeeFeishuAssociationSection";
+import { EmployeeOverviewSection } from "./overview/EmployeeOverviewSection";
+import { EmployeeRunsSection } from "./runs/EmployeeRunsSection";
+import { EmployeeTeamsSection } from "./teams/EmployeeTeamsSection";
+import { EmployeeMemoryToolsSection } from "./tools/EmployeeMemoryToolsSection";
+import { EmployeeProfileFilesSection } from "./tools/EmployeeProfileFilesSection";
 
 export interface EmployeeHubViewProps {
   employees: AgentEmployee[];
@@ -50,17 +57,7 @@ export interface EmployeeHubViewProps {
   onDismissHighlight?: () => void;
 }
 
-type GroupTemplateRole = {
-  role_type?: string;
-  employee_key?: string;
-  employee_id?: string;
-};
-
-type GroupTemplateConfig = {
-  roles?: GroupTemplateRole[];
-};
-
-export type EmployeeHubTab = "overview" | "employees" | "teams" | "runs" | "settings";
+export type EmployeeHubTab = EmployeeHubTabNavItem;
 
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
@@ -71,33 +68,6 @@ function formatBytes(bytes: number): string {
 
 function employeeKey(employee: AgentEmployee): string {
   return (employee.employee_id || employee.role_id || "").trim();
-}
-
-function parseGroupTemplateConfig(raw?: string | null): GroupTemplateConfig {
-  if (!raw?.trim()) return {};
-  try {
-    return JSON.parse(raw) as GroupTemplateConfig;
-  } catch {
-    return {};
-  }
-}
-
-function groupRoleLabel(roleType: string): string {
-  const normalized = roleType.trim().toLowerCase();
-  switch (normalized) {
-    case "entry":
-      return "入口";
-    case "planner":
-      return "规划";
-    case "reviewer":
-      return "审议";
-    case "coordinator":
-      return "协调";
-    case "executor":
-      return "执行";
-    default:
-      return normalized || "角色";
-  }
 }
 
 export function EmployeeHubView({
@@ -142,9 +112,9 @@ export function EmployeeHubView({
   const [groupEntryId, setGroupEntryId] = useState("");
   const [groupPlannerId, setGroupPlannerId] = useState("");
   const [groupReviewerId, setGroupReviewerId] = useState("");
-  const [groupReviewMode, setGroupReviewMode] = useState("none");
-  const [groupExecutionMode, setGroupExecutionMode] = useState("sequential");
-  const [groupVisibilityMode, setGroupVisibilityMode] = useState("internal");
+  const [groupReviewMode, setGroupReviewMode] = useState<EmployeeGroupReviewMode>("none");
+  const [groupExecutionMode, setGroupExecutionMode] = useState<EmployeeGroupExecutionMode>("sequential");
+  const [groupVisibilityMode, setGroupVisibilityMode] = useState<EmployeeGroupVisibilityMode>("internal");
   const [employeeGroups, setEmployeeGroups] = useState<EmployeeGroup[]>([]);
   const [recentRuns, setRecentRuns] = useState<EmployeeGroupRunSummary[]>([]);
   const [employeeFilter, setEmployeeFilter] = useState<EmployeeHubEmployeeFilter>("all");
@@ -790,6 +760,25 @@ export function EmployeeHubView({
     }
   }
 
+  function handleGroupMemberToggle(employeeCode: string, checked: boolean) {
+    if (checked) {
+      setGroupMemberIds((prev) => {
+        if (prev.includes(employeeCode)) return prev;
+        if (prev.length >= 10) {
+          setMessage("群组成员最多 10 人");
+          return prev;
+        }
+        return [...prev, employeeCode];
+      });
+      return;
+    }
+    setGroupMemberIds((prev) => prev.filter((id) => id !== employeeCode));
+  }
+
+  function handleGroupRunGoalChange(groupId: string, value: string) {
+    setGroupRunGoalById((prev) => ({ ...prev, [groupId]: value }));
+  }
+
   const deleteDialogSummary = pendingDeleteEmployee ? `确定删除员工「${pendingDeleteEmployee.name}」吗？` : "确定删除该员工吗？";
   const deleteDialogImpact = pendingDeleteEmployee ? `员工ID: ${pendingDeleteEmployee.id}` : undefined;
   const clearMemoryScopeLabel = memoryScopeSkillId === "__all__" ? "全部技能" : `技能 ${memoryScopeSkillId}`;
@@ -813,17 +802,6 @@ export function EmployeeHubView({
     { id: "runs", label: "运行" },
     { id: "settings", label: "设置" },
   ];
-  const overviewMetrics = useMemo(
-    () => buildEmployeeHubMetrics({ employees: effectiveEmployees, groups: employeeGroups, runs: recentRuns }),
-    [effectiveEmployees, employeeGroups, recentRuns],
-  );
-  const pendingItems = useMemo(
-    () => buildEmployeeHubPendingItems({ employees: effectiveEmployees, groups: employeeGroups }),
-    [effectiveEmployees, employeeGroups],
-  );
-  const recentEmployees = effectiveEmployees.slice(0, 5);
-  const recentGroups = employeeGroups.slice(0, 5);
-  const recentRunsForOverview = recentRuns.slice(0, 5);
   const filteredEmployees = useMemo(
     () => effectiveEmployees.filter((employee) => matchesEmployeeHubEmployeeFilter(employee, employeeFilter)),
     [effectiveEmployees, employeeFilter],
@@ -836,31 +814,6 @@ export function EmployeeHubView({
     () => recentRuns.filter((run) => matchesEmployeeHubRunFilter(run, runFilter)),
     [recentRuns, runFilter],
   );
-  const resolveEmployeeDisplayName = (employeeId: string) => {
-    const normalized = employeeId.trim().toLowerCase();
-    if (!normalized) return "未设置";
-    return employeeLabelById.get(normalized) || employeeId.trim();
-  };
-  const resolveRunStatusLabel = (status: string) => {
-    switch (status.trim().toLowerCase()) {
-      case "running":
-        return "运行中";
-      case "completed":
-        return "已完成";
-      case "failed":
-        return "失败";
-      case "waiting_review":
-        return "等待审核";
-      case "cancelled":
-        return "已取消";
-      default:
-        return status.trim() || "未知";
-    }
-  };
-  const formatRunTimestamp = (value: string) => {
-    if (!value.trim()) return "刚刚";
-    return value.replace("T", " ").replace("Z", "").slice(0, 16);
-  };
   const employeeFilterLabel =
     employeeFilter === "available"
       ? "可用员工"
@@ -917,216 +870,21 @@ export function EmployeeHubView({
             <button type="button" data-testid="employee-creator-highlight-dismiss" onClick={() => onDismissHighlight?.()} className="h-7 px-2.5 rounded border border-emerald-200 hover:bg-emerald-100 text-emerald-700 text-xs">知道了</button>
           </div>
         )}
-        <div className="rounded-xl border border-[var(--sm-border)] bg-[var(--sm-surface)] p-2 shadow-[var(--sm-shadow-sm)]">
-          <div role="tablist" aria-label="智能体员工导航" className="flex flex-wrap gap-2">
-            {tabs.map((tab) => {
-              const selected = activeTab === tab.id;
-              return (
-                <button
-                  key={tab.id}
-                  id={`employee-hub-tab-${tab.id}`}
-                  type="button"
-                  role="tab"
-                  aria-selected={selected}
-                  aria-controls={`employee-hub-panel-${tab.id}`}
-                  tabIndex={selected ? 0 : -1}
-                  onClick={() => openTabFromNav(tab.id)}
-                  className={
-                    "h-9 px-4 rounded-lg text-sm transition " +
-                    (selected
-                      ? "border-[var(--sm-primary-soft)] bg-[var(--sm-primary-soft)] text-[var(--sm-primary-strong)] shadow-[var(--sm-shadow-sm)]"
-                      : "border border-[var(--sm-border)] bg-[var(--sm-surface)] text-[var(--sm-text-muted)] hover:bg-[var(--sm-surface-muted)]")
-                  }
-                >
-                  {tab.label}
-                </button>
-              );
-            })}
-          </div>
-        </div>
+        <EmployeeHubTabNav tabs={tabs} activeTab={activeTab} onTabChange={openTabFromNav} />
         {message && <div className="text-xs text-blue-700 bg-blue-50 border border-blue-100 rounded px-3 py-2">{message}</div>}
         {activeTab === "overview" && (
-          <div
-            id="employee-hub-panel-overview"
-            role="tabpanel"
-            aria-labelledby="employee-hub-tab-overview"
-            className="space-y-4"
-          >
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-5">
-              <button type="button" aria-label="查看全部员工" onClick={() => openEmployeesTab("all")} className="rounded-xl border border-gray-200 bg-white p-4 text-left hover:bg-gray-50">
-                <div className="text-xs text-gray-500">员工总数</div>
-                <div data-testid="employee-overview-metric-employees" className="mt-2 text-2xl font-semibold text-gray-900">{overviewMetrics.employees}</div>
-              </button>
-              <button type="button" aria-label="查看全部团队" onClick={() => openTeamsTab("all")} className="rounded-xl border border-gray-200 bg-white p-4 text-left hover:bg-gray-50">
-                <div className="text-xs text-gray-500">团队总数</div>
-                <div data-testid="employee-overview-metric-teams" className="mt-2 text-2xl font-semibold text-gray-900">{overviewMetrics.teams}</div>
-              </button>
-              <button type="button" aria-label="查看可用员工" onClick={() => openEmployeesTab("available")} className="rounded-xl border border-gray-200 bg-white p-4 text-left hover:bg-gray-50">
-                <div className="text-xs text-gray-500">可用员工</div>
-                <div data-testid="employee-overview-metric-available-employees" className="mt-2 text-2xl font-semibold text-gray-900">{overviewMetrics.availableEmployees}</div>
-              </button>
-              <button type="button" aria-label="查看运行中团队" onClick={() => openRunsTab("running")} className="rounded-xl border border-gray-200 bg-white p-4 text-left hover:bg-gray-50">
-                <div className="text-xs text-gray-500">运行中团队</div>
-                <div data-testid="employee-overview-metric-running-teams" className="mt-2 text-2xl font-semibold text-gray-900">{overviewMetrics.runningTeams}</div>
-              </button>
-              <button
-                type="button"
-                aria-label="查看待处理事项"
-                onClick={() => {
-                  const first = pendingItems[0];
-                  if (!first) return;
-                  if (first.id === "incomplete-team") {
-                    openTeamsTab("incomplete-team");
-                    return;
-                  }
-                  openEmployeesTab(first.id);
-                }}
-                className="rounded-xl border border-gray-200 bg-white p-4 text-left hover:bg-gray-50"
-              >
-                <div className="text-xs text-gray-500">待处理事项</div>
-                <div data-testid="employee-overview-metric-pending-items" className="mt-2 text-2xl font-semibold text-gray-900">{overviewMetrics.pendingItems}</div>
-              </button>
-            </div>
-            <div className="rounded-xl border border-gray-200 bg-white p-4 space-y-3">
-              <div className="flex items-center justify-between gap-2">
-                <div>
-                  <div className="text-sm font-medium text-gray-900">待处理事项</div>
-                  <div className="text-xs text-gray-500 mt-1">优先处理影响员工可用性和团队协作的问题。</div>
-                </div>
-                <button type="button" onClick={() => setActiveTab("settings")} className="text-xs text-blue-600 hover:text-blue-700">
-                  去设置
-                </button>
-              </div>
-              {pendingItems.length === 0 ? (
-                <div className="rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
-                  当前配置完整，可直接开始任务。
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  {pendingItems.map((item) => (
-                    <div key={item.id} className="flex items-center justify-between gap-3 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                      <span>{item.label}</span>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (item.id === "incomplete-team") {
-                            openTeamsTab("incomplete-team");
-                            return;
-                          }
-                          openEmployeesTab(item.id);
-                        }}
-                        className="rounded border border-amber-200 bg-white px-2 py-1 text-[11px] text-amber-700 hover:bg-amber-100"
-                      >
-                        去处理
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-              <div className="rounded-xl border border-gray-200 bg-white p-4 space-y-3">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="text-sm font-medium text-gray-900">员工概览</div>
-                  <button type="button" onClick={() => openEmployeesTab("all")} className="text-xs text-blue-600 hover:text-blue-700">查看全部员工</button>
-                </div>
-                <div className="space-y-2">
-                  {recentEmployees.length === 0 ? (
-                    <div className="rounded-lg border border-dashed border-gray-300 px-3 py-4 text-xs text-gray-500 space-y-1">
-                      <div>还没有智能体员工，先创建第一个员工。</div>
-                      <div>已移除手动创建流程，请通过「智能体员工助手」对话式完成创建与配置。</div>
-                    </div>
-                  ) : (
-                    recentEmployees.map((employee) => (
-                      <button
-                        key={employee.id}
-                        type="button"
-                        onClick={() => {
-                          onSelectEmployee(employee.id);
-                          openEmployeesTab("all");
-                        }}
-                        className="flex w-full items-center justify-between rounded-lg border border-gray-200 px-3 py-2 text-left hover:bg-gray-50"
-                      >
-                        <div>
-                          <div className="text-sm text-gray-900">{employee.name}</div>
-                          <div className="text-xs text-gray-500">{employee.employee_id || employee.role_id || "未设置员工编号"}</div>
-                        </div>
-                        <div className="text-xs text-gray-500">{employee.enabled ? "正常" : "停用"}</div>
-                      </button>
-                    ))
-                  )}
-                </div>
-              </div>
-              <div className="rounded-xl border border-gray-200 bg-white p-4 space-y-3">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="text-sm font-medium text-gray-900">团队概览</div>
-                  <button type="button" onClick={() => openTeamsTab("all")} className="text-xs text-blue-600 hover:text-blue-700">查看全部团队</button>
-                </div>
-                <div className="space-y-2">
-                  {recentGroups.length === 0 ? (
-                    <div className="rounded-lg border border-dashed border-gray-300 px-3 py-4 text-xs text-gray-500">还没有团队，创建团队后可分工协作。</div>
-                  ) : (
-                    recentGroups.map((group) => (
-                      <button
-                        key={group.id}
-                        type="button"
-                        onClick={() => openTeamsTab("all")}
-                        className="flex w-full items-center justify-between rounded-lg border border-gray-200 px-3 py-2 text-left hover:bg-gray-50"
-                      >
-                        <div>
-                          <div className="text-sm text-gray-900">{group.name}</div>
-                          <div className="text-xs text-gray-500">{group.member_count || group.member_employee_ids.length} 人 · {resolveEmployeeDisplayName(group.coordinator_employee_id)}</div>
-                        </div>
-                        <div className="text-xs text-gray-500">查看详情</div>
-                      </button>
-                    ))
-                  )}
-                </div>
-              </div>
-            </div>
-            <div className="rounded-xl border border-gray-200 bg-white p-4 space-y-3">
-              <div className="flex items-center justify-between gap-2">
-                <div>
-                  <div className="text-sm font-medium text-gray-900">最近运行</div>
-                  <div className="text-xs text-gray-500 mt-1">最近发起的团队任务会集中展示在这里。</div>
-                </div>
-                <button type="button" onClick={() => openRunsTab("all")} className="text-xs text-blue-600 hover:text-blue-700">
-                  查看全部
-                </button>
-              </div>
-              {recentRunsForOverview.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-gray-300 px-3 py-4 text-xs text-gray-500">
-                  还没有运行记录，发起一次团队任务后会显示在这里。
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  {recentRunsForOverview.map((run) => (
-                    <div key={run.id} className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2">
-                      <div className="min-w-0">
-                        <div className="text-sm text-gray-900 truncate">{run.goal || "未命名任务"}</div>
-                        <div className="text-xs text-gray-500">
-                          {run.group_name || "未命名团队"} · {resolveRunStatusLabel(run.status)} · {formatRunTimestamp(run.started_at)}
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (run.session_id && run.session_skill_id) {
-                            void onOpenGroupRunSession?.(run.session_id, run.session_skill_id);
-                            return;
-                          }
-                          openTeamsTab("all");
-                        }}
-                        className="text-xs text-blue-600 hover:text-blue-700"
-                      >
-                        {run.session_id && run.session_skill_id ? "进入会话" : "去团队查看"}
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
+          <EmployeeOverviewSection
+            employees={effectiveEmployees}
+            groups={employeeGroups}
+            runs={recentRuns}
+            employeeLabelById={employeeLabelById}
+            onSelectEmployee={onSelectEmployee}
+            onOpenEmployeesTab={openEmployeesTab}
+            onOpenTeamsTab={openTeamsTab}
+            onOpenRunsTab={openRunsTab}
+            onOpenSettingsTab={() => setActiveTab("settings")}
+            onOpenGroupRunSession={onOpenGroupRunSession}
+          />
         )}
         {activeTab === "teams" && (
           <div
@@ -1135,306 +893,50 @@ export function EmployeeHubView({
             aria-labelledby="employee-hub-tab-teams"
             className="space-y-4"
           >
-        <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-3">
-          <div className="flex items-center justify-between gap-2">
-            <div>
-              <div className="text-sm font-medium text-gray-900">拉群协作（最多 10 人）</div>
-              <div className="text-xs text-gray-500 mt-1">创建协作群后，可由协调员按轮次调度成员执行。</div>
-            </div>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-            <input
-              data-testid="employee-group-name"
-              className="border border-gray-200 rounded px-2 py-1.5 text-sm"
-              placeholder="群组名称"
-              value={groupName}
-              onChange={(e) => setGroupName(e.target.value)}
+            <EmployeeTeamsSection
+              employees={employees}
+              employeeLabelById={employeeLabelById}
+              draft={{
+                groupName,
+                groupCoordinatorId,
+                groupMemberIds,
+                groupEntryId,
+                groupPlannerId,
+                groupReviewerId,
+                groupReviewMode,
+                groupExecutionMode,
+                groupVisibilityMode,
+                groupSubmitting,
+              }}
+              groupsState={{
+                teamFilter,
+                teamFilterLabel,
+                filteredGroups,
+                groupDeletingId,
+                groupRunGoalById,
+                groupRunSubmittingId,
+                groupRunReportById,
+                groupRulesById,
+                cloningGroupId,
+              }}
+              actions={{
+                onGroupNameChange: setGroupName,
+                onGroupCoordinatorChange: setGroupCoordinatorId,
+                onGroupEntryChange: setGroupEntryId,
+                onGroupPlannerChange: setGroupPlannerId,
+                onGroupReviewerChange: setGroupReviewerId,
+                onGroupReviewModeChange: setGroupReviewMode,
+                onGroupExecutionModeChange: setGroupExecutionMode,
+                onGroupVisibilityModeChange: setGroupVisibilityMode,
+                onGroupMemberToggle: handleGroupMemberToggle,
+                onCreateEmployeeGroup: createEmployeeGroup,
+                onDeleteEmployeeGroup: deleteEmployeeGroup,
+                onCloneEmployeeGroup: cloneEmployeeGroup,
+                onStartEmployeeGroupRun: startEmployeeGroupRun,
+                onGroupRunGoalChange: handleGroupRunGoalChange,
+                onClearTeamFilter: () => setTeamFilter("all"),
+              }}
             />
-            <select
-              data-testid="employee-group-coordinator"
-              className="border border-gray-200 rounded px-2 py-1.5 text-sm bg-white"
-              value={groupCoordinatorId}
-              onChange={(e) => setGroupCoordinatorId(e.target.value)}
-            >
-              <option value="">选择协调员</option>
-              {employees.map((item) => {
-                const id = (item.employee_id || item.role_id || "").trim();
-                if (!id) return null;
-                return (
-                  <option key={item.id} value={id}>
-                    {item.name}（{id}）
-                  </option>
-                );
-              })}
-            </select>
-            <button
-              type="button"
-              data-testid="employee-group-create"
-              disabled={groupSubmitting}
-              onClick={createEmployeeGroup}
-              className="h-9 rounded bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white text-sm"
-            >
-              {groupSubmitting ? "创建中..." : "创建协作群"}
-            </button>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-            <select
-              data-testid="employee-group-entry"
-              className="border border-gray-200 rounded px-2 py-1.5 text-sm bg-white"
-              value={groupEntryId}
-              onChange={(e) => setGroupEntryId(e.target.value)}
-            >
-              <option value="">入口员工（默认协调员）</option>
-              {employees.map((item) => {
-                const id = employeeKey(item);
-                if (!id) return null;
-                return (
-                  <option key={`${item.id}-entry`} value={id}>
-                    {item.name}（{id}）
-                  </option>
-                );
-              })}
-            </select>
-            <select
-              data-testid="employee-group-planner"
-              className="border border-gray-200 rounded px-2 py-1.5 text-sm bg-white"
-              value={groupPlannerId}
-              onChange={(e) => setGroupPlannerId(e.target.value)}
-            >
-              <option value="">规划员工（默认入口员工）</option>
-              {employees.map((item) => {
-                const id = employeeKey(item);
-                if (!id) return null;
-                return (
-                  <option key={`${item.id}-planner`} value={id}>
-                    {item.name}（{id}）
-                  </option>
-                );
-              })}
-            </select>
-            <select
-              data-testid="employee-group-reviewer"
-              className="border border-gray-200 rounded px-2 py-1.5 text-sm bg-white"
-              value={groupReviewerId}
-              onChange={(e) => setGroupReviewerId(e.target.value)}
-            >
-              <option value="">审核员工（可选）</option>
-              {employees.map((item) => {
-                const id = employeeKey(item);
-                if (!id) return null;
-                return (
-                  <option key={`${item.id}-reviewer`} value={id}>
-                    {item.name}（{id}）
-                  </option>
-                );
-              })}
-            </select>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-            <select
-              data-testid="employee-group-review-mode"
-              className="border border-gray-200 rounded px-2 py-1.5 text-sm bg-white"
-              value={groupReviewMode}
-              onChange={(e) => setGroupReviewMode(e.target.value)}
-            >
-              <option value="none">无需审核</option>
-              <option value="soft">建议审核</option>
-              <option value="hard">强制审核</option>
-            </select>
-            <select
-              data-testid="employee-group-execution-mode"
-              className="border border-gray-200 rounded px-2 py-1.5 text-sm bg-white"
-              value={groupExecutionMode}
-              onChange={(e) => setGroupExecutionMode(e.target.value)}
-            >
-              <option value="sequential">顺序执行</option>
-              <option value="parallel">并行执行</option>
-            </select>
-            <select
-              data-testid="employee-group-visibility-mode"
-              className="border border-gray-200 rounded px-2 py-1.5 text-sm bg-white"
-              value={groupVisibilityMode}
-              onChange={(e) => setGroupVisibilityMode(e.target.value)}
-            >
-              <option value="internal">内部可见</option>
-              <option value="shared">协作共享</option>
-            </select>
-          </div>
-          <div className="rounded border border-gray-200 p-2">
-            <div className="text-[11px] text-gray-500 mb-1">选择成员（{groupMemberIds.length}/10）</div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-1.5">
-              {employees.map((item) => {
-                const employeeCode = (item.employee_id || item.role_id || "").trim();
-                if (!employeeCode) return null;
-                const checked = groupMemberIds.includes(employeeCode);
-                return (
-                  <label key={item.id} className="flex items-center gap-2 text-xs text-gray-700">
-                    <input
-                      data-testid={`employee-group-member-${item.id}`}
-                      type="checkbox"
-                      checked={checked}
-                      onChange={(e) => {
-                        if (e.target.checked) {
-                          setGroupMemberIds((prev) => {
-                            if (prev.includes(employeeCode)) return prev;
-                            if (prev.length >= 10) {
-                              setMessage("群组成员最多 10 人");
-                              return prev;
-                            }
-                            return [...prev, employeeCode];
-                          });
-                        } else {
-                          setGroupMemberIds((prev) => prev.filter((id) => id !== employeeCode));
-                        }
-                      }}
-                    />
-                    <span>{item.name}（{employeeCode}）</span>
-                  </label>
-                );
-              })}
-            </div>
-          </div>
-          <div className="space-y-1">
-            {teamFilter !== "all" && (
-              <div className="mb-2 flex items-center justify-between rounded border border-blue-100 bg-blue-50 px-2 py-1.5 text-[11px] text-blue-700">
-                <span>当前筛选：{teamFilterLabel}</span>
-                <button type="button" onClick={() => setTeamFilter("all")} className="text-blue-700 hover:text-blue-800">清除筛选</button>
-              </div>
-            )}
-            {filteredGroups.length === 0 ? (
-              <div className="text-xs text-gray-500">{teamFilter === "all" ? "暂无协作群组" : "当前筛选下暂无团队"}</div>
-            ) : (
-              filteredGroups.map((group) => (
-                <div key={group.id} data-testid={`employee-group-item-${group.id}`} className="rounded border border-gray-200 px-2 py-1.5 space-y-2">
-                  {(() => {
-                    const templateId = group.template_id?.trim() || "";
-                    const entryEmployeeId = group.entry_employee_id?.trim() || group.coordinator_employee_id;
-                    const reviewMode = group.review_mode?.trim() || "none";
-                    const executionMode = group.execution_mode?.trim() || "sequential";
-                    const visibilityMode = group.visibility_mode?.trim() || "internal";
-                    const groupConfig = parseGroupTemplateConfig(group.config_json);
-                    const groupRules = groupRulesById[group.id] || [];
-                    return (
-                      <>
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="text-xs text-gray-700">
-                      <span className="font-medium">{group.name}</span>
-                      <span className="text-gray-500"> · 协调员 {group.coordinator_employee_id} · {group.member_count} 人</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        data-testid={`employee-team-clone-${group.id}`}
-                        onClick={() => cloneEmployeeGroup(group)}
-                        disabled={cloningGroupId === group.id}
-                        className="h-7 px-2 rounded border border-blue-200 hover:bg-blue-50 disabled:bg-gray-100 text-blue-700 text-xs"
-                      >
-                        {cloningGroupId === group.id ? "复制中..." : "复制模板"}
-                      </button>
-                      <button
-                        type="button"
-                        data-testid={`employee-group-delete-${group.id}`}
-                        onClick={() => deleteEmployeeGroup(group.id)}
-                        disabled={groupDeletingId === group.id}
-                        className="h-7 px-2 rounded border border-red-200 hover:bg-red-50 disabled:bg-gray-100 text-red-600 text-xs"
-                      >
-                        {groupDeletingId === group.id ? "删除中..." : "删除"}
-                      </button>
-                    </div>
-                  </div>
-                  {(group.is_bootstrap_seeded || templateId) && (
-                    <div
-                      data-testid={`employee-team-seeded-banner-${group.id}`}
-                      className="rounded border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-800"
-                    >
-                      已预置默认团队 · 模板 {templateId || "custom"}
-                    </div>
-                  )}
-                  <div className="flex flex-wrap gap-1.5 text-[11px] text-gray-700">
-                    <span className="rounded border border-gray-200 bg-gray-50 px-2 py-0.5">
-                      入口：{resolveEmployeeDisplayName(entryEmployeeId)}
-                    </span>
-                    <span className="rounded border border-gray-200 bg-gray-50 px-2 py-0.5">
-                      协调：{resolveEmployeeDisplayName(group.coordinator_employee_id)}
-                    </span>
-                    <span className="rounded border border-gray-200 bg-gray-50 px-2 py-0.5">
-                      审核：{reviewMode}
-                    </span>
-                    <span className="rounded border border-gray-200 bg-gray-50 px-2 py-0.5">
-                      执行：{executionMode}
-                    </span>
-                    <span className="rounded border border-gray-200 bg-gray-50 px-2 py-0.5">
-                      可见性：{visibilityMode}
-                    </span>
-                  </div>
-                  {groupConfig.roles?.length ? (
-                    <div className="rounded border border-gray-100 bg-gray-50 px-2 py-1.5 text-[11px] text-gray-700">
-                      <div className="text-gray-500 mb-1">角色分工</div>
-                      <div className="flex flex-wrap gap-1.5">
-                        {(groupConfig.roles || []).map((role, index) => (
-                          <span
-                            key={`${group.id}-role-${role.role_type || "role"}-${role.employee_id || role.employee_key || index}`}
-                            className="rounded border border-indigo-100 bg-indigo-50 px-2 py-0.5 text-indigo-700"
-                          >
-                            {groupRoleLabel(role.role_type || "")}：
-                            {resolveEmployeeDisplayName(role.employee_id || role.employee_key || "")}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-                  {groupRules.length > 0 && (
-                    <div className="rounded border border-gray-100 bg-white px-2 py-1.5">
-                      <div className="text-[11px] text-gray-500 mb-1">协作规则</div>
-                      <div className="space-y-1">
-                        {groupRules.map((rule) => (
-                          <div
-                            key={rule.id}
-                            data-testid={`employee-group-rule-${group.id}-${rule.id}`}
-                            className="text-[11px] text-gray-700"
-                          >
-                            {resolveEmployeeDisplayName(rule.from_employee_id)} -&gt; {resolveEmployeeDisplayName(rule.to_employee_id)} · {rule.relation_type} · {rule.phase_scope || "all"}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  <div className="flex items-center gap-2">
-                    <input
-                      data-testid={`employee-group-run-goal-${group.id}`}
-                      className="flex-1 border border-gray-200 rounded px-2 py-1.5 text-xs"
-                      placeholder="给该团队发送协作指令"
-                      value={groupRunGoalById[group.id] || ""}
-                      onChange={(e) =>
-                        setGroupRunGoalById((prev) => ({ ...prev, [group.id]: e.target.value }))
-                      }
-                    />
-                    <button
-                      type="button"
-                      data-testid={`employee-group-run-start-${group.id}`}
-                      onClick={() => startEmployeeGroupRun(group.id)}
-                      disabled={groupRunSubmittingId === group.id}
-                      className="h-7 px-2.5 rounded bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white text-xs"
-                    >
-                      {groupRunSubmittingId === group.id ? "执行中..." : "以团队模式发起任务"}
-                    </button>
-                  </div>
-                  {groupRunReportById[group.id] && (
-                    <div
-                      data-testid={`employee-group-run-report-${group.id}`}
-                      className="rounded border border-indigo-100 bg-indigo-50 px-2 py-1.5 text-[11px] text-indigo-900 whitespace-pre-wrap"
-                    >
-                      {groupRunReportById[group.id]}
-                    </div>
-                  )}
-                      </>
-                    );
-                  })()}
-                </div>
-              ))
-            )}
-          </div>
-        </div>
           </div>
         )}
         {activeTab === "settings" && (
@@ -1528,27 +1030,11 @@ export function EmployeeHubView({
                   />
                 )}
 
-                <div className="rounded-lg border border-gray-200 p-3 space-y-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="text-xs font-medium text-gray-700">AGENTS / SOUL / USER（只读）</div>
-                    <button
-                      type="button"
-                      onClick={() => onOpenEmployeeCreatorSkill?.({ mode: "update", employeeId: selectedEmployee.id })}
-                      className="h-7 px-2.5 rounded border border-blue-200 hover:bg-blue-50 text-blue-700 text-xs"
-                    >
-                      更新画像
-                    </button>
-                  </div>
-                  {profileLoading ? <div className="text-xs text-gray-500">正在加载配置文件...</div> : profileView ? <>
-                    <div className="text-[11px] text-gray-500 break-all">目录：{profileView.profile_dir}</div>
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-2">{profileView.files.map((file) => (
-                      <div key={file.name} className="border border-gray-100 rounded p-2 space-y-1">
-                        <div className="text-xs font-medium text-gray-700">{file.name} {file.exists ? "" : "（未生成）"}</div>
-                        {file.error ? <div className="text-[11px] text-red-600">读取失败：{file.error}</div> : file.exists ? <pre className="text-[11px] text-gray-600 whitespace-pre-wrap max-h-56 overflow-y-auto">{file.content}</pre> : <div className="text-[11px] text-gray-500">尚未生成。可使用“智能体员工助手”补齐配置。</div>}
-                      </div>
-                    ))}</div>
-                  </> : <div className="text-xs text-gray-500">暂无可展示的配置文件。</div>}
-                </div>
+                <EmployeeProfileFilesSection
+                  profileLoading={profileLoading}
+                  profileView={profileView}
+                  onOpenEmployeeCreatorSkill={() => onOpenEmployeeCreatorSkill?.({ mode: "update", employeeId: selectedEmployee.id })}
+                />
 
                 <div className="flex items-center gap-2 pt-1">
                   <button disabled={saving || !selectedEmployeeId} onClick={requestRemoveCurrent} className="h-8 px-3 rounded bg-red-50 hover:bg-red-100 disabled:bg-gray-100 text-red-600 text-xs">删除员工</button>
@@ -1565,22 +1051,19 @@ export function EmployeeHubView({
               </div>
             )}
 
-            <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-3 space-y-2">
-              <div className="flex items-center justify-between gap-2"><div className="text-xs font-medium text-indigo-900">长期记忆管理</div>{memoryLoading && <div className="text-[11px] text-indigo-600">统计刷新中...</div>}</div>
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
-                <select data-testid="employee-memory-scope" className="border border-indigo-200 rounded px-2 py-1.5 text-xs bg-white" value={memoryScopeSkillId} onChange={(e) => setMemoryScopeSkillId(e.target.value)}>
-                  <option value="__all__">全部技能</option>
-                  {memorySkillScopeOptions.map((id) => <option key={id} value={id}>{id}</option>)}
-                </select>
-                <button type="button" data-testid="employee-memory-refresh" onClick={() => refreshEmployeeMemoryStats()} disabled={memoryLoading || memoryActionLoading !== null || !selectedEmployeeMemoryId} className="h-8 rounded border border-indigo-200 hover:bg-indigo-100 disabled:bg-gray-100 text-indigo-700 text-xs">刷新统计</button>
-                <button type="button" data-testid="employee-memory-export" onClick={exportEmployeeMemory} disabled={memoryLoading || memoryActionLoading !== null || !selectedEmployeeMemoryId} className="h-8 rounded border border-indigo-200 hover:bg-indigo-100 disabled:bg-gray-100 text-indigo-700 text-xs">{memoryActionLoading === "export" ? "导出中..." : "导出 JSON"}</button>
-                <button type="button" data-testid="employee-memory-clear" onClick={() => setPendingClearMemory(true)} disabled={memoryLoading || memoryActionLoading !== null || !selectedEmployeeMemoryId} className="h-8 rounded border border-red-200 hover:bg-red-50 disabled:bg-gray-100 text-red-600 text-xs">清空记忆</button>
-              </div>
-              <div className="text-xs text-indigo-800 flex items-center gap-4"><span data-testid="employee-memory-total-files">文件数：{memoryStats?.total_files ?? 0}</span><span data-testid="employee-memory-total-bytes">大小：{memoryStats?.total_bytes ?? 0}</span><span>({formatBytes(memoryStats?.total_bytes ?? 0)})</span></div>
-              <div className="max-h-32 overflow-y-auto rounded border border-indigo-100 bg-white p-2 space-y-1">
-                {(memoryStats?.skills || []).length === 0 ? <div className="text-[11px] text-gray-500">暂无长期记忆文件</div> : (memoryStats?.skills || []).map((item) => <div key={item.skill_id} data-testid={`employee-memory-skill-${item.skill_id}`} className="text-[11px] text-gray-700 flex items-center justify-between"><span>{item.skill_id}</span><span>{item.total_files} 文件 / {formatBytes(item.total_bytes)}</span></div>)}
-              </div>
-            </div>
+            <EmployeeMemoryToolsSection
+              memoryLoading={memoryLoading}
+              memoryActionLoading={memoryActionLoading}
+              memoryScopeSkillId={memoryScopeSkillId}
+              memorySkillScopeOptions={memorySkillScopeOptions}
+              selectedEmployeeMemoryId={selectedEmployeeMemoryId}
+              memoryStats={memoryStats}
+              formatBytes={formatBytes}
+              onMemoryScopeChange={setMemoryScopeSkillId}
+              onRefreshEmployeeMemoryStats={() => refreshEmployeeMemoryStats()}
+              onExportEmployeeMemory={exportEmployeeMemory}
+              onRequestClearEmployeeMemory={() => setPendingClearMemory(true)}
+            />
           </div>
         </div>
           </div>
@@ -1592,51 +1075,14 @@ export function EmployeeHubView({
             aria-labelledby="employee-hub-tab-runs"
             className="space-y-4"
           >
-            <div className="rounded-xl border border-gray-200 bg-white p-4 space-y-3">
-              <div>
-                <div className="text-sm font-medium text-gray-900">最近运行</div>
-                <div className="text-xs text-gray-500 mt-1">统一查看最近发起的团队任务与执行状态。</div>
-              </div>
-              {runFilter !== "all" && (
-                <div className="flex items-center justify-between rounded border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-700">
-                  <span>当前筛选：{runFilterLabel}</span>
-                  <button type="button" onClick={() => setRunFilter("all")} className="text-blue-700 hover:text-blue-800">
-                    清除筛选
-                  </button>
-                </div>
-              )}
-              {filteredRuns.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-gray-300 px-3 py-4 text-xs text-gray-500">
-                  {runFilter === "all" ? "还没有运行记录，可先到团队页发起一次任务。" : "当前筛选下暂无运行记录。"}
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  {filteredRuns.map((run) => (
-                    <div key={run.id} className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2">
-                      <div className="min-w-0">
-                        <div className="text-sm text-gray-900 truncate">{run.goal || "未命名任务"}</div>
-                        <div className="text-xs text-gray-500">
-                          {run.group_name || "未命名团队"} · {resolveRunStatusLabel(run.status)} · {formatRunTimestamp(run.started_at)}
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (run.session_id && run.session_skill_id) {
-                            void onOpenGroupRunSession?.(run.session_id, run.session_skill_id);
-                            return;
-                          }
-                          openTeamsTab("all");
-                        }}
-                        className="text-xs text-blue-600 hover:text-blue-700"
-                      >
-                        {run.session_id && run.session_skill_id ? "进入会话" : "去团队查看"}
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+            <EmployeeRunsSection
+              runFilter={runFilter}
+              runFilterLabel={runFilterLabel}
+              filteredRuns={filteredRuns}
+              onClearRunFilter={() => setRunFilter("all")}
+              onOpenGroupRunSession={onOpenGroupRunSession}
+              onOpenTeamsTab={() => openTeamsTab("all")}
+            />
           </div>
         )}
       </div>

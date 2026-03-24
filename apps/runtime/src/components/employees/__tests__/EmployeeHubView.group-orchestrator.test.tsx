@@ -251,6 +251,90 @@ describe("EmployeeHubView group orchestrator panel", () => {
     ).toBe(false);
   });
 
+  test("opens existing run sessions from the runs tab and falls back to teams when session ids are missing", async () => {
+    const openSessionMock = vi.fn();
+    invokeMock.mockReset();
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_runtime_preferences") {
+        return Promise.resolve({ default_work_dir: "E:\\workspace" });
+      }
+      if (command === "list_employee_groups") {
+        return Promise.resolve([
+          {
+            id: "group-1",
+            name: "交付协作群",
+            coordinator_employee_id: "pm",
+            member_employee_ids: ["pm", "dev", "qa"],
+            member_count: 3,
+            created_at: "2026-03-05T00:00:00Z",
+            updated_at: "2026-03-05T00:00:00Z",
+          },
+        ]);
+      }
+      if (command === "list_employee_group_runs") {
+        return Promise.resolve([
+          {
+            id: "run-session",
+            group_id: "group-1",
+            group_name: "交付协作群",
+            goal: "已有会话任务",
+            status: "running",
+            started_at: "2026-03-05T10:00:00Z",
+            finished_at: "",
+            session_id: "session-group-1",
+            session_skill_id: "builtin-general",
+          },
+          {
+            id: "run-no-session",
+            group_id: "group-1",
+            group_name: "交付协作群",
+            goal: "无会话任务",
+            status: "completed",
+            started_at: "2026-03-05T09:00:00Z",
+            finished_at: "2026-03-05T09:10:00Z",
+            session_id: "",
+            session_skill_id: "",
+          },
+        ]);
+      }
+      if (command === "get_feishu_employee_connection_statuses") {
+        return Promise.resolve({
+          relay: { running: false, generation: 0, interval_ms: 1500, total_accepted: 0 },
+          sidecar: { running: false, queued_events: 0, running_count: 0, items: [] },
+        });
+      }
+      if (command === "set_runtime_preferences") return Promise.resolve(null);
+      if (command === "resolve_default_work_dir") return Promise.resolve("E:\\workspace");
+      return Promise.resolve(null);
+    });
+
+    render(
+      <EmployeeHubView
+        employees={[buildEmployee("pm"), buildEmployee("dev"), buildEmployee("qa")]}
+        skills={[]}
+        selectedEmployeeId={null}
+        onSelectEmployee={() => {}}
+        onSaveEmployee={async () => {}}
+        onDeleteEmployee={async () => {}}
+        onSetAsMainAndEnter={() => {}}
+        onStartTaskWithEmployee={() => {}}
+        onOpenGroupRunSession={openSessionMock}
+      />
+    );
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("list_employee_group_runs", { limit: 10 });
+    });
+
+    fireEvent.click(screen.getByRole("tab", { name: "运行" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "进入会话" }));
+    expect(openSessionMock).toHaveBeenCalledWith("session-group-1", "builtin-general");
+
+    fireEvent.click(screen.getByRole("button", { name: "去团队查看" }));
+    expect(screen.getByRole("tab", { name: "团队" })).toHaveAttribute("aria-selected", "true");
+  });
+
   test("uses explicit labels for employee direct chat and team collaboration entry", async () => {
     invokeMock.mockReset();
     invokeMock.mockImplementation((command: string) => {
