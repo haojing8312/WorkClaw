@@ -37,6 +37,26 @@ import {
   summarizeConnectorIssue,
   summarizeOfficialFeishuRuntimeLogs,
 } from "./settings/feishu/feishuSelectors";
+import {
+  approveFeishuPairingRequest as approveFeishuPairingRequestFromService,
+  denyFeishuPairingRequest as denyFeishuPairingRequestFromService,
+  installOpenClawLarkPlugin as installOpenClawLarkPluginFromService,
+  loadFeishuAdvancedSettings as loadFeishuAdvancedSettingsFromService,
+  loadFeishuGatewaySettings as loadFeishuGatewaySettingsFromService,
+  loadFeishuInstallerSessionStatus as loadFeishuInstallerSessionStatusFromService,
+  loadFeishuPairingRequests as loadFeishuPairingRequestsFromService,
+  loadFeishuPluginChannelHosts as loadFeishuPluginChannelHostsFromService,
+  loadFeishuPluginChannelSnapshot as loadFeishuPluginChannelSnapshotFromService,
+  loadFeishuRuntimeStatus as loadFeishuRuntimeStatusFromService,
+  loadFeishuSetupProgress as loadFeishuSetupProgressFromService,
+  probeFeishuCredentials as probeFeishuCredentialsFromService,
+  saveFeishuAdvancedSettings as saveFeishuAdvancedSettingsFromService,
+  saveFeishuGatewaySettings as saveFeishuGatewaySettingsFromService,
+  sendFeishuInstallerInput as sendFeishuInstallerInputFromService,
+  startFeishuInstallerSession as startFeishuInstallerSessionFromService,
+  startFeishuRuntime as startFeishuRuntimeFromService,
+  stopFeishuInstallerSession as stopFeishuInstallerSessionFromService,
+} from "./settings/feishu/feishuSettingsService";
 export { buildFeishuOnboardingState } from "./settings/feishu/feishuSelectors";
 export type {
   FeishuOnboardingInput,
@@ -52,7 +72,6 @@ import {
   FeishuGatewaySettings,
   OpenClawPluginFeishuAdvancedSettings,
   OpenClawPluginChannelHost,
-  OpenClawPluginInstallRecord,
   OpenClawPluginChannelSnapshotResult,
   OpenClawPluginFeishuCredentialProbeResult,
   OpenClawPluginFeishuRuntimeStatus,
@@ -355,8 +374,8 @@ export function SettingsView({
   async function loadConnectorSettings() {
     try {
       const [feishuSettings, feishuAdvanced] = await Promise.all([
-        invoke<FeishuGatewaySettings>("get_feishu_gateway_settings"),
-        invoke<OpenClawPluginFeishuAdvancedSettings>("get_openclaw_plugin_feishu_advanced_settings"),
+        loadFeishuGatewaySettingsFromService(),
+        loadFeishuAdvancedSettingsFromService(),
       ]);
       setFeishuConnectorSettings({
         app_id: feishuSettings?.app_id || "",
@@ -401,7 +420,7 @@ export function SettingsView({
 
   async function loadFeishuSetupProgress() {
     try {
-      const progress = await invoke<FeishuSetupProgress | null>("get_feishu_setup_progress");
+      const progress = await loadFeishuSetupProgressFromService();
       if (progress) {
         setFeishuEnvironmentStatus(progress.environment ?? null);
         setFeishuSetupProgress(progress);
@@ -418,9 +437,7 @@ export function SettingsView({
 
   async function loadConnectorStatuses() {
     try {
-      const runtimeStatus = await invoke<OpenClawPluginFeishuRuntimeStatus>(
-        "get_openclaw_plugin_feishu_runtime_status",
-      );
+      const runtimeStatus = await loadFeishuRuntimeStatusFromService();
       setOfficialFeishuRuntimeStatus(runtimeStatus);
     } catch (e) {
       console.warn("加载渠道连接器状态失败:", e);
@@ -430,9 +447,7 @@ export function SettingsView({
 
   async function loadFeishuInstallerSessionStatus() {
     try {
-      const status = await invoke<OpenClawLarkInstallerSessionStatus | null>(
-        "get_openclaw_lark_installer_session_status",
-      );
+      const status = await loadFeishuInstallerSessionStatusFromService();
       setFeishuInstallerSession(status ?? DEFAULT_FEISHU_INSTALLER_SESSION);
     } catch (e) {
       console.warn("加载飞书官方安装向导状态失败:", e);
@@ -441,10 +456,8 @@ export function SettingsView({
 
   async function loadConnectorPlatformData() {
     const [hostsResult, pairingResult] = await Promise.allSettled([
-      invoke<OpenClawPluginChannelHost[]>("list_openclaw_plugin_channel_hosts"),
-      invoke<FeishuPairingRequestRecord[]>("list_feishu_pairing_requests", {
-        status: null,
-      }),
+      loadFeishuPluginChannelHostsFromService(),
+      loadFeishuPairingRequestsFromService(),
     ]);
 
     const normalizedHosts =
@@ -478,9 +491,7 @@ export function SettingsView({
 
     const snapshotResults = await Promise.allSettled(
       normalizedHosts.map((host) =>
-        invoke<OpenClawPluginChannelSnapshotResult>("get_openclaw_plugin_feishu_channel_snapshot", {
-          pluginId: host.plugin_id,
-        }),
+        loadFeishuPluginChannelSnapshotFromService(host.plugin_id),
       ),
     );
     const nextSnapshots: Record<string, OpenClawPluginChannelSnapshotResult> = {};
@@ -935,13 +946,7 @@ export function SettingsView({
     setFeishuConnectorNotice("");
     setFeishuConnectorError("");
     try {
-      const probe = await invoke<OpenClawPluginFeishuCredentialProbeResult>(
-        "probe_openclaw_plugin_feishu_credentials",
-        {
-          appId,
-          appSecret,
-        },
-      );
+      const probe = await probeFeishuCredentialsFromService(appId, appSecret);
       if (!probe.ok) {
         setFeishuCredentialProbe(null);
         setFeishuConnectorError(`已有机器人校验失败: ${probe.error || "无法获取机器人信息"}`);
@@ -963,10 +968,7 @@ export function SettingsView({
     setFeishuConnectorNotice("");
     setFeishuConnectorError("");
     try {
-      await invoke("set_feishu_gateway_settings", {
-        settings: feishuConnectorSettings,
-      });
-      const saved = await invoke<FeishuGatewaySettings>("get_feishu_gateway_settings");
+      const saved = await saveFeishuGatewaySettingsFromService(feishuConnectorSettings);
       setFeishuConnectorSettings(saved);
       await loadConnectorStatuses();
       await loadConnectorPlatformData();
@@ -984,40 +986,35 @@ export function SettingsView({
     setFeishuConnectorNotice("");
     setFeishuConnectorError("");
     try {
-      const saved = await invoke<OpenClawPluginFeishuAdvancedSettings>(
-        "set_openclaw_plugin_feishu_advanced_settings",
-        {
-          settings: {
-            groups_json: feishuAdvancedSettings.groups_json,
-            dms_json: feishuAdvancedSettings.dms_json,
-            footer_json: feishuAdvancedSettings.footer_json,
-            account_overrides_json: feishuAdvancedSettings.account_overrides_json,
-            render_mode: feishuAdvancedSettings.render_mode,
-            streaming: feishuAdvancedSettings.streaming,
-            text_chunk_limit: feishuAdvancedSettings.text_chunk_limit,
-            chunk_mode: feishuAdvancedSettings.chunk_mode,
-            reply_in_thread: feishuAdvancedSettings.reply_in_thread,
-            group_session_scope: feishuAdvancedSettings.group_session_scope,
-            topic_session_mode: feishuAdvancedSettings.topic_session_mode,
-            markdown_mode: feishuAdvancedSettings.markdown_mode,
-            markdown_table_mode: feishuAdvancedSettings.markdown_table_mode,
-            heartbeat_visibility: feishuAdvancedSettings.heartbeat_visibility,
-            heartbeat_interval_ms: feishuAdvancedSettings.heartbeat_interval_ms,
-            media_max_mb: feishuAdvancedSettings.media_max_mb,
-            http_timeout_ms: feishuAdvancedSettings.http_timeout_ms,
-            config_writes: feishuAdvancedSettings.config_writes,
-            webhook_host: feishuAdvancedSettings.webhook_host,
-            webhook_port: feishuAdvancedSettings.webhook_port,
-            dynamic_agent_creation_enabled: feishuAdvancedSettings.dynamic_agent_creation_enabled,
-            dynamic_agent_creation_workspace_template:
-              feishuAdvancedSettings.dynamic_agent_creation_workspace_template,
-            dynamic_agent_creation_agent_dir_template:
-              feishuAdvancedSettings.dynamic_agent_creation_agent_dir_template,
-            dynamic_agent_creation_max_agents:
-              feishuAdvancedSettings.dynamic_agent_creation_max_agents,
-          },
-        },
-      );
+      const saved = await saveFeishuAdvancedSettingsFromService({
+        groups_json: feishuAdvancedSettings.groups_json,
+        dms_json: feishuAdvancedSettings.dms_json,
+        footer_json: feishuAdvancedSettings.footer_json,
+        account_overrides_json: feishuAdvancedSettings.account_overrides_json,
+        render_mode: feishuAdvancedSettings.render_mode,
+        streaming: feishuAdvancedSettings.streaming,
+        text_chunk_limit: feishuAdvancedSettings.text_chunk_limit,
+        chunk_mode: feishuAdvancedSettings.chunk_mode,
+        reply_in_thread: feishuAdvancedSettings.reply_in_thread,
+        group_session_scope: feishuAdvancedSettings.group_session_scope,
+        topic_session_mode: feishuAdvancedSettings.topic_session_mode,
+        markdown_mode: feishuAdvancedSettings.markdown_mode,
+        markdown_table_mode: feishuAdvancedSettings.markdown_table_mode,
+        heartbeat_visibility: feishuAdvancedSettings.heartbeat_visibility,
+        heartbeat_interval_ms: feishuAdvancedSettings.heartbeat_interval_ms,
+        media_max_mb: feishuAdvancedSettings.media_max_mb,
+        http_timeout_ms: feishuAdvancedSettings.http_timeout_ms,
+        config_writes: feishuAdvancedSettings.config_writes,
+        webhook_host: feishuAdvancedSettings.webhook_host,
+        webhook_port: feishuAdvancedSettings.webhook_port,
+        dynamic_agent_creation_enabled: feishuAdvancedSettings.dynamic_agent_creation_enabled,
+        dynamic_agent_creation_workspace_template:
+          feishuAdvancedSettings.dynamic_agent_creation_workspace_template,
+        dynamic_agent_creation_agent_dir_template:
+          feishuAdvancedSettings.dynamic_agent_creation_agent_dir_template,
+        dynamic_agent_creation_max_agents:
+          feishuAdvancedSettings.dynamic_agent_creation_max_agents,
+      });
       setFeishuAdvancedSettings(saved);
       await loadConnectorPlatformData();
       await loadFeishuSetupProgress();
@@ -1036,16 +1033,13 @@ export function SettingsView({
     setFeishuConnectorError("");
     try {
       if (!hasInstalledOfficialFeishuPlugin) {
-        await invoke<OpenClawPluginInstallRecord>("install_openclaw_plugin_from_npm", {
-          pluginId: "openclaw-lark",
-          npmSpec: "@larksuite/openclaw-lark",
-        });
+        await installOpenClawLarkPluginFromService();
       }
-      const status = await invoke<OpenClawLarkInstallerSessionStatus | null>("start_openclaw_lark_installer_session", {
+      const status = await startFeishuInstallerSessionFromService(
         mode,
-        appId: mode === "link" ? feishuConnectorSettings.app_id.trim() : null,
-        appSecret: mode === "link" ? feishuConnectorSettings.app_secret.trim() : null,
-      });
+        mode === "link" ? feishuConnectorSettings.app_id.trim() : null,
+        mode === "link" ? feishuConnectorSettings.app_secret.trim() : null,
+      );
       setFeishuInstallerSession(status ?? DEFAULT_FEISHU_INSTALLER_SESSION);
       setFeishuInstallerInput("");
       await loadConnectorPlatformData();
@@ -1067,9 +1061,7 @@ export function SettingsView({
     setFeishuInstallerBusy(true);
     setFeishuConnectorError("");
     try {
-      const status = await invoke<OpenClawLarkInstallerSessionStatus | null>("send_openclaw_lark_installer_input", {
-        input,
-      });
+      const status = await sendFeishuInstallerInputFromService(input);
       setFeishuInstallerSession(status ?? DEFAULT_FEISHU_INSTALLER_SESSION);
       setFeishuInstallerInput("");
     } catch (error) {
@@ -1083,7 +1075,7 @@ export function SettingsView({
     setFeishuInstallerBusy(true);
     setFeishuConnectorError("");
     try {
-      const status = await invoke<OpenClawLarkInstallerSessionStatus | null>("stop_openclaw_lark_installer_session");
+      const status = await stopFeishuInstallerSessionFromService();
       setFeishuInstallerSession(status ?? DEFAULT_FEISHU_INSTALLER_SESSION);
       setFeishuConnectorNotice("已停止飞书官方安装向导");
     } catch (error) {
@@ -1098,10 +1090,7 @@ export function SettingsView({
     setFeishuConnectorNotice("");
     setFeishuConnectorError("");
     try {
-      const runtimeStatus = await invoke<OpenClawPluginFeishuRuntimeStatus | null>("start_openclaw_plugin_feishu_runtime", {
-        pluginId: primaryPluginChannelHost?.plugin_id || "openclaw-lark",
-        accountId: null,
-      });
+      const runtimeStatus = await startFeishuRuntimeFromService(primaryPluginChannelHost?.plugin_id || "openclaw-lark", null);
       if (runtimeStatus) {
         applyOfficialFeishuRuntimeStatus(runtimeStatus, { showStartErrorNotice: true });
       } else {
@@ -1124,10 +1113,7 @@ export function SettingsView({
     setFeishuConnectorNotice("");
     setFeishuConnectorError("");
     try {
-      await invoke<OpenClawPluginInstallRecord>("install_openclaw_plugin_from_npm", {
-        pluginId: "openclaw-lark",
-        npmSpec: "@larksuite/openclaw-lark",
-      });
+      await installOpenClawLarkPluginFromService();
       await loadConnectorPlatformData();
       await loadFeishuSetupProgress();
       setFeishuConnectorNotice("飞书官方插件已安装");
@@ -1143,13 +1129,11 @@ export function SettingsView({
     setFeishuConnectorNotice("");
     setFeishuConnectorError("");
     try {
-      await invoke<FeishuPairingRequestRecord>(
-        action === "approve" ? "approve_feishu_pairing_request" : "deny_feishu_pairing_request",
-        {
-          requestId,
-          resolvedByUser: "settings-ui",
-        },
-      );
+      if (action === "approve") {
+        await approveFeishuPairingRequestFromService(requestId);
+      } else {
+        await denyFeishuPairingRequestFromService(requestId);
+      }
       await loadConnectorPlatformData();
       await loadFeishuSetupProgress();
       setFeishuConnectorNotice(action === "approve" ? "已批准飞书接入请求" : "已拒绝飞书接入请求");
@@ -1170,23 +1154,17 @@ export function SettingsView({
         return;
       }
 
-      await invoke("set_feishu_gateway_settings", {
-        settings: feishuConnectorSettings,
-      });
-      const saved = await invoke<FeishuGatewaySettings>("get_feishu_gateway_settings");
+      const saved = await saveFeishuGatewaySettingsFromService(feishuConnectorSettings);
       setFeishuConnectorSettings(saved);
 
       if (!hasInstalledOfficialFeishuPlugin) {
-        await invoke<OpenClawPluginInstallRecord>("install_openclaw_plugin_from_npm", {
-          pluginId: "openclaw-lark",
-          npmSpec: "@larksuite/openclaw-lark",
-        });
+        await installOpenClawLarkPluginFromService();
       }
 
-      const runtimeStatus = await invoke<OpenClawPluginFeishuRuntimeStatus | null>("start_openclaw_plugin_feishu_runtime", {
-        pluginId: primaryPluginChannelHost?.plugin_id || "openclaw-lark",
-        accountId: null,
-      });
+      const runtimeStatus = await startFeishuRuntimeFromService(
+        primaryPluginChannelHost?.plugin_id || "openclaw-lark",
+        null,
+      );
       if (runtimeStatus) {
         applyOfficialFeishuRuntimeStatus(runtimeStatus, { showStartErrorNotice: true });
       }
