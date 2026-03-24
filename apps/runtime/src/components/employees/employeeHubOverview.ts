@@ -7,6 +7,9 @@ export interface EmployeeHubRunLike {
 export type EmployeeHubEmployeeFilter = "all" | "available" | "missing-skills" | "pending-connection";
 export type EmployeeHubTeamFilter = "all" | "incomplete-team";
 export type EmployeeHubRunFilter = "all" | "running";
+export type EmployeeGroupReviewMode = "none" | "soft" | "hard";
+export type EmployeeGroupExecutionMode = "sequential" | "parallel";
+export type EmployeeGroupVisibilityMode = "internal" | "shared";
 
 export interface EmployeeHubOverviewMetrics {
   employees: number;
