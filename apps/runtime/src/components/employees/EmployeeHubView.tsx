@@ -18,6 +18,7 @@ import {
   UpsertAgentEmployeeInput,
 } from "../../types";
 import { RiskConfirmDialog } from "../RiskConfirmDialog";
+import { EmployeeHubTabNav, type EmployeeHubTab as EmployeeHubTabNavItem } from "./EmployeeHubTabNav";
 import {
   EmployeeHubEmployeeFilter,
   EmployeeHubRunFilter,
@@ -60,7 +61,7 @@ type GroupTemplateConfig = {
   roles?: GroupTemplateRole[];
 };
 
-export type EmployeeHubTab = "overview" | "employees" | "teams" | "runs" | "settings";
+export type EmployeeHubTab = EmployeeHubTabNavItem;
 
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
@@ -917,33 +918,7 @@ export function EmployeeHubView({
             <button type="button" data-testid="employee-creator-highlight-dismiss" onClick={() => onDismissHighlight?.()} className="h-7 px-2.5 rounded border border-emerald-200 hover:bg-emerald-100 text-emerald-700 text-xs">知道了</button>
           </div>
         )}
-        <div className="rounded-xl border border-[var(--sm-border)] bg-[var(--sm-surface)] p-2 shadow-[var(--sm-shadow-sm)]">
-          <div role="tablist" aria-label="智能体员工导航" className="flex flex-wrap gap-2">
-            {tabs.map((tab) => {
-              const selected = activeTab === tab.id;
-              return (
-                <button
-                  key={tab.id}
-                  id={`employee-hub-tab-${tab.id}`}
-                  type="button"
-                  role="tab"
-                  aria-selected={selected}
-                  aria-controls={`employee-hub-panel-${tab.id}`}
-                  tabIndex={selected ? 0 : -1}
-                  onClick={() => openTabFromNav(tab.id)}
-                  className={
-                    "h-9 px-4 rounded-lg text-sm transition " +
-                    (selected
-                      ? "border-[var(--sm-primary-soft)] bg-[var(--sm-primary-soft)] text-[var(--sm-primary-strong)] shadow-[var(--sm-shadow-sm)]"
-                      : "border border-[var(--sm-border)] bg-[var(--sm-surface)] text-[var(--sm-text-muted)] hover:bg-[var(--sm-surface-muted)]")
-                  }
-                >
-                  {tab.label}
-                </button>
-              );
-            })}
-          </div>
-        </div>
+        <EmployeeHubTabNav tabs={tabs} activeTab={activeTab} onTabChange={openTabFromNav} />
         {message && <div className="text-xs text-blue-700 bg-blue-50 border border-blue-100 rounded px-3 py-2">{message}</div>}
         {activeTab === "overview" && (
           <div
