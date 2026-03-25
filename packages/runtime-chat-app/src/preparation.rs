@@ -36,7 +36,7 @@ pub(crate) fn prepare_session_creation(request: SessionCreationRequest) -> Prepa
     }
 }
 
-pub async fn prepare_chat_execution<R: ChatSettingsRepository>(
+pub(crate) async fn prepare_chat_execution<R: ChatSettingsRepository>(
     repo: &R,
     request: ChatPreparationRequest,
 ) -> Result<PreparedChatExecution, String> {
