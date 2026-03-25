@@ -81,3 +81,59 @@ fn resolve_manual_confirmation(
     };
     Ok(decision)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_manual_confirmation;
+    use crate::approval_bus::ApprovalDecision;
+    use std::sync::mpsc::Sender;
+    use std::sync::{Arc, Mutex};
+    use std::thread;
+    use std::time::Duration;
+
+    fn drive_manual_confirmation(
+        confirm_state: Arc<Mutex<Option<Sender<bool>>>>,
+        decision: bool,
+    ) -> thread::JoinHandle<()> {
+        thread::spawn(move || {
+            for _ in 0..50 {
+                let sender = {
+                    let guard = confirm_state.lock().expect("lock confirm state");
+                    guard.as_ref().cloned()
+                };
+                if let Some(sender) = sender {
+                    sender.send(decision).expect("send decision");
+                    return;
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            panic!("manual confirmation sender was not installed");
+        })
+    }
+
+    #[test]
+    fn manual_confirmation_true_is_allowed_once() {
+        let confirm_state = Arc::new(Mutex::new(None));
+        let driver = drive_manual_confirmation(Arc::clone(&confirm_state), true);
+
+        let decision = resolve_manual_confirmation(Some(&confirm_state))
+            .expect("manual confirmation")
+            .expect("decision");
+
+        driver.join().expect("driver thread");
+        assert_eq!(decision, ApprovalDecision::AllowOnce);
+    }
+
+    #[test]
+    fn manual_confirmation_false_is_rejected() {
+        let confirm_state = Arc::new(Mutex::new(None));
+        let driver = drive_manual_confirmation(Arc::clone(&confirm_state), false);
+
+        let decision = resolve_manual_confirmation(Some(&confirm_state))
+            .expect("manual confirmation")
+            .expect("decision");
+
+        driver.join().expect("driver thread");
+        assert_eq!(decision, ApprovalDecision::Deny);
+    }
+}

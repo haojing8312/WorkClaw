@@ -5,11 +5,9 @@ use super::system_prompts::SystemPromptBuilder;
 use super::types::StreamDelta;
 use anyhow::Result;
 use serde_json::Value;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tauri::AppHandle;
-
-const TOOL_CONFIRM_TIMEOUT_SECS: u64 = 15;
 
 pub struct AgentExecutor {
     pub(super) registry: Arc<ToolRegistry>,
@@ -43,21 +41,6 @@ impl AgentExecutor {
     }
 
     /// 轮询 cancel_flag，直到收到取消信号
-    pub(super) async fn wait_for_cancel(cancel_flag: &Option<Arc<AtomicBool>>) {
-        loop {
-            if let Some(ref flag) = cancel_flag {
-                if flag.load(Ordering::SeqCst) {
-                    return;
-                }
-            } else {
-                // 没有 cancel_flag，永远不会取消
-                std::future::pending::<()>().await;
-                return;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        }
-    }
-
     pub async fn execute_turn(
         &self,
         api_format: &str,

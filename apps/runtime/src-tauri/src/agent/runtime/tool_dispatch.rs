@@ -1,12 +1,12 @@
 use crate::agent::browser_progress::BrowserProgressSnapshot;
 use crate::agent::event_bridge::{append_tool_run_event, build_skill_route_event};
-use crate::agent::executor::AgentExecutor;
 use crate::agent::permissions::PermissionMode;
 use crate::agent::progress::{json_progress_signature, text_progress_signature};
+use crate::agent::registry::ToolRegistry;
 use crate::agent::run_guard::{encode_run_stop_reason, ProgressFingerprint};
+use crate::agent::runtime::approval_gate::gate_tool_approval;
 use crate::agent::safety::classify_policy_blocked_tool_error;
 use crate::agent::types::{AgentStateEvent, Tool, ToolCall, ToolCallEvent, ToolContext, ToolResult};
-use crate::agent::runtime::approval_gate::gate_tool_approval;
 use crate::session_journal::SessionRunEvent;
 use anyhow::{anyhow, Result};
 use runtime_executor_core::{
@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter};
 
 pub(crate) struct ToolDispatchContext<'a> {
-    pub agent: &'a AgentExecutor,
+    pub registry: &'a ToolRegistry,
     pub app_handle: Option<&'a AppHandle>,
     pub session_id: Option<&'a str>,
     pub persisted_run_id: Option<&'a str>,
@@ -44,6 +44,190 @@ pub(crate) struct ToolDispatchState<'a> {
 pub(crate) enum ToolDispatchOutcome {
     Continue,
     Cancelled,
+}
+
+enum ApprovalOutcome {
+    Allowed(crate::approval_bus::ApprovalDecision),
+    TimedOut,
+    Failed(String),
+}
+
+async fn resolve_approval_outcome(
+    ctx: &ToolDispatchContext<'_>,
+    call: &ToolCall,
+) -> Result<ApprovalOutcome> {
+    match gate_tool_approval(
+        ctx.app_handle,
+        ctx.session_id,
+        ctx.persisted_run_id,
+        call,
+        ctx.tool_ctx.work_dir.as_deref(),
+        ctx.tool_confirm_tx,
+        ctx.cancel_flag.clone(),
+    )
+    .await
+    {
+        Ok(Some(decision)) => Ok(ApprovalOutcome::Allowed(decision)),
+        Ok(None) => Ok(ApprovalOutcome::TimedOut),
+        Err(err) => Ok(ApprovalOutcome::Failed(err.to_string())),
+    }
+}
+
+async fn emit_failed_completion(
+    ctx: &ToolDispatchContext<'_>,
+    call: &ToolCall,
+    state: &mut ToolDispatchState<'_>,
+    message: String,
+) {
+    if let (Some(app), Some(sid)) = (ctx.app_handle, ctx.session_id) {
+        let _ = app.emit(
+            "tool-call-event",
+            ToolCallEvent {
+                session_id: sid.to_string(),
+                tool_name: call.name.clone(),
+                tool_input: call.input.clone(),
+                tool_output: Some(message.clone()),
+                status: "error".to_string(),
+            },
+        );
+        if let Some(run_id) = ctx.persisted_run_id {
+            let _ = append_tool_run_event(
+                app,
+                sid,
+                SessionRunEvent::ToolCompleted {
+                    run_id: run_id.to_string(),
+                    tool_name: call.name.clone(),
+                    call_id: call.id.clone(),
+                    input: call.input.clone(),
+                    output: message.clone(),
+                    is_error: true,
+                },
+            )
+            .await;
+        }
+    }
+
+    state.tool_results.push(ToolResult {
+        tool_use_id: call.id.clone(),
+        content: message,
+    });
+}
+
+async fn emit_tool_completion(
+    ctx: &ToolDispatchContext<'_>,
+    call: &ToolCall,
+    node_id: &str,
+    skill_name: &str,
+    result: &str,
+    is_error: bool,
+    is_skill_call: bool,
+    started_at: std::time::Instant,
+) {
+    if let (Some(app), Some(sid)) = (ctx.app_handle, ctx.session_id) {
+        let _ = app.emit(
+            "tool-call-event",
+            ToolCallEvent {
+                session_id: sid.to_string(),
+                tool_name: call.name.clone(),
+                tool_input: call.input.clone(),
+                tool_output: Some(result.to_string()),
+                status: if is_error {
+                    "error".to_string()
+                } else {
+                    "completed".to_string()
+                },
+            },
+        );
+        if let Some(run_id) = ctx.persisted_run_id {
+            let _ = append_tool_run_event(
+                app,
+                sid,
+                SessionRunEvent::ToolCompleted {
+                    run_id: run_id.to_string(),
+                    tool_name: call.name.clone(),
+                    call_id: call.id.clone(),
+                    input: call.input.clone(),
+                    output: result.to_string(),
+                    is_error,
+                },
+            )
+            .await;
+        }
+
+        if is_skill_call {
+            let duration_ms = started_at.elapsed().as_millis() as u64;
+            let parsed_error = if is_error {
+                Some(split_error_code_and_message(result))
+            } else {
+                None
+            };
+            let _ = app.emit(
+                "skill-route-node-updated",
+                build_skill_route_event(
+                    sid,
+                    ctx.route_run_id,
+                    node_id,
+                    None,
+                    skill_name,
+                    1,
+                    if is_error { "failed" } else { "completed" },
+                    Some(duration_ms),
+                    parsed_error.as_ref().map(|(code, _)| code.as_str()),
+                    parsed_error.as_ref().map(|(_, msg)| msg.as_str()),
+                ),
+            );
+        }
+    }
+}
+
+fn record_tool_progress(
+    state: &mut ToolDispatchState<'_>,
+    call: &ToolCall,
+    result: &str,
+    is_error: bool,
+) {
+    if is_error {
+        if let Some(summary) = update_tool_failure_streak(
+            state.tool_failure_streak,
+            &call.name,
+            &call.input,
+            result,
+        ) {
+            *state.repeated_failure_summary = Some(summary);
+        }
+    } else {
+        *state.tool_failure_streak = None;
+    }
+
+    let input_signature = json_progress_signature(&call.input);
+    let browser_progress_snapshot = if is_error {
+        None
+    } else {
+        BrowserProgressSnapshot::from_tool_output(&call.name, result)
+    };
+    let output_signature = if let Some(snapshot) = browser_progress_snapshot.as_ref() {
+        snapshot.progress_signature()
+    } else {
+        let progress_text = if is_error {
+            format!("error:{result}")
+        } else {
+            result.to_string()
+        };
+        text_progress_signature(&progress_text)
+    };
+    if let Some(snapshot) = browser_progress_snapshot {
+        *state.latest_browser_progress = Some(snapshot);
+    }
+    state.progress_history.push(ProgressFingerprint::tool_result(
+        call.name.clone(),
+        input_signature,
+        output_signature,
+    ));
+
+    state.tool_results.push(ToolResult {
+        tool_use_id: call.id.clone(),
+        content: result.to_string(),
+    });
 }
 
 pub(crate) async fn dispatch_tool_call(
@@ -141,100 +325,24 @@ pub(crate) async fn dispatch_tool_call(
         .permission_mode
         .needs_confirmation(&call.name, &call.input, ctx.tool_ctx.work_dir.as_deref())
     {
-        let approval_decision: Result<Option<crate::approval_bus::ApprovalDecision>> =
-            gate_tool_approval(
-            ctx.app_handle,
-            ctx.session_id,
-            ctx.persisted_run_id,
-            call,
-            ctx.tool_ctx.work_dir.as_deref(),
-            ctx.tool_confirm_tx,
-            ctx.cancel_flag.clone(),
-        )
-        .await;
-
-        let Some(approval_decision) = (match approval_decision {
-            Ok(Some(decision)) => Some(decision),
-            Ok(None) => {
+        match resolve_approval_outcome(ctx, call).await? {
+            ApprovalOutcome::TimedOut => {
                 state.tool_results.push(ToolResult {
                     tool_use_id: call.id.clone(),
                     content: "工具确认超时，已取消此操作".to_string(),
                 });
                 return Ok(ToolDispatchOutcome::Continue);
             }
-            Err(err) => {
-                let rejection_message = err.to_string();
-                if let (Some(app), Some(sid)) = (ctx.app_handle, ctx.session_id) {
-                    let _ = app.emit(
-                        "tool-call-event",
-                        ToolCallEvent {
-                            session_id: sid.to_string(),
-                            tool_name: call.name.clone(),
-                            tool_input: call.input.clone(),
-                            tool_output: Some(rejection_message.clone()),
-                            status: "error".to_string(),
-                        },
-                    );
-                    if let Some(run_id) = ctx.persisted_run_id {
-                        let _ = append_tool_run_event(
-                            app,
-                            sid,
-                            SessionRunEvent::ToolCompleted {
-                                run_id: run_id.to_string(),
-                                tool_name: call.name.clone(),
-                                call_id: call.id.clone(),
-                                input: call.input.clone(),
-                                output: rejection_message.clone(),
-                                is_error: true,
-                            },
-                        )
-                        .await;
-                    }
-                }
-                state.tool_results.push(ToolResult {
-                    tool_use_id: call.id.clone(),
-                    content: rejection_message,
-                });
+            ApprovalOutcome::Failed(message) => {
+                emit_failed_completion(ctx, call, state, message).await;
                 return Ok(ToolDispatchOutcome::Continue);
             }
-        }) else {
-            return Ok(ToolDispatchOutcome::Continue);
-        };
-
-        if approval_decision == crate::approval_bus::ApprovalDecision::Deny {
-            let rejection_message = "用户拒绝了此操作";
-            if let (Some(app), Some(sid)) = (ctx.app_handle, ctx.session_id) {
-                let _ = app.emit(
-                    "tool-call-event",
-                    ToolCallEvent {
-                        session_id: sid.to_string(),
-                        tool_name: call.name.clone(),
-                        tool_input: call.input.clone(),
-                        tool_output: Some(rejection_message.to_string()),
-                        status: "error".to_string(),
-                    },
-                );
-                if let Some(run_id) = ctx.persisted_run_id {
-                    let _ = append_tool_run_event(
-                        app,
-                        sid,
-                        SessionRunEvent::ToolCompleted {
-                            run_id: run_id.to_string(),
-                            tool_name: call.name.clone(),
-                            call_id: call.id.clone(),
-                            input: call.input.clone(),
-                            output: rejection_message.to_string(),
-                            is_error: true,
-                        },
-                    )
-                    .await;
+            ApprovalOutcome::Allowed(decision) => {
+                if decision == crate::approval_bus::ApprovalDecision::Deny {
+                    emit_failed_completion(ctx, call, state, "用户拒绝了此操作".to_string()).await;
+                    return Ok(ToolDispatchOutcome::Continue);
                 }
             }
-            state.tool_results.push(ToolResult {
-                tool_use_id: call.id.clone(),
-                content: rejection_message.to_string(),
-            });
-            return Ok(ToolDispatchOutcome::Continue);
         }
     }
 
@@ -256,24 +364,36 @@ pub(crate) async fn dispatch_tool_call(
                 true,
             )
         } else {
-            match ctx.agent.registry.get(&call.name) {
+            match ctx.registry.get(&call.name) {
                 Some(tool) => {
                     if let Some(whitelist) = ctx.allowed_tools {
                         if !whitelist.iter().any(|w| w == &call.name) {
-                            (
-                                format!("此 Skill 不允许使用工具: {}", call.name),
-                                true,
-                            )
+                            (format!("此 Skill 不允许使用工具: {}", call.name), true)
                         } else {
-                            run_tool(tool, call, ctx.tool_ctx, ctx.cancel_flag.clone(), ctx.route_node_timeout_secs, is_skill_call).await
+                            run_tool(
+                                tool,
+                                call,
+                                ctx.tool_ctx,
+                                ctx.cancel_flag.clone(),
+                                ctx.route_node_timeout_secs,
+                                is_skill_call,
+                            )
+                            .await
                         }
                     } else {
-                        run_tool(tool, call, ctx.tool_ctx, ctx.cancel_flag.clone(), ctx.route_node_timeout_secs, is_skill_call).await
+                        run_tool(
+                            tool,
+                            call,
+                            ctx.tool_ctx,
+                            ctx.cancel_flag.clone(),
+                            ctx.route_node_timeout_secs,
+                            is_skill_call,
+                        )
+                        .await
                     }
                 }
                 None => {
                     let available: Vec<String> = ctx
-                        .agent
                         .registry
                         .get_tool_definitions()
                         .iter()
@@ -297,76 +417,17 @@ pub(crate) async fn dispatch_tool_call(
 
     let result = truncate_tool_output(&result, MAX_TOOL_OUTPUT_CHARS);
 
-    if is_error {
-        if let Some(summary) = update_tool_failure_streak(
-            state.tool_failure_streak,
-            &call.name,
-            &call.input,
-            &result,
-        ) {
-            *state.repeated_failure_summary = Some(summary);
-        }
-    } else {
-        *state.tool_failure_streak = None;
-    }
-
-    if let (Some(app), Some(sid)) = (ctx.app_handle, ctx.session_id) {
-        let _ = app.emit(
-            "tool-call-event",
-            ToolCallEvent {
-                session_id: sid.to_string(),
-                tool_name: call.name.clone(),
-                tool_input: call.input.clone(),
-                tool_output: Some(result.clone()),
-                status: if is_error {
-                    "error".to_string()
-                } else {
-                    "completed".to_string()
-                },
-            },
-        );
-        if let Some(run_id) = ctx.persisted_run_id {
-            let _ = append_tool_run_event(
-                app,
-                sid,
-                SessionRunEvent::ToolCompleted {
-                    run_id: run_id.to_string(),
-                    tool_name: call.name.clone(),
-                    call_id: call.id.clone(),
-                    input: call.input.clone(),
-                    output: result.clone(),
-                    is_error,
-                },
-            )
-            .await;
-        }
-    }
-
-    if is_skill_call {
-        if let (Some(app), Some(sid)) = (ctx.app_handle, ctx.session_id) {
-            let duration_ms = started_at.elapsed().as_millis() as u64;
-            let parsed_error = if is_error {
-                Some(split_error_code_and_message(&result))
-            } else {
-                None
-            };
-            let _ = app.emit(
-                "skill-route-node-updated",
-                build_skill_route_event(
-                    sid,
-                    ctx.route_run_id,
-                    &node_id,
-                    None,
-                    &skill_name,
-                    1,
-                    if is_error { "failed" } else { "completed" },
-                    Some(duration_ms),
-                    parsed_error.as_ref().map(|(code, _)| code.as_str()),
-                    parsed_error.as_ref().map(|(_, msg)| msg.as_str()),
-                ),
-            );
-        }
-    }
+    emit_tool_completion(
+        ctx,
+        call,
+        &node_id,
+        &skill_name,
+        &result,
+        is_error,
+        is_skill_call,
+        started_at,
+    )
+    .await;
 
     if is_error {
         if let Some(mut stop_reason) = classify_policy_blocked_tool_error(&call.name, &result) {
@@ -387,35 +448,7 @@ pub(crate) async fn dispatch_tool_call(
         }
     }
 
-    let input_signature = json_progress_signature(&call.input);
-    let browser_progress_snapshot = if is_error {
-        None
-    } else {
-        BrowserProgressSnapshot::from_tool_output(&call.name, &result)
-    };
-    let output_signature = if let Some(snapshot) = browser_progress_snapshot.as_ref() {
-        snapshot.progress_signature()
-    } else {
-        let progress_text = if is_error {
-            format!("error:{result}")
-        } else {
-            result.clone()
-        };
-        text_progress_signature(&progress_text)
-    };
-    if let Some(snapshot) = browser_progress_snapshot {
-        *state.latest_browser_progress = Some(snapshot);
-    }
-    state.progress_history.push(ProgressFingerprint::tool_result(
-        call.name.clone(),
-        input_signature,
-        output_signature,
-    ));
-
-    state.tool_results.push(ToolResult {
-        tool_use_id: call.id.clone(),
-        content: result,
-    });
+    record_tool_progress(state, call, &result, is_error);
 
     Ok(ToolDispatchOutcome::Continue)
 }
@@ -441,7 +474,7 @@ async fn run_tool(
                     Err(e) => (format!("工具执行线程异常: {}", e), true),
                 }
             }
-            _ = AgentExecutor::wait_for_cancel(&cancel_flag) => {
+            _ = wait_for_cancel(&cancel_flag) => {
                 ("工具执行被用户取消".to_string(), true)
             }
         }
@@ -459,5 +492,19 @@ async fn run_tool(
         }
     } else {
         exec_future.await
+    }
+}
+
+async fn wait_for_cancel(cancel_flag: &Option<Arc<AtomicBool>>) {
+    loop {
+        if let Some(ref flag) = cancel_flag {
+            if flag.load(Ordering::SeqCst) {
+                return;
+            }
+        } else {
+            std::future::pending::<()>().await;
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
 }

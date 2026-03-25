@@ -255,7 +255,7 @@ impl AgentExecutor {
                     let mut tool_results = vec![];
                     let mut repeated_failure_summary: Option<String> = None;
                     let dispatch_context = super::runtime::tool_dispatch::ToolDispatchContext {
-                        agent: self,
+                        registry: self.registry.as_ref(),
                         app_handle,
                         session_id,
                         persisted_run_id: persisted_run_id.as_deref(),
