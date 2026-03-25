@@ -1,33 +1,25 @@
-use super::approval_flow::{
-    request_tool_approval_and_wait, resolve_approval_wait_runtime, wait_for_tool_confirmation,
-    ApprovalWaitRuntime, ToolConfirmationDecision,
-};
 use super::browser_progress::BrowserProgressSnapshot;
 use super::context::build_tool_context;
-use super::event_bridge::{
-    append_run_guard_warning_event, append_tool_run_event, build_skill_route_event,
-    resolve_current_session_run_id,
+use super::event_bridge::{append_run_guard_warning_event, resolve_current_session_run_id};
+#[cfg(test)]
+use super::approval_flow::{
+    request_tool_approval_and_wait, wait_for_tool_confirmation, ApprovalWaitRuntime,
+    ToolConfirmationDecision,
 };
+#[cfg(test)]
+use super::safety::classify_policy_blocked_tool_error;
 #[cfg(test)]
 use super::execution_caps::detect_execution_caps;
 use super::executor::AgentExecutor;
 use super::permissions::PermissionMode;
-use super::progress::{json_progress_signature, text_progress_signature};
 use super::run_guard::{
-    encode_run_stop_reason, ProgressFingerprint, ProgressGuard, RunBudgetPolicy, RunBudgetScope,
-    RunStopReason,
+    encode_run_stop_reason, ProgressFingerprint, RunBudgetPolicy, RunBudgetScope, RunStopReason,
 };
-use super::safety::classify_policy_blocked_tool_error;
-use super::types::{AgentStateEvent, LLMResponse, StreamDelta, ToolCallEvent, ToolResult};
+use super::types::{AgentStateEvent, LLMResponse, StreamDelta};
 use crate::adapters;
-use crate::approval_bus::{approval_bus_rollout_enabled_with_pool, ApprovalDecision};
-use crate::approval_rules::find_matching_approval_rule_with_pool;
-use crate::session_journal::SessionRunEvent;
 use anyhow::{anyhow, Result};
 use runtime_executor_core::{
-    estimate_tokens, extract_tool_call_parse_error, micro_compact, split_error_code_and_message,
-    trim_messages, truncate_tool_output, update_tool_failure_streak, ToolFailureStreak,
-    DEFAULT_TOKEN_BUDGET, MAX_TOOL_OUTPUT_CHARS,
+    estimate_tokens, micro_compact, trim_messages, ToolFailureStreak, DEFAULT_TOKEN_BUDGET,
 };
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -36,7 +28,6 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
 use uuid::Uuid;
 
-const TOOL_CONFIRM_TIMEOUT_SECS: u64 = 15;
 
 impl AgentExecutor {
     pub(super) async fn execute_turn_impl(
@@ -263,41 +254,38 @@ impl AgentExecutor {
                     // 执行所有工具调用
                     let mut tool_results = vec![];
                     let mut repeated_failure_summary: Option<String> = None;
+                    let dispatch_context = super::runtime::tool_dispatch::ToolDispatchContext {
+                        agent: self,
+                        app_handle,
+                        session_id,
+                        persisted_run_id: persisted_run_id.as_deref(),
+                        allowed_tools,
+                        permission_mode,
+                        tool_ctx: &tool_ctx,
+                        tool_confirm_tx: tool_confirm_tx.as_ref(),
+                        cancel_flag: cancel_flag.clone(),
+                        route_run_id: &route_run_id,
+                        route_node_timeout_secs,
+                        route_retry_count,
+                        iteration,
+                    };
                     for (call_index, call) in tool_calls.iter().enumerate() {
-                        let skill_name = call
-                            .input
-                            .get("skill_name")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or_default()
-                            .to_string();
-                        let is_skill_call = call.name == "skill";
-                        let node_id = format!("{}-{}-{}", iteration, call_index, call.id);
-                        let started_at = std::time::Instant::now();
-
-                        if is_skill_call {
-                            if let (Some(app), Some(sid)) = (app_handle, session_id) {
-                                let _ = app.emit(
-                                    "skill-route-node-updated",
-                                    build_skill_route_event(
-                                        sid,
-                                        &route_run_id,
-                                        &node_id,
-                                        None,
-                                        &skill_name,
-                                        1,
-                                        "routing",
-                                        None,
-                                        None,
-                                        None,
-                                    ),
-                                );
-                            }
-                        }
-                        // 执行每个工具前检查取消标志
-                        if let Some(ref flag) = cancel_flag {
-                            if flag.load(Ordering::SeqCst) {
-                                eprintln!("[agent] 工具执行中被用户取消");
-                                // 发射 finished 事件，确保前端清除状态指示器
+                        let mut dispatch_state = super::runtime::tool_dispatch::ToolDispatchState {
+                            tool_results: &mut tool_results,
+                            repeated_failure_summary: &mut repeated_failure_summary,
+                            tool_failure_streak: &mut tool_failure_streak,
+                            progress_history: &mut progress_history,
+                            latest_browser_progress: &mut latest_browser_progress,
+                        };
+                        match super::runtime::tool_dispatch::dispatch_tool_call(
+                            &dispatch_context,
+                            &mut dispatch_state,
+                            call_index,
+                            call,
+                        )
+                        .await?
+                        {
+                            super::runtime::tool_dispatch::ToolDispatchOutcome::Cancelled => {
                                 if let (Some(app), Some(sid)) = (app_handle, session_id) {
                                     let _ = app.emit(
                                         "agent-state-event",
@@ -315,543 +303,8 @@ impl AgentExecutor {
                                 }));
                                 return Ok(messages);
                             }
+                            super::runtime::tool_dispatch::ToolDispatchOutcome::Continue => {}
                         }
-
-                        eprintln!("[agent] Calling tool: {}", call.name);
-
-                        if is_skill_call {
-                            if let (Some(app), Some(sid)) = (app_handle, session_id) {
-                                let _ = app.emit(
-                                    "skill-route-node-updated",
-                                    build_skill_route_event(
-                                        sid,
-                                        &route_run_id,
-                                        &node_id,
-                                        None,
-                                        &skill_name,
-                                        1,
-                                        "executing",
-                                        None,
-                                        None,
-                                        None,
-                                    ),
-                                );
-                            }
-                        }
-
-                        // 发送工具开始事件
-                        if let (Some(app), Some(sid)) = (app_handle, session_id) {
-                            let _ = app.emit(
-                                "tool-call-event",
-                                ToolCallEvent {
-                                    session_id: sid.to_string(),
-                                    tool_name: call.name.clone(),
-                                    tool_input: call.input.clone(),
-                                    tool_output: None,
-                                    status: "started".to_string(),
-                                },
-                            );
-                            if let Some(run_id) = persisted_run_id.as_ref() {
-                                let _ = append_tool_run_event(
-                                    app,
-                                    sid,
-                                    SessionRunEvent::ToolStarted {
-                                        run_id: run_id.clone(),
-                                        tool_name: call.name.clone(),
-                                        call_id: call.id.clone(),
-                                        input: call.input.clone(),
-                                    },
-                                )
-                                .await;
-                            }
-                        }
-
-                        // 权限确认检查：在执行工具前判断是否需要用户确认
-                        if permission_mode.needs_confirmation(
-                            &call.name,
-                            &call.input,
-                            tool_ctx.work_dir.as_deref(),
-                        ) {
-                            let approval_decision = if let (Some(app), Some(sid)) =
-                                (app_handle, session_id)
-                            {
-                                let runtime = match resolve_approval_wait_runtime(app) {
-                                    Ok(runtime) => runtime,
-                                    Err(err) => {
-                                        let rejection_message = err.to_string();
-                                        let _ = app.emit(
-                                            "tool-call-event",
-                                            ToolCallEvent {
-                                                session_id: sid.to_string(),
-                                                tool_name: call.name.clone(),
-                                                tool_input: call.input.clone(),
-                                                tool_output: Some(rejection_message.clone()),
-                                                status: "error".to_string(),
-                                            },
-                                        );
-                                        if let Some(run_id) = persisted_run_id.as_ref() {
-                                            let _ = append_tool_run_event(
-                                                app,
-                                                sid,
-                                                SessionRunEvent::ToolCompleted {
-                                                    run_id: run_id.clone(),
-                                                    tool_name: call.name.clone(),
-                                                    call_id: call.id.clone(),
-                                                    input: call.input.clone(),
-                                                    output: rejection_message.clone(),
-                                                    is_error: true,
-                                                },
-                                            )
-                                            .await;
-                                        }
-                                        tool_results.push(ToolResult {
-                                            tool_use_id: call.id.clone(),
-                                            content: rejection_message,
-                                        });
-                                        continue;
-                                    }
-                                };
-                                let approval_bus_enabled =
-                                    approval_bus_rollout_enabled_with_pool(&runtime.pool)
-                                        .await
-                                        .unwrap_or(true);
-
-                                if approval_bus_enabled {
-                                    match find_matching_approval_rule_with_pool(
-                                        &runtime.pool,
-                                        &call.name,
-                                        &call.input,
-                                    )
-                                    .await
-                                    {
-                                        Ok(Some(_)) => Some(ApprovalDecision::AllowAlways),
-                                        Ok(None) | Err(_) => {
-                                            match request_tool_approval_and_wait(
-                                                &runtime,
-                                                Some(app),
-                                                sid,
-                                                persisted_run_id.as_deref(),
-                                                &call.name,
-                                                &call.id,
-                                                &call.input,
-                                                tool_ctx.work_dir.as_deref(),
-                                                cancel_flag.clone(),
-                                            )
-                                            .await
-                                            {
-                                                Ok(decision) => Some(decision),
-                                                Err(err) => {
-                                                    let rejection_message = err.to_string();
-                                                    let _ = app.emit(
-                                                        "tool-call-event",
-                                                        ToolCallEvent {
-                                                            session_id: sid.to_string(),
-                                                            tool_name: call.name.clone(),
-                                                            tool_input: call.input.clone(),
-                                                            tool_output: Some(
-                                                                rejection_message.clone(),
-                                                            ),
-                                                            status: "error".to_string(),
-                                                        },
-                                                    );
-                                                    if let Some(run_id) = persisted_run_id.as_ref()
-                                                    {
-                                                        let _ = append_tool_run_event(
-                                                            app,
-                                                            sid,
-                                                            SessionRunEvent::ToolCompleted {
-                                                                run_id: run_id.clone(),
-                                                                tool_name: call.name.clone(),
-                                                                call_id: call.id.clone(),
-                                                                input: call.input.clone(),
-                                                                output: rejection_message.clone(),
-                                                                is_error: true,
-                                                            },
-                                                        )
-                                                        .await;
-                                                    }
-                                                    tool_results.push(ToolResult {
-                                                        tool_use_id: call.id.clone(),
-                                                        content: rejection_message,
-                                                    });
-                                                    None
-                                                }
-                                            }
-                                        }
-                                    }
-                                } else if let Some(ref confirm_state) = tool_confirm_tx {
-                                    let (tx, rx) = std::sync::mpsc::channel::<bool>();
-                                    if let Ok(mut guard) = confirm_state.lock() {
-                                        *guard = Some(tx);
-                                    }
-
-                                    let confirmation = wait_for_tool_confirmation(
-                                        &rx,
-                                        std::time::Duration::from_secs(TOOL_CONFIRM_TIMEOUT_SECS),
-                                    );
-
-                                    if let Ok(mut guard) = confirm_state.lock() {
-                                        *guard = None;
-                                    }
-
-                                    match confirmation {
-                                        ToolConfirmationDecision::Confirmed => {
-                                            Some(ApprovalDecision::AllowOnce)
-                                        }
-                                        ToolConfirmationDecision::Rejected => {
-                                            Some(ApprovalDecision::Deny)
-                                        }
-                                        ToolConfirmationDecision::TimedOut => {
-                                            tool_results.push(ToolResult {
-                                                tool_use_id: call.id.clone(),
-                                                content: "工具确认超时，已取消此操作".to_string(),
-                                            });
-                                            None
-                                        }
-                                    }
-                                } else {
-                                    Some(ApprovalDecision::AllowOnce)
-                                }
-                            } else if let Some(ref confirm_state) = tool_confirm_tx {
-                                let (tx, rx) = std::sync::mpsc::channel::<bool>();
-                                if let Ok(mut guard) = confirm_state.lock() {
-                                    *guard = Some(tx);
-                                }
-
-                                let confirmation = wait_for_tool_confirmation(
-                                    &rx,
-                                    std::time::Duration::from_secs(TOOL_CONFIRM_TIMEOUT_SECS),
-                                );
-
-                                if let Ok(mut guard) = confirm_state.lock() {
-                                    *guard = None;
-                                }
-
-                                match confirmation {
-                                    ToolConfirmationDecision::Confirmed => {
-                                        Some(ApprovalDecision::AllowOnce)
-                                    }
-                                    ToolConfirmationDecision::Rejected => {
-                                        Some(ApprovalDecision::Deny)
-                                    }
-                                    ToolConfirmationDecision::TimedOut => {
-                                        tool_results.push(ToolResult {
-                                            tool_use_id: call.id.clone(),
-                                            content: "工具确认超时，已取消此操作".to_string(),
-                                        });
-                                        None
-                                    }
-                                }
-                            } else {
-                                Some(ApprovalDecision::AllowOnce)
-                            };
-
-                            let Some(approval_decision) = approval_decision else {
-                                continue;
-                            };
-
-                            if approval_decision == ApprovalDecision::Deny {
-                                let rejection_message = "用户拒绝了此操作";
-                                if let (Some(app), Some(sid)) = (app_handle, session_id) {
-                                    let _ = app.emit(
-                                        "tool-call-event",
-                                        ToolCallEvent {
-                                            session_id: sid.to_string(),
-                                            tool_name: call.name.clone(),
-                                            tool_input: call.input.clone(),
-                                            tool_output: Some(rejection_message.to_string()),
-                                            status: "error".to_string(),
-                                        },
-                                    );
-                                    if let Some(run_id) = persisted_run_id.as_ref() {
-                                        let _ = append_tool_run_event(
-                                            app,
-                                            sid,
-                                            SessionRunEvent::ToolCompleted {
-                                                run_id: run_id.clone(),
-                                                tool_name: call.name.clone(),
-                                                call_id: call.id.clone(),
-                                                input: call.input.clone(),
-                                                output: rejection_message.to_string(),
-                                                is_error: true,
-                                            },
-                                        )
-                                        .await;
-                                    }
-                                }
-                                tool_results.push(ToolResult {
-                                    tool_use_id: call.id.clone(),
-                                    content: rejection_message.to_string(),
-                                });
-                                continue;
-                            }
-                        }
-
-                        let max_attempts = if is_skill_call {
-                            route_retry_count + 1
-                        } else {
-                            1
-                        };
-                        let mut attempt = 0usize;
-                        let (result, is_error) = loop {
-                            attempt += 1;
-                            let (result, is_error) = if let Some(parse_error) =
-                                extract_tool_call_parse_error(&call.input)
-                            {
-                                (
-                                    format!(
-                                        "工具参数错误: {}。请提供完整且合法的 JSON 参数后再重试。",
-                                        parse_error
-                                    ),
-                                    true,
-                                )
-                            } else {
-                                match self.registry.get(&call.name) {
-                                    Some(tool) => {
-                                        // 检查白名单：若设置了白名单但工具不在其中，拒绝执行
-                                        if let Some(whitelist) = allowed_tools {
-                                            if !whitelist.iter().any(|w| w == &call.name) {
-                                                (
-                                                    format!(
-                                                        "此 Skill 不允许使用工具: {}",
-                                                        call.name
-                                                    ),
-                                                    true,
-                                                )
-                                            } else {
-                                                let tool_clone = Arc::clone(&tool);
-                                                let input_clone = call.input.clone();
-                                                let ctx_clone = tool_ctx.clone();
-                                                let handle =
-                                                    tokio::task::spawn_blocking(move || {
-                                                        tool_clone.execute(input_clone, &ctx_clone)
-                                                    });
-                                                let cancel_flag_ref = cancel_flag.clone();
-                                                let exec_future = async move {
-                                                    tokio::select! {
-                                                        res = handle => {
-                                                            match res {
-                                                                Ok(Ok(output)) => (output, false),
-                                                                Ok(Err(e)) => (format!("工具执行错误: {}", e), true),
-                                                                Err(e) => (format!("工具执行线程异常: {}", e), true),
-                                                            }
-                                                        }
-                                                        _ = Self::wait_for_cancel(&cancel_flag_ref) => {
-                                                            ("工具执行被用户取消".to_string(), true)
-                                                        }
-                                                    }
-                                                };
-                                                if is_skill_call {
-                                                    match tokio::time::timeout(
-                                                        std::time::Duration::from_secs(
-                                                            route_node_timeout_secs,
-                                                        ),
-                                                        exec_future,
-                                                    )
-                                                    .await
-                                                    {
-                                                        Ok(v) => v,
-                                                        Err(_) => (
-                                                            "TIMEOUT: 子 Skill 执行超时"
-                                                                .to_string(),
-                                                            true,
-                                                        ),
-                                                    }
-                                                } else {
-                                                    exec_future.await
-                                                }
-                                            }
-                                        } else {
-                                            let tool_clone = Arc::clone(&tool);
-                                            let input_clone = call.input.clone();
-                                            let ctx_clone = tool_ctx.clone();
-                                            let handle = tokio::task::spawn_blocking(move || {
-                                                tool_clone.execute(input_clone, &ctx_clone)
-                                            });
-                                            let cancel_flag_ref = cancel_flag.clone();
-                                            let exec_future = async move {
-                                                tokio::select! {
-                                                    res = handle => {
-                                                        match res {
-                                                            Ok(Ok(output)) => (output, false),
-                                                            Ok(Err(e)) => (format!("工具执行错误: {}", e), true),
-                                                            Err(e) => (format!("工具执行线程异常: {}", e), true),
-                                                        }
-                                                    }
-                                                    _ = Self::wait_for_cancel(&cancel_flag_ref) => {
-                                                        ("工具执行被用户取消".to_string(), true)
-                                                    }
-                                                }
-                                            };
-                                            if is_skill_call {
-                                                match tokio::time::timeout(
-                                                    std::time::Duration::from_secs(
-                                                        route_node_timeout_secs,
-                                                    ),
-                                                    exec_future,
-                                                )
-                                                .await
-                                                {
-                                                    Ok(v) => v,
-                                                    Err(_) => (
-                                                        "TIMEOUT: 子 Skill 执行超时".to_string(),
-                                                        true,
-                                                    ),
-                                                }
-                                            } else {
-                                                exec_future.await
-                                            }
-                                        }
-                                    }
-                                    None => {
-                                        // 列出可用工具，引导 LLM 使用正确的工具
-                                        let available: Vec<String> = self
-                                            .registry
-                                            .get_tool_definitions()
-                                            .iter()
-                                            .filter_map(|t| t["name"].as_str().map(String::from))
-                                            .collect();
-                                        (
-                                        format!(
-                                            "错误: 工具 '{}' 不存在。请勿再次调用此工具。可用工具: {}",
-                                            call.name,
-                                            available.join(", ")
-                                        ),
-                                        true,
-                                    )
-                                    }
-                                }
-                            };
-                            if !is_error || attempt >= max_attempts {
-                                break (result, is_error);
-                            }
-                        };
-                        // 截断过长的工具输出，防止超出上下文窗口
-                        let result = truncate_tool_output(&result, MAX_TOOL_OUTPUT_CHARS);
-
-                        if is_error {
-                            if let Some(summary) = update_tool_failure_streak(
-                                &mut tool_failure_streak,
-                                &call.name,
-                                &call.input,
-                                &result,
-                            ) {
-                                repeated_failure_summary = Some(summary);
-                            }
-                        } else {
-                            tool_failure_streak = None;
-                        }
-
-                        // 发送工具完成事件
-                        if let (Some(app), Some(sid)) = (app_handle, session_id) {
-                            let _ = app.emit(
-                                "tool-call-event",
-                                ToolCallEvent {
-                                    session_id: sid.to_string(),
-                                    tool_name: call.name.clone(),
-                                    tool_input: call.input.clone(),
-                                    tool_output: Some(result.clone()),
-                                    status: if is_error {
-                                        "error".to_string()
-                                    } else {
-                                        "completed".to_string()
-                                    },
-                                },
-                            );
-                            if let Some(run_id) = persisted_run_id.as_ref() {
-                                let _ = append_tool_run_event(
-                                    app,
-                                    sid,
-                                    SessionRunEvent::ToolCompleted {
-                                        run_id: run_id.clone(),
-                                        tool_name: call.name.clone(),
-                                        call_id: call.id.clone(),
-                                        input: call.input.clone(),
-                                        output: result.clone(),
-                                        is_error,
-                                    },
-                                )
-                                .await;
-                            }
-                        }
-
-                        if is_skill_call {
-                            if let (Some(app), Some(sid)) = (app_handle, session_id) {
-                                let duration_ms = started_at.elapsed().as_millis() as u64;
-                                let parsed_error = if is_error {
-                                    Some(split_error_code_and_message(&result))
-                                } else {
-                                    None
-                                };
-                                let _ = app.emit(
-                                    "skill-route-node-updated",
-                                    build_skill_route_event(
-                                        sid,
-                                        &route_run_id,
-                                        &node_id,
-                                        None,
-                                        &skill_name,
-                                        1,
-                                        if is_error { "failed" } else { "completed" },
-                                        Some(duration_ms),
-                                        parsed_error.as_ref().map(|(code, _)| code.as_str()),
-                                        parsed_error.as_ref().map(|(_, msg)| msg.as_str()),
-                                    ),
-                                );
-                            }
-                        }
-
-                        if is_error {
-                            if let Some(mut stop_reason) =
-                                classify_policy_blocked_tool_error(&call.name, &result)
-                            {
-                                if let Some(last_completed_step) = latest_browser_progress
-                                    .as_ref()
-                                    .and_then(BrowserProgressSnapshot::last_completed_step)
-                                {
-                                    stop_reason =
-                                        stop_reason.with_last_completed_step(last_completed_step);
-                                }
-                                if let (Some(app), Some(sid)) = (app_handle, session_id) {
-                                    let _ = app.emit(
-                                        "agent-state-event",
-                                        AgentStateEvent::stopped(sid, iteration, &stop_reason),
-                                    );
-                                }
-                                return Err(anyhow!(encode_run_stop_reason(&stop_reason)));
-                            }
-                        }
-
-                        let input_signature = json_progress_signature(&call.input);
-                        let browser_progress_snapshot = if is_error {
-                            None
-                        } else {
-                            BrowserProgressSnapshot::from_tool_output(&call.name, &result)
-                        };
-                        let output_signature =
-                            if let Some(snapshot) = browser_progress_snapshot.as_ref() {
-                                snapshot.progress_signature()
-                            } else {
-                                let progress_text = if is_error {
-                                    format!("error:{result}")
-                                } else {
-                                    result.clone()
-                                };
-                                text_progress_signature(&progress_text)
-                            };
-                        if let Some(snapshot) = browser_progress_snapshot {
-                            latest_browser_progress = Some(snapshot);
-                        }
-                        progress_history.push(ProgressFingerprint::tool_result(
-                            call.name.clone(),
-                            input_signature,
-                            output_signature,
-                        ));
-
-                        tool_results.push(ToolResult {
-                            tool_use_id: call.id.clone(),
-                            content: result,
-                        });
 
                         if repeated_failure_summary.is_some() {
                             break;
@@ -935,26 +388,17 @@ impl AgentExecutor {
                         return Ok(messages);
                     }
 
-                    let progress_evaluation =
-                        ProgressGuard::evaluate(&run_budget_policy, &progress_history);
-                    if let Some(mut warning) = progress_evaluation.warning {
-                        if let Some(last_completed_step) = latest_browser_progress
-                            .as_ref()
-                            .and_then(BrowserProgressSnapshot::last_completed_step)
-                        {
-                            warning = warning.with_last_completed_step(last_completed_step);
-                        }
+                    let progress_evaluation = super::runtime::progress_guard::evaluate_progress_guard(
+                        &run_budget_policy,
+                        &progress_history,
+                        latest_browser_progress.as_ref(),
+                    );
+                    if let Some(warning) = progress_evaluation.warning {
                         if let (Some(app), Some(sid)) = (app_handle, session_id) {
                             let _ = append_run_guard_warning_event(app, sid, &warning).await;
                         }
                     }
-                    if let Some(mut stop_reason) = progress_evaluation.stop_reason {
-                        if let Some(last_completed_step) = latest_browser_progress
-                            .as_ref()
-                            .and_then(BrowserProgressSnapshot::last_completed_step)
-                        {
-                            stop_reason = stop_reason.with_last_completed_step(last_completed_step);
-                        }
+                    if let Some(stop_reason) = progress_evaluation.stop_reason {
                         if let (Some(app), Some(sid)) = (app_handle, session_id) {
                             let _ = app.emit(
                                 "agent-state-event",
@@ -1262,3 +706,8 @@ mod tests {
         );
     }
 }
+
+
+
+
+

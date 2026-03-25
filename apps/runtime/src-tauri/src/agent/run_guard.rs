@@ -261,6 +261,21 @@ impl ProgressEvaluation {
             stop_reason: None,
         }
     }
+
+    pub(crate) fn with_last_completed_step(
+        mut self,
+        last_completed_step: Option<String>,
+    ) -> Self {
+        if let Some(step) = last_completed_step {
+            if let Some(warning) = self.warning.as_mut() {
+                warning.last_completed_step = Some(step.clone());
+            }
+            if let Some(stop_reason) = self.stop_reason.as_mut() {
+                stop_reason.last_completed_step = Some(step);
+            }
+        }
+        self
+    }
 }
 
 pub struct ProgressGuard;

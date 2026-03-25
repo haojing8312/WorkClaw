@@ -10,6 +10,8 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
 
+pub(super) const TOOL_CONFIRM_TIMEOUT_SECS: u64 = 15;
+
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum ToolConfirmationDecision {
     Confirmed,

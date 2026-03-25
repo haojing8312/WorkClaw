@@ -1,7 +1,10 @@
+pub mod approval_gate;
 pub mod attempt_runner;
 pub mod events;
 pub mod failover;
+pub mod progress_guard;
 pub mod session_runtime;
+pub mod tool_dispatch;
 pub mod transcript;
 
 pub use attempt_runner::AttemptRunner;
