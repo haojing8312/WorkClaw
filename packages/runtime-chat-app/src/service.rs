@@ -116,13 +116,6 @@ impl ChatExecutionPreparationService {
         model_id: &str,
         request: &ChatExecutionPreparationRequest,
     ) -> Result<crate::types::PreparedRouteCandidates, String> {
-        let preparation_request: ChatPreparationRequest = request.clone().into();
-        routing::prepare_route_candidates_with_capability(
-            repo,
-            model_id,
-            &preparation_request,
-            request.requested_capability.as_deref(),
-        )
-        .await
+        routing::prepare_route_decisions(repo, model_id, request).await
     }
 }

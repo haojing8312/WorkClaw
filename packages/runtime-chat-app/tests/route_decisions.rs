@@ -4,6 +4,7 @@ use runtime_chat_app::{
     ChatRoutingSnapshot, ChatSettingsRepository, PreparedRouteCandidate,
     ProviderConnectionSnapshot, RoutingSettingsSnapshot, SessionModelSnapshot,
 };
+use serde_json::json;
 
 struct FakeRouteDecisionRepo {
     requested_route: Option<ChatRoutePolicySnapshot>,
@@ -130,6 +131,77 @@ async fn prepare_route_decisions_prefers_explicit_capability() {
             base_url: "https://vision.example.com/v1".to_string(),
             model_name: "qwen-vl-max".to_string(),
             api_key: "sk-vision".to_string(),
+        }
+    );
+}
+
+#[tokio::test]
+async fn prepare_route_decisions_ignores_image_parts_and_keeps_session_fallback() {
+    let repo = FakeRouteDecisionRepo {
+        requested_route: None,
+        chat_route: Some(ChatRoutePolicySnapshot {
+            primary_provider_id: "provider-chat".to_string(),
+            primary_model: "chat-model".to_string(),
+            fallback_chain_json: "[]".to_string(),
+            retry_count: 1,
+            enabled: true,
+        }),
+        providers: vec![ProviderConnectionSnapshot {
+            provider_id: "provider-chat".to_string(),
+            protocol_type: "openai".to_string(),
+            base_url: "https://chat.example.com/v1".to_string(),
+            api_key: "sk-chat".to_string(),
+        }],
+        session_model: SessionModelSnapshot {
+            model_id: "model-1".to_string(),
+            api_format: "openai".to_string(),
+            base_url: "https://fallback.example.com".to_string(),
+            model_name: "session-model".to_string(),
+            api_key: "sk-session".to_string(),
+        },
+    };
+
+    let prepared = ChatExecutionPreparationService::new()
+        .prepare_route_decisions(
+            &repo,
+            "model-1",
+            &ChatExecutionPreparationRequest {
+                user_message: "just continue".to_string(),
+                user_message_parts: Some(vec![
+                    json!({ "type": "text", "text": "just continue" }),
+                    json!({ "type": "image", "name": "screen.png", "mimeType": "image/png", "data": "abcd" }),
+                ]),
+                session_id: Some("session-9".to_string()),
+                permission_mode: Some("standard".to_string()),
+                session_mode: Some("general".to_string()),
+                team_id: None,
+                employee_id: None,
+                requested_capability: None,
+                work_dir: None,
+                imported_mcp_server_ids: vec![],
+            },
+        )
+        .await
+        .expect("route decisions");
+
+    assert_eq!(prepared.retry_count_per_candidate, 1);
+    assert_eq!(prepared.candidates.len(), 2);
+    assert_eq!(
+        prepared.candidates[0],
+        PreparedRouteCandidate {
+            protocol_type: "openai".to_string(),
+            base_url: "https://chat.example.com/v1".to_string(),
+            model_name: "chat-model".to_string(),
+            api_key: "sk-chat".to_string(),
+        }
+    );
+    assert_eq!(
+        prepared.candidates[1],
+        PreparedRouteCandidate {
+            protocol_type: "openai".to_string(),
+            base_url: "https://fallback.example.com".to_string(),
+            model_name: "session-model".to_string(),
+            api_key: "sk-session".to_string(),
         }
     );
 }

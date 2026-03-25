@@ -1,8 +1,10 @@
-use crate::preparation::infer_capability_from_message_parts;
+use crate::preparation::{
+    infer_capability_from_message_parts, infer_capability_from_user_message,
+};
 use crate::traits::ChatSettingsRepository;
 use crate::types::{
-    ChatPreparationRequest, ModelRouteErrorKind, PreparedRouteCandidate, PreparedRouteCandidates,
-    SessionModelSnapshot,
+    ChatExecutionPreparationRequest, ChatPreparationRequest, ModelRouteErrorKind,
+    PreparedRouteCandidate, PreparedRouteCandidates, SessionModelSnapshot,
 };
 use serde_json::Value;
 
@@ -67,6 +69,71 @@ pub async fn prepare_route_candidates_with_capability<R: ChatSettingsRepository>
     }
 
     if !requires_explicit_vision_route && !session_model.api_key.trim().is_empty() {
+        candidates.push(PreparedRouteCandidate {
+            protocol_type: session_model.api_format,
+            base_url: session_model.base_url,
+            model_name: session_model.model_name,
+            api_key: session_model.api_key,
+        });
+    }
+
+    Ok(PreparedRouteCandidates {
+        candidates,
+        retry_count_per_candidate,
+    })
+}
+
+pub async fn prepare_route_decisions<R: ChatSettingsRepository>(
+    repo: &R,
+    model_id: &str,
+    request: &ChatExecutionPreparationRequest,
+) -> Result<PreparedRouteCandidates, String> {
+    let session_model = resolve_session_model_with_fallback(repo, model_id).await?;
+    let requested_capability = request
+        .requested_capability
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| infer_capability_from_user_message(&request.user_message));
+
+    let mut retry_count_per_candidate = 0usize;
+    let mut route_policy = repo
+        .load_route_policy(requested_capability)
+        .await?
+        .filter(|policy| policy.enabled);
+    if route_policy.is_none() && requested_capability != "chat" {
+        route_policy = repo
+            .load_route_policy("chat")
+            .await?
+            .filter(|policy| policy.enabled);
+    }
+
+    let mut candidates = Vec::new();
+    if let Some(policy) = route_policy {
+        retry_count_per_candidate = policy.retry_count.clamp(0, 3) as usize;
+        let mut provider_targets =
+            vec![(policy.primary_provider_id, policy.primary_model.clone())];
+        provider_targets.extend(parse_fallback_chain_targets(&policy.fallback_chain_json));
+
+        for (provider_id, preferred_model) in provider_targets {
+            if let Some(provider) = repo.get_provider_connection(&provider_id).await? {
+                if is_supported_protocol(&provider.protocol_type) && !provider.api_key.trim().is_empty()
+                {
+                    candidates.push(PreparedRouteCandidate {
+                        protocol_type: provider.protocol_type,
+                        base_url: provider.base_url,
+                        model_name: if preferred_model.trim().is_empty() {
+                            session_model.model_name.clone()
+                        } else {
+                            preferred_model
+                        },
+                        api_key: provider.api_key,
+                    });
+                }
+            }
+        }
+    }
+
+    if !session_model.api_key.trim().is_empty() {
         candidates.push(PreparedRouteCandidate {
             protocol_type: session_model.api_format,
             base_url: session_model.base_url,

@@ -117,14 +117,7 @@ where
             execution_context.imported_mcp_server_ids.clone();
     }
     let execution_guidance = prepare_execution_guidance(repo, &guidance_request).await?;
-    let route_request: ChatPreparationRequest = request.clone().into();
-    let route_decisions = crate::routing::prepare_route_candidates_with_capability(
-        repo,
-        model_id,
-        &route_request,
-        request.requested_capability.as_deref(),
-    )
-    .await?;
+    let route_decisions = crate::routing::prepare_route_decisions(repo, model_id, request).await?;
 
     Ok(PreparedChatExecutionAssembly {
         chat_preparation,
