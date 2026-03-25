@@ -29,13 +29,6 @@ pub(crate) struct CandidateAttemptOutcome {
     pub reasoning_duration_ms: Option<u64>,
 }
 
-#[derive(Clone, Copy)]
-pub(crate) struct RuntimeFailoverPolicy {
-    pub should_retry_same_candidate: fn(RuntimeFailoverErrorKind) -> bool,
-    pub retry_budget_for_error: fn(RuntimeFailoverErrorKind, usize) -> usize,
-    pub retry_backoff_ms: fn(RuntimeFailoverErrorKind, usize) -> u64,
-}
-
 #[derive(Debug, Clone)]
 pub(crate) struct RuntimeFailoverOutcome {
     pub final_messages: Option<Vec<Value>>,
@@ -50,7 +43,6 @@ pub(crate) struct RuntimeFailoverOutcome {
 pub(crate) struct RuntimeFailoverParams<'a> {
     pub route_candidates: &'a [(String, String, String, String)],
     pub per_candidate_retry_count: usize,
-    pub policy: RuntimeFailoverPolicy,
     pub attempt_once: Box<
         dyn FnMut(
                 &'a str,
@@ -123,14 +115,13 @@ impl RuntimeFailover {
                             .and_then(runtime_failover_kind_from_key)
                     })
                     .unwrap_or(RuntimeFailoverErrorKind::Unknown);
-                let retry_budget = (params.policy.retry_budget_for_error)(
+                let retry_budget = runtime_retry_budget_for_error(
                     current_kind,
                     params.per_candidate_retry_count,
                 );
-                if (params.policy.should_retry_same_candidate)(current_kind)
-                    && attempt_idx < retry_budget
+                if runtime_should_retry_same_candidate(current_kind) && attempt_idx < retry_budget
                 {
-                    let backoff_ms = (params.policy.retry_backoff_ms)(current_kind, attempt_idx);
+                    let backoff_ms = runtime_retry_backoff_ms(current_kind, attempt_idx);
                     if backoff_ms > 0 {
                         tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
                     }
@@ -168,4 +159,38 @@ fn runtime_failover_kind_from_key(key: &str) -> Option<RuntimeFailoverErrorKind>
         "unknown" => RuntimeFailoverErrorKind::Unknown,
         _ => return None,
     })
+}
+
+fn runtime_should_retry_same_candidate(kind: RuntimeFailoverErrorKind) -> bool {
+    matches!(
+        kind,
+        RuntimeFailoverErrorKind::RateLimit
+            | RuntimeFailoverErrorKind::Timeout
+            | RuntimeFailoverErrorKind::Network
+    )
+}
+
+fn runtime_retry_budget_for_error(
+    kind: RuntimeFailoverErrorKind,
+    configured_retry_count: usize,
+) -> usize {
+    if kind == RuntimeFailoverErrorKind::Network {
+        configured_retry_count.max(1)
+    } else {
+        configured_retry_count
+    }
+}
+
+fn runtime_retry_backoff_ms(kind: RuntimeFailoverErrorKind, attempt_idx: usize) -> u64 {
+    let base_ms = match kind {
+        RuntimeFailoverErrorKind::RateLimit => 1200u64,
+        RuntimeFailoverErrorKind::Timeout => 700u64,
+        RuntimeFailoverErrorKind::Network => 400u64,
+        _ => 0u64,
+    };
+    if base_ms == 0 {
+        return 0;
+    }
+    let exp = attempt_idx.min(3) as u32;
+    base_ms.saturating_mul(1u64 << exp).min(5000)
 }

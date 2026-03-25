@@ -4,7 +4,7 @@ use super::chat_runtime_io as chat_io;
 use crate::agent::permissions::PermissionMode;
 use crate::agent::runtime::{
     CandidateAttemptOutcome, RuntimeFailover, RuntimeFailoverErrorKind, RuntimeFailoverOutcome,
-    RuntimeFailoverParams, RuntimeFailoverPolicy,
+    RuntimeFailoverParams,
 };
 use crate::agent::run_guard::{parse_run_stop_reason, RunStopReasonKind};
 use crate::agent::types::StreamDelta;
@@ -43,11 +43,6 @@ pub(crate) async fn execute_route_candidates(
     RuntimeFailover::execute_candidates(RuntimeFailoverParams {
         route_candidates: params.route_candidates,
         per_candidate_retry_count: params.per_candidate_retry_count,
-        policy: RuntimeFailoverPolicy {
-            should_retry_same_candidate: runtime_should_retry_same_candidate,
-            retry_budget_for_error: runtime_retry_budget_for_error,
-            retry_backoff_ms: runtime_retry_backoff_ms,
-        },
         attempt_once: Box::new(move |candidate_api_format, candidate_base_url, candidate_model_name, candidate_api_key, attempt_idx| {
             Box::pin(execute_candidate_attempt(
                 params_ref,
@@ -300,38 +295,4 @@ fn runtime_error_kind_key(kind: RuntimeFailoverErrorKind) -> &'static str {
         RuntimeFailoverErrorKind::NoProgress => "no_progress",
         RuntimeFailoverErrorKind::Unknown => "unknown",
     }
-}
-
-fn runtime_should_retry_same_candidate(kind: RuntimeFailoverErrorKind) -> bool {
-    matches!(
-        kind,
-        RuntimeFailoverErrorKind::RateLimit
-            | RuntimeFailoverErrorKind::Timeout
-            | RuntimeFailoverErrorKind::Network
-    )
-}
-
-fn runtime_retry_budget_for_error(
-    kind: RuntimeFailoverErrorKind,
-    configured_retry_count: usize,
-) -> usize {
-    if kind == RuntimeFailoverErrorKind::Network {
-        configured_retry_count.max(1)
-    } else {
-        configured_retry_count
-    }
-}
-
-fn runtime_retry_backoff_ms(kind: RuntimeFailoverErrorKind, attempt_idx: usize) -> u64 {
-    let base_ms = match kind {
-        RuntimeFailoverErrorKind::RateLimit => 1200u64,
-        RuntimeFailoverErrorKind::Timeout => 700u64,
-        RuntimeFailoverErrorKind::Network => 400u64,
-        _ => 0u64,
-    };
-    if base_ms == 0 {
-        return 0;
-    }
-    let exp = attempt_idx.min(3) as u32;
-    base_ms.saturating_mul(1u64 << exp).min(5000)
 }

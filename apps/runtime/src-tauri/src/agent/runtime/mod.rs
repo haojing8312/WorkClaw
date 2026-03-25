@@ -7,7 +7,7 @@ pub mod transcript;
 pub use attempt_runner::AttemptRunner;
 pub(crate) use failover::{
     CandidateAttemptOutcome, RuntimeFailover, RuntimeFailoverErrorKind, RuntimeFailoverOutcome,
-    RuntimeFailoverParams, RuntimeFailoverPolicy,
+    RuntimeFailoverParams,
 };
 pub use session_runtime::SessionRuntime;
 pub use transcript::RuntimeTranscript;
