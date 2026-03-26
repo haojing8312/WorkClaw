@@ -21,6 +21,17 @@ function createSearchProvider(config: SearchProviderCatalogItem): SearchProvider
 
 export const SEARCH_PROVIDER_CATALOG: SearchProviderCatalogItem[] = [
   createSearchProvider({
+    id: "metaso",
+    label: "秘塔搜索 (中文首选)",
+    name: "秘塔搜索",
+    apiFormat: "search_metaso",
+    baseUrl: "https://metaso.cn",
+    badge: "中文首选",
+    helper: "国内搜索效果好，无广告，适合中文用户。",
+    officialConsoleUrl: "https://metaso.cn/",
+    officialDocsUrl: "https://metaso.cn/",
+  }),
+  createSearchProvider({
     id: "brave",
     label: "Brave Search (国际首选)",
     name: "Brave Search",
@@ -41,17 +52,6 @@ export const SEARCH_PROVIDER_CATALOG: SearchProviderCatalogItem[] = [
     helper: "专为 AI 设计的搜索引擎，适合 AI Agent 获取实时信息。",
     officialConsoleUrl: "https://tavily.com/",
     officialDocsUrl: "https://docs.tavily.com/",
-  }),
-  createSearchProvider({
-    id: "metaso",
-    label: "秘塔搜索 (中文首选)",
-    name: "秘塔搜索",
-    apiFormat: "search_metaso",
-    baseUrl: "https://metaso.cn",
-    badge: "中文首选",
-    helper: "国内搜索效果好，无广告，适合中文用户。",
-    officialConsoleUrl: "https://metaso.cn/",
-    officialDocsUrl: "https://metaso.cn/",
   }),
   createSearchProvider({
     id: "bocha",
