@@ -8,9 +8,17 @@ import { ChatWorkspaceSidePanel } from "./chat-side-panel/ChatWorkspaceSidePanel
 import { ChatExecutionContextBar } from "./chat/ChatExecutionContextBar";
 import { ChatHeader } from "./chat/ChatHeader";
 import { ChatComposer } from "./chat/ChatComposer";
+import { ChatCollaborationStatusPanel } from "./chat/ChatCollaborationStatusPanel";
 import { ChatMessageRail } from "./chat/ChatMessageRail";
-import { ChatGroupRunBoard } from "./chat/group-run/ChatGroupRunBoard";
+import { ChatGroupRunSection } from "./chat/group-run/ChatGroupRunSection";
 import { ChatShell } from "./chat/ChatShell";
+import {
+  clearSessionDraft,
+  clonePersistedChatRuntimeState,
+  persistSessionDraft,
+  readSessionDraft,
+} from "../scenes/chat/chatRuntimeState";
+import { useChatDraftState } from "../scenes/chat/useChatDraftState";
 import {
   buildTaskJourneyViewModel,
   buildTaskPanelViewModel,
@@ -22,13 +30,13 @@ import { getDefaultModel } from "../lib/default-model";
 import {
   answerUserQuestion,
   cancelAgent,
-  sendMessage,
 } from "../services/chat/chatSessionService";
 import {
   resolveApproval as resolvePendingApproval,
 } from "../services/chat/chatApprovalService";
 import { useChatSessionController, type PendingApprovalView } from "../scenes/chat/useChatSessionController";
 import { useChatCollaborationController } from "../scenes/chat/useChatCollaborationController";
+import { buildMessageParts, useChatSendController } from "../scenes/chat/useChatSendController";
 import {
   getModelErrorDisplay,
   inferModelErrorKindFromMessage,
@@ -72,42 +80,6 @@ type ChatSessionExecutionContext = {
   sourceStepTimeline?: ChatSessionTimelineItem[];
 };
 
-const SESSION_DRAFT_STORAGE_PREFIX = "workclaw:session-draft:";
-
-function getSessionDraftStorageKey(sessionId: string): string {
-  return `${SESSION_DRAFT_STORAGE_PREFIX}${sessionId}`;
-}
-
-function readSessionDraft(sessionId: string): string {
-  if (typeof window === "undefined" || !sessionId) {
-    return "";
-  }
-  try {
-    return window.localStorage.getItem(getSessionDraftStorageKey(sessionId)) ?? "";
-  } catch {
-    return "";
-  }
-}
-
-function persistSessionDraft(sessionId: string, value: string) {
-  if (typeof window === "undefined" || !sessionId) {
-    return;
-  }
-  try {
-    if (value.length > 0) {
-      window.localStorage.setItem(getSessionDraftStorageKey(sessionId), value);
-      return;
-    }
-    window.localStorage.removeItem(getSessionDraftStorageKey(sessionId));
-  } catch {
-    // ignore localStorage failures
-  }
-}
-
-function clearSessionDraft(sessionId: string) {
-  persistSessionDraft(sessionId, "");
-}
-
 const CONTINUE_MESSAGE_TEXT = "继续";
 const CONTINUE_BUDGET_INCREMENT = 100;
 const CHAT_SCROLL_EDGE_THRESHOLD = 48;
@@ -145,20 +117,6 @@ interface Props {
   sessionSourceChannel?: string;
   sessionSourceLabel?: string;
   operationPermissionMode?: "standard" | "full_access" | string;
-}
-
-function clonePersistedChatRuntimeState(state?: PersistedChatRuntimeState | null): PersistedChatRuntimeState {
-  return {
-    streaming: state?.streaming ?? false,
-    streamItems: state?.streamItems ? [...state.streamItems] : [],
-    streamReasoning: state?.streamReasoning ? { ...state.streamReasoning } : null,
-    agentState: state?.agentState ? { ...state.agentState } : null,
-    subAgentBuffer: state?.subAgentBuffer ?? "",
-    subAgentRoleName: state?.subAgentRoleName ?? "",
-    mainRoleName: state?.mainRoleName ?? "",
-    mainSummaryDelivered: state?.mainSummaryDelivered ?? false,
-    delegationCards: state?.delegationCards ? state.delegationCards.map((item) => ({ ...item })) : [],
-  };
 }
 
 function shouldRenderCompletedJourneySummary(model: TaskJourneyViewModel) {
@@ -254,19 +212,16 @@ export function ChatView({
   };
   const initialRuntimeState = clonePersistedChatRuntimeState(persistedRuntimeState);
   const [expandedRunDetailIds, setExpandedRunDetailIds] = useState<string[]>([]);
-  const [input, setInput] = useState("");
   const [pendingInstallSkill, setPendingInstallSkill] = useState<ClawhubInstallCandidate | null>(null);
   const [showInstallConfirm, setShowInstallConfirm] = useState(false);
   const [installingSlug, setInstallingSlug] = useState<string | null>(null);
   const [installError, setInstallError] = useState<string | null>(null);
-  const [composerError, setComposerError] = useState<string | null>(null);
   const installInFlightRef = useRef(false);
   const [mainRoleName, setMainRoleName] = useState(initialRuntimeState.mainRoleName);
   const [mainSummaryDelivered, setMainSummaryDelivered] = useState(initialRuntimeState.mainSummaryDelivered);
   const [highlightedMessageIndex, setHighlightedMessageIndex] = useState<number | null>(null);
   const [highlightedGroupRunStepId, setHighlightedGroupRunStepId] = useState<string | null>(null);
   const [highlightedGroupRunStepEventId, setHighlightedGroupRunStepEventId] = useState<string | null>(null);
-  const [showDelegationHistory, setShowDelegationHistory] = useState(false);
   const [isNearTop, setIsNearTop] = useState(true);
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [hasScrollableContent, setHasScrollableContent] = useState(false);
@@ -276,7 +231,6 @@ export function ChatView({
   const autoFollowScrollRef = useRef(true);
   const scrollAnimationFrameRef = useRef<number | null>(null);
   const scrollAnimationTargetRef = useRef<"top" | "bottom" | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const sessionIdRef = useRef(sessionId);
   const mainRoleNameRef = useRef("");
   const loadMessagesRef = useRef<(sid: string) => Promise<void>>(async () => {});
@@ -288,44 +242,25 @@ export function ChatView({
   const lastHandledGroupRunStepFocusNonceRef = useRef<number | null>(null);
   const groupRunStepElementRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const groupRunStepEventElementRefs = useRef<Record<string, HTMLDivElement | null>>({});
-  const seededInitialAttachmentsSessionRef = useRef<string | null>(null);
-
-  // File Upload: 附件状态
-  const [attachedFiles, setAttachedFiles] = useState<PendingAttachment[]>([]);
-  const MAX_FILES = 5;
-  const MAX_IMAGE_FILES = 3;
-  const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
-  const MAX_TEXT_FILE_SIZE = 1 * 1024 * 1024;
-  const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "webp"]);
-  const TEXT_FILE_EXTENSIONS = new Set([
-    "txt",
-    "md",
-    "json",
-    "yaml",
-    "yml",
-    "xml",
-    "csv",
-    "tsv",
-    "log",
-    "ini",
-    "conf",
-    "env",
-    "js",
-    "jsx",
-    "ts",
-    "tsx",
-    "py",
-    "rs",
-    "go",
-    "java",
-    "c",
-    "cpp",
-    "h",
-    "cs",
-    "sh",
-    "ps1",
-    "sql",
-  ]);
+  const {
+    input,
+    setInput,
+    attachedFiles,
+    composerError,
+    setComposerError,
+    textareaRef,
+    handleComposerInputChange,
+    handleFileSelect,
+    removeAttachedFile,
+    clearComposerState,
+  } = useChatDraftState({
+    sessionId,
+    initialAttachments,
+    consumeInitialAttachmentsImmediately: !initialMessage?.trim(),
+    onInitialAttachmentsConsumed: onInitialAttachmentsConsumed
+      ? () => onInitialAttachmentsConsumed()
+      : undefined,
+  });
 
   const upsertPendingApproval = (nextApproval: PendingApprovalView) => {
     setPendingApprovals((prev) => {
@@ -376,13 +311,6 @@ export function ChatView({
     sessionIdRef.current = sessionId;
   }, [sessionId]);
 
-  function syncComposerHeight() {
-    const el = textareaRef.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
-  }
-
   // 右侧面板状态
   const [sidePanelOpen, setSidePanelOpen] = useState(false);
   const [sidePanelTab, setSidePanelTab] = useState<"tasks" | "files" | "websearch">("tasks");
@@ -426,7 +354,6 @@ export function ChatView({
     removePendingApproval,
     onResetForSessionSwitch: () => {
       collaborationControllerState.resetForSessionSwitch();
-      setShowDelegationHistory(false);
       setSidePanelTab("tasks");
       setExpandedThinkingKeys([]);
     },
@@ -524,7 +451,6 @@ export function ChatView({
       setMessages((prev) => [...prev, message]);
     },
     onResetForSessionSwitch: () => {
-      setShowDelegationHistory(false);
       setHighlightedMessageIndex(null);
       setHighlightedGroupRunStepId(null);
       setHighlightedGroupRunStepEventId(null);
@@ -537,185 +463,6 @@ export function ChatView({
   loadSessionRunsRef.current = loadSessionRuns;
   pendingApprovalsSnapshotRef.current = pendingApprovals;
   resolvingApprovalSnapshotRef.current = resolvingApprovalId;
-
-  // File Upload: 读取文件为文本
-  const readFileAsText = (file: File): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
-      reader.onerror = reject;
-      reader.readAsText(file);
-    });
-  };
-
-  const readFileAsDataUrl = (file: File): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    });
-  };
-
-  const getFileExtension = (fileName: string): string => fileName.split(".").pop()?.toLowerCase() ?? "";
-
-  const isImageFile = (file: File): boolean =>
-    file.type.startsWith("image/") || IMAGE_EXTENSIONS.has(getFileExtension(file.name));
-
-  const isTextFile = (file: File): boolean => TEXT_FILE_EXTENSIONS.has(getFileExtension(file.name));
-
-  // File Upload: 处理文件选择
-  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []);
-    const currentImageCount = attachedFiles.filter((file) => file.kind === "image").length;
-
-    if (attachedFiles.length + files.length > MAX_FILES) {
-      alert(`最多只能上传 ${MAX_FILES} 个文件`);
-      e.target.value = "";
-      return;
-    }
-
-    const newFiles: PendingAttachment[] = [];
-    let nextImageCount = currentImageCount;
-    for (const file of files) {
-      if (isImageFile(file)) {
-        if (nextImageCount >= MAX_IMAGE_FILES) {
-          alert(`最多只能上传 ${MAX_IMAGE_FILES} 张图片`);
-          continue;
-        }
-        if (file.size > MAX_IMAGE_SIZE) {
-          alert(`图片 ${file.name} 超过 5MB 限制`);
-          continue;
-        }
-        const data = await readFileAsDataUrl(file);
-        newFiles.push({
-          id: crypto.randomUUID(),
-          kind: "image",
-          name: file.name,
-          mimeType: file.type,
-          size: file.size,
-          data,
-          previewUrl: data,
-        });
-        nextImageCount += 1;
-        continue;
-      }
-
-      if (!isTextFile(file)) {
-        alert(`暂不支持附件类型 ${file.name}`);
-        continue;
-      }
-      if (file.size > MAX_TEXT_FILE_SIZE) {
-        alert(`文本文件 ${file.name} 超过 1MB 限制`);
-        continue;
-      }
-      const text = await readFileAsText(file);
-      newFiles.push({
-        id: crypto.randomUUID(),
-        kind: "text-file",
-        name: file.name,
-        mimeType: file.type || "text/plain",
-        size: file.size,
-        text,
-      });
-    }
-
-    setAttachedFiles((prev) => [...prev, ...newFiles]);
-    e.target.value = ""; // 重置 input
-  };
-
-  // File Upload: 删除附件
-  const removeAttachedFile = (index: number) => {
-    setAttachedFiles((prev) => prev.filter((_, i) => i !== index));
-  };
-
-  const buildDefaultAttachmentPrompt = (attachments: PendingAttachment[]): string => {
-    const hasImage = attachments.some((file) => file.kind === "image");
-    const hasTextFile = attachments.some((file) => file.kind === "text-file");
-    if (hasImage && hasTextFile) {
-      return "请结合这些图片和文本附件一起分析，并给出结论。";
-    }
-    if (hasImage) {
-      return "请结合这些图片描述主要内容，并提取可见文字。";
-    }
-    return "请阅读这些附件并总结关键信息。";
-  };
-
-  const buildMessageParts = (message: string, attachments: PendingAttachment[]): ChatMessagePart[] => {
-    const normalizedMessage = message.trim() || buildDefaultAttachmentPrompt(attachments);
-    const parts: ChatMessagePart[] = [{ type: "text", text: normalizedMessage }];
-    attachments.forEach((file) => {
-      if (file.kind === "image") {
-        parts.push({
-          type: "image",
-          name: file.name,
-          mimeType: file.mimeType,
-          size: file.size,
-          data: file.data,
-        });
-        return;
-      }
-      parts.push({
-        type: "file_text",
-        name: file.name,
-        mimeType: file.mimeType,
-        size: file.size,
-        text: file.text,
-        truncated: file.truncated,
-      });
-    });
-    return parts;
-  };
-
-  const buildOptimisticUserContent = (parts: ChatMessagePart[]): string => {
-    const textPart = parts.find((part) => part.type === "text");
-    const nonTextParts = parts.filter((part) => part.type !== "text");
-    if (nonTextParts.length === 0) {
-      return textPart?.text ?? "";
-    }
-    const attachmentSummary = nonTextParts
-      .map((part) => (part.type === "image" ? `[图片] ${part.name}` : `[文本文件] ${part.name}`))
-      .join("\n");
-    return [textPart?.text ?? "", attachmentSummary].filter(Boolean).join("\n\n");
-  };
-
-  const toUserFacingSendError = (error: unknown): string => {
-    const raw =
-      typeof error === "string"
-        ? error
-        : error instanceof Error
-        ? error.message
-        : String(error ?? "");
-    if (raw.includes("VISION_MODEL_NOT_CONFIGURED")) {
-      return "请先在设置中配置图片理解模型";
-    }
-    const modelErrorKind = inferModelErrorKindFromMessage(raw);
-    if (modelErrorKind) {
-      const display = getModelErrorDisplay(modelErrorKind);
-      return `${display.title}：${display.message}`;
-    }
-    return `错误: ${raw}`;
-  };
-
-  const shouldPreserveInlineSendError = (error: unknown): boolean => {
-    const raw =
-      typeof error === "string"
-        ? error
-        : error instanceof Error
-        ? error.message
-        : String(error ?? "");
-    return raw.includes("VISION_MODEL_NOT_CONFIGURED");
-  };
-
-  const isModelRouteFailureError = (error: unknown): boolean => {
-    const raw =
-      typeof error === "string"
-        ? error
-        : error instanceof Error
-        ? error.message
-        : String(error ?? "");
-    return inferModelErrorKindFromMessage(raw) !== null;
-  };
 
   const renderUserContentParts = (parts: ChatMessagePart[]) => {
     const textParts = parts.filter((part): part is Extract<ChatMessagePart, { type: "text" }> => part.type === "text");
@@ -760,26 +507,6 @@ export function ChatView({
       </div>
     );
   };
-
-  useEffect(() => {
-    if (initialAttachments.length === 0) {
-      return;
-    }
-    if (seededInitialAttachmentsSessionRef.current === sessionId) {
-      return;
-    }
-
-    seededInitialAttachmentsSessionRef.current = sessionId;
-    setAttachedFiles(initialAttachments);
-
-    if (!initialMessage?.trim()) {
-      onInitialAttachmentsConsumed?.();
-    }
-  }, [initialAttachments, initialMessage, onInitialAttachmentsConsumed, sessionId]);
-
-  useEffect(() => {
-    syncComposerHeight();
-  }, [input, sessionId]);
 
   const syncScrollMetrics = (element: HTMLDivElement | null) => {
     if (!element) {
@@ -889,6 +616,31 @@ export function ChatView({
     animateScrollRegionTo(scrollRegion.scrollHeight - scrollRegion.clientHeight, 1000, "bottom");
   };
 
+  const {
+    sendContent,
+    handleSend,
+  } = useChatSendController({
+    sessionId,
+    streaming,
+    input,
+    attachedFiles,
+    clearComposerState,
+    setComposerError,
+    setMessages,
+    loadMessages,
+    loadSessionRuns,
+    prepareForSend,
+    finishStreaming,
+    onSessionUpdate,
+    autoFollowScrollRef,
+    setIsNearBottom,
+    setIsNearTop,
+    animateScrollRegionTo,
+    scrollRegionRef,
+    shouldGrantContinuationBudget,
+    continuationBudgetIncrement: CONTINUE_BUDGET_INCREMENT,
+  });
+
   useEffect(() => {
     autoFollowScrollRef.current = true;
     setIsNearTop(true);
@@ -990,86 +742,6 @@ export function ChatView({
     }, 2400);
     return () => clearTimeout(timer);
   }, [expandedGroupRunStepIds, groupRunSnapshot, groupRunStepFocusRequest, sessionId]);
-
-  async function handleSend() {
-    if (!input.trim() && attachedFiles.length === 0) return;
-    if (streaming || !sessionId) return;
-
-    const parts = buildMessageParts(input, attachedFiles);
-    await sendContent({
-      sessionId,
-      parts,
-    });
-  }
-
-  async function sendContent(request: SendMessageRequest | string) {
-    if (streaming || !sessionId) return;
-
-    const normalizedRequest: SendMessageRequest =
-      typeof request === "string"
-        ? {
-            sessionId,
-            parts: [{ type: "text", text: request.trim() }],
-          }
-        : request;
-    const continuationRequest =
-      shouldGrantContinuationBudget(normalizedRequest) &&
-      normalizedRequest.maxIterations === undefined
-        ? {
-            ...normalizedRequest,
-            maxIterations: CONTINUE_BUDGET_INCREMENT,
-          }
-        : normalizedRequest;
-    const optimisticContent = buildOptimisticUserContent(continuationRequest.parts);
-    if (!continuationRequest.parts.length || !optimisticContent.trim()) return;
-
-    setInput("");
-    setAttachedFiles([]); // 发送后清空附件
-    setComposerError(null);
-    autoFollowScrollRef.current = true;
-    setIsNearBottom(true);
-    setIsNearTop(false);
-    animateScrollRegionTo(
-      (scrollRegionRef.current?.scrollHeight ?? 0) - (scrollRegionRef.current?.clientHeight ?? 0),
-      1000,
-      "bottom",
-    );
-    setMessages((prev) => [
-      ...prev,
-      {
-        role: "user",
-        content: optimisticContent,
-        contentParts: continuationRequest.parts,
-        created_at: new Date().toISOString(),
-      },
-    ]);
-    prepareForSend();
-    try {
-      await sendMessage(continuationRequest);
-      onSessionUpdate?.();
-    } catch (e) {
-      const preserveInlineError = shouldPreserveInlineSendError(e);
-      const modelRouteFailureError = isModelRouteFailureError(e);
-      const userFacingError = toUserFacingSendError(e);
-      setComposerError(modelRouteFailureError ? null : userFacingError);
-      if (preserveInlineError) {
-        return;
-      }
-      await Promise.all([loadMessages(sessionId), loadSessionRuns(sessionId)]);
-      if (!modelRouteFailureError) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            role: "assistant",
-            content: userFacingError,
-            created_at: new Date().toISOString(),
-          },
-        ]);
-      }
-    } finally {
-      finishStreaming();
-    }
-  }
 
   useEffect(() => {
     const msg = initialMessage?.trim();
@@ -1814,15 +1486,6 @@ export function ChatView({
     setPendingInstallSkill(null);
   }
 
-  function handleComposerInputChange(nextValue: string) {
-    if (composerError) setComposerError(null);
-    setInput(nextValue);
-    const element = textareaRef.current;
-    if (!element) return;
-    element.style.height = "auto";
-    element.style.height = `${Math.min(element.scrollHeight, 200)}px`;
-  }
-
   function handleComposerWorkdirClick() {
     invoke<string | null>("select_directory", {
       defaultPath: workspace || undefined,
@@ -1834,7 +1497,7 @@ export function ChatView({
   }
 
   function handleComposerRemoveAttachment(fileId: string) {
-    removeAttachedFile(attachedFiles.findIndex((item) => item.id === fileId));
+    removeAttachedFile(fileId);
   }
 
   async function handleCopyAssistantMessage(messageKey: string, content: string) {
@@ -2084,27 +1747,15 @@ export function ChatView({
             </div>
           </div>
         )}
-        {(mainRoleName || primaryDelegationCard) && (
-          <div
-            data-testid="team-collab-status-bar"
-            className="sticky top-0 z-10 max-w-[80%] rounded-xl border border-sky-200 bg-sky-50 px-4 py-2 text-xs text-sky-800"
-          >
-            <div className="flex items-center gap-2">
-              <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-sky-500 text-[10px] font-semibold text-white">
-                主
-              </span>
-              <span>{collaborationStatusText}</span>
-            </div>
-            {(completedDelegationCount > 0 || failedDelegationCount > 0) && (
-              <div className="mt-1 text-[11px] text-sky-700/90">
-                {completedDelegationCount > 0 && <span>已完成 {completedDelegationCount} 次协作</span>}
-                {completedDelegationCount > 0 && failedDelegationCount > 0 && <span> · </span>}
-                {failedDelegationCount > 0 && <span>待处理失败 {failedDelegationCount} 次</span>}
-              </div>
-            )}
-          </div>
-        )}
-        <ChatGroupRunBoard
+        <ChatCollaborationStatusPanel
+          mainRoleName={mainRoleName}
+          primaryDelegationCard={primaryDelegationCard}
+          delegationHistoryCards={delegationHistoryCards}
+          collaborationStatusText={collaborationStatusText}
+          completedDelegationCount={completedDelegationCount}
+          failedDelegationCount={failedDelegationCount}
+        />
+        <ChatGroupRunSection
           groupPhaseLabel={groupPhaseLabel}
           groupRound={groupRound}
           groupReviewRound={groupReviewRound}
@@ -2137,65 +1788,9 @@ export function ChatView({
           onToggleGroupRunStepDetails={toggleGroupRunStepDetails}
           onOpenSession={onOpenSession}
           sessionId={sessionId}
+          shouldShowTeamEntryEmptyState={shouldShowTeamEntryEmptyState}
+          sessionDisplaySubtitle={sessionDisplaySubtitle}
         />
-        {shouldShowTeamEntryEmptyState && (
-          <div
-            data-testid="team-entry-empty-state"
-            className="max-w-[80%] rounded-2xl border border-sky-200 bg-sky-50 px-5 py-4 text-sm text-sky-950 shadow-sm"
-          >
-            <div className="text-sm font-semibold">团队已就绪</div>
-            <div className="mt-1 text-xs text-sky-800">
-              {sessionDisplaySubtitle || "当前团队"} 已进入协作模式，等待你下达第一条任务。
-            </div>
-            <div className="mt-3 rounded-xl border border-sky-100 bg-white/80 px-3 py-2 text-[11px] text-sky-900">
-              适合提交需要拆分、审核、执行和汇总的复杂任务。直接在下方输入目标即可开始团队协作。
-            </div>
-          </div>
-        )}
-        {primaryDelegationCard && (
-          <div className="space-y-2">
-            <div
-              data-testid={`delegation-card-${primaryDelegationCard.id}`}
-              className="max-w-[80%] rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-xs text-emerald-800"
-            >
-              <div className="font-medium">{`${primaryDelegationCard.fromRole} 已将任务分配给 ${primaryDelegationCard.toRole}`}</div>
-              <div className="mt-1">
-                {primaryDelegationCard.status === "running" && "执行中"}
-                {primaryDelegationCard.status === "completed" && "已完成"}
-                {primaryDelegationCard.status === "failed" && "失败"}
-              </div>
-            </div>
-            {delegationHistoryCards.length > 0 && (
-              <>
-                <button
-                  data-testid="delegation-history-toggle"
-                  onClick={() => setShowDelegationHistory((prev) => !prev)}
-                  className="text-[11px] text-emerald-700 hover:text-emerald-800 underline underline-offset-2"
-                >
-                  历史协作（{delegationHistoryCards.length}）
-                </button>
-                {showDelegationHistory && (
-                  <div data-testid="delegation-history-panel" className="space-y-2">
-                    {delegationHistoryCards.map((card) => (
-                      <div
-                        key={card.id}
-                        data-testid={`delegation-card-${card.id}`}
-                        className="max-w-[80%] rounded-lg border border-gray-200 bg-white px-3 py-2 text-[11px] text-gray-700"
-                      >
-                        <div>{`${card.fromRole} -> ${card.toRole}`}</div>
-                        <div className="mt-0.5 text-gray-500">
-                          {card.status === "running" && "执行中"}
-                          {card.status === "completed" && "已完成"}
-                          {card.status === "failed" && "失败"}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-        )}
         <ChatMessageRail
           renderedMessages={renderedMessages}
           highlightedMessageIndex={highlightedMessageIndex}
