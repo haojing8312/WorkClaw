@@ -1,4 +1,4 @@
-import { act, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook } from "@testing-library/react";
 import { useFeishuInstallerSessionController } from "../useFeishuInstallerSessionController";
 import type { SettingsTabName } from "../../SettingsTabNav";
 
@@ -33,6 +33,8 @@ describe("useFeishuInstallerSessionController", () => {
   });
 
   afterEach(() => {
+    cleanup();
+    vi.clearAllTimers();
     vi.useRealTimers();
   });
 
@@ -47,23 +49,17 @@ describe("useFeishuInstallerSessionController", () => {
 
     expect(result.current.feishuInstallerSession.running).toBe(true);
 
-    const beforePollCount = invokeMock.mock.calls.filter(
-      ([command]) => command === "get_openclaw_lark_installer_session_status",
-    ).length;
+    const beforePollCount = invokeMock.mock.calls.filter(([command]) => command === "get_openclaw_lark_installer_session_status").length;
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1500);
     });
 
-    const currentCount = invokeMock.mock.calls.filter(
-      ([command]) => command === "get_openclaw_lark_installer_session_status",
-    ).length;
+    const currentCount = invokeMock.mock.calls.filter(([command]) => command === "get_openclaw_lark_installer_session_status").length;
     expect(currentCount).toBeGreaterThan(beforePollCount);
 
     rerender({ activeTab: "models" as SettingsTabName });
-    const afterLeaveCount = invokeMock.mock.calls.filter(
-      ([command]) => command === "get_openclaw_lark_installer_session_status",
-    ).length;
+    const afterLeaveCount = invokeMock.mock.calls.filter(([command]) => command === "get_openclaw_lark_installer_session_status").length;
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(3000);

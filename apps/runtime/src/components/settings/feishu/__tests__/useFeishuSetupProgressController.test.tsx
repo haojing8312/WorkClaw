@@ -1,4 +1,4 @@
-import { act, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook } from "@testing-library/react";
 import { useFeishuSetupProgressController } from "../useFeishuSetupProgressController";
 import type { SettingsTabName } from "../../SettingsTabNav";
 
@@ -45,6 +45,8 @@ describe("useFeishuSetupProgressController", () => {
   });
 
   afterEach(() => {
+    cleanup();
+    vi.clearAllTimers();
     vi.useRealTimers();
   });
 
@@ -75,8 +77,8 @@ describe("useFeishuSetupProgressController", () => {
       await vi.advanceTimersByTimeAsync(10000);
     });
 
-    expect(invokeMock.mock.calls.filter(([command]) => command === "get_feishu_setup_progress").length).toBe(
-      afterLeaveCount,
-    );
+    expect(
+      invokeMock.mock.calls.filter(([command]) => command === "get_feishu_setup_progress").length,
+    ).toBe(afterLeaveCount);
   });
 });

@@ -160,6 +160,33 @@ export function useFeishuSettingsController({
       return;
     }
 
+    const timer = window.setInterval(() => {
+      void loadConnectorPlatformData();
+    }, 5000);
+
+    return () => window.clearInterval(timer);
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab !== "feishu" || !feishuInstallerSession.running) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      void Promise.all([
+        loadConnectorSettings(),
+        loadFeishuSetupProgress(),
+      ]);
+    }, 1500);
+
+    return () => window.clearInterval(timer);
+  }, [activeTab, feishuInstallerSession.running]);
+
+  useEffect(() => {
+    if (activeTab !== "feishu") {
+      return;
+    }
+
     const completionNotice = resolveFeishuInstallerCompletionNotice(feishuInstallerSession);
     if (!completionNotice) {
       return;
@@ -492,7 +519,6 @@ export function useFeishuSettingsController({
       } else {
         await denyFeishuPairingRequestFromService(requestId);
       }
-      await loadConnectorStatuses();
       await loadConnectorPlatformData();
       await loadFeishuSetupProgress();
       setFeishuConnectorNotice(action === "approve" ? "已批准飞书接入请求" : "已拒绝飞书接入请求");
@@ -559,7 +585,6 @@ export function useFeishuSettingsController({
           pluginVersion: feishuSetupProgress?.plugin_version || pluginChannelHosts[0]?.version || "未识别",
           defaultAccountId: Object.values(pluginChannelSnapshots)[0]?.snapshot.defaultAccountId || "未识别",
           authApproved: feishuSetupProgress?.auth_status === "approved",
-          pendingPairings: feishuSetupProgress?.pending_pairings ?? pendingFeishuPairingCount,
           defaultRoutingEmployeeName: feishuSetupProgress?.default_routing_employee_name || "未设置",
           scopedRoutingCount: feishuSetupProgress?.scoped_routing_count ?? 0,
           lastEventAt: officialFeishuRuntimeStatus?.last_event_at,
@@ -686,7 +711,6 @@ export function useFeishuSettingsController({
     connectorStatus: feishuConnectorStatus,
     runtimeRunning,
     authApproved: feishuSetupProgress?.auth_status === "approved",
-    pendingPairings: feishuSetupProgress?.pending_pairings ?? pendingFeishuPairingCount,
     defaultRoutingEmployeeName: feishuSetupProgress?.default_routing_employee_name,
     scopedRoutingCount: feishuSetupProgress?.scoped_routing_count,
   });

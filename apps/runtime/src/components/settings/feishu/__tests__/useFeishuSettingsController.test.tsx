@@ -1,4 +1,4 @@
-import { act, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook } from "@testing-library/react";
 import { useFeishuSettingsController } from "../useFeishuSettingsController";
 import type { SettingsTabName } from "../../SettingsTabNav";
 
@@ -8,7 +8,8 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
 }));
 
-function installInvokeMock() {
+function installInvokeMock(options?: { installerRunning?: boolean }) {
+  const installerRunning = options?.installerRunning ?? false;
   invokeMock.mockReset();
   invokeMock.mockImplementation((command: string) => {
     if (command === "get_feishu_gateway_settings") {
@@ -101,10 +102,10 @@ function installInvokeMock() {
     }
     if (command === "get_openclaw_lark_installer_session_status") {
       return Promise.resolve({
-        running: false,
-        mode: null,
-        started_at: null,
-        last_output_at: null,
+        running: installerRunning,
+        mode: installerRunning ? "link" : null,
+        started_at: installerRunning ? "2026-03-24T12:00:00Z" : null,
+        last_output_at: installerRunning ? "2026-03-24T12:00:01Z" : null,
         last_error: null,
         prompt_hint: null,
         recent_output: [],
@@ -124,6 +125,8 @@ describe("useFeishuSettingsController", () => {
   });
 
   afterEach(() => {
+    cleanup();
+    vi.clearAllTimers();
     vi.useRealTimers();
   });
 
@@ -170,5 +173,63 @@ describe("useFeishuSettingsController", () => {
     expect(invokeMock).toHaveBeenCalledWith("get_openclaw_plugin_feishu_advanced_settings");
     expect(invokeMock).toHaveBeenCalledWith("list_openclaw_plugin_channel_hosts");
     expect(invokeMock).toHaveBeenCalledWith("list_feishu_pairing_requests", { status: null });
+  });
+
+  test("keeps refreshing runtime status and platform data while staying on the Feishu tab", async () => {
+    renderHook(({ activeTab }) => useFeishuSettingsController({ activeTab }), {
+      initialProps: { activeTab: "feishu" as SettingsTabName },
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const runtimeStatusCount = invokeMock.mock.calls.filter(
+      ([command]) => command === "get_openclaw_plugin_feishu_runtime_status",
+    ).length;
+    const hostCount = invokeMock.mock.calls.filter(([command]) => command === "list_openclaw_plugin_channel_hosts").length;
+    const pairingCount = invokeMock.mock.calls.filter(([command]) => command === "list_feishu_pairing_requests").length;
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+
+    expect(
+      invokeMock.mock.calls.filter(([command]) => command === "get_openclaw_plugin_feishu_runtime_status").length,
+    ).toBeGreaterThan(runtimeStatusCount);
+    expect(
+      invokeMock.mock.calls.filter(([command]) => command === "list_openclaw_plugin_channel_hosts").length,
+    ).toBeGreaterThan(hostCount);
+    expect(
+      invokeMock.mock.calls.filter(([command]) => command === "list_feishu_pairing_requests").length,
+    ).toBeGreaterThan(pairingCount);
+  });
+
+  test("refreshes connector settings and setup progress faster while installer is running", async () => {
+    installInvokeMock({ installerRunning: true });
+
+    renderHook(({ activeTab }) => useFeishuSettingsController({ activeTab }), {
+      initialProps: { activeTab: "feishu" as SettingsTabName },
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const connectorSettingsCount = invokeMock.mock.calls.filter(
+      ([command]) => command === "get_feishu_gateway_settings",
+    ).length;
+    const setupProgressCount = invokeMock.mock.calls.filter(([command]) => command === "get_feishu_setup_progress").length;
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1500);
+    });
+
+    expect(
+      invokeMock.mock.calls.filter(([command]) => command === "get_feishu_gateway_settings").length,
+    ).toBeGreaterThan(connectorSettingsCount);
+    expect(
+      invokeMock.mock.calls.filter(([command]) => command === "get_feishu_setup_progress").length,
+    ).toBeGreaterThan(setupProgressCount);
   });
 });

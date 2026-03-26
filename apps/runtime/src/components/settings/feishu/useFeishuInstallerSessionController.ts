@@ -1,7 +1,11 @@
 import { useEffect, useState } from "react";
 import { type SettingsTabName } from "../SettingsTabNav";
-import { loadFeishuInstallerSessionStatus as loadFeishuInstallerSessionStatusFromService } from "./feishuSettingsService";
-import type { OpenClawLarkInstallerSessionStatus } from "../../../types";
+import {
+  loadFeishuInstallerSessionStatus as loadFeishuInstallerSessionStatusFromService,
+} from "./feishuSettingsService";
+import type {
+  OpenClawLarkInstallerSessionStatus,
+} from "../../../types";
 
 export const DEFAULT_FEISHU_INSTALLER_SESSION: OpenClawLarkInstallerSessionStatus = {
   running: false,

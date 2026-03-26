@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listModelConfigs, listProviderConfigs } from "../../components/settings/models/modelSettingsService";
+import {
+  listModelConfigs,
+  listProviderConfigs,
+} from "../../components/settings/models/modelSettingsService";
 import type {
   CapabilityRouteTemplateInfo,
   CapabilityRoutingPolicy,
@@ -61,6 +64,7 @@ function buildDefaultRoutingPolicy(capability: string): CapabilityRoutingPolicy 
 export function useSettingsController() {
   const [models, setModels] = useState<ModelConfig[]>([]);
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
+
   const [selectedCapability, setSelectedCapability] = useState("chat");
   const [chatRoutingPolicy, setChatRoutingPolicy] = useState<CapabilityRoutingPolicy>(
     buildDefaultRoutingPolicy("chat"),
@@ -71,6 +75,7 @@ export function useSettingsController() {
   const [chatFallbackRows, setChatFallbackRows] = useState<RouteLogRow[]>([]);
   const [routeTemplates, setRouteTemplates] = useState<CapabilityRouteTemplateInfo[]>([]);
   const [selectedRouteTemplateId, setSelectedRouteTemplateId] = useState("china-first-p0");
+
   const [healthResult, setHealthResult] = useState<ProviderHealthInfo | null>(null);
   const [allHealthResults, setAllHealthResults] = useState<ProviderHealthInfo[]>([]);
   const [healthLoading, setHealthLoading] = useState(false);
@@ -118,7 +123,10 @@ export function useSettingsController() {
       return;
     }
     try {
-      const models = await invoke<string[]>("list_provider_models", { providerId, capability });
+      const models = await invoke<string[]>("list_provider_models", {
+        providerId,
+        capability,
+      });
       setChatPrimaryModels(models);
     } catch {
       setChatPrimaryModels([]);
@@ -127,7 +135,9 @@ export function useSettingsController() {
 
   async function loadCapabilityRoutingPolicy(capability: string) {
     try {
-      const loaded = await invoke<CapabilityRoutingPolicy | null>("get_capability_routing_policy", { capability });
+      const loaded = await invoke<CapabilityRoutingPolicy | null>("get_capability_routing_policy", {
+        capability,
+      });
       const nextPolicy = loaded ?? buildDefaultRoutingPolicy(capability);
       setChatRoutingPolicy(nextPolicy);
       setChatFallbackRows(parseFallbackRows(nextPolicy.fallback_chain_json));
@@ -179,7 +189,9 @@ export function useSettingsController() {
     if (!healthProviderId) return;
     setHealthLoading(true);
     try {
-      const result = await invoke<ProviderHealthInfo>("test_provider_health", { providerId: healthProviderId });
+      const result = await invoke<ProviderHealthInfo>("test_provider_health", {
+        providerId: healthProviderId,
+      });
       setHealthResult(result);
     } catch (error) {
       setHealthResult({
@@ -305,9 +317,7 @@ export function useSettingsController() {
       if (match?.[1]) {
         missingText = `；缺少服务标识（任选其一）: ${match[1]}`;
       }
-      setPolicyError(
-        `应用路由模板失败: ${raw}${missingText}；当前已启用: ${enabledText}。请先到“模型连接”补齐并启用。`,
-      );
+      setPolicyError(`应用路由模板失败: ${raw}${missingText}；当前已启用: ${enabledText}。请先到“模型连接”补齐并启用。`);
     }
   }
 

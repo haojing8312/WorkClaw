@@ -1,13 +1,20 @@
 import { useEffect, useState } from "react";
 import type { SettingsTabName } from "../SettingsTabNav";
-import { loadFeishuSetupProgress as loadFeishuSetupProgressFromService } from "./feishuSettingsService";
-import type { FeishuPluginEnvironmentStatus, FeishuSetupProgress } from "../../../types";
+import {
+  loadFeishuSetupProgress as loadFeishuSetupProgressFromService,
+} from "./feishuSettingsService";
+import type {
+  FeishuPluginEnvironmentStatus,
+  FeishuSetupProgress,
+} from "../../../types";
 
 interface UseFeishuSetupProgressControllerOptions {
   activeTab: SettingsTabName;
 }
 
-export function useFeishuSetupProgressController({ activeTab }: UseFeishuSetupProgressControllerOptions) {
+export function useFeishuSetupProgressController({
+  activeTab,
+}: UseFeishuSetupProgressControllerOptions) {
   const [feishuEnvironmentStatus, setFeishuEnvironmentStatus] = useState<FeishuPluginEnvironmentStatus | null>(null);
   const [feishuSetupProgress, setFeishuSetupProgress] = useState<FeishuSetupProgress | null>(null);
 
