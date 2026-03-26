@@ -3,7 +3,7 @@ use super::chat_runtime_io as chat_io;
 use super::chat_session_io;
 use super::skills::DbState;
 use crate::agent::AgentExecutor;
-use crate::agent::runtime::SessionRuntime;
+use crate::agent::runtime::{SessionAdmissionGateState, SessionRuntime};
 use crate::approval_bus::ApprovalManager;
 use crate::diagnostics::{self, ManagedDiagnosticsState};
 use crate::session_journal::SessionJournalStateHandle;
@@ -211,6 +211,15 @@ pub async fn send_message(
     let session_id = request.session_id.clone();
     let user_message = request.summary_text();
     let user_message_parts = request.parts_as_json()?;
+
+    let admission_gate = app
+        .try_state::<SessionAdmissionGateState>()
+        .ok_or_else(|| "SessionAdmissionGateState unavailable".to_string())?;
+    let _admission_lease = admission_gate
+        .0
+        .try_acquire(&session_id)
+        .map_err(|conflict| conflict.to_string())?;
+
     if let Some(diagnostics_state) = app.try_state::<ManagedDiagnosticsState>() {
         let _ = diagnostics::write_log_record(
             &diagnostics_state.0.paths,
@@ -343,6 +352,7 @@ pub async fn send_message(
 #[cfg(test)]
 mod tests {
     use super::build_group_orchestrator_report_preview;
+    use crate::agent::runtime::SessionAdmissionConflict;
     use crate::commands::chat_runtime_io;
     use std::collections::HashMap;
     use std::path::Path;
@@ -410,6 +420,14 @@ mod tests {
         assert!(report.contains("计划"));
         assert!(report.contains("执行"));
         assert!(report.contains("汇报"));
+    }
+
+    #[test]
+    fn session_run_conflict_error_is_stable() {
+        let error = SessionAdmissionConflict::new("session-1").to_string();
+
+        assert!(error.starts_with("SESSION_RUN_CONFLICT:"));
+        assert!(error.contains("当前会话仍在执行中"));
     }
 }
 

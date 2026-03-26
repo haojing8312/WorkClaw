@@ -1,3 +1,4 @@
+pub(crate) mod admission_gate;
 pub(crate) mod approval_gate;
 pub(crate) mod attempt_runner;
 pub mod events;
@@ -12,6 +13,7 @@ pub(crate) mod tool_dispatch;
 pub(crate) mod tool_setup;
 pub mod transcript;
 
+pub use admission_gate::{SessionAdmissionConflict, SessionAdmissionGate, SessionAdmissionGateState};
 pub use events::{
     AskUserState, CancelFlagState, SearchCacheState, SkillRouteEvent, StreamToken,
     ToolConfirmResponder,

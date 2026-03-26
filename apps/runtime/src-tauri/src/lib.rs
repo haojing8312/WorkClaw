@@ -14,7 +14,9 @@ pub mod sidecar;
 pub mod team_templates;
 mod windows_process;
 
-use agent::runtime::{RunRegistry, RunRegistryState};
+use agent::runtime::{
+    RunRegistry, RunRegistryState, SessionAdmissionGate, SessionAdmissionGateState,
+};
 use agent::tools::new_responder;
 use agent::tools::search_providers::cache::SearchCache;
 use agent::{AgentExecutor, ToolRegistry};
@@ -111,6 +113,9 @@ fn initialize_runtime_state(app: &mut tauri::App, pool: sqlx::SqlitePool) -> Man
 
     let search_cache = Arc::new(SearchCache::new(std::time::Duration::from_secs(900), 100));
     app.manage(SearchCacheState(search_cache));
+
+    let session_admission_gate = Arc::new(SessionAdmissionGate::default());
+    app.manage(SessionAdmissionGateState(session_admission_gate));
 
     let journal_root = app
         .path()
