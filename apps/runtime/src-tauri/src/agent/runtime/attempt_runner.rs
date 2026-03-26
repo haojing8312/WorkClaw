@@ -6,7 +6,7 @@ use super::failover::{
 };
 use crate::agent::permissions::PermissionMode;
 use crate::agent::run_guard::parse_run_stop_reason;
-use crate::agent::types::StreamDelta;
+use crate::agent::types::{AgentStateEvent, StreamDelta};
 use crate::agent::AgentExecutor;
 use serde_json::Value;
 use std::sync::atomic::AtomicBool;
@@ -43,6 +43,21 @@ pub(crate) async fn execute_route_candidates(params: RouteExecutionParams<'_>) -
     RuntimeFailover::execute_candidates(RuntimeFailoverParams {
         route_candidates: params.route_candidates,
         per_candidate_retry_count: params.per_candidate_retry_count,
+        on_same_candidate_retry: Some(Box::new(move |kind, retry_attempt, total_retries| {
+            if let Some(detail) =
+                build_retrying_agent_state_detail(kind, retry_attempt, total_retries)
+            {
+                let _ = params_ref.app.emit(
+                    "agent-state-event",
+                    AgentStateEvent::basic(
+                        params_ref.session_id,
+                        "retrying",
+                        Some(detail),
+                        retry_attempt,
+                    ),
+                );
+            }
+        })),
         attempt_once: Box::new(
             move |candidate_api_format,
                   candidate_base_url,
@@ -61,6 +76,23 @@ pub(crate) async fn execute_route_candidates(params: RouteExecutionParams<'_>) -
         ),
     })
     .await
+}
+
+fn build_retrying_agent_state_detail(
+    kind: super::failover::RuntimeFailoverErrorKind,
+    retry_attempt: usize,
+    total_retries: usize,
+) -> Option<String> {
+    if total_retries == 0 {
+        return None;
+    }
+
+    match kind {
+        super::failover::RuntimeFailoverErrorKind::Network => Some(format!(
+            "网络异常，正在自动重试（第 {retry_attempt}/{total_retries} 次）"
+        )),
+        _ => None,
+    }
 }
 
 async fn execute_candidate_attempt(
@@ -249,5 +281,23 @@ async fn execute_candidate_attempt(
                 reasoning_duration_ms: None,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_retrying_agent_state_detail;
+    use crate::agent::runtime::failover::RuntimeFailoverErrorKind;
+
+    #[test]
+    fn build_retrying_agent_state_detail_formats_network_retries() {
+        assert_eq!(
+            build_retrying_agent_state_detail(RuntimeFailoverErrorKind::Network, 2, 5).as_deref(),
+            Some("网络异常，正在自动重试（第 2/5 次）")
+        );
+        assert_eq!(
+            build_retrying_agent_state_detail(RuntimeFailoverErrorKind::Timeout, 1, 5),
+            None
+        );
     }
 }

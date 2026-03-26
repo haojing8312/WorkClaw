@@ -22,7 +22,8 @@ fn classifies_route_errors_and_retry_policy() {
         ModelRouteErrorKind::Auth
     );
     assert!(should_retry_same_candidate(ModelRouteErrorKind::Network));
-    assert_eq!(retry_budget_for_error(ModelRouteErrorKind::Network, 0), 1);
+    assert_eq!(retry_budget_for_error(ModelRouteErrorKind::Network, 0), 5);
+    assert_eq!(retry_budget_for_error(ModelRouteErrorKind::Network, 2), 5);
     assert_eq!(retry_budget_for_error(ModelRouteErrorKind::Auth, 2), 2);
     assert_eq!(retry_backoff_ms(ModelRouteErrorKind::RateLimit, 0), 1200);
     assert_eq!(retry_backoff_ms(ModelRouteErrorKind::Timeout, 1), 1400);

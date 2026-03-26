@@ -87,7 +87,6 @@ export function useChatSessionController({
       setMessages(nextMessages);
     } catch (error) {
       console.error("加载历史消息失败:", error);
-      setMessages([]);
     }
   };
 
@@ -101,7 +100,6 @@ export function useChatSessionController({
       setSessionRuns(runs);
     } catch (error) {
       console.error("加载会话运行记录失败:", error);
-      setSessionRuns([]);
     }
   };
 
@@ -124,7 +122,6 @@ export function useChatSessionController({
       });
     } catch (error) {
       console.error("加载待审批列表失败:", error);
-      setPendingApprovals([]);
     }
   };
 

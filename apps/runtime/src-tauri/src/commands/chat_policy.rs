@@ -206,7 +206,7 @@ pub(crate) fn retry_budget_for_error(
     configured_retry_count: usize,
 ) -> usize {
     if kind == ModelRouteErrorKind::Network {
-        configured_retry_count.max(1)
+        configured_retry_count.max(5)
     } else {
         configured_retry_count
     }
@@ -472,8 +472,9 @@ mod tests {
 
     #[test]
     fn retry_budget_for_error_guarantees_one_retry_for_network() {
-        assert_eq!(retry_budget_for_error(ModelRouteErrorKind::Network, 0), 1);
-        assert_eq!(retry_budget_for_error(ModelRouteErrorKind::Network, 2), 2);
+        assert_eq!(retry_budget_for_error(ModelRouteErrorKind::Network, 0), 5);
+        assert_eq!(retry_budget_for_error(ModelRouteErrorKind::Network, 2), 5);
+        assert_eq!(retry_budget_for_error(ModelRouteErrorKind::Network, 7), 7);
         assert_eq!(retry_budget_for_error(ModelRouteErrorKind::RateLimit, 0), 0);
     }
 

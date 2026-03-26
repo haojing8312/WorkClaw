@@ -109,7 +109,7 @@ pub fn should_retry_same_candidate(kind: ModelRouteErrorKind) -> bool {
 
 pub fn retry_budget_for_error(kind: ModelRouteErrorKind, configured_retry_count: usize) -> usize {
     if kind == ModelRouteErrorKind::Network {
-        configured_retry_count.max(1)
+        configured_retry_count.max(5)
     } else {
         configured_retry_count
     }

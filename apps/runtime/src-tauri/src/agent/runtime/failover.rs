@@ -44,6 +44,8 @@ pub(crate) struct RuntimeFailoverOutcome {
 pub(crate) struct RuntimeFailoverParams<'a> {
     pub route_candidates: &'a [(String, String, String, String)],
     pub per_candidate_retry_count: usize,
+    pub on_same_candidate_retry:
+        Option<Box<dyn FnMut(RuntimeFailoverErrorKind, usize, usize) + Send + 'a>>,
     pub attempt_once: Box<
         dyn FnMut(
                 &'a str,
@@ -127,6 +129,9 @@ pub(crate) async fn execute_candidates(
                 );
                 if runtime_should_retry_same_candidate(current_kind) && attempt_idx < retry_budget
                 {
+                    if let Some(on_retry) = params.on_same_candidate_retry.as_mut() {
+                        on_retry(current_kind, attempt_idx + 1, retry_budget);
+                    }
                     let backoff_ms = runtime_retry_backoff_ms(current_kind, attempt_idx);
                     if backoff_ms > 0 {
                         tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
@@ -284,7 +289,7 @@ fn runtime_retry_budget_for_error(
     configured_retry_count: usize,
 ) -> usize {
     if kind == RuntimeFailoverErrorKind::Network {
-        configured_retry_count.max(1)
+        configured_retry_count.max(5)
     } else {
         configured_retry_count
     }
@@ -332,6 +337,7 @@ mod tests {
         let result = RuntimeFailover::execute_candidates(RuntimeFailoverParams {
             route_candidates: &route_candidates,
             per_candidate_retry_count: 1,
+            on_same_candidate_retry: None,
             attempt_once: Box::new(move |api_format, _base_url, model_name, _api_key, attempt_idx| {
                 let attempts = Arc::clone(&attempts_clone);
                 Box::pin(async move {
@@ -383,6 +389,107 @@ mod tests {
         assert_eq!(result.partial_text, "done");
         assert_eq!(result.reasoning_text, "");
         assert_eq!(result.reasoning_duration_ms, Some(12));
+    }
+
+    #[tokio::test]
+    async fn execute_candidates_guarantees_five_network_retries() {
+        let attempts = Arc::new(Mutex::new(Vec::new()));
+        let attempts_clone = Arc::clone(&attempts);
+        let route_candidates = vec![(
+            "openai".to_string(),
+            "https://a.example".to_string(),
+            "model-a".to_string(),
+            "key-a".to_string(),
+        )];
+
+        let result = RuntimeFailover::execute_candidates(RuntimeFailoverParams {
+            route_candidates: &route_candidates,
+            per_candidate_retry_count: 0,
+            on_same_candidate_retry: None,
+            attempt_once: Box::new(move |api_format, _base_url, model_name, _api_key, attempt_idx| {
+                let attempts = Arc::clone(&attempts_clone);
+                Box::pin(async move {
+                    attempts
+                        .lock()
+                        .expect("attempt log lock")
+                        .push(format!("{api_format}:{model_name}:{attempt_idx}"));
+
+                    CandidateAttemptOutcome {
+                        final_messages: None,
+                        last_error: Some("network connection reset".to_string()),
+                        last_error_kind: Some("network".to_string()),
+                        error_kind: Some(RuntimeFailoverErrorKind::Network),
+                        last_stop_reason: None,
+                        partial_text: String::new(),
+                        reasoning_text: String::new(),
+                        reasoning_duration_ms: None,
+                    }
+                })
+            }),
+        })
+        .await;
+
+        assert!(result.final_messages.is_none());
+        assert_eq!(
+            attempts.lock().expect("attempt log lock").as_slice(),
+            &[
+                "openai:model-a:0".to_string(),
+                "openai:model-a:1".to_string(),
+                "openai:model-a:2".to_string(),
+                "openai:model-a:3".to_string(),
+                "openai:model-a:4".to_string(),
+                "openai:model-a:5".to_string(),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_candidates_reports_network_retry_progress() {
+        let retry_progress = Arc::new(Mutex::new(Vec::new()));
+        let retry_progress_clone = Arc::clone(&retry_progress);
+        let route_candidates = vec![(
+            "openai".to_string(),
+            "https://a.example".to_string(),
+            "model-a".to_string(),
+            "key-a".to_string(),
+        )];
+
+        let _ = RuntimeFailover::execute_candidates(RuntimeFailoverParams {
+            route_candidates: &route_candidates,
+            per_candidate_retry_count: 0,
+            on_same_candidate_retry: Some(Box::new(move |kind, retry_attempt, total_retries| {
+                retry_progress_clone
+                    .lock()
+                    .expect("retry progress lock")
+                    .push((kind, retry_attempt, total_retries));
+            })),
+            attempt_once: Box::new(move |_api_format, _base_url, _model_name, _api_key, _attempt_idx| {
+                Box::pin(async move {
+                    CandidateAttemptOutcome {
+                        final_messages: None,
+                        last_error: Some("network connection reset".to_string()),
+                        last_error_kind: Some("network".to_string()),
+                        error_kind: Some(RuntimeFailoverErrorKind::Network),
+                        last_stop_reason: None,
+                        partial_text: String::new(),
+                        reasoning_text: String::new(),
+                        reasoning_duration_ms: None,
+                    }
+                })
+            }),
+        })
+        .await;
+
+        assert_eq!(
+            retry_progress.lock().expect("retry progress lock").as_slice(),
+            &[
+                (RuntimeFailoverErrorKind::Network, 1, 5),
+                (RuntimeFailoverErrorKind::Network, 2, 5),
+                (RuntimeFailoverErrorKind::Network, 3, 5),
+                (RuntimeFailoverErrorKind::Network, 4, 5),
+                (RuntimeFailoverErrorKind::Network, 5, 5),
+            ]
+        );
     }
 
     #[test]

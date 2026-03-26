@@ -720,6 +720,153 @@ describe("ChatView session resilience", () => {
     expect(failureCard).toHaveTextContent("upstream gateway exploded with trace id abc-123");
   });
 
+  test("shows network failure recovery guidance", async () => {
+    sessionRunsResponse = [
+      {
+        id: "run-network",
+        session_id: "sess-network",
+        user_message_id: "user-network",
+        assistant_message_id: null,
+        status: "failed",
+        buffered_text: "已经抓取到前两页数据",
+        error_kind: "network",
+        error_message: "error sending request for url",
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+    ];
+    messagesResponse = [
+      {
+        id: "user-network",
+        role: "user",
+        content: "继续处理报表",
+        created_at: new Date().toISOString(),
+      },
+    ];
+
+    render(
+      <ChatView
+        skill={{
+          id: "builtin-general",
+          name: "General",
+          description: "desc",
+          version: "1.0.0",
+          author: "test",
+          recommended_model: "",
+          tags: [],
+          created_at: new Date().toISOString(),
+        }}
+        models={[
+          {
+            id: "m1",
+            name: "model",
+            api_format: "openai",
+            base_url: "https://example.com",
+            model_name: "model",
+            is_default: true,
+          },
+        ]}
+        sessionId="sess-network"
+      />
+    );
+
+    const failureCard = await screen.findByTestId("run-failure-card-run-network");
+    expect(failureCard).toHaveTextContent("网络连接失败");
+    expect(failureCard).toHaveTextContent("无法连接到模型接口，请检查 Base URL、网络环境或代理配置。");
+    expect(failureCard).toHaveTextContent("已经保留当前任务的历史消息和部分输出");
+    expect(failureCard).toHaveTextContent("网络恢复后可直接输入“继续”");
+    expect(failureCard).toHaveTextContent("已经抓取到前两页数据");
+  });
+
+  test("keeps prior session content visible when reload after send fails", async () => {
+    messagesResponse = [
+      {
+        id: "user-existing",
+        role: "user",
+        content: "先整理现有上下文",
+        created_at: "2026-03-16T00:00:01Z",
+      },
+      {
+        id: "assistant-existing",
+        role: "assistant",
+        content: "现有上下文已经保留",
+        created_at: "2026-03-16T00:00:02Z",
+      },
+    ];
+    sessionRunsResponse = [
+      {
+        id: "run-existing",
+        session_id: "sess-reload-failure",
+        user_message_id: "user-existing",
+        assistant_message_id: "assistant-existing",
+        status: "failed",
+        buffered_text: "现有上下文已经保留",
+        error_kind: "network",
+        error_message: "error sending request for url",
+        created_at: "2026-03-16T00:00:01Z",
+        updated_at: "2026-03-16T00:00:03Z",
+      },
+    ];
+
+    let failReload = false;
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_messages") {
+        if (failReload) return Promise.reject(new Error("reload messages failed"));
+        return Promise.resolve(messagesResponse);
+      }
+      if (command === "list_sessions") return Promise.resolve([]);
+      if (command === "get_sessions") return Promise.resolve([]);
+      if (command === "list_session_runs") {
+        if (failReload) return Promise.reject(new Error("reload runs failed"));
+        return Promise.resolve(sessionRunsResponse);
+      }
+      if (command === "send_message") {
+        failReload = true;
+        return Promise.reject(new Error("network timeout"));
+      }
+      return Promise.resolve(null);
+    });
+
+    render(
+      <ChatView
+        skill={{
+          id: "builtin-general",
+          name: "General",
+          description: "desc",
+          version: "1.0.0",
+          author: "test",
+          recommended_model: "",
+          tags: [],
+          created_at: new Date().toISOString(),
+        }}
+        models={[
+          {
+            id: "m1",
+            name: "model",
+            api_format: "openai",
+            base_url: "https://example.com",
+            model_name: "model",
+            is_default: true,
+          },
+        ]}
+        sessionId="sess-reload-failure"
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getAllByText("现有上下文已经保留").length).toBeGreaterThan(0);
+    });
+
+    const composer = screen.getByPlaceholderText("输入消息，Shift+Enter 换行...");
+    fireEvent.change(composer, { target: { value: "继续" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+
+    await waitFor(() => {
+      expect(screen.getAllByText("现有上下文已经保留").length).toBeGreaterThan(0);
+      expect(screen.getByTestId("run-failure-card-run-existing")).toBeInTheDocument();
+    });
+  });
+
   test("keeps unsent drafts isolated per session when switching between conversations", async () => {
     const { rerender } = render(
       <ChatView

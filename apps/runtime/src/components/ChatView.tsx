@@ -43,6 +43,7 @@ import {
   isModelErrorKind,
 } from "../lib/model-error-display";
 import { useChatStreamController } from "../scenes/chat/useChatStreamController";
+import { openExternalUrl } from "../utils/openExternalUrl";
 
 type ClawhubInstallCandidate = {
   slug: string;
@@ -78,6 +79,12 @@ type ChatSessionExecutionContext = {
   sourceEmployeeId?: string;
   assigneeEmployeeId?: string;
   sourceStepTimeline?: ChatSessionTimelineItem[];
+};
+
+type ChatLinkToastState = {
+  variant: "success" | "error";
+  message: string;
+  url: string;
 };
 
 const CONTINUE_MESSAGE_TEXT = "继续";
@@ -316,10 +323,22 @@ export function ChatView({
   const [sidePanelTab, setSidePanelTab] = useState<"tasks" | "files" | "websearch">("tasks");
   const [expandedThinkingKeys, setExpandedThinkingKeys] = useState<string[]>([]);
   const [copiedAssistantMessageKey, setCopiedAssistantMessageKey] = useState<string | null>(null);
+  const [chatLinkToast, setChatLinkToast] = useState<ChatLinkToastState | null>(null);
 
   const toggleThinkingBlock = (key: string) => {
     setExpandedThinkingKeys((prev) => (prev.includes(key) ? prev.filter((item) => item !== key) : [...prev, key]));
   };
+
+  useEffect(() => {
+    if (chatLinkToast?.variant !== "success") {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setChatLinkToast((current) => (current?.variant === "success" ? null : current));
+    }, 1200);
+    return () => window.clearTimeout(timer);
+  }, [chatLinkToast]);
+
   const collaborationControllerState = {
     resetForSessionSwitch: () => {},
   };
@@ -1510,9 +1529,50 @@ export function ChatView({
     }, 1600);
   }
 
+  async function handleOpenChatExternalLink(url: string) {
+    try {
+      await openExternalUrl(url);
+      setChatLinkToast({
+        variant: "success",
+        message: "已在浏览器打开",
+        url,
+      });
+    } catch (error) {
+      console.error("打开会话外链失败:", error);
+      setChatLinkToast({
+        variant: "error",
+        message: "链接打开失败",
+        url,
+      });
+    }
+  }
+
+  async function handleCopyChatLink(url: string) {
+    const trimmed = url.trim();
+    if (!trimmed) return;
+    try {
+      await globalThis.navigator?.clipboard?.writeText?.(trimmed);
+      setChatLinkToast({
+        variant: "success",
+        message: "链接已复制",
+        url: trimmed,
+      });
+    } catch (error) {
+      console.error("复制会话外链失败:", error);
+      setChatLinkToast({
+        variant: "error",
+        message: "复制链接失败",
+        url: trimmed,
+      });
+    }
+  }
+
   function getAgentStateLabel() {
     if (!agentState) return "";
     if (agentState.state === "thinking") return "正在分析任务";
+    if (agentState.state === "retrying") {
+      return agentState.detail || "网络异常，正在自动重试";
+    }
     if (agentState.state === "tool_calling") {
       return agentState.detail ? `正在处理步骤：${agentState.detail}` : "正在处理步骤";
     }
@@ -1576,6 +1636,9 @@ export function ChatView({
   }
 
   function getRunFailureDisplay(run: SessionRunProjection) {
+    const networkRecoverySuffix =
+      "\n已经保留当前任务的历史消息和部分输出。网络恢复后可直接输入“继续”，从当前上下文继续完成任务。";
+
     if (run.error_kind === "cancelled") {
       return {
         title: "任务已取消",
@@ -1621,7 +1684,7 @@ export function ChatView({
       const display = getModelErrorDisplay(run.error_kind);
       return {
         title: display.title,
-        message: display.message,
+        message: run.error_kind === "network" ? `${display.message}${networkRecoverySuffix}` : display.message,
         rawMessage:
           run.error_kind === "unknown" &&
           run.error_message &&
@@ -1639,7 +1702,10 @@ export function ChatView({
       const display = getModelErrorDisplay(inferredModelErrorKind);
       return {
         title: display.title,
-        message: display.message,
+        message:
+          inferredModelErrorKind === "network"
+            ? `${display.message}${networkRecoverySuffix}`
+            : display.message,
         rawMessage: null as string | null,
       };
     }
@@ -1737,12 +1803,24 @@ export function ChatView({
                 ? "text-amber-800 border-amber-200"
                 : agentState.state === "error"
                 ? "text-red-700 border-red-200"
+                : agentState.state === "retrying"
+                ? "text-blue-700 border-blue-200"
                 : "text-gray-600 border-gray-200"
             }`}
           >
             {renderAgentStateIndicator()}
             <div className="flex min-w-0 flex-col">
-              <span className={agentState.state === "error" ? "text-red-500" : undefined}>{getAgentStateLabel()}</span>
+              <span
+                className={
+                  agentState.state === "error"
+                    ? "text-red-500"
+                    : agentState.state === "retrying"
+                    ? "text-blue-700"
+                    : undefined
+                }
+              >
+                {getAgentStateLabel()}
+              </span>
               {renderAgentStateSecondaryText()}
             </div>
           </div>
@@ -1825,7 +1903,49 @@ export function ChatView({
           askUserAnswer={askUserAnswer}
           onAskUserAnswerChange={setAskUserAnswer}
           onAnswerUser={handleAnswerUser}
+          onOpenExternalLink={handleOpenChatExternalLink}
         />
+        {chatLinkToast && (
+          <div className="pointer-events-none absolute inset-x-0 bottom-5 z-20 flex justify-center px-4">
+            <div
+              data-testid="chat-link-toast"
+              className={
+                "pointer-events-auto flex max-w-[36rem] items-center gap-3 rounded-2xl border px-4 py-3 text-sm shadow-lg backdrop-blur-sm " +
+                (chatLinkToast.variant === "success"
+                  ? "border-emerald-200 bg-white/95 text-emerald-700"
+                  : "border-rose-200 bg-white/95 text-rose-700")
+              }
+            >
+              <span className="font-medium">{chatLinkToast.message}</span>
+              {chatLinkToast.variant === "error" && (
+                <>
+                  <button
+                    type="button"
+                    className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-medium text-rose-700 transition-colors hover:bg-rose-100"
+                    onClick={() => void handleOpenChatExternalLink(chatLinkToast.url)}
+                  >
+                    重试
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-100"
+                    onClick={() => void handleCopyChatLink(chatLinkToast.url)}
+                  >
+                    复制链接
+                  </button>
+                </>
+              )}
+              <button
+                type="button"
+                aria-label="关闭链接提示"
+                className="rounded-lg px-2 py-1 text-xs text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700"
+                onClick={() => setChatLinkToast(null)}
+              >
+                关闭
+              </button>
+            </div>
+          </div>
+        )}
         <RiskConfirmDialog
           open={Boolean(activePendingApproval)}
           level="high"
