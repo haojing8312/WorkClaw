@@ -515,7 +515,7 @@ export function ChatView({
                 >
                   <div className="font-medium">{part.name}</div>
                   <div className="mt-1 opacity-80">
-                    文本附件
+                    {part.type === "pdf_file" ? "PDF 附件" : "文本附件"}
                     {part.truncated ? " · 已截断" : ""}
                   </div>
                 </div>

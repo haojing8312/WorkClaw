@@ -136,6 +136,28 @@ pub(crate) fn render_user_content_parts(content_json: &str) -> Option<String> {
                     "[文本附件] {name} ({mime_type})\n```{ext}\n{text}\n```{note}"
                 ));
             }
+            "pdf_file" => {
+                let name = part
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("attachment.pdf");
+                let mime_type = part
+                    .get("mimeType")
+                    .and_then(Value::as_str)
+                    .unwrap_or("application/pdf");
+                let text = part
+                    .get("extractedText")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                let truncated = part
+                    .get("truncated")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let note = if truncated { "\n[内容已截断]" } else { "" };
+                sections.push(format!(
+                    "[PDF 附件] {name} ({mime_type})\n```text\n{text}\n```{note}"
+                ));
+            }
             _ => {}
         }
     }
@@ -173,7 +195,7 @@ mod tests {
     }
 
     #[test]
-    fn render_user_content_parts_formats_images_and_text_files() {
+    fn render_user_content_parts_formats_images_text_files_and_pdf_files() {
         let rendered = render_user_content_parts(
             &serde_json::to_string(&json!([
                 { "type": "text", "text": "请结合附件分析" },
@@ -184,6 +206,13 @@ mod tests {
                     "mimeType": "text/plain",
                     "text": "console.log('hi')",
                     "truncated": true
+                },
+                {
+                    "type": "pdf_file",
+                    "name": "brief.pdf",
+                    "mimeType": "application/pdf",
+                    "extractedText": "这是 PDF 正文",
+                    "truncated": true
                 }
             ]))
             .expect("serialize content parts"),
@@ -193,6 +222,8 @@ mod tests {
         assert!(rendered.contains("请结合附件分析"));
         assert!(rendered.contains("[图片] screen.png"));
         assert!(rendered.contains("[文本附件] debug.ts (text/plain)"));
+        assert!(rendered.contains("[PDF 附件] brief.pdf (application/pdf)"));
+        assert!(rendered.contains("这是 PDF 正文"));
         assert!(rendered.contains("[内容已截断]"));
     }
 }

@@ -69,10 +69,7 @@ impl RuntimeTranscript {
         }
         let combined_text = combined_text_parts.join("\n\n").trim().to_string();
         if !combined_text.is_empty() {
-            content_blocks.insert(
-                0,
-                json!({ "type": "text", "text": combined_text }),
-            );
+            content_blocks.insert(0, json!({ "type": "text", "text": combined_text }));
         }
 
         if content_blocks.is_empty() {
@@ -164,7 +161,9 @@ impl RuntimeTranscript {
                         })
                     })
                     .collect();
-                result.push(json!({"role": "assistant", "content": content_val, "tool_calls": tc_arr}));
+                result.push(
+                    json!({"role": "assistant", "content": content_val, "tool_calls": tc_arr}),
+                );
 
                 for (tc, output) in &tool_calls {
                     result.push(json!({
@@ -355,7 +354,10 @@ impl RuntimeTranscript {
         streamed_text: &str,
     ) -> (String, bool, String) {
         let (mut final_text, has_tool_calls, mut content) =
-            Self::build_assistant_content_from_final_messages(final_messages, reconstructed_history_len);
+            Self::build_assistant_content_from_final_messages(
+                final_messages,
+                reconstructed_history_len,
+            );
         let fallback_text = streamed_text.trim();
 
         if final_text.trim().is_empty() && !fallback_text.is_empty() {
@@ -388,27 +390,51 @@ impl RuntimeTranscript {
     fn build_attachment_context_text(parts: &[Value]) -> Option<String> {
         let mut file_blocks = Vec::new();
         for part in parts {
-            if part.get("type").and_then(Value::as_str) != Some("file_text") {
-                continue;
+            match part.get("type").and_then(Value::as_str) {
+                Some("file_text") => {
+                    let name = part
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or("attachment.txt");
+                    let mime_type = part
+                        .get("mimeType")
+                        .and_then(Value::as_str)
+                        .unwrap_or("text/plain");
+                    let text = part.get("text").and_then(Value::as_str).unwrap_or_default();
+                    let truncated = part
+                        .get("truncated")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    let ext = name.split('.').last().unwrap_or("txt");
+                    let truncated_note = if truncated { "\n[内容已截断]" } else { "" };
+                    file_blocks.push(format!(
+                        "## {name} ({mime_type})\n```{ext}\n{text}\n```{truncated_note}"
+                    ));
+                }
+                Some("pdf_file") => {
+                    let name = part
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or("attachment.pdf");
+                    let mime_type = part
+                        .get("mimeType")
+                        .and_then(Value::as_str)
+                        .unwrap_or("application/pdf");
+                    let text = part
+                        .get("extractedText")
+                        .and_then(Value::as_str)
+                        .unwrap_or("未提取到可读的 PDF 文本内容。");
+                    let truncated = part
+                        .get("truncated")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    let truncated_note = if truncated { "\n[内容已截断]" } else { "" };
+                    file_blocks.push(format!(
+                        "## PDF 附件 {name} ({mime_type})\n```text\n{text}\n```{truncated_note}"
+                    ));
+                }
+                _ => {}
             }
-            let name = part
-                .get("name")
-                .and_then(Value::as_str)
-                .unwrap_or("attachment.txt");
-            let mime_type = part
-                .get("mimeType")
-                .and_then(Value::as_str)
-                .unwrap_or("text/plain");
-            let text = part.get("text").and_then(Value::as_str).unwrap_or_default();
-            let truncated = part
-                .get("truncated")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            let ext = name.split('.').last().unwrap_or("txt");
-            let truncated_note = if truncated { "\n[内容已截断]" } else { "" };
-            file_blocks.push(format!(
-                "## {name} ({mime_type})\n```{ext}\n{text}\n```{truncated_note}"
-            ));
         }
         if file_blocks.is_empty() {
             None
@@ -425,5 +451,34 @@ impl RuntimeTranscript {
             .iter()
             .skip(reconstructed_history_len)
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RuntimeTranscript;
+    use serde_json::json;
+
+    #[test]
+    fn build_current_turn_message_includes_pdf_attachment_context() {
+        let message = RuntimeTranscript::build_current_turn_message(
+            "openai",
+            &[json!({
+                "type": "pdf_file",
+                "name": "brief.pdf",
+                "mimeType": "application/pdf",
+                "extractedText": "这是 PDF 正文",
+                "truncated": true
+            })],
+        )
+        .expect("message");
+
+        let text = message["content"][0]["text"]
+            .as_str()
+            .expect("text block");
+        assert!(text.contains("PDF 附件"));
+        assert!(text.contains("brief.pdf"));
+        assert!(text.contains("这是 PDF 正文"));
+        assert!(text.contains("[内容已截断]"));
     }
 }

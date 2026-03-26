@@ -30,14 +30,14 @@ type UseChatSendControllerArgs = {
 
 export function buildDefaultAttachmentPrompt(attachments: PendingAttachment[]): string {
   const hasImage = attachments.some((file) => file.kind === "image");
-  const hasTextFile = attachments.some((file) => file.kind === "text-file");
-  if (hasImage && hasTextFile) {
-    return "请结合这些图片和文本附件一起分析，并给出结论。";
+  const hasDocument = attachments.some((file) => file.kind === "text-file" || file.kind === "pdf-file");
+  if (hasImage && hasDocument) {
+    return "请结合这些图片和文档附件一起分析，并给出结论。";
   }
   if (hasImage) {
     return "请结合这些图片描述主要内容，并提取可见文字。";
   }
-  return "请阅读这些附件并总结关键信息。";
+  return "请阅读这些文档附件并总结关键信息。";
 }
 
 export function buildMessageParts(message: string, attachments: PendingAttachment[]): ChatMessagePart[] {
@@ -55,12 +55,24 @@ export function buildMessageParts(message: string, attachments: PendingAttachmen
       return;
     }
     parts.push({
-      type: "file_text",
-      name: file.name,
-      mimeType: file.mimeType,
-      size: file.size,
-      text: file.text,
-      truncated: file.truncated,
+      ...(file.kind === "pdf-file"
+        ? {
+            type: "pdf_file" as const,
+            name: file.name,
+            mimeType: file.mimeType,
+            size: file.size,
+            data: file.data,
+            extractedText: file.extractedText,
+            truncated: file.truncated,
+          }
+        : {
+            type: "file_text" as const,
+            name: file.name,
+            mimeType: file.mimeType,
+            size: file.size,
+            text: file.text,
+            truncated: file.truncated,
+          }),
     });
   });
   return parts;
@@ -77,6 +89,9 @@ function buildOptimisticUserContent(parts: ChatMessagePart[]): string {
       }
       if (part.type === "file_text") {
         return `[文件: ${part.name}]`;
+      }
+      if (part.type === "pdf_file") {
+        return `[PDF: ${part.name}]`;
       }
       return "";
     })

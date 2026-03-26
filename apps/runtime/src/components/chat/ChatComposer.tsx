@@ -1,5 +1,6 @@
 import type { ChangeEvent, KeyboardEvent, RefObject } from "react";
 
+import { buildPendingAttachmentMeta } from "../../lib/chatAttachments";
 import type { ModelConfig, PendingAttachment } from "../../types";
 
 type ChatComposerProps = {
@@ -81,6 +82,9 @@ export function ChatComposer({
               <div className="text-[11px] text-gray-500">已添加 {attachedFiles.length} 个附件</div>
               <div className="space-y-2">
                 {attachedFiles.map((file) => (
+                  (() => {
+                    const meta = buildPendingAttachmentMeta(file);
+                    return (
                   <div
                     key={file.id}
                     className="flex items-center gap-3 rounded-lg border border-gray-200 bg-white px-3 py-2"
@@ -93,15 +97,15 @@ export function ChatComposer({
                       />
                     ) : (
                       <div className="flex h-10 w-10 items-center justify-center rounded border border-gray-200 bg-gray-50 text-[11px] text-gray-600">
-                        TXT
+                        {file.kind === "pdf-file" ? "PDF" : "TXT"}
                       </div>
                     )}
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-sm text-gray-800">{file.name}</div>
                       <div className="flex items-center gap-2 text-[11px] text-gray-500">
-                        <span>{file.kind === "image" ? "图片" : "文本"}</span>
+                        <span>{meta.badge}</span>
                         <span>{Math.ceil(file.size / 1024)} KB</span>
-                        {file.kind === "text-file" && file.truncated && <span>已截断</span>}
+                        {meta.truncated && <span>已截断</span>}
                       </div>
                     </div>
                     <button
@@ -113,6 +117,8 @@ export function ChatComposer({
                       删除
                     </button>
                   </div>
+                    );
+                  })()
                 ))}
               </div>
             </div>

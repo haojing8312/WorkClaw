@@ -604,6 +604,22 @@ describe("ChatView side panel redesign", () => {
     expect(screen.getByText("文本")).toBeInTheDocument();
   });
 
+  test("shows pdf attachment previews", async () => {
+    renderEmptyChat();
+
+    const fileInput = document.getElementById("file-upload") as HTMLInputElement;
+    const pdfFile = new File(["%PDF-1.4 fake"], "brief.pdf", { type: "application/pdf" });
+
+    fireEvent.change(fileInput, {
+      target: {
+        files: [pdfFile],
+      },
+    });
+
+    expect(await screen.findByText("brief.pdf")).toBeInTheDocument();
+    expect(screen.getAllByText("PDF").length).toBeGreaterThan(0);
+  });
+
   test("renders multiple pending attachments and removes one by id", async () => {
     renderEmptyChat();
 
@@ -691,6 +707,42 @@ describe("ChatView side panel redesign", () => {
               name: "notes.md",
               mimeType: "text/plain",
               text: "hello",
+            }),
+          ],
+        },
+      });
+    });
+  });
+
+  test("sends pdf attachments as pdf_file parts", async () => {
+    renderEmptyChat();
+
+    fireEvent.change(screen.getByPlaceholderText("输入消息，Shift+Enter 换行..."), {
+      target: { value: "请阅读这个 PDF" },
+    });
+
+    const fileInput = document.getElementById("file-upload") as HTMLInputElement;
+    const pdfFile = new File(["%PDF-1.4 fake"], "brief.pdf", { type: "application/pdf" });
+
+    fireEvent.change(fileInput, {
+      target: {
+        files: [pdfFile],
+      },
+    });
+
+    await screen.findByText("brief.pdf");
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("send_message", {
+        request: {
+          sessionId: "session-side-panel-redesign",
+          parts: [
+            { type: "text", text: "请阅读这个 PDF" },
+            expect.objectContaining({
+              type: "pdf_file",
+              name: "brief.pdf",
+              mimeType: "application/pdf",
             }),
           ],
         },
@@ -792,6 +844,13 @@ describe("ChatView side panel redesign", () => {
                 size: 18,
                 text: "console.log('hi')",
               },
+              {
+                type: "pdf_file",
+                name: "brief.pdf",
+                mimeType: "application/pdf",
+                size: 128,
+                extractedText: "这是 PDF 内容",
+              },
             ],
             created_at: new Date().toISOString(),
           },
@@ -814,7 +873,9 @@ describe("ChatView side panel redesign", () => {
     expect(await screen.findByText("请结合附件一起分析")).toBeInTheDocument();
     expect(await screen.findByAltText("screen.png")).toBeInTheDocument();
     expect(await screen.findByText("debug.ts")).toBeInTheDocument();
+    expect(await screen.findByText("brief.pdf")).toBeInTheDocument();
     expect(screen.getByText("文本附件")).toBeInTheDocument();
+    expect(screen.getByText("PDF 附件")).toBeInTheDocument();
   });
 
   test("renders task journey summary after transcript instead of before the first message", async () => {

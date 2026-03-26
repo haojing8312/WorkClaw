@@ -912,6 +912,16 @@ export type PendingAttachment =
       size: number;
       text: string;
       truncated?: boolean;
+    }
+  | {
+      id: string;
+      kind: "pdf-file";
+      name: string;
+      mimeType: string;
+      size: number;
+      data: string;
+      extractedText?: string;
+      truncated?: boolean;
     };
 
 export interface LandingSessionLaunchInput {
@@ -935,6 +945,15 @@ export type ChatMessagePart =
       mimeType: string;
       size: number;
       text: string;
+      truncated?: boolean;
+    }
+  | {
+      type: "pdf_file";
+      name: string;
+      mimeType: string;
+      size: number;
+      data?: string;
+      extractedText?: string;
       truncated?: boolean;
     };
 

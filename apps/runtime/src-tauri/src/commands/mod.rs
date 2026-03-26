@@ -2,6 +2,7 @@ pub mod agent_profile;
 pub mod approvals;
 pub mod channel_connectors;
 pub mod chat;
+pub(crate) mod chat_attachments;
 pub(crate) mod chat_compaction;
 pub mod chat_control;
 pub(crate) mod chat_policy;

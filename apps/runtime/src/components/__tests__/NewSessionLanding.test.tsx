@@ -356,4 +356,40 @@ describe("NewSessionLanding", () => {
       workDir: "",
     });
   });
+
+  test("accepts pdf attachments and includes them in submit payload", async () => {
+    const onCreate = vi.fn();
+    render(
+      <NewSessionLanding
+        sessions={[]}
+        teams={[]}
+        creating={false}
+        onSelectSession={() => {}}
+        onCreateSessionWithInitialMessage={onCreate}
+      />
+    );
+
+    const input = screen.getByLabelText("添加附件") as HTMLInputElement;
+    const file = new File(["%PDF-1.4 fake"], "方案.pdf", { type: "application/pdf" });
+    fireEvent.change(input, { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(screen.getByText("已添加 1 个附件")).toBeInTheDocument();
+      expect(screen.getByText("方案.pdf")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "开始任务" }));
+
+    expect(onCreate).toHaveBeenCalledWith({
+      initialMessage: "",
+      attachments: [
+        expect.objectContaining({
+          kind: "pdf-file",
+          name: "方案.pdf",
+          mimeType: "application/pdf",
+        }),
+      ],
+      workDir: "",
+    });
+  });
 });

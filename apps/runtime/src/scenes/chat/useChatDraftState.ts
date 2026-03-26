@@ -1,5 +1,18 @@
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
 
+import {
+  isImageFile,
+  isPdfFile,
+  isTextFile,
+  MAX_FILES,
+  MAX_IMAGE_FILES,
+  MAX_IMAGE_SIZE,
+  MAX_PDF_FILE_SIZE,
+  MAX_TEXT_FILE_SIZE,
+  readFileAsBase64,
+  readFileAsDataUrl,
+  readFileAsText,
+} from "../../lib/chatAttachments";
 import type { PendingAttachment } from "../../types";
 
 type UseChatDraftStateArgs = {
@@ -8,41 +21,6 @@ type UseChatDraftStateArgs = {
   consumeInitialAttachmentsImmediately?: boolean;
   onInitialAttachmentsConsumed?: () => void;
 };
-
-const MAX_FILES = 5;
-const MAX_IMAGE_FILES = 3;
-const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
-const MAX_TEXT_FILE_SIZE = 1 * 1024 * 1024;
-const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "webp"]);
-const TEXT_FILE_EXTENSIONS = new Set([
-  "txt",
-  "md",
-  "json",
-  "yaml",
-  "yml",
-  "xml",
-  "csv",
-  "tsv",
-  "log",
-  "ini",
-  "conf",
-  "env",
-  "js",
-  "jsx",
-  "ts",
-  "tsx",
-  "py",
-  "rs",
-  "go",
-  "java",
-  "c",
-  "cpp",
-  "h",
-  "cs",
-  "sh",
-  "ps1",
-  "sql",
-]);
 
 export function useChatDraftState({
   sessionId,
@@ -55,31 +33,6 @@ export function useChatDraftState({
   const [composerError, setComposerError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const seededInitialAttachmentsSessionRef = useRef<string | null>(null);
-
-  const readFileAsText = (file: File): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
-      reader.onerror = reject;
-      reader.readAsText(file);
-    });
-  };
-
-  const readFileAsDataUrl = (file: File): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    });
-  };
-
-  const getFileExtension = (fileName: string): string => fileName.split(".").pop()?.toLowerCase() ?? "";
-
-  const isImageFile = (file: File): boolean =>
-    file.type.startsWith("image/") || IMAGE_EXTENSIONS.has(getFileExtension(file.name));
-
-  const isTextFile = (file: File): boolean => TEXT_FILE_EXTENSIONS.has(getFileExtension(file.name));
 
   const syncComposerHeight = () => {
     const el = textareaRef.current;
@@ -145,7 +98,23 @@ export function useChatDraftState({
       }
 
       if (!isTextFile(file)) {
-        alert(`暂不支持附件类型 ${file.name}`);
+        if (!isPdfFile(file)) {
+          alert(`暂不支持附件类型 ${file.name}`);
+          continue;
+        }
+        if (file.size > MAX_PDF_FILE_SIZE) {
+          alert(`PDF 文件 ${file.name} 超过 10MB 限制`);
+          continue;
+        }
+        const data = await readFileAsBase64(file);
+        newFiles.push({
+          id: crypto.randomUUID(),
+          kind: "pdf-file",
+          name: file.name,
+          mimeType: file.type || "application/pdf",
+          size: file.size,
+          data,
+        });
         continue;
       }
       if (file.size > MAX_TEXT_FILE_SIZE) {

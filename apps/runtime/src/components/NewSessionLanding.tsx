@@ -1,5 +1,19 @@
 import { ChangeEvent, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
+import {
+  createAttachmentId,
+  isImageFile,
+  isPdfFile,
+  isTextFile,
+  MAX_FILES,
+  MAX_IMAGE_FILES,
+  MAX_IMAGE_SIZE,
+  MAX_PDF_FILE_SIZE,
+  MAX_TEXT_FILE_SIZE,
+  readFileAsBase64,
+  readFileAsDataUrl,
+  readFileAsText,
+} from "../lib/chatAttachments";
 import { LandingSessionLaunchInput, PendingAttachment, SessionInfo } from "../types";
 
 interface Props {
@@ -19,55 +33,7 @@ interface Props {
   defaultWorkDir?: string;
 }
 
-const MAX_FILES = 5;
-const MAX_IMAGE_FILES = 3;
-const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
-const MAX_TEXT_FILE_SIZE = 1 * 1024 * 1024;
-const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "webp"]);
-const TEXT_FILE_EXTENSIONS = new Set(["txt", "md", "json", "yaml", "yml", "xml", "csv", "tsv", "log"]);
 const LANDING_FILE_INPUT_ID = "landing-file-upload";
-
-function getFileExtension(name: string): string {
-  const dotIndex = name.lastIndexOf(".");
-  return dotIndex >= 0 ? name.slice(dotIndex + 1).toLowerCase() : "";
-}
-
-function isImageFile(file: File): boolean {
-  return file.type.startsWith("image/") || IMAGE_EXTENSIONS.has(getFileExtension(file.name));
-}
-
-function isTextFile(file: File): boolean {
-  return TEXT_FILE_EXTENSIONS.has(getFileExtension(file.name));
-}
-
-function createAttachmentId(): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-  return `landing-attachment-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
-function readFileAsDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : "");
-    reader.onerror = () => reject(reader.error ?? new Error("文件读取失败"));
-    reader.readAsDataURL(file);
-  });
-}
-
-function readTextFile(file: File): Promise<string> {
-  if (typeof file.text === "function") {
-    return file.text();
-  }
-
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : "");
-    reader.onerror = () => reject(reader.error ?? new Error("文件读取失败"));
-    reader.readAsText(file);
-  });
-}
 
 const SCENARIO_CARDS = [
   {
@@ -226,14 +192,30 @@ export function NewSessionLanding({
       }
 
       if (!isTextFile(file)) {
-        alert(`暂不支持附件类型 ${file.name}`);
+        if (!isPdfFile(file)) {
+          alert(`暂不支持附件类型 ${file.name}`);
+          continue;
+        }
+        if (file.size > MAX_PDF_FILE_SIZE) {
+          alert(`PDF 文件 ${file.name} 超过 10MB 限制`);
+          continue;
+        }
+        const data = await readFileAsBase64(file);
+        newFiles.push({
+          id: createAttachmentId("landing-attachment"),
+          kind: "pdf-file",
+          name: file.name,
+          mimeType: file.type || "application/pdf",
+          size: file.size,
+          data,
+        });
         continue;
       }
 
-      const text = await readTextFile(file);
+      const text = await readFileAsText(file);
       const truncated = text.length > MAX_TEXT_FILE_SIZE;
       newFiles.push({
-        id: createAttachmentId(),
+        id: createAttachmentId("landing-attachment"),
         kind: "text-file",
         name: file.name,
         mimeType: file.type || "text/plain",
@@ -346,6 +328,9 @@ export function NewSessionLanding({
                     className="inline-flex items-center gap-2 rounded-full border border-[var(--sm-primary-soft)] bg-[var(--sm-primary-soft)] px-3 py-1 text-xs text-[var(--sm-primary-strong)]"
                     title={file.name}
                   >
+                    <span className="rounded-full bg-white/70 px-1.5 py-0.5 text-[10px] uppercase tracking-wide">
+                      {file.kind === "image" ? "IMG" : file.kind === "pdf-file" ? "PDF" : "TXT"}
+                    </span>
                     <span className="max-w-[220px] truncate">{file.name}</span>
                     <button
                       type="button"

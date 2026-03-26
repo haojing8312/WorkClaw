@@ -1,4 +1,5 @@
 use super::chat_compaction;
+use super::chat_attachments;
 use super::chat_runtime_io as chat_io;
 use super::chat_session_io;
 use super::skills::DbState;
@@ -77,6 +78,14 @@ pub enum SendMessagePart {
         text: String,
         truncated: Option<bool>,
     },
+    #[serde(rename = "pdf_file")]
+    PdfFile {
+        name: String,
+        #[serde(rename = "mimeType")]
+        mime_type: String,
+        size: usize,
+        data: String,
+    },
 }
 
 impl SendMessageRequest {
@@ -104,20 +113,25 @@ impl SendMessageRequest {
             .iter()
             .filter(|part| matches!(part, SendMessagePart::FileText { .. }))
             .count();
+        let pdf_file_count = self
+            .parts
+            .iter()
+            .filter(|part| matches!(part, SendMessagePart::PdfFile { .. }))
+            .count();
         if image_count > 0 {
             summary_parts.push(format!("[图片 {} 张]", image_count));
         }
         if text_file_count > 0 {
             summary_parts.push(format!("[文本文件 {} 个]", text_file_count));
         }
+        if pdf_file_count > 0 {
+            summary_parts.push(format!("[PDF {} 个]", pdf_file_count));
+        }
         summary_parts.join(" ")
     }
 
     fn parts_as_json(&self) -> Result<Vec<Value>, String> {
-        self.parts
-            .iter()
-            .map(|part| serde_json::to_value(part).map_err(|err| err.to_string()))
-            .collect()
+        chat_attachments::normalize_message_parts(&self.parts)
     }
 }
 
@@ -354,6 +368,7 @@ mod tests {
     use super::build_group_orchestrator_report_preview;
     use crate::agent::runtime::SessionAdmissionConflict;
     use crate::commands::chat_runtime_io;
+    use crate::commands::chat::SendMessagePart;
     use std::collections::HashMap;
     use std::path::Path;
 
@@ -428,6 +443,27 @@ mod tests {
 
         assert!(error.starts_with("SESSION_RUN_CONFLICT:"));
         assert!(error.contains("当前会话仍在执行中"));
+    }
+
+    #[test]
+    fn send_message_summary_text_counts_pdf_attachments() {
+        let request = super::SendMessageRequest {
+            session_id: "session-1".to_string(),
+            parts: vec![
+                SendMessagePart::Text {
+                    text: "请阅读附件".to_string(),
+                },
+                SendMessagePart::PdfFile {
+                    name: "brief.pdf".to_string(),
+                    mime_type: "application/pdf".to_string(),
+                    size: 10,
+                    data: "abc".to_string(),
+                },
+            ],
+            max_iterations: None,
+        };
+
+        assert!(request.summary_text().contains("[PDF 1 个]"));
     }
 }
 
