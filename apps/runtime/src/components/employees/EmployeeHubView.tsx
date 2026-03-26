@@ -1,34 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import {
   AgentEmployee,
-  EmployeeGroup,
-  EmployeeGroupRule,
-  EmployeeGroupRunResult,
-  EmployeeGroupRunSummary,
-  AgentProfileFilesView,
-  EmployeeMemoryExport,
-  EmployeeMemoryStats,
-  ImRoutingBinding,
-  OpenClawPluginFeishuRuntimeStatus,
-  RuntimePreferences,
-  SaveFeishuEmployeeAssociationInput,
   SkillManifest,
   UpsertAgentEmployeeInput,
 } from "../../types";
 import { RiskConfirmDialog } from "../RiskConfirmDialog";
 import { EmployeeHubTabNav, type EmployeeHubTab as EmployeeHubTabNavItem } from "./EmployeeHubTabNav";
 import {
-  EmployeeGroupExecutionMode,
-  EmployeeGroupReviewMode,
-  EmployeeGroupVisibilityMode,
   EmployeeHubEmployeeFilter,
   EmployeeHubRunFilter,
   EmployeeHubTeamFilter,
   matchesEmployeeHubEmployeeFilter,
-  matchesEmployeeHubRunFilter,
-  matchesEmployeeHubTeamFilter,
 } from "./employeeHubOverview";
 import { EmployeeFeishuAssociationSection } from "./EmployeeFeishuAssociationSection";
 import { EmployeeOverviewSection } from "./overview/EmployeeOverviewSection";
@@ -36,6 +18,10 @@ import { EmployeeRunsSection } from "./runs/EmployeeRunsSection";
 import { EmployeeTeamsSection } from "./teams/EmployeeTeamsSection";
 import { EmployeeMemoryToolsSection } from "./tools/EmployeeMemoryToolsSection";
 import { EmployeeProfileFilesSection } from "./tools/EmployeeProfileFilesSection";
+import { useEmployeeHubGroups } from "./hooks/useEmployeeHubGroups";
+import { toEmployeeHubFeishuRuntimeStatus, useEmployeeHubFeishu } from "./hooks/useEmployeeHubFeishu";
+import { useEmployeeHubRuntimeState } from "./hooks/useEmployeeHubRuntimeState";
+import { useEmployeeHubTools } from "./hooks/useEmployeeHubTools";
 
 export interface EmployeeHubViewProps {
   employees: AgentEmployee[];
@@ -91,43 +77,54 @@ export function EmployeeHubView({
   const [activeTab, setActiveTab] = useState<EmployeeHubTab>(initialTab ?? (selectedEmployeeId ? "employees" : "overview"));
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
-  const [officialFeishuRuntimeStatus, setOfficialFeishuRuntimeStatus] =
-    useState<OpenClawPluginFeishuRuntimeStatus | null>(null);
-  const [globalDefaultWorkDir, setGlobalDefaultWorkDir] = useState("");
-  const [savingGlobalWorkDir, setSavingGlobalWorkDir] = useState(false);
   const [pendingDeleteEmployee, setPendingDeleteEmployee] = useState<{ id: string; name: string } | null>(null);
-  const [memoryScopeSkillId, setMemoryScopeSkillId] = useState("__all__");
-  const [memoryStats, setMemoryStats] = useState<EmployeeMemoryStats | null>(null);
-  const [memoryLoading, setMemoryLoading] = useState(false);
-  const [memoryActionLoading, setMemoryActionLoading] = useState<"export" | "clear" | null>(null);
-  const [pendingClearMemory, setPendingClearMemory] = useState(false);
-  const [profileView, setProfileView] = useState<AgentProfileFilesView | null>(null);
-  const [profileLoading, setProfileLoading] = useState(false);
-  const [routingBindings, setRoutingBindings] = useState<ImRoutingBinding[]>([]);
   const [employeeScopeOverrides, setEmployeeScopeOverrides] = useState<Record<string, string[]>>({});
-  const [savingFeishuAssociation, setSavingFeishuAssociation] = useState(false);
-  const [groupName, setGroupName] = useState("");
-  const [groupCoordinatorId, setGroupCoordinatorId] = useState("");
-  const [groupMemberIds, setGroupMemberIds] = useState<string[]>([]);
-  const [groupEntryId, setGroupEntryId] = useState("");
-  const [groupPlannerId, setGroupPlannerId] = useState("");
-  const [groupReviewerId, setGroupReviewerId] = useState("");
-  const [groupReviewMode, setGroupReviewMode] = useState<EmployeeGroupReviewMode>("none");
-  const [groupExecutionMode, setGroupExecutionMode] = useState<EmployeeGroupExecutionMode>("sequential");
-  const [groupVisibilityMode, setGroupVisibilityMode] = useState<EmployeeGroupVisibilityMode>("internal");
-  const [employeeGroups, setEmployeeGroups] = useState<EmployeeGroup[]>([]);
-  const [recentRuns, setRecentRuns] = useState<EmployeeGroupRunSummary[]>([]);
   const [employeeFilter, setEmployeeFilter] = useState<EmployeeHubEmployeeFilter>("all");
-  const [teamFilter, setTeamFilter] = useState<EmployeeHubTeamFilter>("all");
-  const [runFilter, setRunFilter] = useState<EmployeeHubRunFilter>("all");
-  const [groupSubmitting, setGroupSubmitting] = useState(false);
-  const [groupDeletingId, setGroupDeletingId] = useState<string | null>(null);
-  const [groupRunGoalById, setGroupRunGoalById] = useState<Record<string, string>>({});
-  const [groupRunSubmittingId, setGroupRunSubmittingId] = useState<string | null>(null);
-  const [groupRunReportById, setGroupRunReportById] = useState<Record<string, string>>({});
-  const [groupRulesById, setGroupRulesById] = useState<Record<string, EmployeeGroupRule[]>>({});
-  const [cloningGroupId, setCloningGroupId] = useState<string | null>(null);
-
+  const {
+    groupName,
+    setGroupName,
+    groupCoordinatorId,
+    setGroupCoordinatorId,
+    groupMemberIds,
+    groupEntryId,
+    setGroupEntryId,
+    groupPlannerId,
+    setGroupPlannerId,
+    groupReviewerId,
+    setGroupReviewerId,
+    groupReviewMode,
+    setGroupReviewMode,
+    groupExecutionMode,
+    setGroupExecutionMode,
+    groupVisibilityMode,
+    setGroupVisibilityMode,
+    employeeGroups,
+    recentRuns,
+    teamFilter,
+    setTeamFilter,
+    runFilter,
+    setRunFilter,
+    groupSubmitting,
+    groupDeletingId,
+    groupRunGoalById,
+    groupRunSubmittingId,
+    groupRunReportById,
+    groupRulesById,
+    cloningGroupId,
+    filteredGroups,
+    filteredRuns,
+    createEmployeeGroup,
+    deleteEmployeeGroup,
+    startEmployeeGroupRun,
+    cloneEmployeeGroup,
+    handleGroupMemberToggle,
+    handleGroupRunGoalChange,
+  } = useEmployeeHubGroups({
+    employees,
+    onOpenGroupRunSession,
+    onEmployeeGroupsChanged,
+    setMessage,
+  });
   const effectiveEmployees = useMemo(
     () =>
       employees.map((employee) => {
@@ -144,6 +141,45 @@ export function EmployeeHubView({
     () => (selectedEmployee?.employee_id || selectedEmployee?.role_id || "").trim(),
     [selectedEmployee],
   );
+  const {
+    globalDefaultWorkDir,
+    setGlobalDefaultWorkDir,
+    savingGlobalWorkDir,
+    officialFeishuRuntimeStatus,
+    saveGlobalDefaultWorkDir,
+  } = useEmployeeHubRuntimeState({
+    setMessage,
+  });
+  const {
+    memoryScopeSkillId,
+    setMemoryScopeSkillId,
+    memoryStats,
+    memoryLoading,
+    memoryActionLoading,
+    pendingClearMemory,
+    setPendingClearMemory,
+    profileView,
+    profileLoading,
+    refreshEmployeeMemoryStats,
+    exportEmployeeMemory,
+    confirmClearEmployeeMemory,
+  } = useEmployeeHubTools({
+    selectedEmployee,
+    selectedEmployeeId,
+    selectedEmployeeMemoryId,
+    setMessage,
+  });
+  const {
+    routingBindings,
+    savingFeishuAssociation,
+    resolveFeishuStatus,
+    saveFeishuAssociation,
+  } = useEmployeeHubFeishu({
+    selectedEmployee,
+    onRefreshEmployees,
+    setMessage,
+    setEmployeeScopeOverrides,
+  });
   const skillNameById = useMemo(() => new Map(skills.map((skill) => [skill.id, skill.name])), [skills]);
   const memorySkillScopeOptions = useMemo(() => {
     if (!selectedEmployee) return [];
@@ -176,517 +212,12 @@ export function EmployeeHubView({
   }, [effectiveEmployees]);
 
   useEffect(() => {
-    (async () => {
-      try {
-        const prefs = await invoke<RuntimePreferences>("get_runtime_preferences");
-        setGlobalDefaultWorkDir(prefs.default_work_dir || "");
-      } catch {
-        // ignore
-      }
-    })();
-  }, []);
-
-  useEffect(() => {
     if (initialTab) {
       setActiveTab(initialTab);
     }
   }, [initialTab]);
 
-  useEffect(() => {
-    const normalized = employees
-      .map((item) => (item.employee_id || item.role_id || "").trim())
-      .filter((item) => item.length > 0);
-    setGroupMemberIds((prev) => prev.filter((id) => normalized.includes(id)));
-    setGroupCoordinatorId((prev) => (normalized.includes(prev) ? prev : normalized[0] || ""));
-  }, [employees]);
-
-  async function loadEmployeeGroups() {
-    try {
-      const groups = await invoke<EmployeeGroup[]>("list_employee_groups");
-      const normalizedGroups = Array.isArray(groups) ? groups : [];
-      setEmployeeGroups(normalizedGroups);
-      if (normalizedGroups.length === 0) {
-        setGroupRulesById({});
-        return;
-      }
-      const entries = await Promise.all(
-        normalizedGroups.map(async (group) => {
-          try {
-            const rules = await invoke<EmployeeGroupRule[]>("list_employee_group_rules", {
-              groupId: group.id,
-            });
-            return [group.id, Array.isArray(rules) ? rules : []] as const;
-          } catch {
-            return [group.id, []] as const;
-          }
-        }),
-      );
-      setGroupRulesById(Object.fromEntries(entries));
-    } catch {
-      setEmployeeGroups([]);
-      setGroupRulesById({});
-    }
-  }
-
-  async function loadRecentRuns() {
-    try {
-      const runs = await invoke<EmployeeGroupRunSummary[]>("list_employee_group_runs", { limit: 10 });
-      setRecentRuns(Array.isArray(runs) ? runs : []);
-    } catch {
-      setRecentRuns([]);
-    }
-  }
-
-  useEffect(() => {
-    void loadEmployeeGroups();
-    void loadRecentRuns();
-  }, []);
-
-  useEffect(() => {
-    let disposed = false;
-    const loadStatuses = async () => {
-      try {
-        const runtimeStatus = await invoke<OpenClawPluginFeishuRuntimeStatus | null>(
-          "get_openclaw_plugin_feishu_runtime_status",
-          {
-            pluginId: "@larksuite/openclaw-lark",
-            accountId: "default",
-          },
-        ).catch(() => null);
-        if (!disposed) {
-          setOfficialFeishuRuntimeStatus(runtimeStatus);
-        }
-      } catch {
-        if (!disposed) {
-          setOfficialFeishuRuntimeStatus(null);
-        }
-      }
-    };
-    void loadStatuses();
-    const timer = setInterval(() => {
-      void loadStatuses();
-    }, 5000);
-    return () => {
-      disposed = true;
-      clearInterval(timer);
-    };
-  }, []);
-
-  useEffect(() => {
-    let disposed = false;
-    const loadBindings = async () => {
-      try {
-        const bindings = await invoke<ImRoutingBinding[]>("list_im_routing_bindings");
-        if (!disposed) {
-          setRoutingBindings(Array.isArray(bindings) ? bindings : []);
-        }
-      } catch {
-        if (!disposed) {
-          setRoutingBindings([]);
-        }
-      }
-    };
-    void loadBindings();
-    return () => {
-      disposed = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    setMemoryScopeSkillId("__all__");
-    setMemoryStats(null);
-    setPendingClearMemory(false);
-  }, [selectedEmployeeId]);
-
-  useEffect(() => {
-    if (!selectedEmployee) {
-      setProfileView(null);
-      setProfileLoading(false);
-      return;
-    }
-
-    let disposed = false;
-    setProfileLoading(true);
-    invoke<AgentProfileFilesView>("get_agent_profile_files", { employeeDbId: selectedEmployee.id })
-      .then((view) => {
-        if (!disposed) setProfileView(view);
-      })
-      .catch(() => {
-        if (!disposed) setProfileView(null);
-      })
-      .finally(() => {
-        if (!disposed) setProfileLoading(false);
-      });
-
-    return () => {
-      disposed = true;
-    };
-  }, [selectedEmployee]);
-
   const officialFeishuRuntimeRunning = officialFeishuRuntimeStatus?.running === true;
-
-  function resolveFeishuStatus(employee: AgentEmployee): { dotClass: string; label: string; detail: string; error: string } {
-    const enabled = !!employee.enabled;
-    const agentId = (employee.openclaw_agent_id || employeeKey(employee)).trim().toLowerCase();
-    const hasFeishuBinding = routingBindings.some(
-      (binding) =>
-        binding.enabled &&
-        binding.channel === "feishu" &&
-        binding.agent_id.trim().toLowerCase() === agentId,
-    );
-    const receivesFeishu = employee.enabled_scopes.includes("feishu") || hasFeishuBinding;
-    if (!enabled) {
-      return { dotClass: "bg-gray-300", label: "未启用飞书消息", detail: "该员工已停用，不接收飞书事件。", error: "" };
-    }
-    if (!receivesFeishu) {
-      return { dotClass: "bg-gray-300", label: "未关联飞书接待", detail: "请在员工详情中启用飞书接待。", error: "" };
-    }
-    if (officialFeishuRuntimeRunning && !officialFeishuRuntimeStatus?.last_error?.trim()) {
-      return {
-        dotClass: "bg-emerald-500",
-        label: "飞书接入正常",
-        detail: "官方插件宿主已运行，飞书接待规则已生效。",
-        error: "",
-      };
-    }
-    const error =
-      officialFeishuRuntimeStatus?.last_error?.trim() ||
-      (!officialFeishuRuntimeRunning ? "官方插件宿主未运行" : "飞书消息桥接未运行");
-    if (!officialFeishuRuntimeRunning) {
-      return {
-        dotClass: "bg-amber-500",
-        label: "待启动飞书接入",
-        detail: "请前往设置中心中的飞书连接页面检查官方插件状态。",
-        error,
-      };
-    }
-    return {
-      dotClass: "bg-red-500",
-      label: "飞书接入异常",
-      detail: "请检查官方插件运行状态或员工接待规则。",
-      error,
-    };
-  }
-
-  async function refreshEmployeeMemoryStats(scopeSkillId?: string) {
-    if (!selectedEmployeeMemoryId) {
-      setMemoryStats(null);
-      return;
-    }
-    const normalizedSkillId = (scopeSkillId ?? memoryScopeSkillId) === "__all__" ? null : (scopeSkillId ?? memoryScopeSkillId);
-    setMemoryLoading(true);
-    try {
-      const stats = await invoke<EmployeeMemoryStats>("get_employee_memory_stats", {
-        employeeId: selectedEmployeeMemoryId,
-        skillId: normalizedSkillId,
-      });
-      setMemoryStats(stats);
-    } catch (e) {
-      setMessage(`加载长期记忆统计失败: ${String(e)}`);
-    } finally {
-      setMemoryLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    if (!selectedEmployeeMemoryId) {
-      setMemoryStats(null);
-      return;
-    }
-    void refreshEmployeeMemoryStats();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedEmployeeMemoryId, memoryScopeSkillId]);
-
-  async function exportEmployeeMemory() {
-    if (!selectedEmployeeMemoryId || memoryActionLoading) return;
-    setMemoryActionLoading("export");
-    try {
-      const skillId = memoryScopeSkillId === "__all__" ? null : memoryScopeSkillId;
-      const payload = await invoke<EmployeeMemoryExport>("export_employee_memory", {
-        employeeId: selectedEmployeeMemoryId,
-        skillId,
-      });
-      const filePath = await saveDialog({
-        defaultPath: `employee-memory-${selectedEmployeeMemoryId}-${skillId || "all"}.json`,
-        filters: [{ name: "JSON", extensions: ["json"] }],
-      });
-      if (!filePath) return;
-      await invoke("write_export_file", {
-        path: filePath,
-        content: JSON.stringify(payload, null, 2),
-      });
-      setMessage("长期记忆已导出");
-    } catch (e) {
-      setMessage(`导出长期记忆失败: ${String(e)}`);
-    } finally {
-      setMemoryActionLoading(null);
-    }
-  }
-
-  async function confirmClearEmployeeMemory() {
-    if (!selectedEmployeeMemoryId || memoryActionLoading) return;
-    setMemoryActionLoading("clear");
-    try {
-      const skillId = memoryScopeSkillId === "__all__" ? null : memoryScopeSkillId;
-      const stats = await invoke<EmployeeMemoryStats>("clear_employee_memory", {
-        employeeId: selectedEmployeeMemoryId,
-        skillId,
-      });
-      setMemoryStats(stats);
-      setMessage("长期记忆已清空");
-    } catch (e) {
-      setMessage(`清空长期记忆失败: ${String(e)}`);
-    } finally {
-      setMemoryActionLoading(null);
-      setPendingClearMemory(false);
-    }
-  }
-
-  async function saveFeishuAssociation(input: {
-    enabled: boolean;
-    mode: "default" | "scoped";
-    peerKind: "group" | "channel" | "direct";
-    peerId: string;
-    priority: number;
-  }) {
-    if (!selectedEmployee) return;
-    if (!selectedEmployee.id.trim()) {
-      setMessage("员工编号缺失，无法保存飞书接待");
-      return;
-    }
-    setSavingFeishuAssociation(true);
-    setMessage("");
-    try {
-      const scopes = new Set(selectedEmployee.enabled_scopes?.length ? selectedEmployee.enabled_scopes : ["app"]);
-      if (input.enabled) {
-        scopes.add("feishu");
-      } else {
-        scopes.delete("feishu");
-      }
-      if (scopes.size === 0) {
-        scopes.add("app");
-      }
-      const nextScopes = Array.from(scopes.values());
-      const payload: SaveFeishuEmployeeAssociationInput = {
-        employee_db_id: selectedEmployee.id,
-        enabled: input.enabled,
-        mode: input.mode,
-        peer_kind: input.mode === "default" ? "group" : input.peerKind,
-        peer_id: input.mode === "default" ? "" : input.peerId.trim(),
-        priority: input.priority,
-      };
-      await invoke("save_feishu_employee_association", { input: payload });
-
-      const latestBindings = await invoke<ImRoutingBinding[]>("list_im_routing_bindings");
-      setRoutingBindings(Array.isArray(latestBindings) ? latestBindings : []);
-      setEmployeeScopeOverrides((current) => ({
-        ...current,
-        [selectedEmployee.id]: nextScopes,
-      }));
-      let refreshWarning = "";
-      if (onRefreshEmployees) {
-        try {
-          await onRefreshEmployees();
-          setEmployeeScopeOverrides((current) => {
-            if (!(selectedEmployee.id in current)) return current;
-            const next = { ...current };
-            delete next[selectedEmployee.id];
-            return next;
-          });
-        } catch (refreshError) {
-          refreshWarning = `，员工列表刷新失败: ${String(refreshError)}`;
-        }
-      }
-      setMessage(
-        input.enabled
-          ? `飞书接待已保存${refreshWarning}`
-          : `已关闭该员工的飞书接待${refreshWarning}`,
-      );
-    } catch (e) {
-      setMessage(`保存飞书接待失败: ${String(e)}`);
-    } finally {
-      setSavingFeishuAssociation(false);
-    }
-  }
-
-  async function createEmployeeGroup() {
-    const name = groupName.trim();
-    const coordinator = groupCoordinatorId.trim();
-    const members = Array.from(new Set(groupMemberIds.map((item) => item.trim()).filter((item) => item.length > 0)));
-    const entryEmployeeId = (groupEntryId.trim() || coordinator).trim();
-    const plannerEmployeeId = (groupPlannerId.trim() || entryEmployeeId || coordinator).trim();
-    const reviewerEmployeeId = groupReviewerId.trim();
-    const reviewMode = groupReviewMode.trim() || "none";
-    const executionMode = groupExecutionMode.trim() || "sequential";
-    const visibilityMode = groupVisibilityMode.trim() || "internal";
-
-    if (!name) {
-      setMessage("请填写群组名称");
-      return;
-    }
-    if (!coordinator) {
-      setMessage("请先选择协调员");
-      return;
-    }
-    if (members.length === 0) {
-      setMessage("请至少选择 1 个成员");
-      return;
-    }
-    if (members.length > 10) {
-      setMessage("群组成员最多 10 人");
-      return;
-    }
-    if (!members.includes(coordinator)) {
-      setMessage("协调员必须包含在群组成员中");
-      return;
-    }
-    if (entryEmployeeId && !members.includes(entryEmployeeId)) {
-      setMessage("入口员工必须包含在团队成员中");
-      return;
-    }
-    if (plannerEmployeeId && !members.includes(plannerEmployeeId)) {
-      setMessage("规划员工必须包含在团队成员中");
-      return;
-    }
-    if (reviewMode !== "none" && !reviewerEmployeeId) {
-      setMessage("开启审核后必须选择审核员工");
-      return;
-    }
-    if (reviewerEmployeeId && !members.includes(reviewerEmployeeId)) {
-      setMessage("审核员工必须包含在团队成员中");
-      return;
-    }
-
-    setGroupSubmitting(true);
-    setMessage("");
-    try {
-      await invoke<string>("create_employee_team", {
-        input: {
-          name,
-          coordinator_employee_id: coordinator,
-          member_employee_ids: members,
-          entry_employee_id: entryEmployeeId,
-          planner_employee_id: plannerEmployeeId,
-          reviewer_employee_id: reviewerEmployeeId,
-          review_mode: reviewMode,
-          execution_mode: executionMode,
-          visibility_mode: visibilityMode,
-        },
-      });
-      setGroupName("");
-      setGroupCoordinatorId("");
-      setGroupMemberIds([]);
-      setGroupEntryId("");
-      setGroupPlannerId("");
-      setGroupReviewerId("");
-      setGroupReviewMode("none");
-      setGroupExecutionMode("sequential");
-      setGroupVisibilityMode("internal");
-      await loadEmployeeGroups();
-      await loadRecentRuns();
-      await onEmployeeGroupsChanged?.();
-      setMessage("协作团队已创建");
-    } catch (e) {
-      setMessage(`创建群组失败: ${String(e)}`);
-    } finally {
-      setGroupSubmitting(false);
-    }
-  }
-
-  async function deleteEmployeeGroup(groupId: string) {
-    if (!groupId) return;
-    setGroupDeletingId(groupId);
-    try {
-      await invoke("delete_employee_group", { groupId });
-      setGroupRunGoalById((prev) => {
-        const next = { ...prev };
-        delete next[groupId];
-        return next;
-      });
-      setGroupRunReportById((prev) => {
-        const next = { ...prev };
-        delete next[groupId];
-        return next;
-      });
-      setGroupRulesById((prev) => {
-        const next = { ...prev };
-        delete next[groupId];
-        return next;
-      });
-      await loadEmployeeGroups();
-      await loadRecentRuns();
-      await onEmployeeGroupsChanged?.();
-      setMessage("协作群组已删除");
-    } catch (e) {
-      setMessage(`删除群组失败: ${String(e)}`);
-    } finally {
-      setGroupDeletingId(null);
-    }
-  }
-
-  async function startEmployeeGroupRun(groupId: string) {
-    if (!groupId || groupRunSubmittingId) return;
-    const userGoal = (groupRunGoalById[groupId] || "").trim();
-    if (!userGoal) {
-      setMessage("请先填写协作指令");
-      return;
-    }
-    setGroupRunSubmittingId(groupId);
-    setMessage("");
-    try {
-      const result = await invoke<EmployeeGroupRunResult>("start_employee_group_run", {
-        input: {
-          group_id: groupId,
-          user_goal: userGoal,
-          execution_window: 3,
-          max_retry_per_step: 1,
-          timeout_employee_ids: [],
-        },
-      });
-      setGroupRunReportById((prev) => ({
-        ...prev,
-        [groupId]: result.final_report || "",
-      }));
-      await loadRecentRuns();
-      if (result.session_id && result.session_skill_id) {
-        await onOpenGroupRunSession?.(result.session_id, result.session_skill_id);
-      }
-      if ((result.state || "").trim().toLowerCase() === "waiting_review") {
-        setMessage("协作任务已启动，等待审核");
-      } else if ((result.state || "").trim().toLowerCase() === "done") {
-        setMessage(`协作任务已完成（第 ${result.current_round || 1} 轮）`);
-      } else {
-        setMessage(`协作任务已启动，当前状态：${result.state || "执行"}`);
-      }
-    } catch (e) {
-      setMessage(`发起协作失败: ${String(e)}`);
-    } finally {
-      setGroupRunSubmittingId(null);
-    }
-  }
-
-  async function cloneEmployeeGroup(group: EmployeeGroup) {
-    if (!group.id || cloningGroupId) return;
-    const cloneName = `${group.name}（副本）`;
-    setCloningGroupId(group.id);
-    setMessage("");
-    try {
-      await invoke<string>("clone_employee_group_template", {
-        input: {
-          source_group_id: group.id,
-          name: cloneName,
-        },
-      });
-      await loadEmployeeGroups();
-      await loadRecentRuns();
-      await onEmployeeGroupsChanged?.();
-      setMessage(`已复制团队：${cloneName}`);
-    } catch (e) {
-      setMessage(`复制团队失败: ${String(e)}`);
-    } finally {
-      setCloningGroupId(null);
-    }
-  }
 
   function requestRemoveCurrent() {
     if (!selectedEmployeeId || saving) return;
@@ -706,25 +237,6 @@ export function EmployeeHubView({
     } finally {
       setSaving(false);
       setPendingDeleteEmployee(null);
-    }
-  }
-
-  async function saveGlobalDefaultWorkDir() {
-    if (!globalDefaultWorkDir.trim()) {
-      setMessage("默认工作目录不能为空");
-      return;
-    }
-    setSavingGlobalWorkDir(true);
-    setMessage("");
-    try {
-      await invoke("set_runtime_preferences", { input: { default_work_dir: globalDefaultWorkDir.trim() } });
-      const resolved = await invoke<string>("resolve_default_work_dir");
-      setGlobalDefaultWorkDir(resolved);
-      setMessage("全局默认工作目录已保存");
-    } catch (e) {
-      setMessage(String(e));
-    } finally {
-      setSavingGlobalWorkDir(false);
     }
   }
 
@@ -760,25 +272,6 @@ export function EmployeeHubView({
     }
   }
 
-  function handleGroupMemberToggle(employeeCode: string, checked: boolean) {
-    if (checked) {
-      setGroupMemberIds((prev) => {
-        if (prev.includes(employeeCode)) return prev;
-        if (prev.length >= 10) {
-          setMessage("群组成员最多 10 人");
-          return prev;
-        }
-        return [...prev, employeeCode];
-      });
-      return;
-    }
-    setGroupMemberIds((prev) => prev.filter((id) => id !== employeeCode));
-  }
-
-  function handleGroupRunGoalChange(groupId: string, value: string) {
-    setGroupRunGoalById((prev) => ({ ...prev, [groupId]: value }));
-  }
-
   const deleteDialogSummary = pendingDeleteEmployee ? `确定删除员工「${pendingDeleteEmployee.name}」吗？` : "确定删除该员工吗？";
   const deleteDialogImpact = pendingDeleteEmployee ? `员工ID: ${pendingDeleteEmployee.id}` : undefined;
   const clearMemoryScopeLabel = memoryScopeSkillId === "__all__" ? "全部技能" : `技能 ${memoryScopeSkillId}`;
@@ -786,15 +279,8 @@ export function EmployeeHubView({
     ? `确定清空员工「${selectedEmployee.name}」在${clearMemoryScopeLabel}下的长期记忆吗？`
     : `确定清空${clearMemoryScopeLabel}下的长期记忆吗？`;
   const clearMemoryDialogImpact = selectedEmployeeMemoryId ? `员工编号: ${selectedEmployeeMemoryId}` : undefined;
-  const selectedEmployeeFeishuStatus = selectedEmployee ? resolveFeishuStatus(selectedEmployee) : null;
-  const selectedEmployeeFeishuRuntimeStatus = officialFeishuRuntimeStatus
-    ? {
-        queued_events: 0,
-        reconnect_attempts: 0,
-        last_event_at: officialFeishuRuntimeStatus.last_event_at ?? null,
-        last_error: officialFeishuRuntimeStatus.last_error ?? null,
-      }
-    : null;
+  const selectedEmployeeFeishuStatus = selectedEmployee ? resolveFeishuStatus(selectedEmployee, officialFeishuRuntimeStatus) : null;
+  const selectedEmployeeFeishuRuntimeStatus = toEmployeeHubFeishuRuntimeStatus(officialFeishuRuntimeStatus);
   const tabs: Array<{ id: EmployeeHubTab; label: string }> = [
     { id: "overview", label: "总览" },
     { id: "employees", label: "员工" },
@@ -805,14 +291,6 @@ export function EmployeeHubView({
   const filteredEmployees = useMemo(
     () => effectiveEmployees.filter((employee) => matchesEmployeeHubEmployeeFilter(employee, employeeFilter)),
     [effectiveEmployees, employeeFilter],
-  );
-  const filteredGroups = useMemo(
-    () => employeeGroups.filter((group) => matchesEmployeeHubTeamFilter(group, teamFilter)),
-    [employeeGroups, teamFilter],
-  );
-  const filteredRuns = useMemo(
-    () => recentRuns.filter((run) => matchesEmployeeHubRunFilter(run, runFilter)),
-    [recentRuns, runFilter],
   );
   const employeeFilterLabel =
     employeeFilter === "available"
@@ -976,7 +454,7 @@ export function EmployeeHubView({
               {filteredEmployees.length === 0 ? (
                 <div className="rounded border border-dashed border-gray-300 px-3 py-4 text-xs text-gray-500">当前筛选下暂无员工。</div>
               ) : filteredEmployees.map((employee) => {
-                const status = resolveFeishuStatus(employee);
+                const status = resolveFeishuStatus(employee, officialFeishuRuntimeStatus);
                 const isSelected = selectedEmployeeId === employee.id;
                 const isHighlighted = highlightEmployeeId === employee.id;
                 return (
