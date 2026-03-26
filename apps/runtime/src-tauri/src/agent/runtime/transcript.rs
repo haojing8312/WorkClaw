@@ -1,5 +1,7 @@
 use serde_json::{json, Value};
 
+use super::transcript_hygiene;
+
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct RuntimeTranscript;
 
@@ -215,6 +217,13 @@ impl RuntimeTranscript {
                 vec![json!({"role": role, "content": content})]
             })
             .collect()
+    }
+
+    pub(crate) fn sanitize_reconstructed_messages(
+        messages: Vec<Value>,
+        api_format: &str,
+    ) -> Vec<Value> {
+        transcript_hygiene::sanitize_reconstructed_messages(messages, api_format)
     }
 
     pub(crate) fn build_assistant_content_from_final_messages(

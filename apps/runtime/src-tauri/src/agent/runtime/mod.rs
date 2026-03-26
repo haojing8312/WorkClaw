@@ -13,6 +13,7 @@ pub(crate) mod session_runs;
 pub mod session_runtime;
 pub(crate) mod tool_dispatch;
 pub(crate) mod tool_setup;
+pub(crate) mod transcript_hygiene;
 pub mod transcript;
 
 pub use admission_gate::{SessionAdmissionConflict, SessionAdmissionGate, SessionAdmissionGateState};

@@ -205,7 +205,10 @@ impl SessionRuntime {
         );
 
         let (api_format, base_url, model_name, api_key) = route_candidates[0].clone();
-        let mut messages = RuntimeTranscript::reconstruct_history_messages(&history, &api_format);
+        let mut messages = RuntimeTranscript::sanitize_reconstructed_messages(
+            RuntimeTranscript::reconstruct_history_messages(&history, &api_format),
+            &api_format,
+        );
         if let Some(current_turn) =
             RuntimeTranscript::build_current_turn_message(&api_format, params.user_message_parts)
         {
