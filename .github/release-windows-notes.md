@@ -1,14 +1,16 @@
 ## WorkClaw Windows Release
 
-- Highlights in `v0.5.2`:
+- Highlights in `v0.5.3`:
   - 中文:
-    - 新增本地技能批量导入能力，导入多个本地 Skill 包时更省步骤。
-    - 持续收敛桌面端大模块拆分后的稳定性问题，提升设置页、员工中心和聊天相关流程的可靠性。
-    - 重点修复飞书官方插件链路中的 Windows 启动、插件宿主兼容、诊断误报，以及批准接入后仍重复要求授权的问题，飞书接入流程更稳定。
+    - 强化了智能体运行时稳定性，补上会话内运行串行保护、工具循环拦截、转录清洗和上下文压缩治理，长任务与工具链路更稳。
+    - 改善了多步任务执行可靠性，子任务现在由运行时托管并持久化，复杂任务更不容易出现状态漂移或中断。
+    - 完成聊天页、员工中心和设置页的一轮场景层重构与主干收口，提升维护性，也修复了合并过程中暴露出的细节回归。
+    - 继续加固 Windows 桌面打包链路，`MSI` 与 `NSIS` 安装包构建通过，飞书设置与桌面端整体稳定性进一步提升。
   - English:
-    - Adds batch local skill imports so multiple local Skill packs can be brought in with less manual setup.
-    - Continues hardening the desktop app after the recent module splits, improving reliability across settings, employee hub, and chat flows.
-    - Significantly improves the Feishu official-plugin path on Windows, including runtime startup, plugin-host compatibility, diagnostics accuracy, and pairing approval sync so approved users are no longer repeatedly asked to authorize.
+    - Strengthens agent runtime stability with per-session run serialization, pre-tool loop interception, transcript hygiene, and context compaction governance for more reliable long-running and tool-heavy tasks.
+    - Improves multi-step task reliability by moving subtask execution into runtime-owned persistent child sessions, reducing state drift and interrupted execution.
+    - Completes a scene-layer refactor and mainline integration pass for Chat, Employee Hub, and Settings, improving maintainability and fixing merge-time regressions found during integration.
+    - Further hardens the Windows desktop packaging path, with both `MSI` and `NSIS` installers building successfully and overall Feishu settings plus desktop flow stability improved.
 
 - Recommended download: `*-setup.exe` for direct install.
 - Enterprise deployment: `*.msi` for IT-managed installation and manual upgrades.
