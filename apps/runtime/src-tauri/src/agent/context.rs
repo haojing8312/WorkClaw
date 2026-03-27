@@ -3,7 +3,7 @@ use super::types::ToolContext;
 use anyhow::{anyhow, Result};
 use std::path::PathBuf;
 
-pub(super) fn build_tool_context(
+pub(crate) fn build_tool_context(
     session_id: Option<&str>,
     work_dir: Option<PathBuf>,
     allowed_tools: Option<&[String]>,
@@ -22,7 +22,7 @@ pub(super) fn build_tool_context(
     })
 }
 
-pub(super) fn build_task_temp_dir(session_id: &str) -> Result<PathBuf> {
+pub(crate) fn build_task_temp_dir(session_id: &str) -> Result<PathBuf> {
     let temp_root = std::env::temp_dir();
     let session_slug: String = session_id
         .chars()

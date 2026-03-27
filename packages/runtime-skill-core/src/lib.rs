@@ -8,4 +8,8 @@ pub use builtin_skills::{
     BUILTIN_GENERAL_SKILL_ID, BUILTIN_MULTISTEP_TODOWRITE_GOVERNANCE, BUILTIN_PDF_SKILL_ID,
     BUILTIN_PPTX_SKILL_ID, BUILTIN_SKILL_CREATOR_ID, BUILTIN_XLSX_SKILL_ID,
 };
-pub use skill_config::{McpServerDep, SkillConfig};
+pub use skill_config::{
+    McpServerDep, OpenClawSkillMetadata, OpenClawSkillMetadataRequires,
+    SkillCommandArgMode, SkillCommandDispatchKind, SkillCommandDispatchSpec, SkillConfig,
+    SkillInvocationPolicy,
+};

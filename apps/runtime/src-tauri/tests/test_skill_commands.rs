@@ -1,5 +1,9 @@
 mod helpers;
 
+use chrono::Utc;
+use runtime_lib::agent::runtime::runtime_io::{
+    build_workspace_skill_command_specs, load_workspace_skill_runtime_entries_with_pool,
+};
 use runtime_lib::commands::skills::{
     create_local_skill, import_local_skills_to_pool, render_local_skill_preview,
 };
@@ -222,5 +226,195 @@ async fn import_local_skills_reports_partial_success_without_blocking_other_skil
             .contains("DUPLICATE_SKILL_NAME:Writer"),
         "unexpected failure reason: {}",
         result.failed[0].error
+    );
+}
+
+#[tokio::test]
+async fn imported_openclaw_style_skill_produces_user_invocable_command_spec() {
+    let (pool, _tmp) = helpers::setup_test_db().await;
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let skill_dir = dir.path().join("pm-summary");
+    std::fs::create_dir_all(&skill_dir).expect("create skill dir");
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        r#"---
+name: PM Summary
+description: Summarize PM updates
+user-invocable: true
+disable-model-invocation: true
+command-dispatch: tool
+command-tool: exec
+command-arg-mode: raw
+metadata:
+  {
+    "openclaw":
+      {
+        "primaryEnv": "OPENAI_API_KEY",
+        "requires": { "env": ["OPENAI_API_KEY"] },
+      },
+  }
+---
+
+Run the standard PM summary workflow.
+"#,
+    )
+    .expect("write skill");
+
+    let result = import_local_skills_to_pool(skill_dir.to_string_lossy().to_string(), &pool, &[])
+        .await
+        .expect("import should succeed");
+    assert_eq!(result.installed.len(), 1);
+
+    let entries = load_workspace_skill_runtime_entries_with_pool(&pool)
+        .await
+        .expect("load runtime entries");
+    let specs = build_workspace_skill_command_specs(&entries);
+
+    assert!(entries.iter().any(|entry| {
+        entry.name == "PM Summary"
+            && entry.invocation.user_invocable
+            && entry.invocation.disable_model_invocation
+            && entry
+                .command_dispatch
+                .as_ref()
+                .map(|dispatch| dispatch.tool_name.as_str())
+                == Some("exec")
+            && entry
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.primary_env.as_deref())
+                == Some("OPENAI_API_KEY")
+    }));
+    assert!(specs.iter().any(|spec| {
+        spec.name == "pm_summary"
+            && spec.skill_name == "PM Summary"
+            && spec
+                .dispatch
+                .as_ref()
+                .map(|dispatch| dispatch.tool_name.as_str())
+                == Some("exec")
+    }));
+
+    let manifests = sqlx::query_as::<_, (String,)>("SELECT manifest FROM installed_skills")
+        .fetch_all(&pool)
+        .await
+        .expect("load manifests");
+    assert_eq!(manifests.len(), 1);
+    let manifest: skillpack_rs::SkillManifest =
+        serde_json::from_str(&manifests[0].0).expect("parse manifest json");
+    assert_eq!(manifest.name, "PM Summary");
+    assert_eq!(manifest.version, "local");
+    assert!(manifest.created_at <= Utc::now());
+}
+
+
+#[tokio::test]
+async fn imported_prompt_following_openclaw_skill_still_produces_user_command_spec() {
+    let (pool, _tmp) = helpers::setup_test_db().await;
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let skill_dir = dir.path().join("pm-review");
+    std::fs::create_dir_all(&skill_dir).expect("create skill dir");
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        r#"---
+name: PM Review
+description: Review PM updates
+user-invocable: true
+metadata:
+  {
+    "openclaw":
+      {
+        "emoji": "📝",
+        "requires": { "bins": ["python"] },
+      },
+  }
+---
+
+Read the PM updates and prepare a review summary for the user.
+"#,
+    )
+    .expect("write skill");
+
+    let result = import_local_skills_to_pool(skill_dir.to_string_lossy().to_string(), &pool, &[])
+        .await
+        .expect("import should succeed");
+    assert_eq!(result.installed.len(), 1);
+
+    let entries = load_workspace_skill_runtime_entries_with_pool(&pool)
+        .await
+        .expect("load runtime entries");
+    let specs = build_workspace_skill_command_specs(&entries);
+
+    let entry = entries
+        .iter()
+        .find(|entry| entry.name == "PM Review")
+        .expect("pm review entry");
+    assert!(entry.invocation.user_invocable);
+    assert!(!entry.invocation.disable_model_invocation);
+    assert!(entry.command_dispatch.is_none());
+    assert_eq!(
+        entry
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.emoji.as_deref()),
+        Some("📝")
+    );
+    assert_eq!(
+        entry
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.requires.as_ref())
+            .map(|requires| requires.bins.clone())
+            .unwrap_or_default(),
+        vec!["python".to_string()]
+    );
+
+    let spec = specs
+        .iter()
+        .find(|spec| spec.skill_name == "PM Review")
+        .expect("pm review command spec");
+    assert_eq!(spec.name, "pm_review");
+    assert!(spec.dispatch.is_none());
+    assert_eq!(spec.description, "Review PM updates");
+}
+
+#[tokio::test]
+async fn imported_hidden_non_dispatch_skill_does_not_produce_dead_user_command() {
+    let (pool, _tmp) = helpers::setup_test_db().await;
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let skill_dir = dir.path().join("hidden-skill");
+    std::fs::create_dir_all(&skill_dir).expect("create skill dir");
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        r#"---
+name: Hidden Prompt Skill
+description: Hidden from model but not dispatchable
+user-invocable: true
+disable-model-invocation: true
+---
+
+This skill should not be exposed as a dead slash command.
+"#,
+    )
+    .expect("write skill");
+
+    import_local_skills_to_pool(skill_dir.to_string_lossy().to_string(), &pool, &[])
+        .await
+        .expect("import should succeed");
+
+    let entries = load_workspace_skill_runtime_entries_with_pool(&pool)
+        .await
+        .expect("load runtime entries");
+    let specs = build_workspace_skill_command_specs(&entries);
+
+    assert!(entries.iter().any(|entry| {
+        entry.name == "Hidden Prompt Skill"
+            && entry.invocation.user_invocable
+            && entry.invocation.disable_model_invocation
+            && entry.command_dispatch.is_none()
+    }));
+    assert!(
+        specs.iter().all(|spec| spec.skill_name != "Hidden Prompt Skill"),
+        "non-dispatch hidden skills should not produce dead slash commands"
     );
 }

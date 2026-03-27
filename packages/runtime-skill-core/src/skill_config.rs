@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use serde_json::Value as JsonValue;
 
 #[derive(Deserialize, Debug, Clone, serde::Serialize)]
 pub struct McpServerDep {
@@ -31,7 +32,7 @@ impl AllowedToolsValue {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct SkillConfig {
     pub name: Option<String>,
     pub description: Option<String>,
@@ -41,10 +42,104 @@ pub struct SkillConfig {
     pub argument_hint: Option<String>,
     pub disable_model_invocation: bool,
     pub user_invocable: bool,
+    pub invocation: SkillInvocationPolicy,
+    pub metadata: Option<OpenClawSkillMetadata>,
+    pub command_dispatch: Option<SkillCommandDispatchSpec>,
     pub context: Option<String>,
     pub agent: Option<String>,
     pub mcp_servers: Vec<McpServerDep>,
     pub system_prompt: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SkillInvocationPolicy {
+    pub user_invocable: bool,
+    pub disable_model_invocation: bool,
+}
+
+impl Default for SkillInvocationPolicy {
+    fn default() -> Self {
+        Self {
+            user_invocable: true,
+            disable_model_invocation: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+pub struct OpenClawSkillMetadata {
+    pub always: Option<bool>,
+    pub emoji: Option<String>,
+    pub homepage: Option<String>,
+    pub skill_key: Option<String>,
+    pub primary_env: Option<String>,
+    pub os: Vec<String>,
+    pub requires: Option<OpenClawSkillMetadataRequires>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+pub struct OpenClawSkillMetadataRequires {
+    pub bins: Vec<String>,
+    pub any_bins: Vec<String>,
+    pub env: Vec<String>,
+    pub config: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum SkillCommandDispatchKind {
+    Tool,
+}
+
+impl SkillCommandDispatchKind {
+    fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "tool" => Some(Self::Tool),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum SkillCommandArgMode {
+    Raw,
+}
+
+impl SkillCommandArgMode {
+    fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "" | "raw" => Some(Self::Raw),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SkillCommandDispatchSpec {
+    pub kind: SkillCommandDispatchKind,
+    pub tool_name: String,
+    pub arg_mode: SkillCommandArgMode,
+}
+
+impl Default for SkillConfig {
+    fn default() -> Self {
+        Self {
+            name: None,
+            description: None,
+            allowed_tools: None,
+            model: None,
+            max_iterations: None,
+            argument_hint: None,
+            disable_model_invocation: false,
+            user_invocable: true,
+            invocation: SkillInvocationPolicy::default(),
+            metadata: None,
+            command_dispatch: None,
+            context: None,
+            agent: None,
+            mcp_servers: Vec::new(),
+            system_prompt: String::new(),
+        }
+    }
 }
 
 #[derive(Deserialize, Default)]
@@ -60,6 +155,13 @@ struct FrontMatter {
     disable_model_invocation: bool,
     #[serde(alias = "user-invocable", default = "default_true")]
     user_invocable: bool,
+    metadata: Option<serde_yaml::Value>,
+    #[serde(alias = "command-dispatch")]
+    command_dispatch: Option<String>,
+    #[serde(alias = "command-tool")]
+    command_tool: Option<String>,
+    #[serde(alias = "command-arg-mode")]
+    command_arg_mode: Option<String>,
     context: Option<String>,
     agent: Option<String>,
     #[serde(alias = "mcp-servers", default)]
@@ -99,6 +201,19 @@ impl SkillConfig {
         };
 
         let fm: FrontMatter = serde_yaml::from_str(yaml_str).unwrap_or_default();
+        let invocation = SkillInvocationPolicy {
+            user_invocable: fm.user_invocable,
+            disable_model_invocation: fm.disable_model_invocation,
+        };
+        let metadata = fm
+            .metadata
+            .as_ref()
+            .and_then(parse_openclaw_metadata_block);
+        let command_dispatch = parse_command_dispatch(
+            fm.command_dispatch.as_deref(),
+            fm.command_tool.as_deref(),
+            fm.command_arg_mode.as_deref(),
+        );
 
         Self {
             name: fm.name,
@@ -109,6 +224,9 @@ impl SkillConfig {
             argument_hint: fm.argument_hint,
             disable_model_invocation: fm.disable_model_invocation,
             user_invocable: fm.user_invocable,
+            invocation,
+            metadata,
+            command_dispatch,
             context: fm.context,
             agent: fm.agent,
             mcp_servers: fm.mcp_servers,
@@ -135,4 +253,93 @@ impl SkillConfig {
 
         self.system_prompt = result;
     }
+}
+
+fn yaml_string_list(value: Option<&JsonValue>) -> Vec<String> {
+    match value {
+        Some(JsonValue::Array(values)) => values
+            .iter()
+            .filter_map(JsonValue::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+            .collect(),
+        Some(JsonValue::String(raw)) => raw
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn parse_metadata_json_value(value: &serde_yaml::Value) -> Option<JsonValue> {
+    match value {
+        serde_yaml::Value::String(raw) => {
+            json5::from_str::<JsonValue>(raw).ok().and_then(|parsed| {
+                let manifest = parsed.get("openclaw").cloned()?;
+                manifest.is_object().then_some(manifest)
+            })
+        }
+        _ => serde_json::to_value(value)
+            .ok()
+            .and_then(|parsed| parsed.get("openclaw").cloned().filter(JsonValue::is_object)),
+    }
+}
+
+fn parse_openclaw_metadata_block(value: &serde_yaml::Value) -> Option<OpenClawSkillMetadata> {
+    let JsonValue::Object(metadata) = parse_metadata_json_value(value)? else {
+        return None;
+    };
+
+    let requires = metadata
+        .get("requires")
+        .and_then(JsonValue::as_object)
+        .map(|requires| OpenClawSkillMetadataRequires {
+            bins: yaml_string_list(requires.get("bins")),
+            any_bins: yaml_string_list(requires.get("anyBins")),
+            env: yaml_string_list(requires.get("env")),
+            config: yaml_string_list(requires.get("config")),
+        });
+
+    Some(OpenClawSkillMetadata {
+        always: metadata.get("always").and_then(JsonValue::as_bool),
+        emoji: metadata
+            .get("emoji")
+            .and_then(JsonValue::as_str)
+            .map(ToString::to_string),
+        homepage: metadata
+            .get("homepage")
+            .and_then(JsonValue::as_str)
+            .map(ToString::to_string),
+        skill_key: metadata
+            .get("skillKey")
+            .and_then(JsonValue::as_str)
+            .map(ToString::to_string),
+        primary_env: metadata
+            .get("primaryEnv")
+            .and_then(JsonValue::as_str)
+            .map(ToString::to_string),
+        os: yaml_string_list(metadata.get("os")),
+        requires,
+    })
+}
+
+fn parse_command_dispatch(
+    kind: Option<&str>,
+    tool_name: Option<&str>,
+    arg_mode: Option<&str>,
+) -> Option<SkillCommandDispatchSpec> {
+    let kind = SkillCommandDispatchKind::parse(kind?)?;
+    let tool_name = tool_name?.trim();
+    if tool_name.is_empty() {
+        return None;
+    }
+
+    Some(SkillCommandDispatchSpec {
+        kind,
+        tool_name: tool_name.to_string(),
+        arg_mode: SkillCommandArgMode::parse(arg_mode.unwrap_or_default())?,
+    })
 }

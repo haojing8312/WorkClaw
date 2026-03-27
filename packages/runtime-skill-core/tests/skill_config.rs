@@ -28,6 +28,73 @@ fn parse_claude_compatible_fields() {
     assert!(!config.user_invocable);
     assert_eq!(config.context.as_deref(), Some("fork"));
     assert_eq!(config.agent.as_deref(), Some("Explore"));
+    assert_eq!(config.invocation.user_invocable, config.user_invocable);
+    assert_eq!(
+        config.invocation.disable_model_invocation,
+        config.disable_model_invocation
+    );
+}
+
+#[test]
+fn parse_openclaw_metadata_and_command_dispatch_fields() {
+    let content = r#"---
+name: dispatched-skill
+description: Deterministic tool-routed skill
+user-invocable: true
+disable-model-invocation: true
+command-dispatch: tool
+command-tool: exec
+command-arg-mode: raw
+metadata:
+  {
+    "openclaw":
+      {
+        "always": true,
+        "emoji": "🌐",
+        "skillKey": "pm-summary",
+        "primaryEnv": "OPENAI_API_KEY",
+        "os": ["windows", "linux"],
+        "requires":
+          {
+            "bins": ["python"],
+            "anyBins": ["py", "python3"],
+            "env": ["OPENAI_API_KEY"],
+            "config": ["skills.entries.pm-summary.apiKey"],
+          },
+      },
+  }
+---
+Run the standard command.
+"#;
+
+    let config = SkillConfig::parse(content);
+    assert!(config.user_invocable);
+    assert!(config.disable_model_invocation);
+    assert_eq!(config.command_dispatch.as_ref().map(|spec| spec.tool_name.as_str()), Some("exec"));
+    assert_eq!(
+        config.metadata.as_ref().and_then(|metadata| metadata.primary_env.as_deref()),
+        Some("OPENAI_API_KEY")
+    );
+    assert_eq!(
+        config.metadata.as_ref().and_then(|metadata| metadata.skill_key.as_deref()),
+        Some("pm-summary")
+    );
+    assert_eq!(
+        config
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.requires.as_ref())
+            .map(|requires| requires.bins.clone()),
+        Some(vec!["python".to_string()])
+    );
+    assert_eq!(
+        config
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.requires.as_ref())
+            .map(|requires| requires.any_bins.clone()),
+        Some(vec!["py".to_string(), "python3".to_string()])
+    );
 }
 
 #[test]

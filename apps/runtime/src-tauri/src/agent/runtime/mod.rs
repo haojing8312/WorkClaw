@@ -9,7 +9,7 @@ pub(crate) mod failover;
 pub(crate) mod progress_guard;
 pub(crate) mod repo;
 pub(crate) mod run_registry;
-pub(crate) mod runtime_io;
+pub mod runtime_io;
 pub(crate) mod session_runs;
 pub mod session_runtime;
 pub(crate) mod tool_dispatch;
@@ -28,5 +28,9 @@ pub use events::{
     ToolConfirmResponder,
 };
 pub use run_registry::{RunRegistry, RunRegistryState};
+pub use runtime_io::{
+    build_workspace_skill_command_specs, load_workspace_skill_runtime_entries_with_pool,
+    WorkspaceSkillCommandSpec, WorkspaceSkillContent, WorkspaceSkillRuntimeEntry,
+};
 pub use session_runtime::SessionRuntime;
 pub use transcript::RuntimeTranscript;

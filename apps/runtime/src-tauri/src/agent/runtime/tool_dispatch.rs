@@ -2,7 +2,7 @@ use crate::agent::browser_progress::BrowserProgressSnapshot;
 use crate::agent::event_bridge::{
     append_run_guard_warning_event, append_tool_run_event, build_skill_route_event,
 };
-use crate::agent::permissions::PermissionMode;
+use crate::agent::permissions::{normalize_tool_name, PermissionMode};
 use crate::agent::progress::{json_progress_signature, text_progress_signature};
 use crate::agent::registry::ToolRegistry;
 use crate::agent::run_guard::{encode_run_stop_reason, ProgressFingerprint, RunBudgetPolicy};
@@ -11,12 +11,14 @@ use crate::agent::safety::classify_policy_blocked_tool_error;
 use crate::agent::types::{
     AgentStateEvent, Tool, ToolCall, ToolCallEvent, ToolContext, ToolResult,
 };
+use super::runtime_io::WorkspaceSkillCommandSpec;
 use crate::session_journal::SessionRunEvent;
 use anyhow::{anyhow, Result};
 use runtime_executor_core::{
     extract_tool_call_parse_error, split_error_code_and_message, truncate_tool_output,
     update_tool_failure_streak, ToolFailureStreak, MAX_TOOL_OUTPUT_CHARS,
 };
+use serde_json::json;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter};
@@ -50,6 +52,66 @@ pub(crate) struct ToolDispatchState<'a> {
 pub(crate) enum ToolDispatchOutcome {
     Continue,
     Cancelled,
+}
+
+pub(crate) async fn dispatch_skill_command(
+    ctx: &ToolDispatchContext<'_>,
+    spec: &WorkspaceSkillCommandSpec,
+    raw_args: &str,
+) -> Result<String> {
+    let dispatch = spec
+        .dispatch
+        .as_ref()
+        .ok_or_else(|| anyhow!("SKILL_COMMAND_NOT_DISPATCHABLE: /{} 未声明 command-dispatch", spec.name))?;
+    if let Some(allowed_tools) = ctx.allowed_tools {
+        let target_tool = normalize_tool_name(&dispatch.tool_name);
+        let tool_allowed = allowed_tools
+            .iter()
+            .map(|tool| normalize_tool_name(tool))
+            .any(|tool| tool == target_tool);
+        if !tool_allowed {
+            return Err(anyhow!(
+                "PERMISSION_DENIED: Skill command /{} 目标工具 '{}' 不在当前会话允许范围内",
+                spec.name,
+                dispatch.tool_name
+            ));
+        }
+    }
+
+    let call = ToolCall {
+        id: format!("skill-command-{}", uuid::Uuid::new_v4()),
+        name: dispatch.tool_name.clone(),
+        input: json!({
+            "command": raw_args,
+            "commandName": spec.name,
+            "skillName": spec.skill_name,
+        }),
+    };
+    let mut tool_results = Vec::new();
+    let mut repeated_failure_summary = None;
+    let mut tool_failure_streak = None;
+    let mut tool_call_history = Vec::new();
+    let mut tool_result_history = Vec::new();
+    let mut latest_browser_progress = None;
+    let mut dispatch_state = ToolDispatchState {
+        tool_results: &mut tool_results,
+        repeated_failure_summary: &mut repeated_failure_summary,
+        tool_failure_streak: &mut tool_failure_streak,
+        tool_call_history: &mut tool_call_history,
+        tool_result_history: &mut tool_result_history,
+        latest_browser_progress: &mut latest_browser_progress,
+    };
+
+    match dispatch_tool_call(ctx, &mut dispatch_state, 0, &call).await? {
+        ToolDispatchOutcome::Cancelled => {
+            Err(anyhow!("CANCELLED: Skill command /{} 已取消", spec.name))
+        }
+        ToolDispatchOutcome::Continue => tool_results
+            .into_iter()
+            .next()
+            .map(|result| result.content)
+            .ok_or_else(|| anyhow!("SKILL_COMMAND_NO_RESULT: Skill command /{} 未返回结果", spec.name)),
+    }
 }
 
 enum ApprovalOutcome {
@@ -569,13 +631,18 @@ async fn wait_for_cancel(cancel_flag: &Option<Arc<AtomicBool>>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        dispatch_tool_call, run_tool, ToolDispatchContext, ToolDispatchOutcome, ToolDispatchState,
+        dispatch_skill_command, dispatch_tool_call, run_tool, ToolDispatchContext,
+        ToolDispatchOutcome, ToolDispatchState,
     };
     use crate::agent::permissions::PermissionMode;
     use crate::agent::registry::ToolRegistry;
+    use crate::agent::runtime::runtime_io::WorkspaceSkillCommandSpec;
     use crate::agent::run_guard::{parse_run_stop_reason, RunStopReasonKind};
     use crate::agent::types::{Tool, ToolCall, ToolContext};
     use anyhow::Result;
+    use runtime_skill_core::{
+        SkillCommandArgMode, SkillCommandDispatchKind, SkillCommandDispatchSpec,
+    };
     use serde_json::{json, Value};
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -590,6 +657,8 @@ mod tests {
     struct CountingTool {
         count: Arc<AtomicUsize>,
     }
+
+    struct EchoCommandTool;
 
     impl Tool for BlockingTool {
         fn name(&self) -> &str {
@@ -629,6 +698,29 @@ mod tests {
         fn execute(&self, _input: Value, _ctx: &ToolContext) -> Result<String> {
             self.count.fetch_add(1, Ordering::SeqCst);
             Ok("counted".to_string())
+        }
+    }
+
+    impl Tool for EchoCommandTool {
+        fn name(&self) -> &str {
+            "exec"
+        }
+
+        fn description(&self) -> &str {
+            "echoes dispatch input"
+        }
+
+        fn input_schema(&self) -> Value {
+            json!({})
+        }
+
+        fn execute(&self, input: Value, _ctx: &ToolContext) -> Result<String> {
+            Ok(format!(
+                "command={} skillName={} commandName={}",
+                input["command"].as_str().unwrap_or_default(),
+                input["skillName"].as_str().unwrap_or_default(),
+                input["commandName"].as_str().unwrap_or_default()
+            ))
         }
     }
 
@@ -797,5 +889,93 @@ mod tests {
 
         assert_eq!(stop_reason.kind, RunStopReasonKind::LoopDetected);
         assert_eq!(count.load(Ordering::SeqCst), 5);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_skill_command_routes_raw_args_to_allowed_tool() {
+        let registry = ToolRegistry::new();
+        registry.register(Arc::new(EchoCommandTool));
+        let tool_ctx = ToolContext::default();
+        let ctx = ToolDispatchContext {
+            registry: &registry,
+            app_handle: None,
+            session_id: None,
+            persisted_run_id: None,
+            allowed_tools: Some(&["exec".to_string()]),
+            permission_mode: PermissionMode::Unrestricted,
+            tool_ctx: &tool_ctx,
+            tool_confirm_tx: None,
+            cancel_flag: None,
+            route_run_id: "route-skill-command",
+            route_node_timeout_secs: 5,
+            route_retry_count: 0,
+            iteration: 1,
+            run_budget_policy: crate::agent::run_guard::RunBudgetPolicy::for_scope(
+                crate::agent::run_guard::RunBudgetScope::Skill,
+            ),
+        };
+        let spec = WorkspaceSkillCommandSpec {
+            name: "pm_summary".to_string(),
+            skill_id: "skill-1".to_string(),
+            skill_name: "PM Summary".to_string(),
+            description: "Summarize PM updates".to_string(),
+            dispatch: Some(SkillCommandDispatchSpec {
+                kind: SkillCommandDispatchKind::Tool,
+                tool_name: "exec".to_string(),
+                arg_mode: SkillCommandArgMode::Raw,
+            }),
+        };
+
+        let output = dispatch_skill_command(&ctx, &spec, "--employee xt --date 2026-03-27")
+            .await
+            .expect("skill command dispatch should succeed");
+
+        assert!(output.contains("command=--employee xt --date 2026-03-27"));
+        assert!(output.contains("skillName=PM Summary"));
+        assert!(output.contains("commandName=pm_summary"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_skill_command_rejects_blocked_target_tool() {
+        let registry = ToolRegistry::new();
+        registry.register(Arc::new(EchoCommandTool));
+        let tool_ctx = ToolContext::default();
+        let allowed = vec!["read_file".to_string()];
+        let ctx = ToolDispatchContext {
+            registry: &registry,
+            app_handle: None,
+            session_id: None,
+            persisted_run_id: None,
+            allowed_tools: Some(allowed.as_slice()),
+            permission_mode: PermissionMode::Unrestricted,
+            tool_ctx: &tool_ctx,
+            tool_confirm_tx: None,
+            cancel_flag: None,
+            route_run_id: "route-skill-command",
+            route_node_timeout_secs: 5,
+            route_retry_count: 0,
+            iteration: 1,
+            run_budget_policy: crate::agent::run_guard::RunBudgetPolicy::for_scope(
+                crate::agent::run_guard::RunBudgetScope::Skill,
+            ),
+        };
+        let spec = WorkspaceSkillCommandSpec {
+            name: "pm_summary".to_string(),
+            skill_id: "skill-1".to_string(),
+            skill_name: "PM Summary".to_string(),
+            description: "Summarize PM updates".to_string(),
+            dispatch: Some(SkillCommandDispatchSpec {
+                kind: SkillCommandDispatchKind::Tool,
+                tool_name: "exec".to_string(),
+                arg_mode: SkillCommandArgMode::Raw,
+            }),
+        };
+
+        let err = dispatch_skill_command(&ctx, &spec, "--employee xt")
+            .await
+            .expect_err("blocked skill command should fail");
+
+        assert!(err.to_string().contains("PERMISSION_DENIED"));
+        assert!(err.to_string().contains("exec"));
     }
 }

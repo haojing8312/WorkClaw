@@ -28,7 +28,10 @@ fn compose_system_prompt_includes_execution_guidance_and_optional_sections() {
     assert!(prompt.contains("最大迭代次数: 8"));
     assert!(prompt.contains("Skills (mandatory):"));
     assert!(prompt.contains("<available_skills>"));
+    assert!(prompt.contains("Scan the descriptions first."));
     assert!(prompt.contains("use its <invoke_name> or <location> as skill_name"));
+    assert!(prompt.contains("Do not read multiple skills up front"));
+    assert!(prompt.contains("do not read any skill when none clearly applies"));
     assert!(prompt.contains("E:/workspace/demo/skills/xhs/SKILL.md"));
     assert!(prompt.contains("WorkClaw 内置本地 browser sidecar"));
     assert!(prompt.contains("http://localhost:8765"));

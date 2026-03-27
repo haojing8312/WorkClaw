@@ -1,10 +1,11 @@
 use super::events::{StreamToken, ToolConfirmResponder};
 use crate::agent::permissions::PermissionMode;
-use crate::agent::run_guard::{RunBudgetPolicy, RunBudgetScope};
+use crate::agent::run_guard::{parse_run_stop_reason, RunBudgetPolicy, RunBudgetScope};
 use crate::agent::runtime::attempt_runner::{
     execute_route_candidates, RouteExecutionOutcome, RouteExecutionParams,
 };
 use crate::agent::runtime::repo::{PoolChatEmployeeDirectory, PoolChatSettingsRepository};
+use crate::agent::context::build_tool_context;
 use crate::agent::runtime::tool_setup::{
     prepare_runtime_tools, PreparedRuntimeTools, ToolSetupParams,
 };
@@ -13,6 +14,7 @@ use crate::agent::AgentExecutor;
 use crate::session_journal::SessionJournalStore;
 use runtime_chat_app::{ChatExecutionPreparationRequest, ChatExecutionPreparationService};
 use serde_json::Value;
+use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
@@ -61,6 +63,95 @@ impl SessionRuntime {
         }
     }
 
+    fn parse_user_skill_command(user_message: &str) -> Option<(String, String)> {
+        let trimmed = user_message.trim();
+        let without_slash = trimmed.strip_prefix('/')?;
+        let command = without_slash
+            .split_whitespace()
+            .next()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())?;
+        let args = without_slash[command.len()..].trim_start().to_string();
+        Some((command.to_ascii_lowercase(), args))
+    }
+
+    fn rewrite_user_skill_command_for_model(
+        user_message: &str,
+        skill_command_specs: &[chat_io::WorkspaceSkillCommandSpec],
+    ) -> Option<String> {
+        let (command_name, raw_args) = Self::parse_user_skill_command(user_message)?;
+        let spec = skill_command_specs
+            .iter()
+            .find(|spec| spec.name.eq_ignore_ascii_case(&command_name) && spec.dispatch.is_none())?;
+
+        let mut parts = vec![format!(
+            "Use the \"{}\" skill for this request.",
+            spec.skill_name
+        )];
+        if !raw_args.trim().is_empty() {
+            parts.push(format!("User input:\n{}", raw_args.trim()));
+        }
+        Some(parts.join("\n\n"))
+    }
+
+    async fn maybe_execute_user_skill_command(
+        app: &AppHandle,
+        agent_executor: &Arc<AgentExecutor>,
+        session_id: &str,
+        run_id: &str,
+        user_message: &str,
+        prepared_context: &PreparedSendMessageContext,
+        cancel_flag: Arc<AtomicBool>,
+        tool_confirm_responder: ToolConfirmResponder,
+    ) -> Result<Option<String>, String> {
+        let Some((command_name, raw_args)) = Self::parse_user_skill_command(user_message) else {
+            return Ok(None);
+        };
+        let Some(spec) = prepared_context
+            .prepared_runtime_tools
+            .skill_command_specs
+            .iter()
+            .find(|spec| spec.name.eq_ignore_ascii_case(&command_name) && spec.dispatch.is_some())
+        else {
+            return Ok(None);
+        };
+
+        let tool_ctx = build_tool_context(
+            Some(session_id),
+            prepared_context
+                .executor_work_dir
+                .as_ref()
+                .map(PathBuf::from),
+            prepared_context.prepared_runtime_tools.allowed_tools.as_deref(),
+        )
+        .map_err(|err| err.to_string())?;
+        let dispatch_context = crate::agent::runtime::tool_dispatch::ToolDispatchContext {
+            registry: agent_executor.registry(),
+            app_handle: Some(app),
+            session_id: Some(session_id),
+            persisted_run_id: Some(run_id),
+            allowed_tools: prepared_context.prepared_runtime_tools.allowed_tools.as_deref(),
+            permission_mode: prepared_context.permission_mode,
+            tool_ctx: &tool_ctx,
+            tool_confirm_tx: Some(&tool_confirm_responder),
+            cancel_flag: Some(cancel_flag),
+            route_run_id: run_id,
+            route_node_timeout_secs: prepared_context.node_timeout_seconds,
+            route_retry_count: 0,
+            iteration: 1,
+            run_budget_policy: RunBudgetPolicy::for_scope(RunBudgetScope::Skill),
+        };
+
+        crate::agent::runtime::tool_dispatch::dispatch_skill_command(
+            &dispatch_context,
+            spec,
+            &raw_args,
+        )
+        .await
+        .map(Some)
+        .map_err(|err| err.to_string())
+    }
+
     pub(crate) async fn run_send_message(
         app: &AppHandle,
         agent_executor: &Arc<AgentExecutor>,
@@ -88,6 +179,86 @@ impl SessionRuntime {
         let run_id = Uuid::new_v4().to_string();
         chat_io::append_run_started_with_pool(db, journal, session_id, &run_id, user_message_id)
             .await?;
+
+        match Self::maybe_execute_user_skill_command(
+            app,
+            agent_executor,
+            session_id,
+            &run_id,
+            user_message,
+            &prepared_context,
+            cancel_flag.clone(),
+            tool_confirm_responder.clone(),
+        )
+        .await
+        {
+            Ok(Some(output)) => {
+                chat_io::finalize_run_success_with_pool(
+                    db,
+                    journal,
+                    session_id,
+                    &run_id,
+                    &output,
+                    false,
+                    &output,
+                    "",
+                    None,
+                )
+                .await?;
+                let _ = app.emit(
+                    "stream-token",
+                    StreamToken {
+                        session_id: session_id.to_string(),
+                        token: output,
+                        done: false,
+                        sub_agent: false,
+                    },
+                );
+                let _ = app.emit(
+                    "stream-token",
+                    StreamToken {
+                        session_id: session_id.to_string(),
+                        token: String::new(),
+                        done: true,
+                        sub_agent: false,
+                    },
+                );
+                return Ok(());
+            }
+            Ok(None) => {}
+            Err(error) => {
+                if let Some(stop_reason) = parse_run_stop_reason(&error) {
+                    let _ = chat_io::append_run_stopped_with_pool(
+                        db,
+                        journal,
+                        session_id,
+                        &run_id,
+                        &stop_reason,
+                    )
+                    .await;
+                } else {
+                    chat_io::append_run_failed_with_pool(
+                        db,
+                        journal,
+                        session_id,
+                        &run_id,
+                        "skill_command_dispatch",
+                        &error,
+                    )
+                    .await;
+                }
+                let _ = app.emit(
+                    "stream-token",
+                    StreamToken {
+                        session_id: session_id.to_string(),
+                        token: String::new(),
+                        done: true,
+                        sub_agent: false,
+                    },
+                );
+                return Err(error);
+            }
+        }
 
         let route_execution = execute_route_candidates(RouteExecutionParams {
             app,
@@ -260,6 +431,28 @@ impl SessionRuntime {
         })
         .await?;
 
+        if let Some(rewritten_body) =
+            Self::rewrite_user_skill_command_for_model(params.user_message, &prepared_runtime_tools.skill_command_specs)
+        {
+            let rewritten_parts = vec![serde_json::json!({
+                "type": "text",
+                "text": rewritten_body,
+            })];
+            if let Some(current_turn) =
+                RuntimeTranscript::build_current_turn_message(&api_format, &rewritten_parts)
+            {
+                if let Some(existing) = messages
+                    .iter_mut()
+                    .rev()
+                    .find(|message| message["role"].as_str() == Some("user"))
+                {
+                    *existing = current_turn;
+                } else {
+                    messages.push(current_turn);
+                }
+            }
+        }
+
         Ok(PreparedSendMessageContext {
             requested_capability,
             route_candidates,
@@ -390,5 +583,72 @@ impl SessionRuntime {
         );
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SessionRuntime;
+    use crate::agent::runtime::runtime_io as chat_io;
+
+    #[test]
+    fn parse_user_skill_command_extracts_command_and_raw_args() {
+        let parsed = SessionRuntime::parse_user_skill_command("  /pm_summary  --employee xt --date 2026-03-27 ");
+        assert_eq!(
+            parsed,
+            Some((
+                "pm_summary".to_string(),
+                "--employee xt --date 2026-03-27".to_string(),
+            ))
+        );
+    }
+
+    #[test]
+    fn parse_user_skill_command_ignores_non_command_messages() {
+        assert_eq!(SessionRuntime::parse_user_skill_command("pm_summary"), None);
+        assert_eq!(SessionRuntime::parse_user_skill_command("/"), None);
+    }
+
+    #[test]
+    fn rewrite_user_skill_command_for_model_rewrites_prompt_following_skill_commands() {
+        let specs = vec![chat_io::WorkspaceSkillCommandSpec {
+            name: "pm_summary".to_string(),
+            skill_id: "skill-1".to_string(),
+            skill_name: "PM Summary".to_string(),
+            description: "Summarize PM updates".to_string(),
+            dispatch: None,
+        }];
+
+        let rewritten = SessionRuntime::rewrite_user_skill_command_for_model(
+            "/pm_summary --employee xt --date 2026-03-27",
+            &specs,
+        );
+
+        assert_eq!(
+            rewritten.as_deref(),
+            Some(
+                "Use the \"PM Summary\" skill for this request.\n\nUser input:\n--employee xt --date 2026-03-27"
+            )
+        );
+    }
+
+    #[test]
+    fn rewrite_user_skill_command_for_model_ignores_dispatchable_commands() {
+        let specs = vec![chat_io::WorkspaceSkillCommandSpec {
+            name: "pm_summary".to_string(),
+            skill_id: "skill-1".to_string(),
+            skill_name: "PM Summary".to_string(),
+            description: "Summarize PM updates".to_string(),
+            dispatch: Some(runtime_skill_core::SkillCommandDispatchSpec {
+                kind: runtime_skill_core::SkillCommandDispatchKind::Tool,
+                tool_name: "exec".to_string(),
+                arg_mode: runtime_skill_core::SkillCommandArgMode::Raw,
+            }),
+        }];
+
+        assert_eq!(
+            SessionRuntime::rewrite_user_skill_command_for_model("/pm_summary --employee xt", &specs),
+            None
+        );
     }
 }

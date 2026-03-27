@@ -1,8 +1,15 @@
 use super::runtime_support::tool_ctx_from_work_dir;
-use super::types::{WorkspaceSkillContent, WorkspaceSkillPromptEntry, WorkspaceSkillRuntimeEntry};
+use super::types::{
+    WorkspaceSkillCommandSpec, WorkspaceSkillContent, WorkspaceSkillPromptEntry,
+    WorkspaceSkillRuntimeEntry,
+};
+use crate::agent::skill_config::SkillConfig;
 use serde_json::Value;
 
-pub(crate) fn normalize_workspace_skill_dir_name(skill_id: &str) -> String {
+const SKILL_COMMAND_MAX_LENGTH: usize = 32;
+const SKILL_COMMAND_FALLBACK: &str = "skill";
+
+pub fn normalize_workspace_skill_dir_name(skill_id: &str) -> String {
     let mut out = String::new();
     let mut last_sep = false;
     for ch in skill_id.trim().chars() {
@@ -26,7 +33,7 @@ pub(crate) fn normalize_workspace_skill_dir_name(skill_id: &str) -> String {
     }
 }
 
-pub(crate) fn build_workspace_skill_markdown_path(
+pub fn build_workspace_skill_markdown_path(
     work_dir: &std::path::Path,
     skill_id: &str,
 ) -> std::path::PathBuf {
@@ -36,7 +43,7 @@ pub(crate) fn build_workspace_skill_markdown_path(
         .join("SKILL.md")
 }
 
-pub(crate) fn build_workspace_skill_prompt_entry(entry: &WorkspaceSkillPromptEntry) -> String {
+pub fn build_workspace_skill_prompt_entry(entry: &WorkspaceSkillPromptEntry) -> String {
     format!(
         "<skill>\n<name>{}</name>\n<invoke_name>{}</invoke_name>\n<description>{}</description>\n<location>{}</location>\n</skill>",
         entry.name.trim(),
@@ -46,7 +53,7 @@ pub(crate) fn build_workspace_skill_prompt_entry(entry: &WorkspaceSkillPromptEnt
     )
 }
 
-pub(crate) fn build_workspace_skills_prompt(entries: &[WorkspaceSkillPromptEntry]) -> String {
+pub fn build_workspace_skills_prompt(entries: &[WorkspaceSkillPromptEntry]) -> String {
     if entries.is_empty() {
         return String::new();
     }
@@ -58,7 +65,89 @@ pub(crate) fn build_workspace_skills_prompt(entries: &[WorkspaceSkillPromptEntry
     blocks.join("\n")
 }
 
-pub(crate) fn extract_skill_prompt_from_decrypted_files(
+fn sanitize_skill_command_name(raw: &str) -> String {
+    let mut out = String::new();
+    let mut last_sep = false;
+    for ch in raw.trim().chars().flat_map(char::to_lowercase) {
+        if ch.is_ascii_lowercase() || ch.is_ascii_digit() {
+            out.push(ch);
+            last_sep = false;
+        } else if !last_sep {
+            out.push('_');
+            last_sep = true;
+        }
+
+        if out.len() >= SKILL_COMMAND_MAX_LENGTH {
+            break;
+        }
+    }
+
+    let trimmed = out.trim_matches('_');
+    if trimmed.is_empty() {
+        SKILL_COMMAND_FALLBACK.to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn resolve_unique_skill_command_name(
+    base: &str,
+    used: &mut std::collections::HashSet<String>,
+) -> String {
+    if used.insert(base.to_string()) {
+        return base.to_string();
+    }
+
+    for index in 2..10_000 {
+        let suffix = format!("_{index}");
+        let max_base_len = SKILL_COMMAND_MAX_LENGTH.saturating_sub(suffix.len()).max(1);
+        let trimmed_base = &base[..base.len().min(max_base_len)];
+        let candidate = format!("{trimmed_base}{suffix}");
+        if used.insert(candidate.clone()) {
+            return candidate;
+        }
+    }
+
+    let fallback = format!(
+        "{}_x",
+        &base[..base
+            .len()
+            .min(SKILL_COMMAND_MAX_LENGTH.saturating_sub(2).max(1))]
+    );
+    let _ = used.insert(fallback.clone());
+    fallback
+}
+
+pub fn build_workspace_skill_command_specs(
+    entries: &[WorkspaceSkillRuntimeEntry],
+) -> Vec<WorkspaceSkillCommandSpec> {
+    let mut used = std::collections::HashSet::new();
+
+    entries
+        .iter()
+        .filter(|entry| {
+            entry.invocation.user_invocable
+                && (!entry.invocation.disable_model_invocation || entry.command_dispatch.is_some())
+        })
+        .map(|entry| {
+            let base = sanitize_skill_command_name(&entry.name);
+            let unique = resolve_unique_skill_command_name(&base, &mut used);
+            WorkspaceSkillCommandSpec {
+                name: unique,
+                skill_id: entry.skill_id.clone(),
+                skill_name: entry.name.clone(),
+                description: if entry.description.trim().is_empty() {
+                    entry.name.clone()
+                } else {
+                    entry.description.clone()
+                },
+                dispatch: entry.command_dispatch.clone(),
+            }
+        })
+        .collect()
+}
+
+pub fn extract_skill_prompt_from_decrypted_files(
     files: &std::collections::HashMap<String, Vec<u8>>,
 ) -> Option<String> {
     for key in ["SKILL.md", "skill.md"] {
@@ -109,7 +198,7 @@ pub(crate) fn read_local_skill_prompt(pack_path: &str) -> Option<String> {
     None
 }
 
-pub(crate) fn resolve_workspace_skill_runtime_entry(
+pub fn resolve_workspace_skill_runtime_entry(
     skill_id: &str,
     manifest_json: &str,
     username: &str,
@@ -119,28 +208,43 @@ pub(crate) fn resolve_workspace_skill_runtime_entry(
     let manifest: skillpack_rs::SkillManifest =
         serde_json::from_str(manifest_json).map_err(|e| e.to_string())?;
     let projected_dir_name = normalize_workspace_skill_dir_name(skill_id);
-    let content = match source_type {
-        "local" => WorkspaceSkillContent::LocalDir(std::path::PathBuf::from(pack_path)),
+    let (content, raw_skill_markdown) = match source_type {
+        "local" => (
+            WorkspaceSkillContent::LocalDir(std::path::PathBuf::from(pack_path)),
+            read_local_skill_prompt(pack_path),
+        ),
         "builtin" => {
             let markdown = crate::builtin_skills::builtin_skill_markdown(skill_id)
                 .unwrap_or(crate::builtin_skills::builtin_general_skill_markdown());
             let mut files = std::collections::HashMap::new();
             files.insert("SKILL.md".to_string(), markdown.as_bytes().to_vec());
-            WorkspaceSkillContent::FileTree(files)
+            (
+                WorkspaceSkillContent::FileTree(files),
+                Some(markdown.to_string()),
+            )
         }
         _ => {
             let unpacked = skillpack_rs::verify_and_unpack(pack_path, username)
                 .map_err(|e| format!("解包 Skill 失败: {}", e))?;
-            WorkspaceSkillContent::FileTree(unpacked.files)
+            let markdown = extract_skill_prompt_from_decrypted_files(&unpacked.files);
+            (WorkspaceSkillContent::FileTree(unpacked.files), markdown)
         }
     };
+    let config = raw_skill_markdown
+        .as_deref()
+        .map(SkillConfig::parse)
+        .unwrap_or_default();
 
     Ok(WorkspaceSkillRuntimeEntry {
         skill_id: skill_id.to_string(),
-        name: manifest.name,
-        description: manifest.description,
+        name: config.name.clone().unwrap_or(manifest.name),
+        description: config.description.clone().unwrap_or(manifest.description),
         source_type: source_type.to_string(),
         projected_dir_name,
+        invocation: config.invocation.clone(),
+        metadata: config.metadata.clone(),
+        command_dispatch: config.command_dispatch.clone(),
+        config,
         content,
     })
 }
@@ -207,7 +311,7 @@ fn write_skill_file_tree(
     Ok(())
 }
 
-pub(crate) fn sync_workspace_skills_to_directory(
+pub fn sync_workspace_skills_to_directory(
     work_dir: &std::path::Path,
     entries: &[WorkspaceSkillRuntimeEntry],
 ) -> Result<(), String> {
@@ -230,12 +334,13 @@ pub(crate) fn sync_workspace_skills_to_directory(
     Ok(())
 }
 
-pub(crate) fn build_workspace_skill_prompt_entries(
+pub fn build_workspace_skill_prompt_entries(
     work_dir: &std::path::Path,
     entries: &[WorkspaceSkillRuntimeEntry],
 ) -> Vec<WorkspaceSkillPromptEntry> {
     entries
         .iter()
+        .filter(|entry| !entry.invocation.disable_model_invocation)
         .map(|entry| WorkspaceSkillPromptEntry {
             skill_id: entry.skill_id.clone(),
             invoke_name: entry.skill_id.clone(),
@@ -248,7 +353,7 @@ pub(crate) fn build_workspace_skill_prompt_entries(
         .collect()
 }
 
-pub(crate) fn prepare_workspace_skills_prompt(
+pub fn prepare_workspace_skills_prompt(
     work_dir: &std::path::Path,
     entries: &[WorkspaceSkillRuntimeEntry],
 ) -> Result<String, String> {
@@ -257,7 +362,7 @@ pub(crate) fn prepare_workspace_skills_prompt(
     Ok(build_workspace_skills_prompt(&prompt_entries))
 }
 
-pub(crate) async fn load_workspace_skill_runtime_entries_with_pool(
+pub async fn load_workspace_skill_runtime_entries_with_pool(
     pool: &sqlx::SqlitePool,
 ) -> Result<Vec<WorkspaceSkillRuntimeEntry>, String> {
     let rows = sqlx::query_as::<_, (String, String, String, String, String)>(
@@ -291,7 +396,7 @@ pub(crate) async fn load_workspace_skill_runtime_entries_with_pool(
     Ok(entries)
 }
 
-pub(crate) fn extract_assistant_text_content(content: &str) -> String {
+pub fn extract_assistant_text_content(content: &str) -> String {
     let Ok(parsed) = serde_json::from_str::<Value>(content) else {
         return content.to_string();
     };
@@ -303,7 +408,7 @@ pub(crate) fn extract_assistant_text_content(content: &str) -> String {
         .unwrap_or_else(|| content.to_string())
 }
 
-pub(crate) fn load_skill_prompt(
+pub fn load_skill_prompt(
     skill_id: &str,
     manifest_json: &str,
     username: &str,
@@ -343,7 +448,7 @@ pub(crate) fn load_skill_prompt(
     ))
 }
 
-pub(crate) fn build_skill_roots(
+pub fn build_skill_roots(
     effective_work_dir: &str,
     source_type: &str,
     pack_path: &str,
@@ -377,7 +482,7 @@ pub(crate) fn build_skill_roots(
 #[cfg(test)]
 mod workspace_skill_projection_tests {
     use super::{
-        build_skill_roots, build_workspace_skill_markdown_path,
+        build_skill_roots, build_workspace_skill_command_specs, build_workspace_skill_markdown_path,
         build_workspace_skill_prompt_entries, build_workspace_skill_prompt_entry,
         build_workspace_skills_prompt, extract_assistant_text_content,
         normalize_workspace_skill_dir_name, prepare_workspace_skills_prompt,
@@ -385,6 +490,7 @@ mod workspace_skill_projection_tests {
         WorkspaceSkillContent, WorkspaceSkillPromptEntry, WorkspaceSkillRuntimeEntry,
     };
     use chrono::Utc;
+    use runtime_skill_core::SkillConfig;
     use skillpack_rs::{pack, PackConfig, SkillManifest};
     use sqlx::sqlite::SqlitePoolOptions;
     use std::path::Path;
@@ -531,6 +637,73 @@ mod workspace_skill_projection_tests {
     }
 
     #[test]
+    fn resolve_workspace_skill_runtime_entry_preserves_openclaw_frontmatter_fields() {
+        let tmp = tempdir().unwrap();
+        let skill_dir = tmp.path().join("skill-src");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            r#"---
+name: dispatched-skill
+description: Routed through exec
+user-invocable: true
+disable-model-invocation: true
+command-dispatch: tool
+command-tool: exec
+command-arg-mode: raw
+metadata:
+  {
+    "openclaw":
+      {
+        "primaryEnv": "OPENAI_API_KEY",
+        "requires": { "env": ["OPENAI_API_KEY"] },
+      },
+  }
+---
+Run exec directly.
+"#,
+        )
+        .unwrap();
+
+        let manifest = SkillManifest {
+            id: "dispatched-skill".to_string(),
+            name: "manifest-name".to_string(),
+            description: "manifest-description".to_string(),
+            version: "local".to_string(),
+            author: "tester".to_string(),
+            recommended_model: "gpt-4o".to_string(),
+            tags: vec![],
+            created_at: Utc::now(),
+            username_hint: None,
+            encrypted_verify: String::new(),
+        };
+
+        let entry = resolve_workspace_skill_runtime_entry(
+            "dispatched-skill",
+            &serde_json::to_string(&manifest).unwrap(),
+            "",
+            &skill_dir.to_string_lossy(),
+            "local",
+        )
+        .unwrap();
+
+        assert_eq!(entry.name, "dispatched-skill");
+        assert_eq!(entry.description, "Routed through exec");
+        assert!(entry.invocation.user_invocable);
+        assert!(entry.invocation.disable_model_invocation);
+        assert_eq!(
+            entry.command_dispatch.as_ref().map(|dispatch| dispatch.tool_name.as_str()),
+            Some("exec")
+        );
+        assert_eq!(
+            entry.metadata
+                .as_ref()
+                .and_then(|metadata| metadata.primary_env.as_deref()),
+            Some("OPENAI_API_KEY")
+        );
+    }
+
+    #[test]
     fn resolve_workspace_skill_runtime_entry_for_encrypted_skill_uses_unpacked_files() {
         let tmp = tempdir().unwrap();
         let skill_dir = tmp.path().join("skill-src");
@@ -589,6 +762,10 @@ mod workspace_skill_projection_tests {
             description: "Local".to_string(),
             source_type: "local".to_string(),
             projected_dir_name: "local-skill".to_string(),
+            config: SkillConfig::default(),
+            invocation: runtime_skill_core::SkillInvocationPolicy::default(),
+            metadata: None,
+            command_dispatch: None,
             content: WorkspaceSkillContent::LocalDir(source_dir),
         };
 
@@ -624,6 +801,10 @@ mod workspace_skill_projection_tests {
             description: "Local".to_string(),
             source_type: "local".to_string(),
             projected_dir_name: "local-skill".to_string(),
+            config: SkillConfig::default(),
+            invocation: runtime_skill_core::SkillInvocationPolicy::default(),
+            metadata: None,
+            command_dispatch: None,
             content: WorkspaceSkillContent::LocalDir(source_dir),
         };
 
@@ -649,6 +830,10 @@ mod workspace_skill_projection_tests {
             description: "Builtin".to_string(),
             source_type: "builtin".to_string(),
             projected_dir_name: "builtin-general".to_string(),
+            config: SkillConfig::default(),
+            invocation: runtime_skill_core::SkillInvocationPolicy::default(),
+            metadata: None,
+            command_dispatch: None,
             content: WorkspaceSkillContent::FileTree(files),
         };
 
@@ -683,6 +868,10 @@ mod workspace_skill_projection_tests {
             description: "Fresh".to_string(),
             source_type: "builtin".to_string(),
             projected_dir_name: "fresh-skill".to_string(),
+            config: SkillConfig::default(),
+            invocation: runtime_skill_core::SkillInvocationPolicy::default(),
+            metadata: None,
+            command_dispatch: None,
             content: WorkspaceSkillContent::FileTree(files),
         };
 
@@ -705,6 +894,10 @@ mod workspace_skill_projection_tests {
             description: "Generic".to_string(),
             source_type: "builtin".to_string(),
             projected_dir_name: "builtin-general".to_string(),
+            config: SkillConfig::default(),
+            invocation: runtime_skill_core::SkillInvocationPolicy::default(),
+            metadata: None,
+            command_dispatch: None,
             content: WorkspaceSkillContent::FileTree(std::collections::HashMap::new()),
         }];
 
@@ -714,6 +907,157 @@ mod workspace_skill_projection_tests {
             prompt_entries[0].skill_md_path,
             "E:\\workspace\\session\\skills\\builtin-general\\SKILL.md"
         );
+    }
+
+    #[test]
+    fn build_workspace_skill_prompt_entries_skip_disable_model_invocation_skills() {
+        let work_dir = Path::new("E:\\workspace\\session");
+        let entries = vec![
+            WorkspaceSkillRuntimeEntry {
+                skill_id: "visible-skill".to_string(),
+                name: "Visible".to_string(),
+                description: "Visible skill".to_string(),
+                source_type: "builtin".to_string(),
+                projected_dir_name: "visible-skill".to_string(),
+                config: SkillConfig::default(),
+                invocation: runtime_skill_core::SkillInvocationPolicy::default(),
+                metadata: None,
+                command_dispatch: None,
+                content: WorkspaceSkillContent::FileTree(std::collections::HashMap::new()),
+            },
+            WorkspaceSkillRuntimeEntry {
+                skill_id: "hidden-skill".to_string(),
+                name: "Hidden".to_string(),
+                description: "Hidden skill".to_string(),
+                source_type: "builtin".to_string(),
+                projected_dir_name: "hidden-skill".to_string(),
+                config: SkillConfig::default(),
+                invocation: runtime_skill_core::SkillInvocationPolicy {
+                    user_invocable: true,
+                    disable_model_invocation: true,
+                },
+                metadata: None,
+                command_dispatch: None,
+                content: WorkspaceSkillContent::FileTree(std::collections::HashMap::new()),
+            },
+        ];
+
+        let prompt_entries = build_workspace_skill_prompt_entries(work_dir, &entries);
+        assert_eq!(prompt_entries.len(), 1);
+        assert_eq!(prompt_entries[0].skill_id, "visible-skill");
+    }
+
+    #[test]
+    fn build_workspace_skill_command_specs_sanitizes_and_deduplicates_names() {
+        let entries = vec![
+            WorkspaceSkillRuntimeEntry {
+                skill_id: "skill-a".to_string(),
+                name: "PM Summary".to_string(),
+                description: "Summarize PM updates".to_string(),
+                source_type: "local".to_string(),
+                projected_dir_name: "skill-a".to_string(),
+                config: SkillConfig::default(),
+                invocation: runtime_skill_core::SkillInvocationPolicy {
+                    user_invocable: true,
+                    disable_model_invocation: false,
+                },
+                metadata: None,
+                command_dispatch: Some(runtime_skill_core::SkillCommandDispatchSpec {
+                    kind: runtime_skill_core::SkillCommandDispatchKind::Tool,
+                    tool_name: "exec".to_string(),
+                    arg_mode: runtime_skill_core::SkillCommandArgMode::Raw,
+                }),
+                content: WorkspaceSkillContent::FileTree(std::collections::HashMap::new()),
+            },
+            WorkspaceSkillRuntimeEntry {
+                skill_id: "skill-b".to_string(),
+                name: "pm-summary".to_string(),
+                description: "Second summary".to_string(),
+                source_type: "local".to_string(),
+                projected_dir_name: "skill-b".to_string(),
+                config: SkillConfig::default(),
+                invocation: runtime_skill_core::SkillInvocationPolicy {
+                    user_invocable: true,
+                    disable_model_invocation: false,
+                },
+                metadata: None,
+                command_dispatch: None,
+                content: WorkspaceSkillContent::FileTree(std::collections::HashMap::new()),
+            },
+            WorkspaceSkillRuntimeEntry {
+                skill_id: "skill-hidden".to_string(),
+                name: "Hidden".to_string(),
+                description: "Not directly invocable".to_string(),
+                source_type: "local".to_string(),
+                projected_dir_name: "skill-hidden".to_string(),
+                config: SkillConfig::default(),
+                invocation: runtime_skill_core::SkillInvocationPolicy {
+                    user_invocable: false,
+                    disable_model_invocation: true,
+                },
+                metadata: None,
+                command_dispatch: None,
+                content: WorkspaceSkillContent::FileTree(std::collections::HashMap::new()),
+            },
+        ];
+
+        let specs = build_workspace_skill_command_specs(&entries);
+        assert_eq!(specs.len(), 2);
+        assert_eq!(specs[0].name, "pm_summary");
+        assert_eq!(specs[1].name, "pm_summary_2");
+        assert_eq!(
+            specs[0]
+                .dispatch
+                .as_ref()
+                .map(|dispatch| dispatch.tool_name.as_str()),
+            Some("exec")
+        );
+    }
+
+    #[test]
+    fn build_workspace_skill_command_specs_skips_hidden_non_dispatch_skills() {
+        let entries = vec![
+            WorkspaceSkillRuntimeEntry {
+                skill_id: "hidden-prompt".to_string(),
+                name: "Hidden Prompt".to_string(),
+                description: "Hidden from model".to_string(),
+                source_type: "local".to_string(),
+                projected_dir_name: "hidden-prompt".to_string(),
+                config: SkillConfig::default(),
+                invocation: runtime_skill_core::SkillInvocationPolicy {
+                    user_invocable: true,
+                    disable_model_invocation: true,
+                },
+                metadata: None,
+                command_dispatch: None,
+                content: WorkspaceSkillContent::FileTree(std::collections::HashMap::new()),
+            },
+            WorkspaceSkillRuntimeEntry {
+                skill_id: "hidden-dispatch".to_string(),
+                name: "Hidden Dispatch".to_string(),
+                description: "Hidden but dispatchable".to_string(),
+                source_type: "local".to_string(),
+                projected_dir_name: "hidden-dispatch".to_string(),
+                config: SkillConfig::default(),
+                invocation: runtime_skill_core::SkillInvocationPolicy {
+                    user_invocable: true,
+                    disable_model_invocation: true,
+                },
+                metadata: None,
+                command_dispatch: Some(runtime_skill_core::SkillCommandDispatchSpec {
+                    kind: runtime_skill_core::SkillCommandDispatchKind::Tool,
+                    tool_name: "exec".to_string(),
+                    arg_mode: runtime_skill_core::SkillCommandArgMode::Raw,
+                }),
+                content: WorkspaceSkillContent::FileTree(std::collections::HashMap::new()),
+            },
+        ];
+
+        let specs = build_workspace_skill_command_specs(&entries);
+
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0].skill_name, "Hidden Dispatch");
+        assert_eq!(specs[0].name, "hidden_dispatch");
     }
 
     #[test]
@@ -728,6 +1072,10 @@ mod workspace_skill_projection_tests {
             description: "Fresh description".to_string(),
             source_type: "builtin".to_string(),
             projected_dir_name: "fresh-skill".to_string(),
+            config: SkillConfig::default(),
+            invocation: runtime_skill_core::SkillInvocationPolicy::default(),
+            metadata: None,
+            command_dispatch: None,
             content: WorkspaceSkillContent::FileTree(files),
         };
 
@@ -880,6 +1228,10 @@ mod workspace_skill_projection_tests {
             description: "Create Xiaohongshu notes".to_string(),
             source_type: "local".to_string(),
             projected_dir_name: "local-auto-redbook".to_string(),
+            config: SkillConfig::default(),
+            invocation: runtime_skill_core::SkillInvocationPolicy::default(),
+            metadata: None,
+            command_dispatch: None,
             content: WorkspaceSkillContent::LocalDir(source_dir),
         };
 

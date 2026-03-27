@@ -219,6 +219,7 @@ fn resolve_mcp_search_fallback(registry: &ToolRegistry) -> Option<McpSearchFallb
 pub(crate) struct PreparedRuntimeTools {
     pub allowed_tools: Option<Vec<String>>,
     pub system_prompt: String,
+    pub skill_command_specs: Vec<chat_io::WorkspaceSkillCommandSpec>,
 }
 
 #[derive(Clone)]
@@ -382,19 +383,22 @@ pub(crate) async fn prepare_runtime_tools(
         params.source_type,
         params.pack_path,
     );
-    let workspace_skills_prompt = match params
+    let (workspace_skills_prompt, skill_command_specs) = match params
         .execution_preparation_service
         .resolve_executor_work_dir(params.execution_guidance)
     {
         Some(work_dir) => {
             let entries =
                 chat_io::load_workspace_skill_runtime_entries_with_pool(params.db).await?;
-            Some(chat_io::prepare_workspace_skills_prompt(
-                std::path::Path::new(&work_dir),
-                &entries,
-            )?)
+            (
+                Some(chat_io::prepare_workspace_skills_prompt(
+                    std::path::Path::new(&work_dir),
+                    &entries,
+                )?),
+                chat_io::build_workspace_skill_command_specs(&entries),
+            )
         }
-        None => None,
+        None => (None, Vec::new()),
     };
     let skill_tool = SkillInvokeTool::new(params.session_id.to_string(), skill_roots)
         .with_max_depth(params.max_call_depth);
@@ -441,6 +445,7 @@ pub(crate) async fn prepare_runtime_tools(
     Ok(PreparedRuntimeTools {
         allowed_tools: params.skill_allowed_tools,
         system_prompt,
+        skill_command_specs,
     })
 }
 

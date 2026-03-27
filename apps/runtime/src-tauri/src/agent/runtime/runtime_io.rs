@@ -29,14 +29,15 @@ pub(crate) use session_titles::{
     derive_meaningful_session_title_from_messages, is_generic_session_title,
     maybe_update_session_title_from_first_user_message_with_pool,
 };
-pub(crate) use types::{
-    WorkspaceSkillContent, WorkspaceSkillPromptEntry, WorkspaceSkillRuntimeEntry,
+pub use types::{WorkspaceSkillCommandSpec, WorkspaceSkillContent, WorkspaceSkillRuntimeEntry};
+pub use workspace_skills::{
+    build_workspace_skill_command_specs, load_workspace_skill_runtime_entries_with_pool,
 };
+pub(crate) use types::WorkspaceSkillPromptEntry;
 pub(crate) use workspace_skills::{
     build_skill_roots, build_workspace_skill_markdown_path, build_workspace_skill_prompt_entries,
     build_workspace_skill_prompt_entry, build_workspace_skills_prompt,
     extract_assistant_text_content, extract_skill_prompt_from_decrypted_files, load_skill_prompt,
-    load_workspace_skill_runtime_entries_with_pool, normalize_workspace_skill_dir_name,
-    prepare_workspace_skills_prompt, resolve_workspace_skill_runtime_entry,
-    sync_workspace_skills_to_directory,
+    normalize_workspace_skill_dir_name, prepare_workspace_skills_prompt,
+    resolve_workspace_skill_runtime_entry, sync_workspace_skills_to_directory,
 };

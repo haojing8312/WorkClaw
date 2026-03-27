@@ -2,31 +2,31 @@ use crate::agent::permissions::narrow_allowed_tools;
 use crate::agent::skill_config::SkillConfig;
 use crate::agent::types::{Tool, ToolContext};
 use anyhow::{anyhow, Result};
+use runtime_skill_core::SkillCommandDispatchSpec;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SkillExecutabilityStatus {
-    InstructionOnly,
-    Executable,
-    Blocked,
+enum SkillResolutionMode {
+    PromptFollowing,
+    CommandDispatch,
 }
 
-impl SkillExecutabilityStatus {
+impl SkillResolutionMode {
     fn as_str(self) -> &'static str {
         match self {
-            SkillExecutabilityStatus::InstructionOnly => "instruction_only",
-            SkillExecutabilityStatus::Executable => "executable",
-            SkillExecutabilityStatus::Blocked => "blocked",
+            SkillResolutionMode::PromptFollowing => "prompt_following",
+            SkillResolutionMode::CommandDispatch => "command_dispatch",
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct SkillExecutability {
-    status: SkillExecutabilityStatus,
-    reason: String,
+struct SkillResolution {
+    mode: SkillResolutionMode,
+    narrowed_tools: Vec<String>,
+    unrestricted_tools: bool,
 }
 
 /// Skill 调用工具：按名称加载本地 SKILL.md，并返回可执行指令文本。
@@ -234,26 +234,44 @@ impl SkillInvokeTool {
         }
     }
 
-    fn evaluate_executability(
+    fn resolve_allowed_tools(
+        parent_allowed: Option<&[String]>,
         child_declared: &[String],
-        narrowed_tools: &[String],
-    ) -> SkillExecutability {
-        if child_declared.is_empty() {
-            return SkillExecutability {
-                status: SkillExecutabilityStatus::InstructionOnly,
-                reason: "子 Skill 未声明工具".to_string(),
-            };
+    ) -> SkillResolution {
+        let narrowed_tools = narrow_allowed_tools(
+            parent_allowed,
+            if child_declared.is_empty() {
+                None
+            } else {
+                Some(child_declared)
+            },
+        );
+        let unrestricted_tools = parent_allowed.is_none() && child_declared.is_empty();
+
+        SkillResolution {
+            mode: SkillResolutionMode::PromptFollowing,
+            narrowed_tools,
+            unrestricted_tools,
         }
-        if narrowed_tools.is_empty() {
-            return SkillExecutability {
-                status: SkillExecutabilityStatus::Blocked,
-                reason: "子 Skill 声明的工具不在当前会话允许范围内".to_string(),
-            };
+    }
+
+    fn ensure_dispatch_is_allowed(
+        dispatch: &SkillCommandDispatchSpec,
+        parent_allowed: Option<&[String]>,
+    ) -> Result<()> {
+        if let Some(parent_allowed) = parent_allowed {
+            let dispatch_allowed = narrow_allowed_tools(
+                Some(parent_allowed),
+                Some(std::slice::from_ref(&dispatch.tool_name)),
+            );
+            if dispatch_allowed.is_empty() {
+                return Err(anyhow!(
+                    "PERMISSION_DENIED: Skill command dispatch 目标工具 '{}' 不在父会话允许范围内",
+                    dispatch.tool_name
+                ));
+            }
         }
-        SkillExecutability {
-            status: SkillExecutabilityStatus::Executable,
-            reason: "子 Skill 声明的工具可用".to_string(),
-        }
+        Ok(())
     }
 
     fn render_skill_result(
@@ -262,23 +280,38 @@ impl SkillInvokeTool {
         config: &SkillConfig,
         declared_tools: &str,
         narrowed_tools_text: &str,
-        executability: &SkillExecutability,
+        resolution: &SkillResolution,
     ) -> String {
+        let dispatch_summary = match &config.command_dispatch {
+            Some(dispatch) => format!(
+                "kind={}, tool_name={}, arg_mode={:?}",
+                match dispatch.kind {
+                    runtime_skill_core::SkillCommandDispatchKind::Tool => "tool",
+                },
+                dispatch.tool_name,
+                dispatch.arg_mode
+            ),
+            None => "(none)".to_string(),
+        };
         format!(
             "## Skill: {}\n\
-执行状态: {}\n\
-执行原因: {}\n\
+解析模式: {}\n\
 来源: {}\n\
 描述: {}\n\
+用户可直接调用: {}\n\
+禁用模型自动调用: {}\n\
+命令分派: {}\n\
 声明工具: {}\n\
 收紧后工具: {}\n\
 最大迭代: {}\n\n\
 请严格执行以下 Skill 指令（原文）:\n\n{}",
             skill_name,
-            executability.status.as_str(),
-            executability.reason,
+            resolution.mode.as_str(),
             skill_path.display(),
             config.description.clone().unwrap_or_default(),
+            config.user_invocable,
+            config.disable_model_invocation,
+            dispatch_summary,
             declared_tools,
             narrowed_tools_text,
             config
@@ -286,14 +319,6 @@ impl SkillInvokeTool {
                 .map(|v| v.to_string())
                 .unwrap_or_else(|| "(未声明)".to_string()),
             config.system_prompt
-        )
-    }
-
-    fn render_executability_status(executability: &SkillExecutability) -> String {
-        format!(
-            "执行状态: {}\n执行原因: {}",
-            executability.status.as_str(),
-            executability.reason
         )
     }
 }
@@ -369,42 +394,31 @@ impl Tool for SkillInvokeTool {
             config.substitute_arguments(&arg_refs, &self.session_id);
 
             let child_declared = config.allowed_tools.clone().unwrap_or_default();
-            let narrowed_tools = narrow_allowed_tools(
-                ctx.allowed_tools.as_deref(),
-                if child_declared.is_empty() {
-                    None
-                } else {
-                    Some(child_declared.as_slice())
-                },
-            );
+            let mut resolution = Self::resolve_allowed_tools(ctx.allowed_tools.as_deref(), &child_declared);
+            if let Some(dispatch) = &config.command_dispatch {
+                Self::ensure_dispatch_is_allowed(dispatch, ctx.allowed_tools.as_deref())?;
+                resolution.mode = SkillResolutionMode::CommandDispatch;
+            }
             let declared_tools = if child_declared.is_empty() {
                 "(未声明)".to_string()
             } else {
                 child_declared.join(", ")
             };
-            let narrowed_tools_text = if narrowed_tools.is_empty() {
-                "(无可用工具)".to_string()
+            let narrowed_tools_text = if resolution.unrestricted_tools {
+                "(继承父会话全部工具 / unrestricted)".to_string()
+            } else if resolution.narrowed_tools.is_empty() {
+                "(无显式收紧结果)".to_string()
             } else {
-                narrowed_tools.join(", ")
+                resolution.narrowed_tools.join(", ")
             };
-            let executability = Self::evaluate_executability(&child_declared, &narrowed_tools);
             let rendered = Self::render_skill_result(
                 &skill_name,
                 &skill_path,
                 &config,
                 &declared_tools,
                 &narrowed_tools_text,
-                &executability,
+                &resolution,
             );
-            if executability.status == SkillExecutabilityStatus::Blocked {
-                let status_summary = Self::render_executability_status(&executability);
-                return Err(anyhow!(
-                    "PERMISSION_DENIED: 子 Skill '{}' 声明的工具不在父会话允许范围内\n{}",
-                    skill_name,
-                    status_summary
-                ));
-            }
-
             Ok(rendered)
         })();
 
@@ -430,7 +444,7 @@ mod tests {
     }
 
     #[test]
-    fn skill_tool_marks_instruction_only_when_child_declares_no_tools() {
+    fn skill_tool_returns_prompt_following_mode_when_child_declares_no_tools() {
         let tmp = TempDir::new().expect("temp dir");
         create_skill(
             &tmp,
@@ -451,12 +465,12 @@ mod tests {
             .execute(json!({"skill_name": "instruction-only-skill"}), &ctx)
             .expect("instruction-only skill should succeed");
 
-        assert!(out.contains("执行状态: instruction_only"));
-        assert!(out.contains("执行原因: 子 Skill 未声明工具"));
+        assert!(out.contains("解析模式: prompt_following"));
+        assert!(out.contains("收紧后工具: (继承父会话全部工具 / unrestricted)"));
     }
 
     #[test]
-    fn skill_tool_marks_executable_when_tools_overlap() {
+    fn skill_tool_keeps_narrowed_tools_when_declared_tools_overlap() {
         let tmp = TempDir::new().expect("temp dir");
         create_skill(
             &tmp,
@@ -477,13 +491,12 @@ mod tests {
             .execute(json!({"skill_name": "executable-skill"}), &ctx)
             .expect("executable skill should succeed");
 
-        assert!(out.contains("执行状态: executable"));
-        assert!(out.contains("执行原因: 子 Skill 声明的工具可用"));
+        assert!(out.contains("解析模式: prompt_following"));
         assert!(out.contains("收紧后工具: read_file"));
     }
 
     #[test]
-    fn skill_tool_marks_blocked_when_child_tools_do_not_overlap_parent_scope() {
+    fn skill_tool_allows_empty_overlap_when_no_dispatch_is_requested() {
         let tmp = TempDir::new().expect("temp dir");
         create_skill(
             &tmp,
@@ -500,13 +513,64 @@ mod tests {
             execution_caps: None,
             file_task_caps: None,
         };
-        let err = tool
+        let out = tool
             .execute(json!({"skill_name": "blocked-skill"}), &ctx)
-            .expect_err("blocked skill should be rejected");
+            .expect("prompt-following skill should still load");
 
-        assert!(err.to_string().contains("执行状态: blocked"));
-        assert!(err
-            .to_string()
-            .contains("执行原因: 子 Skill 声明的工具不在当前会话允许范围内"));
+        assert!(out.contains("解析模式: prompt_following"));
+        assert!(out.contains("收紧后工具: (无显式收紧结果)"));
+    }
+
+    #[test]
+    fn skill_tool_exposes_command_dispatch_metadata() {
+        let tmp = TempDir::new().expect("temp dir");
+        create_skill(
+            &tmp,
+            "dispatch-skill",
+            "---\nname: dispatch-skill\ndisable-model-invocation: true\ncommand-dispatch: tool\ncommand-tool: exec\ncommand-arg-mode: raw\n---\n\nChild prompt",
+        );
+
+        let tool = SkillInvokeTool::new("sess-1".to_string(), vec![tmp.path().to_path_buf()]);
+        let ctx = ToolContext {
+            work_dir: None,
+            allowed_tools: Some(vec!["exec".to_string(), "read_file".to_string()]),
+            session_id: None,
+            task_temp_dir: None,
+            execution_caps: None,
+            file_task_caps: None,
+        };
+        let out = tool
+            .execute(json!({"skill_name": "dispatch-skill"}), &ctx)
+            .expect("dispatch skill should resolve");
+
+        assert!(out.contains("解析模式: command_dispatch"));
+        assert!(out.contains("禁用模型自动调用: true"));
+        assert!(out.contains("命令分派: kind=tool, tool_name=exec"));
+    }
+
+    #[test]
+    fn skill_tool_blocks_when_dispatch_target_is_outside_parent_scope() {
+        let tmp = TempDir::new().expect("temp dir");
+        create_skill(
+            &tmp,
+            "dispatch-skill",
+            "---\nname: dispatch-skill\ncommand-dispatch: tool\ncommand-tool: exec\n---\n\nChild prompt",
+        );
+
+        let tool = SkillInvokeTool::new("sess-1".to_string(), vec![tmp.path().to_path_buf()]);
+        let ctx = ToolContext {
+            work_dir: None,
+            allowed_tools: Some(vec!["read_file".to_string()]),
+            session_id: None,
+            task_temp_dir: None,
+            execution_caps: None,
+            file_task_caps: None,
+        };
+        let err = tool
+            .execute(json!({"skill_name": "dispatch-skill"}), &ctx)
+            .expect_err("dispatch outside parent scope should be rejected");
+
+        assert!(err.to_string().contains("PERMISSION_DENIED"));
+        assert!(err.to_string().contains("exec"));
     }
 }

@@ -33,15 +33,16 @@ fn skill_tool_returns_narrowed_allowed_tools() {
 
     assert!(out.contains("声明工具: ReadFile, web_search"));
     assert!(out.contains("收紧后工具: read_file"));
+    assert!(out.contains("解析模式: prompt_following"));
 }
 
 #[test]
-fn skill_tool_denies_when_child_tools_outside_parent_scope() {
+fn skill_tool_only_denies_explicit_dispatch_when_parent_scope_blocks_target_tool() {
     let tmp = TempDir::new().expect("temp dir");
     create_skill(
         &tmp,
         "child-skill",
-        "---\nname: child-skill\nallowed_tools: \"bash\"\n---\n\nChild prompt",
+        "---\nname: child-skill\ncommand-dispatch: tool\ncommand-tool: exec\n---\n\nChild prompt",
     );
 
     let tool = SkillInvokeTool::new("sess-1".to_string(), vec![tmp.path().to_path_buf()]);
@@ -62,11 +63,33 @@ fn skill_tool_denies_when_child_tools_outside_parent_scope() {
         "unexpected error: {}",
         err
     );
-    assert!(err.to_string().contains("执行状态: blocked"));
-    assert!(err
-        .to_string()
-        .contains("执行原因: 子 Skill 声明的工具不在当前会话允许范围内"));
     assert!(!err.to_string().contains("Child prompt"));
+}
+
+#[test]
+fn skill_tool_keeps_prompt_skill_even_when_declared_tools_do_not_overlap_parent_scope() {
+    let tmp = TempDir::new().expect("temp dir");
+    create_skill(
+        &tmp,
+        "child-skill",
+        "---\nname: child-skill\nallowed_tools: \"bash\"\n---\n\nChild prompt",
+    );
+
+    let tool = SkillInvokeTool::new("sess-1".to_string(), vec![tmp.path().to_path_buf()]);
+    let ctx = ToolContext {
+        work_dir: None,
+        allowed_tools: Some(vec!["read_file".to_string()]),
+        session_id: None,
+        task_temp_dir: None,
+        execution_caps: None,
+        file_task_caps: None,
+    };
+    let out = tool
+        .execute(json!({"skill_name": "child-skill"}), &ctx)
+        .expect("prompt skill should still resolve");
+
+    assert!(out.contains("解析模式: prompt_following"));
+    assert!(out.contains("收紧后工具: (无显式收紧结果)"));
 }
 
 #[test]
