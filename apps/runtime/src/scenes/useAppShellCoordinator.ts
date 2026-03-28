@@ -22,6 +22,7 @@ export function useAppShellCoordinator(options: {
   defaultWorkDir: string;
   employees: AgentEmployee[];
   skills: SkillManifest[];
+  showSettings: boolean;
   navigate: (view: MainView) => void;
   openSettingsAtTab: (tab: SettingsTab) => void;
   setActiveMainView: Dispatch<SetStateAction<MainView>>;
@@ -50,6 +51,7 @@ export function useAppShellCoordinator(options: {
     setActiveMainView,
     setSelectedSkillId,
     setShowSettings,
+    showSettings,
     skills,
   } = options;
 
@@ -66,7 +68,10 @@ export function useAppShellCoordinator(options: {
     [defaultWorkDir],
   );
 
-  const handleOpenStartTask = useCallback(() => {
+  const handleOpenStartTask = useCallback(async () => {
+    if (showSettings) {
+      await Promise.all([loadModels(), loadSearchConfigs()]);
+    }
     setShowSettings(false);
     prepareTabForNewTask();
     const mainEmployee = employees.find((e) => e.is_default) ?? employees[0];
@@ -80,10 +85,23 @@ export function useAppShellCoordinator(options: {
       return getDefaultSkillId(skills);
     });
     navigate("start-task");
-  }, [employees, navigate, prepareTabForNewTask, setSelectedSkillId, setShowSettings, skills]);
+  }, [
+    employees,
+    loadModels,
+    loadSearchConfigs,
+    navigate,
+    prepareTabForNewTask,
+    setSelectedSkillId,
+    setShowSettings,
+    showSettings,
+    skills,
+  ]);
 
   const handleEnterStartTask = useCallback(
-    (skillId?: string | null) => {
+    async (skillId?: string | null) => {
+      if (showSettings) {
+        await Promise.all([loadModels(), loadSearchConfigs()]);
+      }
       setShowSettings(false);
       prepareTabForNewTask();
       if (skillId) {
@@ -97,7 +115,16 @@ export function useAppShellCoordinator(options: {
       });
       navigate("start-task");
     },
-    [navigate, prepareTabForNewTask, setSelectedSkillId, setShowSettings, skills],
+    [
+      loadModels,
+      loadSearchConfigs,
+      navigate,
+      prepareTabForNewTask,
+      setSelectedSkillId,
+      setShowSettings,
+      showSettings,
+      skills,
+    ],
   );
 
   useEffect(() => {

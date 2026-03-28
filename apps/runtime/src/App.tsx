@@ -381,6 +381,7 @@ export default function App() {
     defaultWorkDir,
     employees,
     skills,
+    showSettings,
     navigate,
     openSettingsAtTab,
     setActiveMainView,

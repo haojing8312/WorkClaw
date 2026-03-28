@@ -1010,4 +1010,37 @@ describe("App model setup hint", () => {
       expect(screen.getByTestId("model-setup-gate")).toBeInTheDocument();
     });
   });
+
+  test("reloads model configs when leaving settings via the sidebar start-task entry", async () => {
+    window.localStorage.setItem(INITIAL_MODEL_SETUP_COMPLETED_KEY, "1");
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("model-setup-hint")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText("open-settings"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("settings-view")).toBeInTheDocument();
+    });
+
+    mockModels = [
+      {
+        id: "model-after-settings-save",
+        name: "Model After Save",
+        api_format: "openai",
+        base_url: "https://example.com/v1",
+        model_name: "gpt-after-save",
+        is_default: true,
+      },
+    ];
+
+    fireEvent.click(screen.getByText("open-start-task"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("new-session-landing")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("请先在设置中配置模型和 API Key")).not.toBeInTheDocument();
+  });
 });
