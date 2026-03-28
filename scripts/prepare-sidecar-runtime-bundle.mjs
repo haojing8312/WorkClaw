@@ -1,11 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, readdirSync, rmSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, lstatSync, readdirSync, readlinkSync, rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const scriptPath = fileURLToPath(import.meta.url);
 const projectRoot = path.resolve(scriptDir, "..");
+const localStoreDir = path.join(projectRoot, ".pnpm-store-local");
 const bundleDir = path.join(
   projectRoot,
   "apps",
@@ -35,6 +36,8 @@ export function buildDeployCommand(runner, pnpmMajor, targetDir, baseEnv = proce
     "deploy",
     "--prod",
     "--config.bin-links=false",
+    "--store-dir",
+    localStoreDir,
   ];
   if (pnpmMajor >= 10) {
     deployArgs.push("--legacy");
@@ -48,8 +51,12 @@ export function buildDeployCommand(runner, pnpmMajor, targetDir, baseEnv = proce
       ...baseEnv,
       npm_config_bin_links: "false",
       pnpm_config_bin_links: "false",
+      npm_config_store_dir: localStoreDir,
+      pnpm_config_store_dir: localStoreDir,
       NPM_CONFIG_BIN_LINKS: "false",
       PNPM_CONFIG_BIN_LINKS: "false",
+      NPM_CONFIG_STORE_DIR: localStoreDir,
+      PNPM_CONFIG_STORE_DIR: localStoreDir,
     },
   };
 }
@@ -65,7 +72,8 @@ export function isRetryableWindowsDeployError(output, platform = process.platfor
     text.includes("playwright.ps1") ||
     text.includes("Failed to create bin at") ||
     text.includes("EPERM") ||
-    text.includes("ENOENT: no such file or directory, chmod")
+    text.includes("ENOENT: no such file or directory, chmod") ||
+    (text.includes("ERR_PNPM_UNKNOWN") && text.includes("unknown error, stat"))
   );
 }
 
@@ -183,6 +191,90 @@ function removeDirForWindowsBuild(targetDir) {
   rmSync(targetDir, { recursive: true, force: true });
 }
 
+function listBrokenSymlinks(dir, broken = []) {
+  if (!existsSync(dir)) {
+    return broken;
+  }
+
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const entryPath = path.join(dir, entry.name);
+    const stat = lstatSync(entryPath);
+    if (stat.isSymbolicLink()) {
+      try {
+        // `realpathSync.native` would also work, but `cpSync` only needs to know whether
+        // the current link resolves, so `existsSync` on the link target is enough here.
+        const targetPath = readlinkSync(entryPath);
+        const absoluteTarget = path.isAbsolute(targetPath)
+          ? targetPath
+          : path.resolve(path.dirname(entryPath), targetPath);
+        if (!existsSync(absoluteTarget)) {
+          broken.push({ linkPath: entryPath, targetPath: absoluteTarget });
+        }
+      } catch {
+        broken.push({ linkPath: entryPath, targetPath: null });
+      }
+      continue;
+    }
+
+    if (entry.isDirectory()) {
+      listBrokenSymlinks(entryPath, broken);
+    }
+  }
+
+  return broken;
+}
+
+function resolveWorkspaceVirtualStoreTarget(targetDir, brokenTargetPath, workspaceRoot = projectRoot) {
+  if (!brokenTargetPath) {
+    return null;
+  }
+
+  const targetVirtualStore = path.join(targetDir, "node_modules", ".pnpm");
+  const relativeTarget = path.relative(targetVirtualStore, brokenTargetPath);
+  if (
+    !relativeTarget ||
+    relativeTarget.startsWith("..") ||
+    path.isAbsolute(relativeTarget)
+  ) {
+    return null;
+  }
+
+  return path.join(workspaceRoot, "node_modules", ".pnpm", relativeTarget);
+}
+
+export function repairBrokenBundleLinks(targetDir, workspaceRoot = projectRoot) {
+  const bundleVirtualStore = path.join(targetDir, "node_modules", ".pnpm");
+  const repaired = [];
+
+  for (const brokenLink of listBrokenSymlinks(bundleVirtualStore)) {
+    const sourcePath = resolveWorkspaceVirtualStoreTarget(
+      targetDir,
+      brokenLink.targetPath,
+      workspaceRoot,
+    );
+    if (!sourcePath || !existsSync(sourcePath)) {
+      continue;
+    }
+
+    rmSync(brokenLink.linkPath, { recursive: true, force: true });
+    cpSync(sourcePath, brokenLink.linkPath, { recursive: true, dereference: true });
+    repaired.push({
+      linkPath: brokenLink.linkPath,
+      sourcePath,
+    });
+  }
+
+  return repaired;
+}
+
+export function hasRequiredBundleOutputs(targetDir) {
+  return (
+    existsSync(path.join(targetDir, "package.json")) &&
+    existsSync(path.join(targetDir, "dist", "index.js")) &&
+    existsSync(path.join(targetDir, "node_modules"))
+  );
+}
+
 function main() {
   const runner = resolvePnpmRunner();
   const pnpmMajor = readPnpmMajorVersion(runner);
@@ -198,10 +290,17 @@ function main() {
       const output = error && typeof error === "object" && "cause" in error
         ? error.cause?.output
         : "";
+      if (
+        isRetryableWindowsDeployError(output) &&
+        hasRequiredBundleOutputs(bundleDir)
+      ) {
+        console.warn("Continuing after Windows deploy warning because the sidecar bundle outputs are present.");
+        break;
+      }
       if (deployAttempt >= 2 || !isRetryableWindowsDeployError(output)) {
         throw error;
       }
-      console.warn("Retrying sidecar runtime deploy after transient Windows bin creation failure...");
+      console.warn("Retrying sidecar runtime deploy after transient Windows deploy failure...");
     }
   }
 
@@ -214,6 +313,12 @@ function main() {
 
   for (const prunedPath of pruneNonRuntimeBundlePaths(bundleDir)) {
     console.log(`Pruned non-runtime sidecar bundle path: ${path.relative(projectRoot, prunedPath)}`);
+  }
+
+  for (const repairedLink of repairBrokenBundleLinks(bundleDir)) {
+    console.log(
+      `Repaired sidecar bundle link: ${path.relative(projectRoot, repairedLink.linkPath)} <= ${path.relative(projectRoot, repairedLink.sourcePath)}`,
+    );
   }
 
   copyFileSync(process.execPath, path.join(bundleDir, bundledNodeName));

@@ -1,4 +1,5 @@
 use crate::agent::types::{LLMResponse, StreamDelta, ToolCall};
+use crate::model_transport::{ModelTransportKind, ResolvedModelTransport};
 use anyhow::{anyhow, Result};
 use futures_util::StreamExt;
 use reqwest::Client;
@@ -275,6 +276,42 @@ fn validate_test_connection_response(body: &str) -> Result<bool> {
     ))
 }
 
+fn openai_responses_url(base_url: &str) -> String {
+    format!("{}/responses", base_url.trim().trim_end_matches('/'))
+}
+
+fn openai_chat_completions_url(base_url: &str) -> String {
+    format!("{}/chat/completions", base_url.trim().trim_end_matches('/'))
+}
+
+fn openai_tools_from_anthropic_defs(tools: &[Value]) -> Vec<Value> {
+    tools
+        .iter()
+        .map(|t| {
+            json!({
+                "type": "function",
+                "function": {
+                    "name": t["name"],
+                    "description": t["description"],
+                    "parameters": t["input_schema"],
+                }
+            })
+        })
+        .collect()
+}
+
+fn build_openai_chat_completion_messages(system_prompt: &str, messages: Vec<Value>) -> Vec<Value> {
+    let mut request_messages = Vec::with_capacity(messages.len() + 1);
+    if !system_prompt.trim().is_empty() {
+        request_messages.push(json!({
+            "role": "system",
+            "content": system_prompt.trim(),
+        }));
+    }
+    request_messages.extend(messages);
+    request_messages
+}
+
 fn last_tool_message_content(messages: &[Value]) -> Option<String> {
     messages
         .iter()
@@ -462,6 +499,13 @@ fn process_openai_sse_text(
 
             if let Ok(v) = serde_json::from_str::<Value>(data) {
                 match v["type"].as_str().unwrap_or_default() {
+                    "response.reasoning_summary_text.delta" | "response.reasoning_text.delta" => {
+                        if let Some(delta) = v["delta"].as_str().map(str::trim) {
+                            if !delta.is_empty() {
+                                on_token(StreamDelta::Reasoning(delta.to_string()));
+                            }
+                        }
+                    }
                     "response.output_text.delta" => {
                         if let Some(delta) = v["delta"].as_str() {
                             let filtered = filter_thinking(
@@ -670,6 +714,7 @@ fn finish_openai_stream(mut state: OpenAiStreamState) -> LLMResponse {
 /// 当 `finish_reason == "tool_calls"` 时返回 `LLMResponse::ToolCalls`，
 /// 否则返回 `LLMResponse::Text`。
 pub async fn chat_stream_with_tools(
+    transport: &ResolvedModelTransport,
     base_url: &str,
     api_key: &str,
     model: &str,
@@ -796,30 +841,45 @@ pub async fn chat_stream_with_tools(
     }
 
     let client = build_http_client()?;
+    let (url, body) = match transport.kind {
+        ModelTransportKind::OpenAiResponses => {
+            let responses_input = convert_messages_to_responses_input(&messages);
+            let openai_tools: Vec<Value> = tools
+                .iter()
+                .map(|t| {
+                    json!({
+                        "type": "function",
+                        "name": t["name"],
+                        "description": t["description"],
+                        "parameters": t["input_schema"],
+                    })
+                })
+                .collect();
 
-    let responses_input = convert_messages_to_responses_input(&messages);
-
-    let openai_tools: Vec<Value> = tools
-        .iter()
-        .map(|t| {
+            (
+                openai_responses_url(base_url),
+                json!({
+                    "model": model,
+                    "instructions": system_prompt,
+                    "input": responses_input,
+                    "tools": openai_tools,
+                    "stream": true,
+                }),
+            )
+        }
+        ModelTransportKind::OpenAiCompletions => (
+            openai_chat_completions_url(base_url),
             json!({
-                "type": "function",
-                "name": t["name"],
-                "description": t["description"],
-                "parameters": t["input_schema"],
-            })
-        })
-        .collect();
-
-    let body = json!({
-        "model": model,
-        "instructions": system_prompt,
-        "input": responses_input,
-        "tools": openai_tools,
-        "stream": true,
-    });
-
-    let url = format!("{}/responses", base_url.trim_end_matches('/'));
+                "model": model,
+                "messages": build_openai_chat_completion_messages(system_prompt, messages),
+                "tools": openai_tools_from_anthropic_defs(&tools),
+                "stream": true,
+            }),
+        ),
+        ModelTransportKind::AnthropicMessages => {
+            return Err(anyhow!("OpenAI adapter 不支持 Anthropic transport"));
+        }
+    };
     let resp = client
         .post(&url)
         .bearer_auth(api_key)
@@ -848,7 +908,12 @@ pub async fn chat_stream_with_tools(
     Ok(finish_openai_stream(state))
 }
 
-pub async fn test_connection(base_url: &str, api_key: &str, model: &str) -> Result<bool> {
+pub async fn test_connection(
+    transport: &ResolvedModelTransport,
+    base_url: &str,
+    api_key: &str,
+    model: &str,
+) -> Result<bool> {
     if is_mock_text_base_url(base_url)
         || is_mock_tool_loop_base_url(base_url)
         || is_mock_repeat_invalid_write_file_base_url(base_url)
@@ -859,12 +924,27 @@ pub async fn test_connection(base_url: &str, api_key: &str, model: &str) -> Resu
         return Ok(true);
     }
     let client = build_http_client()?;
-    let url = format!("{}/responses", base_url.trim_end_matches('/'));
-    let body = json!({
-        "model": model,
-        "input": "hi",
-        "max_output_tokens": 10
-    });
+    let (url, body) = match transport.kind {
+        ModelTransportKind::OpenAiResponses => (
+            openai_responses_url(base_url),
+            json!({
+                "model": model,
+                "input": "hi",
+                "max_output_tokens": 10
+            }),
+        ),
+        ModelTransportKind::OpenAiCompletions => (
+            openai_chat_completions_url(base_url),
+            json!({
+                "model": model,
+                "messages": [{ "role": "user", "content": "hi" }],
+                "max_tokens": 10
+            }),
+        ),
+        ModelTransportKind::AnthropicMessages => {
+            return Err(anyhow!("OpenAI adapter 不支持 Anthropic transport"));
+        }
+    };
     let resp = client
         .post(&url)
         .bearer_auth(api_key)
@@ -968,6 +1048,22 @@ mod tests {
         .expect("valid openai responses payload");
 
         assert!(result);
+    }
+
+    #[test]
+    fn qwen_style_backends_use_chat_completions_url() {
+        assert_eq!(
+            openai_chat_completions_url("https://dashscope.aliyuncs.com/compatible-mode/v1"),
+            "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn native_openai_uses_responses_url() {
+        assert_eq!(
+            openai_responses_url("https://api.openai.com/v1"),
+            "https://api.openai.com/v1/responses"
+        );
     }
 
     #[test]
@@ -1122,6 +1218,105 @@ mod tests {
 
         match finish_openai_stream(state) {
             LLMResponse::Text(text) => assert_eq!(text, "最终答案"),
+            other => panic!("expected text response, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn responses_reasoning_summary_text_is_emitted_to_reasoning_stream() {
+        let mut state = OpenAiStreamState::default();
+        let mut deltas = Vec::new();
+
+        process_openai_sse_text(
+            "event: response.reasoning_summary_text.delta\n\
+             data: {\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"先分析上下文\"}\n\
+             event: response.output_text.delta\n\
+             data: {\"type\":\"response.output_text.delta\",\"delta\":\"最终回答\"}\n\
+             data: [DONE]\n",
+            &mut state,
+            &mut |delta| deltas.push(delta),
+        )
+        .expect("parse chunk");
+
+        assert_eq!(
+            deltas,
+            vec![
+                StreamDelta::Reasoning("先分析上下文".to_string()),
+                StreamDelta::Text("最终回答".to_string()),
+            ]
+        );
+
+        match finish_openai_stream(state) {
+            LLMResponse::Text(text) => assert_eq!(text, "最终回答"),
+            other => panic!("expected text response, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn responses_reasoning_text_delta_is_emitted_to_reasoning_stream() {
+        let mut state = OpenAiStreamState::default();
+        let mut deltas = Vec::new();
+
+        process_openai_sse_text(
+            "event: response.reasoning_text.delta\n\
+             data: {\"type\":\"response.reasoning_text.delta\",\"delta\":\"继续推理\"}\n\
+             data: [DONE]\n",
+            &mut state,
+            &mut |delta| deltas.push(delta),
+        )
+        .expect("parse chunk");
+
+        assert_eq!(
+            deltas,
+            vec![StreamDelta::Reasoning("继续推理".to_string())]
+        );
+    }
+
+    #[test]
+    fn responses_stream_emits_reasoning_before_visible_output() {
+        let mut state = OpenAiStreamState::default();
+        let mut deltas = Vec::new();
+
+        process_openai_sse_text(
+            "event: response.created\n\
+             data: {\"type\":\"response.created\",\"response\":{\"output\":[],\"status\":\"queued\"}}\n\
+             event: response.in_progress\n\
+             data: {\"type\":\"response.in_progress\",\"response\":{\"output\":[],\"status\":\"in_progress\"}}\n\
+             event: response.output_item.added\n\
+             data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"reasoning\",\"id\":\"msg_reasoning_1\",\"summary\":[]}}\n\
+             event: response.reasoning_summary_text.delta\n\
+             data: {\"type\":\"response.reasoning_summary_text.delta\",\"output_index\":0,\"item_id\":\"msg_reasoning_1\",\"summary_index\":0,\"delta\":\"先分析上下文\"}\n\
+             event: response.reasoning_summary_text.delta\n\
+             data: {\"type\":\"response.reasoning_summary_text.delta\",\"output_index\":0,\"item_id\":\"msg_reasoning_1\",\"summary_index\":0,\"delta\":\"，再组织答案\"}\n\
+             event: response.reasoning_summary_text.done\n\
+             data: {\"type\":\"response.reasoning_summary_text.done\",\"output_index\":0,\"item_id\":\"msg_reasoning_1\",\"summary_index\":0,\"text\":\"先分析上下文，再组织答案\"}\n\
+             event: response.output_item.done\n\
+             data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"reasoning\",\"id\":\"msg_reasoning_1\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"先分析上下文，再组织答案\"}]}}\n\
+             event: response.content_part.added\n\
+             data: {\"type\":\"response.content_part.added\",\"output_index\":1,\"content_index\":0,\"item_id\":\"msg_output_1\",\"part\":{\"type\":\"output_text\",\"text\":\"\"}}\n\
+             event: response.output_text.delta\n\
+             data: {\"type\":\"response.output_text.delta\",\"output_index\":1,\"content_index\":0,\"item_id\":\"msg_output_1\",\"delta\":\"最终回答\"}\n\
+             event: response.output_text.done\n\
+             data: {\"type\":\"response.output_text.done\",\"output_index\":1,\"content_index\":0,\"item_id\":\"msg_output_1\",\"text\":\"最终回答\"}\n\
+             event: response.completed\n\
+             data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\
+             data: [DONE]\n",
+            &mut state,
+            &mut |delta| deltas.push(delta),
+        )
+        .expect("parse chunk");
+
+        assert_eq!(
+            deltas,
+            vec![
+                StreamDelta::Reasoning("先分析上下文".to_string()),
+                StreamDelta::Reasoning("，再组织答案".to_string()),
+                StreamDelta::Text("最终回答".to_string()),
+            ]
+        );
+
+        match finish_openai_stream(state) {
+            LLMResponse::Text(text) => assert_eq!(text, "最终回答"),
             other => panic!("expected text response, got {other:?}"),
         }
     }

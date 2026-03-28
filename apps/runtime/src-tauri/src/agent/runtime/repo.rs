@@ -186,8 +186,8 @@ impl ChatSettingsRepository for PoolChatSettingsRepository<'_> {
         &self,
         provider_id: &str,
     ) -> Result<Option<ProviderConnectionSnapshot>, String> {
-        let row = sqlx::query_as::<_, (String, String, String)>(
-            "SELECT protocol_type, base_url, api_key_encrypted FROM provider_configs WHERE id = ? AND enabled = 1 LIMIT 1",
+        let row = sqlx::query_as::<_, (String, String, String, String)>(
+            "SELECT provider_key, protocol_type, base_url, api_key_encrypted FROM provider_configs WHERE id = ? AND enabled = 1 LIMIT 1",
         )
         .bind(provider_id)
         .fetch_optional(self.db)
@@ -195,8 +195,9 @@ impl ChatSettingsRepository for PoolChatSettingsRepository<'_> {
         .map_err(|e| format!("读取 Provider 配置失败: {e}"))?;
 
         Ok(row.map(
-            |(protocol_type, base_url, api_key)| ProviderConnectionSnapshot {
+            |(provider_key, protocol_type, base_url, api_key)| ProviderConnectionSnapshot {
                 provider_id: provider_id.to_string(),
+                provider_key,
                 protocol_type,
                 base_url,
                 api_key,

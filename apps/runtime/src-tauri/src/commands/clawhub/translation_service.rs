@@ -6,6 +6,7 @@ use sqlx::SqlitePool;
 use crate::agent::types::LLMResponse;
 use crate::commands::models::resolve_default_usable_model_id_with_pool;
 use crate::commands::runtime_preferences::get_runtime_preferences_with_pool;
+use crate::model_transport::{resolve_model_transport, ModelTransportKind};
 
 #[derive(Debug, Clone)]
 struct TranslationModelConfig {
@@ -185,31 +186,34 @@ async fn translate_text_via_model(
         "role": "user",
         "content": user_prompt
     })];
-    let response = match model.api_format.trim().to_ascii_lowercase().as_str() {
-        "anthropic" => crate::adapters::anthropic::chat_stream_with_tools(
-            &model.base_url,
-            &model.api_key,
-            &model.model_name,
-            "You are a professional translation assistant.",
-            messages,
-            vec![],
-            |_| {},
-        )
-        .await
-        .map_err(|e| e.to_string())?,
-        "openai" => crate::adapters::openai::chat_stream_with_tools(
-            &model.base_url,
-            &model.api_key,
-            &model.model_name,
-            "You are a professional translation assistant.",
-            messages,
-            vec![],
-            |_| {},
-        )
-        .await
-        .map_err(|e| e.to_string())?,
-        _ => {
-            return Err("当前默认模型协议不支持翻译".to_string());
+    let transport = resolve_model_transport(&model.api_format, &model.base_url, None);
+    let response = match transport.kind {
+        ModelTransportKind::AnthropicMessages => {
+            crate::adapters::anthropic::chat_stream_with_tools(
+                &model.base_url,
+                &model.api_key,
+                &model.model_name,
+                "You are a professional translation assistant.",
+                messages,
+                vec![],
+                |_| {},
+            )
+            .await
+            .map_err(|e| e.to_string())?
+        }
+        ModelTransportKind::OpenAiCompletions | ModelTransportKind::OpenAiResponses => {
+            crate::adapters::openai::chat_stream_with_tools(
+                &transport,
+                &model.base_url,
+                &model.api_key,
+                &model.model_name,
+                "You are a professional translation assistant.",
+                messages,
+                vec![],
+                |_| {},
+            )
+            .await
+            .map_err(|e| e.to_string())?
         }
     };
 

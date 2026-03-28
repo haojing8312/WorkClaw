@@ -15,6 +15,7 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
 
 use super::runtime_io as chat_io;
+use crate::model_transport::resolve_model_transport;
 
 pub(crate) type RouteExecutionOutcome = RuntimeFailoverOutcome;
 
@@ -25,7 +26,7 @@ pub(crate) struct RouteExecutionParams<'a> {
     pub db: &'a sqlx::SqlitePool,
     pub session_id: &'a str,
     pub requested_capability: &'a str,
-    pub route_candidates: &'a [(String, String, String, String)],
+    pub route_candidates: &'a [(String, String, String, String, String)],
     pub per_candidate_retry_count: usize,
     pub system_prompt: &'a str,
     pub messages: &'a [Value],
@@ -72,6 +73,7 @@ pub(crate) async fn execute_route_candidates(
         }),
         attempt_once: Box::new(
             move |candidate_api_format,
+                  candidate_provider_key,
                   candidate_base_url,
                   candidate_model_name,
                   candidate_api_key,
@@ -79,6 +81,7 @@ pub(crate) async fn execute_route_candidates(
                 Box::pin(execute_candidate_attempt(
                     params_ref,
                     candidate_api_format,
+                    candidate_provider_key,
                     candidate_base_url,
                     candidate_model_name,
                     candidate_api_key,
@@ -110,6 +113,7 @@ fn build_retrying_agent_state_detail(
 async fn execute_candidate_attempt(
     params: &RouteExecutionParams<'_>,
     candidate_api_format: &str,
+    candidate_provider_key: &str,
     candidate_base_url: &str,
     candidate_model_name: &str,
     candidate_api_key: &str,
@@ -124,9 +128,16 @@ async fn execute_candidate_attempt(
     let streamed_reasoning_clone = Arc::clone(&streamed_reasoning);
     let reasoning_started_at_clone = Arc::clone(&reasoning_started_at);
 
+    let transport = resolve_model_transport(
+        candidate_api_format,
+        candidate_base_url,
+        Some(candidate_provider_key).filter(|value| !value.trim().is_empty()),
+    );
+
     let attempt = params
         .agent_executor
-        .execute_turn(
+        .execute_turn_with_transport(
+            transport,
             candidate_api_format,
             candidate_base_url,
             candidate_api_key,

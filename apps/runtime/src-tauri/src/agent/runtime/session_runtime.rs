@@ -28,7 +28,7 @@ pub struct SessionRuntime;
 #[derive(Clone)]
 pub(crate) struct PreparedSendMessageContext {
     pub requested_capability: String,
-    pub route_candidates: Vec<(String, String, String, String)>,
+    pub route_candidates: Vec<(String, String, String, String, String)>,
     pub per_candidate_retry_count: usize,
     pub messages: Vec<Value>,
     pub prepared_runtime_tools: PreparedRuntimeTools,
@@ -345,11 +345,12 @@ impl SessionRuntime {
         let history = chat_io::load_session_history_with_pool(params.db, params.session_id).await?;
 
         let per_candidate_retry_count = prepared_routes.retry_count_per_candidate;
-        let mut route_candidates: Vec<(String, String, String, String)> = prepared_routes
+        let mut route_candidates: Vec<(String, String, String, String, String)> = prepared_routes
             .candidates
             .into_iter()
             .map(|candidate| {
                 (
+                    candidate.provider_key,
                     candidate.protocol_type,
                     candidate.base_url,
                     candidate.model_name,
@@ -376,7 +377,7 @@ impl SessionRuntime {
             per_candidate_retry_count
         );
 
-        let (api_format, base_url, model_name, api_key) = route_candidates[0].clone();
+        let (_, api_format, base_url, model_name, api_key) = route_candidates[0].clone();
         let mut messages = RuntimeTranscript::sanitize_reconstructed_messages(
             RuntimeTranscript::reconstruct_history_messages(&history, &api_format),
             &api_format,

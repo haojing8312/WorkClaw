@@ -1,4 +1,5 @@
 use crate::adapters;
+use crate::model_transport::{resolve_model_transport, ModelTransportKind};
 use anyhow::Result;
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -99,7 +100,8 @@ pub async fn auto_compact(
     let summary_messages = vec![json!({"role": "user", "content": user_prompt})];
 
     // 调用 LLM 生成摘要（空工具列表，空回调）
-    let response = if api_format == "anthropic" {
+    let transport = resolve_model_transport(api_format, base_url, None);
+    let response = if transport.kind == ModelTransportKind::AnthropicMessages {
         adapters::anthropic::chat_stream_with_tools(
             base_url,
             api_key,
@@ -112,6 +114,7 @@ pub async fn auto_compact(
         .await?
     } else {
         adapters::openai::chat_stream_with_tools(
+            &transport,
             base_url,
             api_key,
             model,

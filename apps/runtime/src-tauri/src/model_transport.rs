@@ -1,0 +1,194 @@
+use reqwest::Url;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelTransportKind {
+    AnthropicMessages,
+    OpenAiCompletions,
+    OpenAiResponses,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OpenAiCompatFeatures {
+    pub supports_developer_role: bool,
+    pub supports_usage_in_streaming: bool,
+    pub supports_strict_mode: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedModelTransport {
+    pub kind: ModelTransportKind,
+    pub openai_compat: Option<OpenAiCompatFeatures>,
+}
+
+fn is_openai_api_base_url(base_url: &str) -> bool {
+    let trimmed = base_url.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    let Ok(url) = Url::parse(trimmed) else {
+        return false;
+    };
+
+    if !url
+        .host_str()
+        .unwrap_or_default()
+        .eq_ignore_ascii_case("api.openai.com")
+    {
+        return false;
+    }
+
+    let path = url.path().trim_end_matches('/');
+    path.is_empty() || path.eq_ignore_ascii_case("/v1")
+}
+
+fn is_native_openai_endpoint(base_url: &str) -> bool {
+    let trimmed = base_url.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    let Ok(url) = Url::parse(trimmed) else {
+        return false;
+    };
+
+    url.host_str()
+        .unwrap_or_default()
+        .eq_ignore_ascii_case("api.openai.com")
+}
+
+fn build_openai_compat_features(base_url: &str) -> OpenAiCompatFeatures {
+    let is_native = is_native_openai_endpoint(base_url);
+    OpenAiCompatFeatures {
+        supports_developer_role: is_native,
+        supports_usage_in_streaming: is_native,
+        supports_strict_mode: is_native,
+    }
+}
+
+fn is_openai_provider_key(provider_key: Option<&str>) -> bool {
+    provider_key
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.eq_ignore_ascii_case("openai"))
+        .unwrap_or(false)
+}
+
+fn has_non_openai_provider_key(provider_key: Option<&str>) -> bool {
+    provider_key
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| !value.eq_ignore_ascii_case("openai"))
+        .unwrap_or(false)
+}
+
+pub fn resolve_model_transport(
+    api_format: &str,
+    base_url: &str,
+    provider_key: Option<&str>,
+) -> ResolvedModelTransport {
+    if api_format.trim().eq_ignore_ascii_case("anthropic") {
+        return ResolvedModelTransport {
+            kind: ModelTransportKind::AnthropicMessages,
+            openai_compat: None,
+        };
+    }
+
+    let kind = if has_non_openai_provider_key(provider_key) {
+        ModelTransportKind::OpenAiCompletions
+    } else if is_openai_provider_key(provider_key) && is_openai_api_base_url(base_url) {
+        ModelTransportKind::OpenAiResponses
+    } else if provider_key.is_none() && is_openai_api_base_url(base_url) {
+        ModelTransportKind::OpenAiResponses
+    } else {
+        ModelTransportKind::OpenAiCompletions
+    };
+
+    ResolvedModelTransport {
+        kind,
+        openai_compat: Some(build_openai_compat_features(base_url)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_openai_uses_responses_transport() {
+        let resolved =
+            resolve_model_transport("openai", "https://api.openai.com/v1", Some("openai"));
+
+        assert_eq!(resolved.kind, ModelTransportKind::OpenAiResponses);
+        assert_eq!(
+            resolved.openai_compat,
+            Some(OpenAiCompatFeatures {
+                supports_developer_role: true,
+                supports_usage_in_streaming: true,
+                supports_strict_mode: true,
+            })
+        );
+    }
+
+    #[test]
+    fn qwen_dashscope_uses_chat_completions_transport() {
+        let resolved = resolve_model_transport(
+            "openai",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            Some("qwen"),
+        );
+
+        assert_eq!(resolved.kind, ModelTransportKind::OpenAiCompletions);
+        assert_eq!(
+            resolved.openai_compat,
+            Some(OpenAiCompatFeatures {
+                supports_developer_role: false,
+                supports_usage_in_streaming: false,
+                supports_strict_mode: false,
+            })
+        );
+    }
+
+    #[test]
+    fn moonshot_uses_chat_completions_transport() {
+        let resolved =
+            resolve_model_transport("openai", "https://api.moonshot.ai/v1", Some("moonshot"));
+
+        assert_eq!(resolved.kind, ModelTransportKind::OpenAiCompletions);
+    }
+
+    #[test]
+    fn generic_custom_openai_compatible_endpoint_uses_chat_completions_transport() {
+        let resolved = resolve_model_transport("openai", "https://llm.example.com/v1", None);
+
+        assert_eq!(resolved.kind, ModelTransportKind::OpenAiCompletions);
+        assert_eq!(
+            resolved.openai_compat,
+            Some(OpenAiCompatFeatures {
+                supports_developer_role: false,
+                supports_usage_in_streaming: false,
+                supports_strict_mode: false,
+            })
+        );
+    }
+
+    #[test]
+    fn anthropic_keeps_anthropic_transport() {
+        let resolved = resolve_model_transport(
+            "anthropic",
+            "https://api.anthropic.com/v1",
+            Some("anthropic"),
+        );
+
+        assert_eq!(resolved.kind, ModelTransportKind::AnthropicMessages);
+        assert_eq!(resolved.openai_compat, None);
+    }
+
+    #[test]
+    fn non_openai_provider_key_prevents_responses_upgrade_even_on_openai_host() {
+        let resolved =
+            resolve_model_transport("openai", "https://api.openai.com/v1", Some("qwen"));
+
+        assert_eq!(resolved.kind, ModelTransportKind::OpenAiCompletions);
+    }
+}

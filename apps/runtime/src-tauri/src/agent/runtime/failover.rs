@@ -42,13 +42,14 @@ pub(crate) struct RuntimeFailoverOutcome {
 }
 
 pub(crate) struct RuntimeFailoverParams<'a> {
-    pub route_candidates: &'a [(String, String, String, String)],
+    pub route_candidates: &'a [(String, String, String, String, String)],
     pub per_candidate_retry_count: usize,
     pub on_same_candidate_retry:
         Option<Box<dyn FnMut(RuntimeFailoverErrorKind, usize, usize) + Send + 'a>>,
     pub on_error_kind: Option<Box<dyn FnMut(RuntimeFailoverErrorKind) + Send + 'a>>,
     pub attempt_once: Box<
         dyn FnMut(
+                &'a str,
                 &'a str,
                 &'a str,
                 &'a str,
@@ -73,12 +74,19 @@ impl RuntimeFailover {
         let mut streamed_text = String::new();
         let mut streamed_reasoning = String::new();
 
-        for (candidate_api_format, candidate_base_url, candidate_model_name, candidate_api_key) in
+        for (
+            candidate_provider_key,
+            candidate_api_format,
+            candidate_base_url,
+            candidate_model_name,
+            candidate_api_key,
+        ) in
             params.route_candidates
         {
             let mut attempt_idx = 0usize;
             loop {
                 let attempt = (params.attempt_once)(
+                    candidate_provider_key,
                     candidate_api_format,
                     candidate_base_url,
                     candidate_model_name,
@@ -322,12 +330,14 @@ mod tests {
         let attempts_clone = Arc::clone(&attempts);
         let route_candidates = vec![
             (
+                String::new(),
                 "openai".to_string(),
                 "https://a.example".to_string(),
                 "model-a".to_string(),
                 "key-a".to_string(),
             ),
             (
+                String::new(),
                 "anthropic".to_string(),
                 "https://b.example".to_string(),
                 "model-b".to_string(),
@@ -341,7 +351,7 @@ mod tests {
             on_same_candidate_retry: None,
             on_error_kind: None,
             attempt_once: Box::new(
-                move |api_format, _base_url, model_name, _api_key, attempt_idx| {
+                move |_provider_key, api_format, _base_url, model_name, _api_key, attempt_idx| {
                     let attempts = Arc::clone(&attempts_clone);
                     Box::pin(async move {
                         attempts
@@ -400,6 +410,7 @@ mod tests {
         let attempts = Arc::new(Mutex::new(Vec::new()));
         let attempts_clone = Arc::clone(&attempts);
         let route_candidates = vec![(
+            String::new(),
             "openai".to_string(),
             "https://a.example".to_string(),
             "model-a".to_string(),
@@ -412,7 +423,7 @@ mod tests {
             on_same_candidate_retry: None,
             on_error_kind: None,
             attempt_once: Box::new(
-                move |api_format, _base_url, model_name, _api_key, attempt_idx| {
+                move |_provider_key, api_format, _base_url, model_name, _api_key, attempt_idx| {
                     let attempts = Arc::clone(&attempts_clone);
                     Box::pin(async move {
                         attempts
@@ -456,6 +467,7 @@ mod tests {
         let observed = Arc::new(Mutex::new(Vec::new()));
         let observed_clone = Arc::clone(&observed);
         let route_candidates = vec![(
+            String::new(),
             "openai".to_string(),
             "https://a.example".to_string(),
             "model-a".to_string(),
@@ -470,7 +482,7 @@ mod tests {
                 observed_clone.lock().expect("observed lock").push(kind);
             })),
             attempt_once: Box::new(
-                move |_api_format, _base_url, _model_name, _api_key, _attempt_idx| {
+                move |_provider_key, _api_format, _base_url, _model_name, _api_key, _attempt_idx| {
                     Box::pin(async move {
                         CandidateAttemptOutcome {
                             final_messages: None,
@@ -499,6 +511,7 @@ mod tests {
         let retry_progress = Arc::new(Mutex::new(Vec::new()));
         let retry_progress_clone = Arc::clone(&retry_progress);
         let route_candidates = vec![(
+            String::new(),
             "openai".to_string(),
             "https://a.example".to_string(),
             "model-a".to_string(),
@@ -516,7 +529,7 @@ mod tests {
             })),
             on_error_kind: None,
             attempt_once: Box::new(
-                move |_api_format, _base_url, _model_name, _api_key, _attempt_idx| {
+                move |_provider_key, _api_format, _base_url, _model_name, _api_key, _attempt_idx| {
                     Box::pin(async move {
                         CandidateAttemptOutcome {
                             final_messages: None,

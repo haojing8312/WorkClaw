@@ -83,12 +83,14 @@ async fn prepare_route_decisions_prefers_explicit_capability() {
         providers: vec![
             ProviderConnectionSnapshot {
                 provider_id: "provider-vision".to_string(),
+                provider_key: "qwen".to_string(),
                 protocol_type: "openai".to_string(),
                 base_url: "https://vision.example.com/v1".to_string(),
                 api_key: "sk-vision".to_string(),
             },
             ProviderConnectionSnapshot {
                 provider_id: "provider-fallback".to_string(),
+                provider_key: "anthropic".to_string(),
                 protocol_type: "anthropic".to_string(),
                 base_url: "https://api.anthropic.com".to_string(),
                 api_key: "sk-anthropic".to_string(),
@@ -127,6 +129,7 @@ async fn prepare_route_decisions_prefers_explicit_capability() {
     assert_eq!(
         prepared.candidates[0],
         PreparedRouteCandidate {
+            provider_key: "qwen".to_string(),
             protocol_type: "openai".to_string(),
             base_url: "https://vision.example.com/v1".to_string(),
             model_name: "qwen-vl-max".to_string(),
@@ -148,6 +151,7 @@ async fn prepare_route_decisions_ignores_image_parts_and_keeps_session_fallback(
         }),
         providers: vec![ProviderConnectionSnapshot {
             provider_id: "provider-chat".to_string(),
+            provider_key: "openai".to_string(),
             protocol_type: "openai".to_string(),
             base_url: "https://chat.example.com/v1".to_string(),
             api_key: "sk-chat".to_string(),
@@ -189,6 +193,7 @@ async fn prepare_route_decisions_ignores_image_parts_and_keeps_session_fallback(
     assert_eq!(
         prepared.candidates[0],
         PreparedRouteCandidate {
+            provider_key: "openai".to_string(),
             protocol_type: "openai".to_string(),
             base_url: "https://chat.example.com/v1".to_string(),
             model_name: "chat-model".to_string(),
@@ -198,6 +203,7 @@ async fn prepare_route_decisions_ignores_image_parts_and_keeps_session_fallback(
     assert_eq!(
         prepared.candidates[1],
         PreparedRouteCandidate {
+            provider_key: String::new(),
             protocol_type: "openai".to_string(),
             base_url: "https://fallback.example.com".to_string(),
             model_name: "session-model".to_string(),

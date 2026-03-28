@@ -92,12 +92,14 @@ async fn prepare_route_candidates_prefers_requested_capability_route() {
         providers: vec![
             ProviderConnectionSnapshot {
                 provider_id: "provider-1".to_string(),
+                provider_key: "openai".to_string(),
                 protocol_type: "openai".to_string(),
                 base_url: "https://api.openai.com/v1".to_string(),
                 api_key: "sk-openai".to_string(),
             },
             ProviderConnectionSnapshot {
                 provider_id: "provider-2".to_string(),
+                provider_key: "anthropic".to_string(),
                 protocol_type: "anthropic".to_string(),
                 base_url: "https://api.anthropic.com".to_string(),
                 api_key: "sk-anthropic".to_string(),
@@ -136,18 +138,21 @@ async fn prepare_route_candidates_prefers_requested_capability_route() {
         prepared.candidates,
         vec![
             PreparedRouteCandidate {
+                provider_key: "openai".to_string(),
                 protocol_type: "openai".to_string(),
                 base_url: "https://api.openai.com/v1".to_string(),
                 model_name: "gpt-4.1".to_string(),
                 api_key: "sk-openai".to_string(),
             },
             PreparedRouteCandidate {
+                provider_key: "anthropic".to_string(),
                 protocol_type: "anthropic".to_string(),
                 base_url: "https://api.anthropic.com".to_string(),
                 model_name: "claude-3-5-sonnet".to_string(),
                 api_key: "sk-anthropic".to_string(),
             },
             PreparedRouteCandidate {
+                provider_key: String::new(),
                 protocol_type: "openai".to_string(),
                 base_url: "https://fallback.example.com".to_string(),
                 model_name: "session-model".to_string(),
@@ -175,6 +180,7 @@ async fn prepare_route_candidates_falls_back_to_chat_route_when_capability_missi
         }),
         providers: vec![ProviderConnectionSnapshot {
             provider_id: "provider-chat".to_string(),
+            provider_key: "openai".to_string(),
             protocol_type: "openai".to_string(),
             base_url: "https://chat.example.com/v1".to_string(),
             api_key: "sk-chat".to_string(),
@@ -254,6 +260,7 @@ async fn stale_model_id_falls_back_to_default_usable_model() {
     assert_eq!(
         prepared.candidates,
         vec![PreparedRouteCandidate {
+            provider_key: String::new(),
             protocol_type: "openai".to_string(),
             base_url: "https://proxy.example.com/v1".to_string(),
             model_name: "MiniMax-M2.5".to_string(),
@@ -280,6 +287,7 @@ async fn image_parts_do_not_fall_back_to_chat_route_when_vision_route_missing() 
         }),
         providers: vec![ProviderConnectionSnapshot {
             provider_id: "provider-chat".to_string(),
+            provider_key: "openai".to_string(),
             protocol_type: "openai".to_string(),
             base_url: "https://chat.example.com/v1".to_string(),
             api_key: "sk-chat".to_string(),

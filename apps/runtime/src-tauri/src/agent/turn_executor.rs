@@ -1,13 +1,11 @@
-use super::browser_progress::BrowserProgressSnapshot;
-use super::context::build_tool_context;
-use super::event_bridge::{append_run_guard_warning_event, resolve_current_session_run_id};
 #[cfg(test)]
 use super::approval_flow::{
     request_tool_approval_and_wait, wait_for_tool_confirmation, ApprovalWaitRuntime,
     ToolConfirmationDecision,
 };
-#[cfg(test)]
-use super::safety::classify_policy_blocked_tool_error;
+use super::browser_progress::BrowserProgressSnapshot;
+use super::context::build_tool_context;
+use super::event_bridge::{append_run_guard_warning_event, resolve_current_session_run_id};
 #[cfg(test)]
 use super::execution_caps::detect_execution_caps;
 use super::executor::AgentExecutor;
@@ -15,9 +13,12 @@ use super::permissions::PermissionMode;
 use super::run_guard::{
     encode_run_stop_reason, ProgressFingerprint, RunBudgetPolicy, RunBudgetScope, RunStopReason,
 };
+#[cfg(test)]
+use super::safety::classify_policy_blocked_tool_error;
 use super::types::{AgentStateEvent, LLMResponse, StreamDelta};
 use crate::adapters;
 use crate::agent::runtime::RuntimeObservabilityState;
+use crate::model_transport::{resolve_model_transport, ModelTransportKind, ResolvedModelTransport};
 use anyhow::{anyhow, Result};
 use runtime_executor_core::{
     estimate_tokens, micro_compact, trim_messages, ToolFailureStreak, DEFAULT_TOKEN_BUDGET,
@@ -29,10 +30,10 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
 use uuid::Uuid;
 
-
 impl AgentExecutor {
     pub(super) async fn execute_turn_impl(
         &self,
+        transport_override: Option<ResolvedModelTransport>,
         api_format: &str,
         base_url: &str,
         api_key: &str,
@@ -174,7 +175,11 @@ impl AgentExecutor {
             let trimmed = trim_messages(&compacted, DEFAULT_TOKEN_BUDGET);
 
             // 调用 LLM（使用组合后的系统 prompt）
-            let response_result = if api_format == "anthropic" {
+            let transport =
+                transport_override
+                    .clone()
+                    .unwrap_or_else(|| resolve_model_transport(api_format, base_url, None));
+            let response_result = if transport.kind == ModelTransportKind::AnthropicMessages {
                 adapters::anthropic::chat_stream_with_tools(
                     base_url,
                     api_key,
@@ -186,8 +191,8 @@ impl AgentExecutor {
                 )
                 .await
             } else {
-                // OpenAI 兼容格式
                 adapters::openai::chat_stream_with_tools(
+                    &transport,
                     base_url,
                     api_key,
                     model,
@@ -400,11 +405,12 @@ impl AgentExecutor {
                         return Ok(messages);
                     }
 
-                    let progress_evaluation = super::runtime::progress_guard::evaluate_progress_guard(
-                        &run_budget_policy,
-                        &tool_result_history,
-                        latest_browser_progress.as_ref(),
-                    );
+                    let progress_evaluation =
+                        super::runtime::progress_guard::evaluate_progress_guard(
+                            &run_budget_policy,
+                            &tool_result_history,
+                            latest_browser_progress.as_ref(),
+                        );
                     if let Some(warning) = progress_evaluation.warning {
                         if let (Some(app), Some(sid)) = (app_handle, session_id) {
                             let _ = append_run_guard_warning_event(app, sid, &warning).await;

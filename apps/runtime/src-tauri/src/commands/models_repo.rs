@@ -1,6 +1,5 @@
-use super::models::{
-    ProviderPluginInfo,
-};
+use super::models::ProviderPluginInfo;
+use crate::model_transport::{resolve_model_transport, ModelTransportKind};
 use crate::providers::ProviderRegistry;
 use async_trait::async_trait;
 use runtime_models_app::{ProviderCatalog, ProviderHealthProbe};
@@ -88,12 +87,13 @@ impl ProviderHealthProbe for RuntimeProviderHealthProbe {
         api_key: &str,
         model: &str,
     ) -> Result<bool, String> {
-        if protocol_type == "anthropic" {
+        let transport = resolve_model_transport(protocol_type, base_url, None);
+        if transport.kind == ModelTransportKind::AnthropicMessages {
             crate::adapters::anthropic::test_connection(base_url, api_key, model)
                 .await
                 .map_err(|e| e.to_string())
         } else {
-            crate::adapters::openai::test_connection(base_url, api_key, model)
+            crate::adapters::openai::test_connection(&transport, base_url, api_key, model)
                 .await
                 .map_err(|e| e.to_string())
         }

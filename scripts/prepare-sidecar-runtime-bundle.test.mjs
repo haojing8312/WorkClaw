@@ -1,18 +1,21 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 import {
   buildDeployCommand,
+  hasRequiredBundleOutputs,
   isRetryableWindowsDeployError,
   pruneNonRuntimeBundlePaths,
+  repairBrokenBundleLinks,
 } from "./prepare-sidecar-runtime-bundle.mjs";
 
 test("buildDeployCommand disables bin links via environment on Windows-safe deploys", () => {
   const runner = { command: "pnpm.cmd", args: [] };
   const baseEnv = { PATH: "C:\\bin" };
+  const expectedStoreDir = path.join("D:\\code\\WorkClaw", ".pnpm-store-local");
 
   const result = buildDeployCommand(runner, 10, "D:\\bundle", baseEnv);
 
@@ -23,18 +26,25 @@ test("buildDeployCommand disables bin links via environment on Windows-safe depl
     "deploy",
     "--prod",
     "--config.bin-links=false",
+    "--store-dir",
+    expectedStoreDir,
     "--legacy",
     "D:\\bundle",
   ]);
   assert.equal(result.env.npm_config_bin_links, "false");
   assert.equal(result.env.pnpm_config_bin_links, "false");
+  assert.equal(result.env.npm_config_store_dir, expectedStoreDir);
+  assert.equal(result.env.pnpm_config_store_dir, expectedStoreDir);
   assert.equal(result.env.NPM_CONFIG_BIN_LINKS, "false");
   assert.equal(result.env.PNPM_CONFIG_BIN_LINKS, "false");
+  assert.equal(result.env.NPM_CONFIG_STORE_DIR, expectedStoreDir);
+  assert.equal(result.env.PNPM_CONFIG_STORE_DIR, expectedStoreDir);
   assert.equal(result.env.PATH, "C:\\bin");
 });
 
 test("buildDeployCommand omits legacy flag for older pnpm versions", () => {
   const runner = { command: "pnpm", args: ["--dir", "apps/runtime/sidecar"] };
+  const expectedStoreDir = path.join("D:\\code\\WorkClaw", ".pnpm-store-local");
 
   const result = buildDeployCommand(runner, 9, "/tmp/bundle", {});
 
@@ -46,10 +56,14 @@ test("buildDeployCommand omits legacy flag for older pnpm versions", () => {
     "deploy",
     "--prod",
     "--config.bin-links=false",
+    "--store-dir",
+    expectedStoreDir,
     "/tmp/bundle",
   ]);
   assert.equal(result.env.npm_config_bin_links, "false");
   assert.equal(result.env.pnpm_config_bin_links, "false");
+  assert.equal(result.env.npm_config_store_dir, expectedStoreDir);
+  assert.equal(result.env.pnpm_config_store_dir, expectedStoreDir);
 });
 
 test("isRetryableWindowsDeployError recognizes transient playwright bin failures on Windows", () => {
@@ -64,6 +78,16 @@ test("isRetryableWindowsDeployError recognizes transient playwright bin failures
 
 test("isRetryableWindowsDeployError ignores unrelated failures", () => {
   assert.equal(isRetryableWindowsDeployError("ERR_PNPM_FETCH_404", "win32"), false);
+});
+
+test("isRetryableWindowsDeployError recognizes transient pnpm store stat failures on Windows", () => {
+  assert.equal(
+    isRetryableWindowsDeployError(
+      "ERR_PNPM_UNKNOWN UNKNOWN: unknown error, stat 'E:\\\\pnpm-store\\\\v10\\\\files\\\\4e\\\\artifact'",
+      "win32",
+    ),
+    true,
+  );
 });
 
 test("pruneNonRuntimeBundlePaths removes bundled MCP SDK example trees without touching runtime files", (t) => {
@@ -143,4 +167,49 @@ test("pruneNonRuntimeBundlePaths is a no-op when no targeted example directories
   mkdirSync(path.join(bundleDir, "node_modules", ".pnpm"), { recursive: true });
 
   assert.deepEqual(pruneNonRuntimeBundlePaths(bundleDir), []);
+});
+
+test("repairBrokenBundleLinks materializes broken virtual store symlinks from workspace packages", (t) => {
+  const workspaceDir = mkdtempSync(path.join(os.tmpdir(), "workclaw-workspace-"));
+  const bundleDir = path.join(workspaceDir, "apps", "runtime", "src-tauri", "resources", "sidecar-runtime");
+  const workspaceVirtualStore = path.join(workspaceDir, "node_modules", ".pnpm");
+  const bundleVirtualStore = path.join(bundleDir, "node_modules", ".pnpm");
+  const sourcePackageDir = path.join(workspaceVirtualStore, "zod@4.3.6", "node_modules", "zod");
+  const brokenLinkPath = path.join(
+    bundleVirtualStore,
+    "@modelcontextprotocol+sdk@1.27.1_zod@4.3.6",
+    "node_modules",
+    "zod",
+  );
+  const brokenTargetPath = path.join(bundleVirtualStore, "zod@4.3.6", "node_modules", "zod");
+
+  t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
+
+  mkdirSync(sourcePackageDir, { recursive: true });
+  writeFileSync(path.join(sourcePackageDir, "package.json"), "{\"name\":\"zod\"}\n");
+  mkdirSync(path.dirname(brokenLinkPath), { recursive: true });
+  symlinkSync(brokenTargetPath, brokenLinkPath, "junction");
+
+  const repaired = repairBrokenBundleLinks(bundleDir, workspaceDir);
+
+  assert.equal(repaired.length, 1);
+  assert.equal(repaired[0].linkPath, brokenLinkPath);
+  assert.equal(repaired[0].sourcePath, sourcePackageDir);
+  assert.equal(lstatSync(brokenLinkPath).isSymbolicLink(), false);
+  assert.equal(readFileSync(path.join(brokenLinkPath, "package.json"), "utf8"), "{\"name\":\"zod\"}\n");
+});
+
+test("hasRequiredBundleOutputs requires package, node_modules, and dist/index.js", (t) => {
+  const bundleDir = mkdtempSync(path.join(os.tmpdir(), "sidecar-runtime-ready-"));
+  t.after(() => rmSync(bundleDir, { recursive: true, force: true }));
+
+  mkdirSync(path.join(bundleDir, "node_modules"), { recursive: true });
+  mkdirSync(path.join(bundleDir, "dist"), { recursive: true });
+  writeFileSync(path.join(bundleDir, "package.json"), "{\"name\":\"bundle\"}\n");
+  writeFileSync(path.join(bundleDir, "dist", "index.js"), "console.log('ok');\n");
+
+  assert.equal(hasRequiredBundleOutputs(bundleDir), true);
+
+  rmSync(path.join(bundleDir, "dist", "index.js"), { force: true });
+  assert.equal(hasRequiredBundleOutputs(bundleDir), false);
 });

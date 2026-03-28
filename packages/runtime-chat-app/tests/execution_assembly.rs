@@ -55,12 +55,14 @@ impl ChatSettingsRepository for FakeExecutionAssemblyRepo {
         Ok(match provider_id {
             "provider-primary" => Some(ProviderConnectionSnapshot {
                 provider_id: provider_id.to_string(),
+                provider_key: "qwen".to_string(),
                 protocol_type: "openai".to_string(),
                 base_url: "https://primary.example.com/v1".to_string(),
                 api_key: "sk-primary".to_string(),
             }),
             "provider-fallback" => Some(ProviderConnectionSnapshot {
                 provider_id: provider_id.to_string(),
+                provider_key: "anthropic".to_string(),
                 protocol_type: "anthropic".to_string(),
                 base_url: "https://fallback.example.com".to_string(),
                 api_key: "sk-fallback".to_string(),

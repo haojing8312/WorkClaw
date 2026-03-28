@@ -7,6 +7,7 @@ use crate::model_errors::{
     build_failed_connection_test_result, build_success_connection_test_result,
     ModelConnectionTestResult,
 };
+use crate::model_transport::{resolve_model_transport, ModelTransportKind};
 use runtime_models_app::ModelsAppService;
 use runtime_routing_core::{
     filter_models_by_capability, recommended_models_for_provider, CapabilityRouteTemplateInfo,
@@ -379,12 +380,18 @@ pub async fn test_connection_cmd(
     config: ModelConfig,
     api_key: String,
 ) -> Result<ModelConnectionTestResult, String> {
-    let connection_result = if config.api_format == "anthropic" {
+    let transport = resolve_model_transport(&config.api_format, &config.base_url, None);
+    let connection_result = if transport.kind == ModelTransportKind::AnthropicMessages {
         crate::adapters::anthropic::test_connection(&config.base_url, &api_key, &config.model_name)
             .await
     } else {
-        crate::adapters::openai::test_connection(&config.base_url, &api_key, &config.model_name)
-            .await
+        crate::adapters::openai::test_connection(
+            &transport,
+            &config.base_url,
+            &api_key,
+            &config.model_name,
+        )
+        .await
     };
 
     let result = match connection_result {

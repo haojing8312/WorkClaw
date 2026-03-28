@@ -45,6 +45,7 @@ pub struct ChatRoutePolicySnapshot {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderConnectionSnapshot {
     pub provider_id: String,
+    pub provider_key: String,
     pub protocol_type: String,
     pub base_url: String,
     pub api_key: String,
@@ -71,6 +72,7 @@ pub struct ChatEmployeeSnapshot {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PreparedRouteCandidate {
+    pub provider_key: String,
     pub protocol_type: String,
     pub base_url: String,
     pub model_name: String,

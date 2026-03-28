@@ -1,6 +1,4 @@
-use crate::preparation::{
-    infer_capability_from_message_parts, infer_capability_from_user_message,
-};
+use crate::preparation::{infer_capability_from_message_parts, infer_capability_from_user_message};
 use crate::traits::ChatSettingsRepository;
 use crate::types::{
     ChatExecutionPreparationRequest, ChatPreparationRequest, ModelRouteErrorKind,
@@ -26,7 +24,10 @@ pub(crate) async fn prepare_route_candidates_with_capability<R: ChatSettingsRepo
     let requested_capability = requested_capability
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| {
-            infer_capability_from_message_parts(user_message_parts.unwrap_or(&[]), &request.user_message)
+            infer_capability_from_message_parts(
+                user_message_parts.unwrap_or(&[]),
+                &request.user_message,
+            )
         });
     let requires_explicit_vision_route =
         requested_capability == "vision" && has_image_message_parts(user_message_parts);
@@ -184,6 +185,7 @@ async fn build_route_candidates<R: ChatSettingsRepository>(
 
     if allow_session_model_fallback && !session_model.api_key.trim().is_empty() {
         candidates.push(PreparedRouteCandidate {
+            provider_key: String::new(),
             protocol_type: session_model.api_format,
             base_url: session_model.base_url,
             model_name: session_model.model_name,
@@ -203,14 +205,15 @@ async fn build_candidates_from_policy<R: ChatSettingsRepository>(
     session_model: &SessionModelSnapshot,
 ) -> Result<Vec<PreparedRouteCandidate>, String> {
     let mut candidates = Vec::new();
-    let mut provider_targets =
-        vec![(policy.primary_provider_id, policy.primary_model.clone())];
+    let mut provider_targets = vec![(policy.primary_provider_id, policy.primary_model.clone())];
     provider_targets.extend(parse_fallback_chain_targets(&policy.fallback_chain_json));
 
     for (provider_id, preferred_model) in provider_targets {
         if let Some(provider) = repo.get_provider_connection(&provider_id).await? {
-            if is_supported_protocol(&provider.protocol_type) && !provider.api_key.trim().is_empty() {
+            if is_supported_protocol(&provider.protocol_type) && !provider.api_key.trim().is_empty()
+            {
                 candidates.push(PreparedRouteCandidate {
+                    provider_key: provider.provider_key,
                     protocol_type: provider.protocol_type,
                     base_url: provider.base_url,
                     model_name: if preferred_model.trim().is_empty() {
