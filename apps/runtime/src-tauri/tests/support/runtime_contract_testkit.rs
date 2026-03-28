@@ -16,6 +16,8 @@ use std::sync::Arc;
 pub struct RuntimeContractFixtureParams<'a> {
     pub fixture_name: &'a str,
     pub record_admission_conflict: bool,
+    pub record_compaction_run: bool,
+    pub record_failover_error_kind: Option<&'a str>,
 }
 
 #[derive(Debug)]
@@ -68,6 +70,14 @@ pub async fn run_runtime_contract_fixture(
 
     if params.record_admission_conflict {
         observability.record_admission_conflict(&fixture.session_id);
+    }
+
+    if params.record_compaction_run {
+        observability.record_compaction_run();
+    }
+
+    if let Some(error_kind) = params.record_failover_error_kind {
+        observability.record_failover_error_kind(error_kind);
     }
 
     let trace = export_session_run_trace_with_pool(&pool, &fixture.session_id, &fixture.run_id)

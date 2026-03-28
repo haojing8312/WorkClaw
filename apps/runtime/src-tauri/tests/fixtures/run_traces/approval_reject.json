@@ -1,0 +1,136 @@
+{
+  "session_id": "session-approval-reject",
+  "run_id": "run-approval-reject",
+  "events": [
+    {
+      "event_type": "run_started",
+      "created_at": "2026-03-27T07:00:00Z",
+      "payload": {
+        "type": "run_started",
+        "run_id": "run-approval-reject",
+        "user_message_id": "user-1"
+      }
+    },
+    {
+      "event_type": "approval_requested",
+      "created_at": "2026-03-27T07:00:01Z",
+      "payload": {
+        "type": "approval_requested",
+        "run_id": "run-approval-reject",
+        "approval_id": "approval-1",
+        "tool_name": "shell_command",
+        "call_id": "call-1",
+        "input": {
+          "command": "git status"
+        },
+        "summary": "需要审批后才能执行 shell_command",
+        "impact": "可能读取当前仓库状态",
+        "irreversible": false
+      }
+    },
+    {
+      "event_type": "run_stopped",
+      "created_at": "2026-03-27T07:00:02Z",
+      "payload": {
+        "type": "run_stopped",
+        "run_id": "run-approval-reject",
+        "stop_reason": {
+          "kind": "policy_blocked",
+          "title": "当前任务无法继续执行",
+          "message": "本次请求触发了安全或工作区限制，系统已停止继续尝试。",
+          "detail": "审批被拒绝，已停止继续执行 shell_command。"
+        }
+      }
+    }
+  ],
+  "expected": {
+    "session_id": "session-approval-reject",
+    "run_id": "run-approval-reject",
+    "final_status": "stopped",
+    "event_count": 3,
+    "first_event_at": "<timestamp>",
+    "last_event_at": "<timestamp>",
+    "lifecycle": {
+      "started": true,
+      "completed": false,
+      "failed": true,
+      "cancelled": false,
+      "stopped": true,
+      "waiting_approval": true
+    },
+    "stop_reason_kind": "policy_blocked",
+    "tools": [],
+    "approvals": [
+      {
+        "approval_id": "approval-1",
+        "tool_name": "shell_command",
+        "call_id": "call-1",
+        "summary": "需要审批后才能执行 shell_command",
+        "impact": "可能读取当前仓库状态",
+        "irreversible": false
+      }
+    ],
+    "guard_warnings": [],
+    "parse_warnings": [],
+    "child_session_link": null,
+    "events": [
+      {
+        "session_id": "session-approval-reject",
+        "run_id": "run-approval-reject",
+        "event_type": "run_started",
+        "created_at": "<timestamp>",
+        "status": "thinking",
+        "tool_name": null,
+        "call_id": null,
+        "approval_id": null,
+        "warning_kind": null,
+        "error_kind": null,
+        "message": "user_message_id=user-1",
+        "detail": null,
+        "irreversible": null,
+        "last_completed_step": null,
+        "child_session_id": null,
+        "is_error": null,
+        "parse_warning": null
+      },
+      {
+        "session_id": "session-approval-reject",
+        "run_id": "run-approval-reject",
+        "event_type": "approval_requested",
+        "created_at": "<timestamp>",
+        "status": "waiting_approval",
+        "tool_name": "shell_command",
+        "call_id": "call-1",
+        "approval_id": "approval-1",
+        "warning_kind": null,
+        "error_kind": null,
+        "message": "需要审批后才能执行 shell_command",
+        "detail": "可能读取当前仓库状态",
+        "irreversible": false,
+        "last_completed_step": null,
+        "child_session_id": null,
+        "is_error": false,
+        "parse_warning": null
+      },
+      {
+        "session_id": "session-approval-reject",
+        "run_id": "run-approval-reject",
+        "event_type": "run_stopped",
+        "created_at": "<timestamp>",
+        "status": "stopped",
+        "tool_name": null,
+        "call_id": null,
+        "approval_id": null,
+        "warning_kind": null,
+        "error_kind": "policy_blocked",
+        "message": "当前任务无法继续执行",
+        "detail": "本次请求触发了安全或工作区限制，系统已停止继续尝试。",
+        "irreversible": null,
+        "last_completed_step": null,
+        "child_session_id": null,
+        "is_error": true,
+        "parse_warning": null
+      }
+    ]
+  }
+}

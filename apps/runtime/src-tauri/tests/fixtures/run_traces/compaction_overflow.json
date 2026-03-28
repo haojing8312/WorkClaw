@@ -1,0 +1,113 @@
+{
+  "session_id": "session-compaction",
+  "run_id": "run-compaction-overflow",
+  "events": [
+    {
+      "event_type": "run_started",
+      "created_at": "2026-03-27T05:00:00Z",
+      "payload": {
+        "type": "run_started",
+        "run_id": "run-compaction-overflow",
+        "user_message_id": "user-1"
+      }
+    },
+    {
+      "event_type": "assistant_chunk_appended",
+      "created_at": "2026-03-27T05:00:01Z",
+      "payload": {
+        "type": "assistant_chunk_appended",
+        "run_id": "run-compaction-overflow",
+        "chunk": "上下文接近上限，系统已自动压缩历史记录并继续执行。"
+      }
+    },
+    {
+      "event_type": "run_completed",
+      "created_at": "2026-03-27T05:00:02Z",
+      "payload": {
+        "type": "run_completed",
+        "run_id": "run-compaction-overflow"
+      }
+    }
+  ],
+  "expected": {
+    "session_id": "session-compaction",
+    "run_id": "run-compaction-overflow",
+    "final_status": "completed",
+    "event_count": 3,
+    "first_event_at": "<timestamp>",
+    "last_event_at": "<timestamp>",
+    "lifecycle": {
+      "started": true,
+      "completed": true,
+      "failed": false,
+      "cancelled": false,
+      "stopped": false,
+      "waiting_approval": false
+    },
+    "stop_reason_kind": null,
+    "tools": [],
+    "approvals": [],
+    "guard_warnings": [],
+    "parse_warnings": [],
+    "child_session_link": null,
+    "events": [
+      {
+        "session_id": "session-compaction",
+        "run_id": "run-compaction-overflow",
+        "event_type": "run_started",
+        "created_at": "<timestamp>",
+        "status": "thinking",
+        "tool_name": null,
+        "call_id": null,
+        "approval_id": null,
+        "warning_kind": null,
+        "error_kind": null,
+        "message": "user_message_id=user-1",
+        "detail": null,
+        "irreversible": null,
+        "last_completed_step": null,
+        "child_session_id": null,
+        "is_error": null,
+        "parse_warning": null
+      },
+      {
+        "session_id": "session-compaction",
+        "run_id": "run-compaction-overflow",
+        "event_type": "assistant_chunk_appended",
+        "created_at": "<timestamp>",
+        "status": "thinking",
+        "tool_name": null,
+        "call_id": null,
+        "approval_id": null,
+        "warning_kind": null,
+        "error_kind": null,
+        "message": "上下文接近上限，系统已自动压缩历史记录并继续执行。",
+        "detail": null,
+        "irreversible": null,
+        "last_completed_step": null,
+        "child_session_id": null,
+        "is_error": null,
+        "parse_warning": null
+      },
+      {
+        "session_id": "session-compaction",
+        "run_id": "run-compaction-overflow",
+        "event_type": "run_completed",
+        "created_at": "<timestamp>",
+        "status": "completed",
+        "tool_name": null,
+        "call_id": null,
+        "approval_id": null,
+        "warning_kind": null,
+        "error_kind": null,
+        "message": "run completed",
+        "detail": null,
+        "irreversible": null,
+        "last_completed_step": null,
+        "child_session_id": null,
+        "is_error": false,
+        "parse_warning": null
+      }
+    ]
+  }
+}
