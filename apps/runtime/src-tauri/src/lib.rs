@@ -514,6 +514,7 @@ pub fn run() {
             commands::openclaw_plugins::probe_openclaw_plugin_feishu_credentials,
             commands::desktop_lifecycle::get_desktop_lifecycle_paths,
             commands::desktop_lifecycle::get_desktop_diagnostics_status,
+            commands::desktop_lifecycle::get_runtime_diagnostics_summary,
             commands::desktop_lifecycle::open_desktop_path,
             commands::desktop_lifecycle::open_desktop_diagnostics_dir,
             commands::desktop_lifecycle::clear_desktop_cache_and_logs,

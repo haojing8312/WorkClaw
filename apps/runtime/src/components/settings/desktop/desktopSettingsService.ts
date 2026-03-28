@@ -30,6 +30,47 @@ export interface DesktopDiagnosticsStatus {
   } | null;
 }
 
+export interface RuntimeDiagnosticsCountEntry {
+  kind: string;
+  count: number;
+}
+
+export interface RuntimeDiagnosticEventPreview {
+  kind: string;
+  event_type: string | null;
+  session_id: string | null;
+  run_id: string | null;
+  created_at: string;
+  detail: string | null;
+}
+
+export interface RuntimeDiagnosticsSummary {
+  turns: {
+    active: number;
+    completed: number;
+    failed: number;
+    cancelled: number;
+    average_latency_ms: number;
+    max_latency_ms: number;
+  };
+  admissions: {
+    conflicts: number;
+  };
+  approvals: {
+    total: number;
+  };
+  child_sessions: {
+    total: number;
+  };
+  compaction: {
+    total: number;
+  };
+  guard_top_warning_kinds: RuntimeDiagnosticsCountEntry[];
+  failover_top_error_kinds: RuntimeDiagnosticsCountEntry[];
+  recent_event_preview: RuntimeDiagnosticEventPreview[];
+  hints: string[];
+}
+
 export interface RuntimeLanguagePreferencesInput {
   default_language: string;
   immersive_translation_enabled: boolean;
@@ -111,6 +152,10 @@ export async function getDesktopLifecyclePaths() {
 
 export async function getDesktopDiagnosticsStatus() {
   return invoke<DesktopDiagnosticsStatus>("get_desktop_diagnostics_status");
+}
+
+export async function getRuntimeDiagnosticsSummary() {
+  return invoke<RuntimeDiagnosticsSummary>("get_runtime_diagnostics_summary");
 }
 
 export async function openDesktopPath(path: string) {

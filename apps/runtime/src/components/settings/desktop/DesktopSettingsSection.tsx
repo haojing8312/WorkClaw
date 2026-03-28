@@ -8,17 +8,26 @@ import {
   exportDesktopEnvironmentSummary,
   getDesktopDiagnosticsStatus,
   getDesktopLifecyclePaths,
+  getRuntimeDiagnosticsSummary,
   getRuntimePreferences,
   normalizeRuntimePreferences,
   openDesktopDiagnosticsDir,
   openDesktopPath,
   saveDesktopRuntimePreferences,
   saveRuntimeLanguagePreferences,
+  type RuntimeDiagnosticsSummary,
   type DesktopRuntimePreferencesInput,
   type RuntimeLanguagePreferencesInput,
   type DesktopDiagnosticsStatus,
   type DesktopLifecyclePaths,
 } from "./desktopSettingsService";
+
+function formatRuntimeCountSummary(items: { kind: string; count: number }[]) {
+  if (items.length === 0) {
+    return "无";
+  }
+  return items.map((item) => `${item.kind} (${item.count})`).join("、");
+}
 
 interface DesktopSettingsSectionProps {
   models: ModelConfig[];
@@ -43,6 +52,8 @@ export function DesktopSettingsSection({ models, visible }: DesktopSettingsSecti
   const [desktopLifecycleMessage, setDesktopLifecycleMessage] = useState("");
   const [desktopDiagnosticsStatus, setDesktopDiagnosticsStatus] =
     useState<DesktopDiagnosticsStatus | null>(null);
+  const [runtimeDiagnosticsSummary, setRuntimeDiagnosticsSummary] =
+    useState<RuntimeDiagnosticsSummary | null>(null);
 
   const inputCls = "sm-input w-full text-sm py-1.5";
   const labelCls = "sm-field-label";
@@ -92,13 +103,22 @@ export function DesktopSettingsSection({ models, visible }: DesktopSettingsSecti
     setDesktopLifecycleLoading(true);
     setDesktopLifecycleError("");
     try {
-      const [paths, diagnostics] = await Promise.all([
+      const lifecyclePromise = Promise.all([
         getDesktopLifecyclePaths(),
         getDesktopDiagnosticsStatus(),
+      ]);
+      const summaryPromise = getRuntimeDiagnosticsSummary().catch((cause) => {
+        console.warn("加载运行时诊断摘要失败:", cause);
+        return null;
+      });
+      const [[paths, diagnostics], summary] = await Promise.all([
+        lifecyclePromise,
+        summaryPromise,
       ]);
       if (isCancelled()) return;
       setDesktopLifecyclePaths(paths);
       setDesktopDiagnosticsStatus(diagnostics);
+      setRuntimeDiagnosticsSummary(summary);
     } catch (cause) {
       if (!isCancelled()) {
         setDesktopLifecycleError("加载数据目录失败: " + String(cause));
@@ -599,6 +619,110 @@ export function DesktopSettingsSection({ models, visible }: DesktopSettingsSecti
                   </div>
                 )}
               </div>
+            )}
+            {runtimeDiagnosticsSummary && (
+              <details
+                className="rounded-lg border border-gray-200 bg-white px-3 py-3"
+                data-testid="runtime-diagnostics-summary"
+              >
+                <summary className="cursor-pointer text-xs font-medium text-gray-800">
+                  开发者诊断摘要
+                </summary>
+                <div className="mt-3 space-y-3">
+                  <div className="grid gap-2 sm:grid-cols-4">
+                    <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
+                      <div className="text-[11px] text-gray-500">进行中运行</div>
+                      <div className="mt-1 text-sm font-medium text-gray-900">
+                        {runtimeDiagnosticsSummary.turns.active}
+                      </div>
+                    </div>
+                    <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
+                      <div className="text-[11px] text-gray-500">已完成</div>
+                      <div className="mt-1 text-sm font-medium text-gray-900">
+                        {runtimeDiagnosticsSummary.turns.completed}
+                      </div>
+                    </div>
+                    <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
+                      <div className="text-[11px] text-gray-500">失败</div>
+                      <div className="mt-1 text-sm font-medium text-gray-900">
+                        {runtimeDiagnosticsSummary.turns.failed}
+                      </div>
+                    </div>
+                    <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
+                      <div className="text-[11px] text-gray-500">准入冲突</div>
+                      <div className="mt-1 text-sm font-medium text-gray-900">
+                        {runtimeDiagnosticsSummary.admissions.conflicts}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-3">
+                    <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
+                      <div className="text-[11px] text-gray-500">审批请求</div>
+                      <div className="mt-1 text-sm font-medium text-gray-900">
+                        {runtimeDiagnosticsSummary.approvals.total}
+                      </div>
+                    </div>
+                    <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
+                      <div className="text-[11px] text-gray-500">子会话关联</div>
+                      <div className="mt-1 text-sm font-medium text-gray-900">
+                        {runtimeDiagnosticsSummary.child_sessions.total}
+                      </div>
+                    </div>
+                    <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
+                      <div className="text-[11px] text-gray-500">上下文压缩</div>
+                      <div className="mt-1 text-sm font-medium text-gray-900">
+                        {runtimeDiagnosticsSummary.compaction.total}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-3 space-y-2">
+                    <div className="text-xs font-medium text-gray-700">守卫与故障摘要</div>
+                    <div className="text-xs text-gray-700">
+                      Guard warnings:{" "}
+                      {formatRuntimeCountSummary(runtimeDiagnosticsSummary.guard_top_warning_kinds)}
+                    </div>
+                    <div className="text-xs text-gray-700">
+                      Failover errors:{" "}
+                      {formatRuntimeCountSummary(runtimeDiagnosticsSummary.failover_top_error_kinds)}
+                    </div>
+                    <div className="text-xs text-gray-600">
+                      导出诊断包时会一并包含 `runtime-diagnostics-summary.json` 和
+                      `runtime-diagnostics-summary.md`。
+                    </div>
+                  </div>
+                  {runtimeDiagnosticsSummary.hints.length > 0 && (
+                    <div className="rounded-lg border border-amber-100 bg-amber-50 px-3 py-3">
+                      <div className="text-xs font-medium text-amber-700">提示</div>
+                      <div className="mt-2 space-y-1">
+                        {runtimeDiagnosticsSummary.hints.map((hint) => (
+                          <div key={hint} className="text-xs text-amber-700">
+                            {hint}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {runtimeDiagnosticsSummary.recent_event_preview.length > 0 && (
+                    <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-3">
+                      <div className="text-xs font-medium text-gray-700">最近事件预览</div>
+                      <div className="mt-2 space-y-2">
+                        {runtimeDiagnosticsSummary.recent_event_preview.slice(-5).map((event) => (
+                          <div key={`${event.created_at}-${event.kind}-${event.run_id ?? "no-run"}`} className="text-xs text-gray-700">
+                            <div className="font-medium text-gray-800">
+                              {event.created_at} {event.event_type ?? event.kind}
+                            </div>
+                            <div className="break-all text-gray-600">
+                              {event.session_id ? `session=${event.session_id}` : "session=unknown"}
+                              {event.run_id ? ` · run=${event.run_id}` : ""}
+                              {event.detail ? ` · ${event.detail}` : ""}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </details>
             )}
           </div>
         )}

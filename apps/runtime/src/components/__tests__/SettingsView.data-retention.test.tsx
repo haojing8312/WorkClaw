@@ -61,6 +61,43 @@ describe("SettingsView data retention", () => {
           },
         });
       }
+      if (command === "get_runtime_diagnostics_summary") {
+        return Promise.resolve({
+          turns: {
+            active: 1,
+            completed: 12,
+            failed: 2,
+            cancelled: 0,
+            average_latency_ms: 840,
+            max_latency_ms: 3100,
+          },
+          admissions: {
+            conflicts: 2,
+          },
+          approvals: {
+            total: 1,
+          },
+          child_sessions: {
+            total: 3,
+          },
+          compaction: {
+            total: 1,
+          },
+          guard_top_warning_kinds: [{ kind: "loop_detected", count: 2 }],
+          failover_top_error_kinds: [{ kind: "network", count: 4 }],
+          recent_event_preview: [
+            {
+              kind: "session_run",
+              event_type: "run_guard_warning",
+              session_id: "session-1",
+              run_id: "run-1",
+              created_at: "2026-03-28T10:00:02Z",
+              detail: "warning=loop_detected",
+            },
+          ],
+          hints: ["Admission conflicts: 2", "loop guard activity observed in buffered runtime events."],
+        });
+      }
       if (command === "clear_desktop_cache_and_logs") {
         return Promise.resolve({
           removed_files: 12,
@@ -101,6 +138,9 @@ describe("SettingsView data retention", () => {
     expect(
       screen.getByText("审计目录：C:\\Users\\me\\AppData\\Roaming\\WorkClaw\\diagnostics\\audit"),
     ).toBeInTheDocument();
+    expect(screen.getByText("开发者诊断摘要").closest("details")).not.toHaveAttribute("open");
+    expect(screen.getByText("准入冲突")).toBeInTheDocument();
+    expect(screen.getByText("Admission conflicts: 2")).toBeInTheDocument();
     expect(screen.getByText("检测到上次运行可能异常退出")).toBeInTheDocument();
     expect(screen.getByText(/panic occurred/)).toBeInTheDocument();
     expect(screen.getByText("卸载程序不会删除你的工作目录。")).toBeInTheDocument();
@@ -122,6 +162,7 @@ describe("SettingsView data retention", () => {
       expect(invokeMock).toHaveBeenCalledWith("clear_desktop_cache_and_logs");
       expect(invokeMock).toHaveBeenCalledWith("export_desktop_environment_summary");
       expect(invokeMock).toHaveBeenCalledWith("export_desktop_diagnostics_bundle");
+      expect(invokeMock).toHaveBeenCalledWith("get_runtime_diagnostics_summary");
     });
   });
 });
