@@ -6,6 +6,76 @@ use async_trait::async_trait;
 use runtime_models_app::ModelsConfigRepository;
 use uuid::Uuid;
 
+async fn query_first_non_search_model_id(
+    db: &sqlx::SqlitePool,
+    excluded_model_id: Option<&str>,
+) -> Result<Option<String>, String> {
+    if let Some(model_id) = excluded_model_id {
+        sqlx::query_scalar::<_, String>(
+            "SELECT id
+             FROM model_configs
+             WHERE api_format NOT LIKE 'search_%' AND id != ?
+             ORDER BY rowid ASC
+             LIMIT 1",
+        )
+        .bind(model_id)
+        .fetch_optional(db)
+        .await
+        .map_err(|e| format!("查询模型候选失败: {e}"))
+    } else {
+        sqlx::query_scalar::<_, String>(
+            "SELECT id
+             FROM model_configs
+             WHERE api_format NOT LIKE 'search_%'
+             ORDER BY rowid ASC
+             LIMIT 1",
+        )
+        .fetch_optional(db)
+        .await
+        .map_err(|e| format!("查询模型候选失败: {e}"))
+    }
+}
+
+async fn query_current_default_model_id(
+    db: &sqlx::SqlitePool,
+) -> Result<Option<String>, String> {
+    sqlx::query_scalar::<_, String>(
+        "SELECT id
+         FROM model_configs
+         WHERE api_format NOT LIKE 'search_%' AND is_default = 1
+         LIMIT 1",
+    )
+    .fetch_optional(db)
+    .await
+    .map_err(|e| format!("查询默认模型失败: {e}"))
+}
+
+async fn update_sessions_to_model_id(
+    db: &sqlx::SqlitePool,
+    next_model_id: &str,
+    only_replace_model_id: Option<&str>,
+) -> Result<(), String> {
+    if let Some(previous_model_id) = only_replace_model_id {
+        if previous_model_id == next_model_id {
+            return Ok(());
+        }
+        sqlx::query("UPDATE sessions SET model_id = ? WHERE model_id = ?")
+            .bind(next_model_id)
+            .bind(previous_model_id)
+            .execute(db)
+            .await
+            .map_err(|e| format!("更新会话模型失败: {e}"))?;
+        return Ok(());
+    }
+
+    sqlx::query("UPDATE sessions SET model_id = ?")
+        .bind(next_model_id)
+        .execute(db)
+        .await
+        .map_err(|e| format!("更新会话默认模型失败: {e}"))?;
+    Ok(())
+}
+
 #[async_trait]
 impl ModelsConfigRepository for PoolModelsRepository<'_> {
     async fn load_routing_settings(&self) -> Result<Vec<(String, String)>, String> {
@@ -147,6 +217,17 @@ impl ModelsConfigRepository for PoolModelsRepository<'_> {
     }
 
     async fn delete_model_config(&self, model_id: &str) -> Result<(), String> {
+        let current_default_model_id = query_current_default_model_id(self.db).await?;
+        let replacement_model_id = if current_default_model_id.as_deref() == Some(model_id) {
+            query_first_non_search_model_id(self.db, Some(model_id)).await?
+        } else {
+            current_default_model_id
+        };
+
+        if let Some(next_model_id) = replacement_model_id.as_deref() {
+            update_sessions_to_model_id(self.db, next_model_id, Some(model_id)).await?;
+        }
+
         sqlx::query("DELETE FROM model_configs WHERE id = ?")
             .bind(model_id)
             .execute(self.db)
@@ -168,6 +249,8 @@ impl ModelsConfigRepository for PoolModelsRepository<'_> {
         .execute(self.db)
         .await
         .map_err(|e| e.to_string())?;
+
+        update_sessions_to_model_id(self.db, model_id, None).await?;
 
         Ok(())
     }

@@ -1,5 +1,5 @@
 ---
-name: minimax-docx
+name: docx
 license: MIT
 metadata:
   version: "1.0.0"
@@ -37,7 +37,7 @@ triggers:
   - 套模板
 ---
 
-# minimax-docx
+# docx
 
 Create, edit, and format DOCX documents via CLI tools or direct C# scripts built on OpenXML SDK (.NET).
 

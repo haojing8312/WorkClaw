@@ -246,6 +246,77 @@ describe("ChatView semantic theme", () => {
     expect(screen.queryByText("first-model")).not.toBeInTheDocument();
   });
 
+  test("shows the session model in the composer toolbar when it differs from the current default", async () => {
+    render(
+      <ChatView
+        skill={{
+          id: "builtin-general",
+          name: "General",
+          description: "desc",
+          version: "1.0.0",
+          author: "test",
+          recommended_model: "",
+          tags: [],
+          created_at: new Date().toISOString(),
+        }}
+        models={[
+          {
+            id: "m-old",
+            name: "old-default",
+            api_format: "openai",
+            base_url: "https://example.com/old",
+            model_name: "old-default",
+            is_default: false,
+          },
+          {
+            id: "m-new",
+            name: "new-default",
+            api_format: "openai",
+            base_url: "https://example.com/new",
+            model_name: "new-default",
+            is_default: true,
+          },
+        ]}
+        sessionId="session-a"
+        sessionModelId="m-old"
+      />
+    );
+
+    expect(await screen.findByTestId("chat-composer-model-chip")).toHaveTextContent("old-default");
+    expect(screen.queryByText("new-default")).not.toBeInTheDocument();
+  });
+
+  test("falls back to the current default model when the session model is no longer available", async () => {
+    render(
+      <ChatView
+        skill={{
+          id: "builtin-general",
+          name: "General",
+          description: "desc",
+          version: "1.0.0",
+          author: "test",
+          recommended_model: "",
+          tags: [],
+          created_at: new Date().toISOString(),
+        }}
+        models={[
+          {
+            id: "m-new",
+            name: "new-default",
+            api_format: "openai",
+            base_url: "https://example.com/new",
+            model_name: "new-default",
+            is_default: true,
+          },
+        ]}
+        sessionId="session-a"
+        sessionModelId="m-missing"
+      />
+    );
+
+    expect(await screen.findByTestId("chat-composer-model-chip")).toHaveTextContent("new-default");
+  });
+
   test("does not expose a manual compact button in the composer", async () => {
     render(
       <ChatView

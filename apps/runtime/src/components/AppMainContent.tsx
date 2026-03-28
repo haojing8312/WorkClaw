@@ -327,6 +327,7 @@ export function AppMainContent(props: AppMainContentProps) {
                 skill={selectedSkill}
                 models={models}
                 sessionId={selectedSessionId}
+                sessionModelId={selectedSession?.model_id}
                 workDir={selectedSession?.work_dir}
                 onOpenSession={onOpenSession}
                 sessionFocusRequest={sessionFocusRequest}

@@ -41,13 +41,70 @@ pub(crate) async fn load_session_runtime_inputs_with_pool(
     pool: &sqlx::SqlitePool,
     session_id: &str,
 ) -> Result<(String, String, String, String, String), String> {
-    sqlx::query_as::<_, (String, String, String, String, String)>(
+    let (skill_id, model_id, permission_mode, work_dir, employee_id) =
+        sqlx::query_as::<_, (String, String, String, String, String)>(
         "SELECT skill_id, model_id, permission_mode, COALESCE(work_dir, ''), COALESCE(employee_id, '') FROM sessions WHERE id = ?",
     )
     .bind(session_id)
     .fetch_one(pool)
     .await
-    .map_err(|e| format!("会话不存在 (session_id={session_id}): {e}"))
+    .map_err(|e| format!("会话不存在 (session_id={session_id}): {e}"))?;
+
+    let current_model_exists = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(1) FROM model_configs WHERE id = ?",
+    )
+    .bind(&model_id)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| format!("校验会话模型失败 (session_id={session_id}, model_id={model_id}): {e}"))?
+        > 0;
+
+    if current_model_exists {
+        return Ok((skill_id, model_id, permission_mode, work_dir, employee_id));
+    }
+
+    let fallback_model_id = sqlx::query_scalar::<_, String>(
+        "SELECT id
+         FROM model_configs
+         WHERE api_format NOT LIKE 'search_%' AND is_default = 1
+         LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("读取默认模型失败 (session_id={session_id}): {e}"))?;
+    let fallback_model_id = match fallback_model_id {
+        Some(model_id) => model_id,
+        None => sqlx::query_scalar::<_, String>(
+            "SELECT id
+             FROM model_configs
+             WHERE api_format NOT LIKE 'search_%'
+             ORDER BY rowid ASC
+             LIMIT 1",
+        )
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("读取兜底模型失败 (session_id={session_id}): {e}"))?
+        .ok_or_else(|| {
+        format!(
+            "会话模型不存在且没有可回退的默认模型 (session_id={session_id}, model_id={model_id})"
+        )
+        })?,
+    };
+
+    sqlx::query("UPDATE sessions SET model_id = ? WHERE id = ?")
+        .bind(&fallback_model_id)
+        .bind(session_id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("自愈会话模型失败 (session_id={session_id}): {e}"))?;
+
+    Ok((
+        skill_id,
+        fallback_model_id,
+        permission_mode,
+        work_dir,
+        employee_id,
+    ))
 }
 
 pub(crate) async fn load_installed_skill_source_with_pool(
@@ -111,7 +168,7 @@ pub(crate) async fn load_default_search_provider_config_with_pool(
 
 #[cfg(test)]
 mod tests {
-    use super::load_installed_skill_source_with_pool;
+    use super::{load_installed_skill_source_with_pool, load_session_runtime_inputs_with_pool};
     use chrono::Utc;
     use skillpack_rs::SkillManifest;
     use sqlx::sqlite::SqlitePoolOptions;
@@ -138,6 +195,35 @@ mod tests {
         .execute(&pool)
         .await
         .expect("create installed_skills table");
+
+        sqlx::query(
+            "CREATE TABLE sessions (
+                id TEXT PRIMARY KEY,
+                skill_id TEXT NOT NULL,
+                model_id TEXT NOT NULL,
+                permission_mode TEXT NOT NULL DEFAULT 'standard',
+                work_dir TEXT NOT NULL DEFAULT '',
+                employee_id TEXT NOT NULL DEFAULT ''
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create sessions table");
+
+        sqlx::query(
+            "CREATE TABLE model_configs (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                api_format TEXT NOT NULL,
+                base_url TEXT NOT NULL,
+                model_name TEXT NOT NULL,
+                is_default INTEGER DEFAULT 0,
+                api_key TEXT NOT NULL DEFAULT ''
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create model_configs table");
 
         pool
     }
@@ -234,5 +320,66 @@ mod tests {
         assert_eq!(username, "legacy-user");
         assert_eq!(pack_path, "");
         assert_eq!(source_type, "builtin");
+    }
+
+    #[tokio::test]
+    async fn load_session_runtime_inputs_self_heals_missing_model_to_the_default_model() {
+        let pool = setup_memory_pool().await;
+
+        sqlx::query(
+            "INSERT INTO model_configs (id, name, api_format, base_url, model_name, is_default, api_key)
+             VALUES ('model-default', 'Default', 'openai', 'https://example.com', 'gpt-test', 1, 'sk-default')",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert default model");
+
+        sqlx::query(
+            "INSERT INTO sessions (id, skill_id, model_id, permission_mode, work_dir, employee_id)
+             VALUES ('session-a', 'builtin-general', 'model-missing', 'standard', '', '')",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert session");
+
+        let (_, model_id, _, _, _) = load_session_runtime_inputs_with_pool(&pool, "session-a")
+            .await
+            .expect("load session runtime inputs");
+
+        assert_eq!(model_id, "model-default");
+
+        let (stored_model_id,): (String,) =
+            sqlx::query_as("SELECT model_id FROM sessions WHERE id = 'session-a'")
+                .fetch_one(&pool)
+                .await
+                .expect("query healed session");
+        assert_eq!(stored_model_id, "model-default");
+    }
+
+    #[tokio::test]
+    async fn load_session_runtime_inputs_keeps_existing_model_when_it_is_still_valid() {
+        let pool = setup_memory_pool().await;
+
+        sqlx::query(
+            "INSERT INTO model_configs (id, name, api_format, base_url, model_name, is_default, api_key)
+             VALUES ('model-a', 'Model A', 'openai', 'https://example.com', 'gpt-test', 1, 'sk-a')",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert model");
+
+        sqlx::query(
+            "INSERT INTO sessions (id, skill_id, model_id, permission_mode, work_dir, employee_id)
+             VALUES ('session-a', 'builtin-general', 'model-a', 'standard', '', '')",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert session");
+
+        let (_, model_id, _, _, _) = load_session_runtime_inputs_with_pool(&pool, "session-a")
+            .await
+            .expect("load session runtime inputs");
+
+        assert_eq!(model_id, "model-a");
     }
 }

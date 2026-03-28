@@ -608,6 +608,7 @@ export default function App() {
       settingsInitialTab,
       closeSettings: async () => {
         await loadModels();
+        await loadSessions(selectedSkillId ?? "");
         setShowSettings(false);
       },
       handleOpenEmployeesFromSettings,

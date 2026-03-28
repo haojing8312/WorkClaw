@@ -95,6 +95,7 @@ interface Props {
   skill: SkillManifest;
   models: ModelConfig[];
   sessionId: string;
+  sessionModelId?: string;
   workDir?: string;
   onOpenSession?: (sessionId: string, options?: ChatSessionOpenOptions) => Promise<void> | void;
   sessionFocusRequest?: { nonce: number; snippet: string };
@@ -180,6 +181,7 @@ export function ChatView({
   skill,
   models,
   sessionId,
+  sessionModelId,
   workDir,
   onOpenSession,
   sessionFocusRequest,
@@ -817,7 +819,10 @@ export function ChatView({
   }
 
   // 从 models 查找当前会话的模型名称
-  const currentModel = getDefaultModel(models);
+  const currentModel = useMemo(
+    () => models.find((model) => model.id === sessionModelId) ?? getDefaultModel(models),
+    [models, sessionModelId],
+  );
   const thinkingSupport = useMemo(() => getThinkingSupport(currentModel), [currentModel]);
   const installedSkillSet = new Set(installedSkillIds);
   const recoverableSessionRun = useMemo(() => {

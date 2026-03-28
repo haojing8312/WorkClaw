@@ -1,5 +1,5 @@
 ---
-name: minimax-pdf
+name: pdf
 description: >
   Use this skill when visual quality and design identity matter for a PDF.
   CREATE (generate from scratch): "make a PDF", "generate a report", "write a proposal",
@@ -29,7 +29,7 @@ metadata:
         - py
 ---
 
-# minimax-pdf
+# pdf
 
 Three tasks. One skill.
 
