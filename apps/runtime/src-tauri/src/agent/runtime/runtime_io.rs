@@ -8,6 +8,7 @@ mod session_titles;
 mod types;
 mod workspace_skills;
 
+#[cfg(test)]
 pub(crate) use message_reconstruction::{
     build_assistant_content_from_final_messages, build_assistant_content_with_stream_fallback,
     reconstruct_history_messages,
