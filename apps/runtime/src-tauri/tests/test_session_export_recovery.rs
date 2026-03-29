@@ -388,6 +388,100 @@ async fn export_session_includes_tool_events_linked_to_assistant_run() {
 }
 
 #[tokio::test]
+async fn export_session_does_not_duplicate_failed_run_recovery_when_assistant_message_exists() {
+    let (pool, _tmp) = helpers::setup_test_db().await;
+    let journal_dir = tempfile::tempdir().expect("create journal dir");
+    let journal = SessionJournalStore::new(journal_dir.path().to_path_buf());
+
+    sqlx::query(
+        "INSERT INTO sessions (id, skill_id, title, created_at, model_id, permission_mode, work_dir, employee_id, session_mode, team_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind("sess-max-turns-with-assistant")
+    .bind("builtin-general")
+    .bind("最大步数导出保持执行记录")
+    .bind("2026-03-29T00:30:00Z")
+    .bind("model-1")
+    .bind("standard")
+    .bind("")
+    .bind("")
+    .bind("general")
+    .bind("")
+    .execute(&pool)
+    .await
+    .expect("insert session");
+
+    sqlx::query(
+        "INSERT INTO messages (id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind("msg-user-max-turns")
+    .bind("sess-max-turns-with-assistant")
+    .bind("user")
+    .bind("继续执行")
+    .bind("2026-03-29T00:30:01Z")
+    .execute(&pool)
+    .await
+    .expect("insert user message");
+
+    sqlx::query(
+        "INSERT INTO messages (id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind("msg-assistant-max-turns")
+    .bind("sess-max-turns-with-assistant")
+    .bind("assistant")
+    .bind(
+        r##"{"text":"我先检查一下环境。","items":[{"type":"text","content":"我先检查一下环境。"},{"type":"tool_call","toolCall":{"id":"call-1","name":"bash","input":{"command":"echo hi"},"status":"completed","output":"hi"}}]}"##,
+    )
+    .bind("2026-03-29T00:30:02Z")
+    .execute(&pool)
+    .await
+    .expect("insert assistant message");
+
+    append_session_run_event_with_pool(
+        &pool,
+        &journal,
+        "sess-max-turns-with-assistant",
+        SessionRunEvent::RunStarted {
+            run_id: "run-max-turns".into(),
+            user_message_id: "msg-user-max-turns".into(),
+        },
+    )
+    .await
+    .expect("append run started");
+
+    attach_assistant_message_to_run_with_pool(
+        &pool,
+        "run-max-turns",
+        "msg-assistant-max-turns",
+    )
+    .await
+    .expect("attach assistant message");
+
+    append_session_run_event_with_pool(
+        &pool,
+        &journal,
+        "sess-max-turns-with-assistant",
+        SessionRunEvent::RunStopped {
+            run_id: "run-max-turns".into(),
+            stop_reason: runtime_lib::agent::run_guard::RunStopReason::max_turns(100),
+        },
+    )
+    .await
+    .expect("append run stopped");
+
+    let markdown =
+        export_session_markdown_with_pool(&pool, "sess-max-turns-with-assistant", Some(&journal))
+            .await
+            .expect("export markdown");
+
+    assert!(markdown.contains("我先检查一下环境。"));
+    assert!(markdown.contains("bash"));
+    assert!(markdown.contains("hi"));
+    assert!(!markdown.contains("## 恢复的运行记录"));
+    assert!(!markdown.contains("### Run run-max-turns (failed)"));
+}
+
+#[tokio::test]
 async fn export_session_recovery_includes_tool_events_for_failed_run_without_assistant_message() {
     let (pool, _tmp) = helpers::setup_test_db().await;
     let journal_dir = tempfile::tempdir().expect("create journal dir");

@@ -9,13 +9,14 @@ use crate::agent::permissions::PermissionMode;
 use crate::agent::run_guard::parse_run_stop_reason;
 use crate::agent::types::{AgentStateEvent, StreamDelta};
 use crate::agent::AgentExecutor;
+use crate::diagnostics::{self, LogLevel, ManagedDiagnosticsState};
 use serde_json::Value;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
 
 use super::runtime_io as chat_io;
-use crate::model_transport::resolve_model_transport;
+use crate::model_transport::{resolve_model_transport, ModelTransportKind};
 
 pub(crate) type RouteExecutionOutcome = RuntimeFailoverOutcome;
 
@@ -110,6 +111,50 @@ fn build_retrying_agent_state_detail(
     }
 }
 
+fn compute_reasoning_duration_ms(
+    reasoning_started_at: Option<std::time::Instant>,
+    last_reasoning_at: Option<std::time::Instant>,
+) -> Option<u64> {
+    let started_at = reasoning_started_at?;
+    let ended_at = last_reasoning_at.unwrap_or(started_at);
+    Some(ended_at.saturating_duration_since(started_at).as_millis() as u64)
+}
+
+fn emit_reasoning_completed_if_needed(
+    app: &AppHandle,
+    session_id: &str,
+    reasoning_started_at: &std::sync::Mutex<Option<std::time::Instant>>,
+    last_reasoning_at: &std::sync::Mutex<Option<std::time::Instant>>,
+    completion_emitted: &std::sync::Mutex<bool>,
+) -> Option<u64> {
+    let mut emitted_guard = completion_emitted.lock().ok()?;
+    if *emitted_guard {
+        return reasoning_started_at
+            .lock()
+            .ok()
+            .and_then(|started| last_reasoning_at.lock().ok().and_then(|ended| {
+                compute_reasoning_duration_ms(*started, *ended)
+            }));
+    }
+
+    let duration_ms = reasoning_started_at
+        .lock()
+        .ok()
+        .and_then(|started| last_reasoning_at.lock().ok().and_then(|ended| {
+            compute_reasoning_duration_ms(*started, *ended)
+        }))?;
+
+    let _ = app.emit(
+        "assistant-reasoning-completed",
+        serde_json::json!({
+            "session_id": session_id,
+            "duration_ms": duration_ms,
+        }),
+    );
+    *emitted_guard = true;
+    Some(duration_ms)
+}
+
 async fn execute_candidate_attempt(
     params: &RouteExecutionParams<'_>,
     candidate_api_format: &str,
@@ -122,23 +167,54 @@ async fn execute_candidate_attempt(
     let streamed_text = Arc::new(std::sync::Mutex::new(String::new()));
     let streamed_reasoning = Arc::new(std::sync::Mutex::new(String::new()));
     let reasoning_started_at = Arc::new(std::sync::Mutex::new(None::<std::time::Instant>));
+    let last_reasoning_at = Arc::new(std::sync::Mutex::new(None::<std::time::Instant>));
+    let reasoning_completion_emitted = Arc::new(std::sync::Mutex::new(false));
     let app_clone = params.app.clone();
     let session_id_clone = params.session_id.to_string();
     let streamed_text_clone = Arc::clone(&streamed_text);
     let streamed_reasoning_clone = Arc::clone(&streamed_reasoning);
     let reasoning_started_at_clone = Arc::clone(&reasoning_started_at);
+    let last_reasoning_at_clone = Arc::clone(&last_reasoning_at);
+    let reasoning_completion_emitted_clone = Arc::clone(&reasoning_completion_emitted);
 
     let transport = resolve_model_transport(
         candidate_api_format,
         candidate_base_url,
         Some(candidate_provider_key).filter(|value| !value.trim().is_empty()),
     );
+    let effective_api_format = if candidate_api_format.trim().is_empty() {
+        match transport.kind {
+            ModelTransportKind::AnthropicMessages => "anthropic",
+            ModelTransportKind::OpenAiCompletions | ModelTransportKind::OpenAiResponses => "openai",
+        }
+    } else {
+        candidate_api_format
+    };
+    if candidate_api_format.trim().is_empty() {
+        if let Some(diagnostics_state) = params.app.try_state::<ManagedDiagnosticsState>() {
+            let _ = diagnostics::write_log_record(
+                &diagnostics_state.0.paths,
+                LogLevel::Warn,
+                "chat",
+                "empty_route_protocol_fallback",
+                "route candidate protocol_type was empty; falling back from base_url/transport detection",
+                Some(serde_json::json!({
+                    "session_id": params.session_id,
+                    "provider_key": candidate_provider_key,
+                    "base_url": candidate_base_url,
+                    "model_name": candidate_model_name,
+                    "effective_api_format": effective_api_format,
+                    "transport_kind": format!("{:?}", transport.kind),
+                })),
+            );
+        }
+    }
 
     let attempt = params
         .agent_executor
         .execute_turn_with_transport(
             transport,
-            candidate_api_format,
+            effective_api_format,
             candidate_base_url,
             candidate_api_key,
             candidate_model_name,
@@ -146,6 +222,13 @@ async fn execute_candidate_attempt(
             params.messages.to_vec(),
             move |delta: StreamDelta| match delta {
                 StreamDelta::Text(token) => {
+                    let _ = emit_reasoning_completed_if_needed(
+                        &app_clone,
+                        &session_id_clone,
+                        &reasoning_started_at_clone,
+                        &last_reasoning_at_clone,
+                        &reasoning_completion_emitted_clone,
+                    );
                     if let Ok(mut buffer) = streamed_text_clone.lock() {
                         buffer.push_str(&token);
                     }
@@ -175,6 +258,9 @@ async fn execute_candidate_attempt(
                             "assistant-reasoning-started",
                             serde_json::json!({ "session_id": session_id_clone.clone() }),
                         );
+                    }
+                    if let Ok(mut last_at) = last_reasoning_at_clone.lock() {
+                        *last_at = Some(std::time::Instant::now());
                     }
                     if let Ok(mut buffer) = streamed_reasoning_clone.lock() {
                         buffer.push_str(&text);
@@ -207,7 +293,7 @@ async fn execute_candidate_attempt(
                 params.db,
                 params.session_id,
                 params.requested_capability,
-                candidate_api_format,
+                effective_api_format,
                 candidate_model_name,
                 attempt_idx + 1,
                 attempt_idx,
@@ -216,19 +302,13 @@ async fn execute_candidate_attempt(
                 "",
             )
             .await;
-            let reasoning_duration_ms = reasoning_started_at
-                .lock()
-                .ok()
-                .and_then(|started| started.map(|instant| instant.elapsed().as_millis() as u64));
-            if let Some(duration_ms) = reasoning_duration_ms {
-                let _ = params.app.emit(
-                    "assistant-reasoning-completed",
-                    serde_json::json!({
-                        "session_id": params.session_id,
-                        "duration_ms": duration_ms,
-                    }),
-                );
-            }
+            let reasoning_duration_ms = emit_reasoning_completed_if_needed(
+                params.app,
+                params.session_id,
+                &reasoning_started_at,
+                &last_reasoning_at,
+                &reasoning_completion_emitted,
+            );
             CandidateAttemptOutcome {
                 final_messages: Some(messages_out),
                 last_error: None,
@@ -268,7 +348,7 @@ async fn execute_candidate_attempt(
                 params.db,
                 params.session_id,
                 params.requested_capability,
-                candidate_api_format,
+                effective_api_format,
                 candidate_model_name,
                 attempt_idx + 1,
                 attempt_idx,
@@ -310,7 +390,7 @@ async fn execute_candidate_attempt(
 
 #[cfg(test)]
 mod tests {
-    use super::build_retrying_agent_state_detail;
+    use super::{build_retrying_agent_state_detail, compute_reasoning_duration_ms};
     use crate::agent::runtime::failover::RuntimeFailoverErrorKind;
 
     #[test]
@@ -323,5 +403,27 @@ mod tests {
             build_retrying_agent_state_detail(RuntimeFailoverErrorKind::Timeout, 1, 5),
             None
         );
+    }
+
+    #[test]
+    fn compute_reasoning_duration_uses_last_reasoning_delta_boundary() {
+        let started = std::time::Instant::now();
+        let ended = started + std::time::Duration::from_millis(420);
+
+        assert_eq!(
+            compute_reasoning_duration_ms(Some(started), Some(ended)),
+            Some(420)
+        );
+    }
+
+    #[test]
+    fn compute_reasoning_duration_defaults_to_zero_without_end_boundary() {
+        let started = std::time::Instant::now();
+
+        assert_eq!(
+            compute_reasoning_duration_ms(Some(started), None),
+            Some(0)
+        );
+        assert_eq!(compute_reasoning_duration_ms(None, None), None);
     }
 }

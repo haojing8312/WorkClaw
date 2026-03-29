@@ -523,15 +523,15 @@ fn render_recovered_run_sections(
             && assistant_contents
                 .iter()
                 .any(|content| content.contains(error_message));
-        let missing_assistant_message_for_run =
-            !assistant_run_ids_in_messages.contains(&run.run_id);
-        let should_recover = (!buffered.is_empty() && !buffered_already_exported)
-            || (!error_message.is_empty() && !error_already_exported)
-            || (missing_assistant_message_for_run && !tool_sections.is_empty())
-            || matches!(
-                &run.status,
-                SessionRunStatus::Failed | SessionRunStatus::Cancelled
-            );
+        let missing_assistant_message_for_run = !assistant_run_ids_in_messages.contains(&run.run_id);
+        let should_recover = missing_assistant_message_for_run
+            && ((!buffered.is_empty() && !buffered_already_exported)
+                || (!error_message.is_empty() && !error_already_exported)
+                || !tool_sections.is_empty()
+                || matches!(
+                    &run.status,
+                    SessionRunStatus::Failed | SessionRunStatus::Cancelled
+                ));
 
         if !should_recover {
             continue;

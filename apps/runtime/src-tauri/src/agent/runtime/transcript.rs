@@ -198,6 +198,9 @@ impl RuntimeTranscript {
                         if parsed.get("text").is_some() && parsed.get("items").is_some() {
                             return Self::reconstruct_llm_messages(&parsed, api_format);
                         }
+                        if let Some(text) = parsed.get("text").and_then(Value::as_str) {
+                            return vec![json!({"role": "assistant", "content": text})];
+                        }
                     }
                 }
                 if role == "user" {

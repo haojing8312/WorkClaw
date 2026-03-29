@@ -175,7 +175,7 @@ fn attach_reasoning_to_content(
     reasoning_text: &str,
     reasoning_duration_ms: Option<u64>,
 ) -> String {
-    if reasoning_text.trim().is_empty() {
+    if reasoning_text.trim().is_empty() || has_tool_calls {
         return content.to_string();
     }
 
@@ -202,6 +202,123 @@ fn attach_reasoning_to_content(
         }),
     );
     serde_json::to_string(&Value::Object(obj)).unwrap_or_else(|_| content.to_string())
+}
+
+async fn load_structured_tool_calls_for_run_with_pool(
+    pool: &sqlx::SqlitePool,
+    session_id: &str,
+    run_id: &str,
+) -> Result<Vec<Value>, String> {
+    let rows = sqlx::query_as::<_, (String,)>(
+        "SELECT payload_json
+         FROM session_run_events
+         WHERE session_id = ? AND run_id = ? AND event_type IN ('tool_started', 'tool_completed')
+         ORDER BY created_at ASC, id ASC",
+    )
+    .bind(session_id)
+    .bind(run_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("读取运行工具事件失败: {e}"))?;
+
+    let mut tool_calls: Vec<Value> = Vec::new();
+    for (payload_json,) in rows {
+        let Ok(event) = serde_json::from_str::<SessionRunEvent>(&payload_json) else {
+            continue;
+        };
+        match event {
+            SessionRunEvent::ToolStarted {
+                call_id,
+                tool_name,
+                input,
+                ..
+            } => {
+                if let Some(existing) = tool_calls
+                    .iter_mut()
+                    .find(|entry| entry["toolCall"]["id"].as_str() == Some(call_id.as_str()))
+                {
+                    existing["toolCall"]["name"] = Value::String(tool_name);
+                    existing["toolCall"]["input"] = input;
+                    existing["toolCall"]["status"] = Value::String("running".to_string());
+                } else {
+                    tool_calls.push(json!({
+                        "type": "tool_call",
+                        "toolCall": {
+                            "id": call_id,
+                            "name": tool_name,
+                            "input": input,
+                            "status": "running"
+                        }
+                    }));
+                }
+            }
+            SessionRunEvent::ToolCompleted {
+                call_id,
+                tool_name,
+                input,
+                output,
+                is_error,
+                ..
+            } => {
+                let status = if is_error { "error" } else { "completed" };
+                if let Some(existing) = tool_calls
+                    .iter_mut()
+                    .find(|entry| entry["toolCall"]["id"].as_str() == Some(call_id.as_str()))
+                {
+                    existing["toolCall"]["name"] = Value::String(tool_name);
+                    existing["toolCall"]["input"] = input;
+                    existing["toolCall"]["output"] = Value::String(output);
+                    existing["toolCall"]["status"] = Value::String(status.to_string());
+                } else {
+                    tool_calls.push(json!({
+                        "type": "tool_call",
+                        "toolCall": {
+                            "id": call_id,
+                            "name": tool_name,
+                            "input": input,
+                            "output": output,
+                            "status": status
+                        }
+                    }));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(tool_calls)
+}
+
+pub(crate) async fn persist_partial_assistant_message_for_run_with_pool(
+    pool: &sqlx::SqlitePool,
+    session_id: &str,
+    run_id: &str,
+    partial_text: &str,
+) -> Result<Option<String>, String> {
+    let trimmed_text = partial_text.trim();
+    let tool_calls = load_structured_tool_calls_for_run_with_pool(pool, session_id, run_id).await?;
+    if trimmed_text.is_empty() && tool_calls.is_empty() {
+        return Ok(None);
+    }
+
+    let mut items = Vec::new();
+    if !trimmed_text.is_empty() {
+        items.push(json!({
+            "type": "text",
+            "content": trimmed_text,
+        }));
+    }
+    items.extend(tool_calls);
+
+    let content = serde_json::to_string(&json!({
+        "text": trimmed_text,
+        "items": items,
+    }))
+    .map_err(|e| format!("序列化部分助手消息失败: {e}"))?;
+
+    let msg_id = insert_session_message_with_pool(pool, session_id, "assistant", &content, None).await?;
+    attach_assistant_message_to_run_with_pool(pool, run_id, &msg_id).await?;
+    Ok(Some(msg_id))
 }
 
 pub(crate) async fn finalize_run_success_with_pool(
@@ -264,10 +381,11 @@ pub(crate) async fn finalize_run_success_with_pool(
 mod run_guard_persistence_tests {
     use super::{
         append_run_guard_warning_with_pool, append_run_started_with_pool,
-        append_run_stopped_with_pool,
+        append_run_stopped_with_pool, persist_partial_assistant_message_for_run_with_pool,
     };
     use crate::agent::run_guard::RunStopReason;
     use crate::session_journal::SessionJournalStore;
+    use serde_json::{json, Value};
     use sqlx::sqlite::SqlitePoolOptions;
     use tempfile::tempdir;
 
@@ -310,6 +428,24 @@ mod run_guard_persistence_tests {
         .await
         .expect("create session_run_events table");
 
+        pool
+    }
+
+    async fn setup_partial_message_pool() -> sqlx::SqlitePool {
+        let pool = setup_run_event_pool().await;
+        sqlx::query(
+            "CREATE TABLE messages (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                content_json TEXT,
+                created_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create messages table");
         pool
     }
 
@@ -393,5 +529,101 @@ mod run_guard_persistence_tests {
         assert_eq!(event_type, "run_guard_warning");
         assert!(payload_json.contains("\"warning_kind\":\"loop_detected\""));
         assert!(payload_json.contains("\"last_completed_step\":\"已填写封面标题\""));
+    }
+
+    #[tokio::test]
+    async fn persist_partial_assistant_message_for_run_keeps_tool_calls() {
+        let pool = setup_partial_message_pool().await;
+
+        sqlx::query(
+            "INSERT INTO session_runs (id, session_id, user_message_id, assistant_message_id, status, buffered_text, error_kind, error_message, created_at, updated_at)
+             VALUES ('run-1', 'session-1', 'user-1', '', 'thinking', 'partial text', '', '', '2026-03-29T00:00:00Z', '2026-03-29T00:00:01Z')",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed session run");
+
+        sqlx::query(
+            "INSERT INTO session_run_events (id, run_id, session_id, event_type, payload_json, created_at)
+             VALUES
+             ('evt-1', 'run-1', 'session-1', 'tool_started', ?, '2026-03-29T00:00:02Z'),
+             ('evt-2', 'run-1', 'session-1', 'tool_completed', ?, '2026-03-29T00:00:03Z')",
+        )
+        .bind(
+            serde_json::to_string(&crate::session_journal::SessionRunEvent::ToolStarted {
+                run_id: "run-1".to_string(),
+                tool_name: "bash".to_string(),
+                call_id: "call-1".to_string(),
+                input: json!({"command": "echo hi"}),
+            })
+            .expect("serialize tool started"),
+        )
+        .bind(
+            serde_json::to_string(&crate::session_journal::SessionRunEvent::ToolCompleted {
+                run_id: "run-1".to_string(),
+                tool_name: "bash".to_string(),
+                call_id: "call-1".to_string(),
+                input: json!({"command": "echo hi"}),
+                output: "hi".to_string(),
+                is_error: false,
+            })
+            .expect("serialize tool completed"),
+        )
+        .execute(&pool)
+        .await
+        .expect("seed session run events");
+
+        let msg_id = persist_partial_assistant_message_for_run_with_pool(
+            &pool,
+            "session-1",
+            "run-1",
+            "我先检查一下环境。",
+        )
+        .await
+        .expect("persist partial assistant")
+        .expect("assistant message id");
+
+        let (assistant_message_id,): (String,) = sqlx::query_as(
+            "SELECT assistant_message_id FROM session_runs WHERE id = 'run-1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("query assistant message id");
+        assert_eq!(assistant_message_id, msg_id);
+
+        let (content,): (String,) =
+            sqlx::query_as("SELECT content FROM messages WHERE id = ?")
+                .bind(&msg_id)
+                .fetch_one(&pool)
+                .await
+                .expect("query partial assistant content");
+        let parsed: Value = serde_json::from_str(&content).expect("structured assistant content");
+        assert_eq!(parsed["text"].as_str(), Some("我先检查一下环境。"));
+        assert_eq!(parsed["items"].as_array().map(|items| items.len()), Some(2));
+        assert_eq!(
+            parsed["items"][1]["toolCall"]["name"].as_str(),
+            Some("bash")
+        );
+        assert_eq!(
+            parsed["items"][1]["toolCall"]["output"].as_str(),
+            Some("hi")
+        );
+    }
+
+    #[test]
+    fn attach_reasoning_to_content_skips_tool_call_transcripts() {
+        let content = r#"{"text":"先检查目录","items":[{"type":"text","content":"先检查目录"},{"type":"tool_call","toolCall":{"id":"call-1","name":"list_dir","input":{"path":"."},"status":"completed"}}]}"#;
+
+        let persisted = super::attach_reasoning_to_content(
+            content,
+            "先检查目录",
+            true,
+            "先思考再调用工具",
+            Some(760_000),
+        );
+
+        let parsed: Value = serde_json::from_str(&persisted).expect("structured content");
+        assert!(parsed.get("reasoning").is_none());
+        assert_eq!(parsed["items"].as_array().map(|items| items.len()), Some(2));
     }
 }

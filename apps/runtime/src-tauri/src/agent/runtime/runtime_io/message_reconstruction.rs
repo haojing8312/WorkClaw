@@ -188,6 +188,28 @@ mod tests {
     }
 
     #[test]
+    fn reconstruct_history_messages_restores_structured_assistant_text_without_replaying_json() {
+        let history = vec![(
+            "assistant".to_string(),
+            serde_json::json!({
+                "text": "我是 WorkClaw 助手。",
+                "reasoning": {
+                    "status": "completed",
+                    "content": "先自我介绍"
+                }
+            })
+            .to_string(),
+            None,
+        )];
+
+        let messages = reconstruct_history_messages(&history, "openai");
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["role"].as_str(), Some("assistant"));
+        assert_eq!(messages[0]["content"].as_str(), Some("我是 WorkClaw 助手。"));
+    }
+
+    #[test]
     fn runtime_transcript_round_trip_preserves_tool_call_output_pairs() {
         let final_messages = vec![
             json!({

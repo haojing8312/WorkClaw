@@ -1,5 +1,3 @@
-use super::extract_assistant_text_content;
-
 async fn maybe_self_heal_builtin_skill_source_with_pool(
     pool: &sqlx::SqlitePool,
     skill_id: &str,
@@ -145,13 +143,7 @@ pub(crate) async fn load_session_history_with_pool(
 
     Ok(rows
         .into_iter()
-        .map(|(role, content, content_json)| {
-            if role == "assistant" {
-                (role, extract_assistant_text_content(&content), None)
-            } else {
-                (role, content, content_json)
-            }
-        })
+        .map(|(role, content, content_json)| (role, content, content_json))
         .collect())
 }
 
@@ -168,7 +160,10 @@ pub(crate) async fn load_default_search_provider_config_with_pool(
 
 #[cfg(test)]
 mod tests {
-    use super::{load_installed_skill_source_with_pool, load_session_runtime_inputs_with_pool};
+    use super::{
+        load_installed_skill_source_with_pool, load_session_history_with_pool,
+        load_session_runtime_inputs_with_pool,
+    };
     use chrono::Utc;
     use skillpack_rs::SkillManifest;
     use sqlx::sqlite::SqlitePoolOptions;
@@ -224,6 +219,20 @@ mod tests {
         .execute(&pool)
         .await
         .expect("create model_configs table");
+
+        sqlx::query(
+            "CREATE TABLE messages (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                content_json TEXT,
+                created_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create messages table");
 
         pool
     }
@@ -381,5 +390,53 @@ mod tests {
             .expect("load session runtime inputs");
 
         assert_eq!(model_id, "model-a");
+    }
+
+    #[tokio::test]
+    async fn load_session_history_preserves_structured_assistant_content() {
+        let pool = setup_memory_pool().await;
+        let structured_assistant = serde_json::json!({
+            "text": "我是 WorkClaw 内置助手。",
+            "items": [
+                {
+                    "type": "text",
+                    "content": "我是 WorkClaw 内置助手。"
+                },
+                {
+                    "type": "tool_call",
+                    "toolCall": {
+                        "id": "call-1",
+                        "name": "read_file",
+                        "input": {"path": "README.md"},
+                        "output": "ok",
+                        "status": "completed"
+                    }
+                }
+            ]
+        })
+        .to_string();
+
+        sqlx::query(
+            "INSERT INTO messages (id, session_id, role, content, content_json, created_at)
+             VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind("msg-1")
+        .bind("session-a")
+        .bind("assistant")
+        .bind(&structured_assistant)
+        .bind(Option::<String>::None)
+        .bind(Utc::now().to_rfc3339())
+        .execute(&pool)
+        .await
+        .expect("insert assistant message");
+
+        let history = load_session_history_with_pool(&pool, "session-a")
+            .await
+            .expect("load session history");
+
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].0, "assistant");
+        assert_eq!(history[0].1, structured_assistant);
+        assert_eq!(history[0].2, None);
     }
 }

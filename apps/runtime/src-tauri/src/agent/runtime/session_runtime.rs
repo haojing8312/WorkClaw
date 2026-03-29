@@ -21,6 +21,7 @@ use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
 use super::runtime_io as chat_io;
+use crate::model_transport::{resolve_model_transport, ModelTransportKind};
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct SessionRuntime;
@@ -92,6 +93,10 @@ impl SessionRuntime {
             parts.push(format!("User input:\n{}", raw_args.trim()));
         }
         Some(parts.join("\n\n"))
+    }
+
+    fn append_current_turn_message(messages: &mut Vec<Value>, current_turn: Value) {
+        messages.push(current_turn);
     }
 
     async fn maybe_execute_user_skill_command(
@@ -349,9 +354,23 @@ impl SessionRuntime {
             .candidates
             .into_iter()
             .map(|candidate| {
+                let transport = resolve_model_transport(
+                    &candidate.protocol_type,
+                    &candidate.base_url,
+                    Some(candidate.provider_key.as_str()).filter(|value| !value.trim().is_empty()),
+                );
+                let effective_api_format = if candidate.protocol_type.trim().is_empty() {
+                    match transport.kind {
+                        ModelTransportKind::AnthropicMessages => "anthropic".to_string(),
+                        ModelTransportKind::OpenAiCompletions
+                        | ModelTransportKind::OpenAiResponses => "openai".to_string(),
+                    }
+                } else {
+                    candidate.protocol_type.clone()
+                };
                 (
                     candidate.provider_key,
-                    candidate.protocol_type,
+                    effective_api_format,
                     candidate.base_url,
                     candidate.model_name,
                     candidate.api_key,
@@ -385,15 +404,7 @@ impl SessionRuntime {
         if let Some(current_turn) =
             RuntimeTranscript::build_current_turn_message(&api_format, params.user_message_parts)
         {
-            if let Some(existing) = messages
-                .iter_mut()
-                .rev()
-                .find(|message| message["role"].as_str() == Some("user"))
-            {
-                *existing = current_turn;
-            } else {
-                messages.push(current_turn);
-            }
+            Self::append_current_turn_message(&mut messages, current_turn);
         }
         let skill_config = crate::agent::skill_config::SkillConfig::parse(&raw_prompt);
         let budget_scope = if skill_id.trim().eq_ignore_ascii_case("builtin-general") {
@@ -442,15 +453,8 @@ impl SessionRuntime {
             if let Some(current_turn) =
                 RuntimeTranscript::build_current_turn_message(&api_format, &rewritten_parts)
             {
-                if let Some(existing) = messages
-                    .iter_mut()
-                    .rev()
-                    .find(|message| message["role"].as_str() == Some("user"))
-                {
-                    *existing = current_turn;
-                } else {
-                    messages.push(current_turn);
-                }
+                let _ = messages.pop();
+                Self::append_current_turn_message(&mut messages, current_turn);
             }
         }
 
@@ -492,6 +496,13 @@ impl SessionRuntime {
                     )
                     .await;
                 }
+                let _ = chat_io::persist_partial_assistant_message_for_run_with_pool(
+                    db,
+                    session_id,
+                    run_id,
+                    &partial_text,
+                )
+                .await;
 
                 let error_message = route_execution
                     .last_error
@@ -591,6 +602,7 @@ impl SessionRuntime {
 mod tests {
     use super::SessionRuntime;
     use crate::agent::runtime::runtime_io as chat_io;
+    use serde_json::json;
 
     #[test]
     fn parse_user_skill_command_extracts_command_and_raw_args() {
@@ -651,5 +663,24 @@ mod tests {
             SessionRuntime::rewrite_user_skill_command_for_model("/pm_summary --employee xt", &specs),
             None
         );
+    }
+
+    #[test]
+    fn append_current_turn_message_keeps_previous_user_turns() {
+        let mut messages = vec![
+            json!({"role": "user", "content": "你是谁"}),
+            json!({"role": "assistant", "content": "我是 WorkClaw 助手"}),
+        ];
+
+        SessionRuntime::append_current_turn_message(
+            &mut messages,
+            json!({"role": "user", "content": "你能做什么"}),
+        );
+
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0]["role"].as_str(), Some("user"));
+        assert_eq!(messages[0]["content"].as_str(), Some("你是谁"));
+        assert_eq!(messages[2]["role"].as_str(), Some("user"));
+        assert_eq!(messages[2]["content"].as_str(), Some("你能做什么"));
     }
 }

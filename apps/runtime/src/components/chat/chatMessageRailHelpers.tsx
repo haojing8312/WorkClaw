@@ -102,6 +102,8 @@ export function renderChatRunFailureCard({
 }: RenderChatRunFailureCardArgs) {
   const display = getRunFailureDisplay(run);
   const showContinueAction = run.error_kind === "max_turns";
+  const showBufferedOutput =
+    Boolean(run.buffered_text) && !String(run.assistant_message_id || "").trim();
   const rawDetailsExpanded = expandedRunDetailIds.includes(run.id);
   const technicalToggleLabel = getRunFailureTechnicalToggleLabel(rawDetailsExpanded);
 
@@ -128,7 +130,7 @@ export function renderChatRunFailureCard({
           {rawDetailsExpanded ? <div className={RUN_FAILURE_TECHNICAL_DETAILS_PANEL_CLASS}>{display.rawMessage}</div> : null}
         </div>
       ) : null}
-      {run.buffered_text && (
+      {showBufferedOutput && (
         <div className="mt-3 rounded-xl border border-white/70 bg-white/70 px-4 py-3 text-sm text-gray-700">
           <div className="mb-1 text-xs font-medium tracking-wide text-gray-500">已保留的部分输出</div>
           <div className="whitespace-pre-wrap">{run.buffered_text}</div>

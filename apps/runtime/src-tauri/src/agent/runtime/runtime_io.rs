@@ -16,7 +16,7 @@ pub(crate) use runtime_events::{
     append_partial_assistant_chunk_with_pool, append_run_failed_with_pool,
     append_run_guard_warning_with_pool, append_run_started_with_pool, append_run_stopped_with_pool,
     finalize_run_success_with_pool, insert_session_message_with_pool,
-    record_route_attempt_log_with_pool,
+    persist_partial_assistant_message_for_run_with_pool, record_route_attempt_log_with_pool,
 };
 pub(crate) use runtime_inputs::{
     load_default_search_provider_config_with_pool, load_installed_skill_source_with_pool,
