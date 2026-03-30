@@ -20,6 +20,26 @@ pub struct ResolvedModelTransport {
     pub openai_compat: Option<OpenAiCompatFeatures>,
 }
 
+fn is_anthropic_base_url(base_url: &str) -> bool {
+    let trimmed = base_url.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    let Ok(url) = Url::parse(trimmed) else {
+        return false;
+    };
+
+    let host = url.host_str().unwrap_or_default();
+    if host.eq_ignore_ascii_case("api.anthropic.com") {
+        return true;
+    }
+
+    url.path()
+        .split('/')
+        .any(|segment| segment.eq_ignore_ascii_case("anthropic"))
+}
+
 fn is_openai_api_base_url(base_url: &str) -> bool {
     let trimmed = base_url.trim();
     if trimmed.is_empty() {
@@ -87,7 +107,7 @@ pub fn resolve_model_transport(
     base_url: &str,
     provider_key: Option<&str>,
 ) -> ResolvedModelTransport {
-    if api_format.trim().eq_ignore_ascii_case("anthropic") {
+    if api_format.trim().eq_ignore_ascii_case("anthropic") || is_anthropic_base_url(base_url) {
         return ResolvedModelTransport {
             kind: ModelTransportKind::AnthropicMessages,
             openai_compat: None,
@@ -190,5 +210,22 @@ mod tests {
             resolve_model_transport("openai", "https://api.openai.com/v1", Some("qwen"));
 
         assert_eq!(resolved.kind, ModelTransportKind::OpenAiCompletions);
+    }
+
+    #[test]
+    fn empty_api_format_with_anthropic_compat_path_uses_anthropic_transport() {
+        let resolved =
+            resolve_model_transport("", "https://api.minimax.io/anthropic", Some("minimax"));
+
+        assert_eq!(resolved.kind, ModelTransportKind::AnthropicMessages);
+        assert_eq!(resolved.openai_compat, None);
+    }
+
+    #[test]
+    fn empty_api_format_with_native_anthropic_host_uses_anthropic_transport() {
+        let resolved = resolve_model_transport("", "https://api.anthropic.com/v1", None);
+
+        assert_eq!(resolved.kind, ModelTransportKind::AnthropicMessages);
+        assert_eq!(resolved.openai_compat, None);
     }
 }

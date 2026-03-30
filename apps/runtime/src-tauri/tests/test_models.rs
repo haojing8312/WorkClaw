@@ -171,12 +171,11 @@ async fn set_default_model_updates_existing_sessions_to_the_new_default() {
         .await
         .expect("set default model");
 
-    let session_models: Vec<(String, String)> = sqlx::query_as(
-        "SELECT id, model_id FROM sessions ORDER BY id ASC",
-    )
-    .fetch_all(&pool)
-    .await
-    .expect("query session models");
+    let session_models: Vec<(String, String)> =
+        sqlx::query_as("SELECT id, model_id FROM sessions ORDER BY id ASC")
+            .fetch_all(&pool)
+            .await
+            .expect("query session models");
 
     assert_eq!(
         session_models,
@@ -198,12 +197,11 @@ async fn delete_non_default_model_rehomes_sessions_to_the_current_default() {
         .await
         .expect("delete non-default model");
 
-    let session_model: (String,) = sqlx::query_as(
-        "SELECT model_id FROM sessions WHERE id = 'session-1'",
-    )
-    .fetch_one(&pool)
-    .await
-    .expect("query session model");
+    let session_model: (String,) =
+        sqlx::query_as("SELECT model_id FROM sessions WHERE id = 'session-1'")
+            .fetch_one(&pool)
+            .await
+            .expect("query session model");
 
     assert_eq!(session_model.0, "model-1");
 }
@@ -220,12 +218,11 @@ async fn delete_default_model_rehomes_sessions_to_the_promoted_replacement() {
         .await
         .expect("delete default model");
 
-    let session_model: (String,) = sqlx::query_as(
-        "SELECT model_id FROM sessions WHERE id = 'session-1'",
-    )
-    .fetch_one(&pool)
-    .await
-    .expect("query session model");
+    let session_model: (String,) =
+        sqlx::query_as("SELECT model_id FROM sessions WHERE id = 'session-1'")
+            .fetch_one(&pool)
+            .await
+            .expect("query session model");
 
     assert_eq!(session_model.0, "model-2");
 }

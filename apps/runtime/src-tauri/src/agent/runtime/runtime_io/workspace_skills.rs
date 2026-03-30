@@ -8,6 +8,7 @@ use serde_json::Value;
 
 const SKILL_COMMAND_MAX_LENGTH: usize = 32;
 const SKILL_COMMAND_FALLBACK: &str = "skill";
+const WORKSPACE_SKILL_ID_MARKER_FILE: &str = ".workclaw-skill-id";
 
 pub fn normalize_workspace_skill_dir_name(skill_id: &str) -> String {
     let mut out = String::new();
@@ -35,11 +36,11 @@ pub fn normalize_workspace_skill_dir_name(skill_id: &str) -> String {
 
 pub fn build_workspace_skill_markdown_path(
     work_dir: &std::path::Path,
-    skill_id: &str,
+    projected_dir_name: &str,
 ) -> std::path::PathBuf {
     work_dir
         .join("skills")
-        .join(normalize_workspace_skill_dir_name(skill_id))
+        .join(normalize_workspace_skill_dir_name(projected_dir_name))
         .join("SKILL.md")
 }
 
@@ -116,6 +117,42 @@ fn resolve_unique_skill_command_name(
     );
     let _ = used.insert(fallback.clone());
     fallback
+}
+
+fn resolve_unique_projected_skill_dir_name(
+    base: &str,
+    used: &mut std::collections::HashSet<String>,
+) -> String {
+    let normalized_base = normalize_workspace_skill_dir_name(base);
+    if used.insert(normalized_base.clone()) {
+        return normalized_base;
+    }
+
+    for index in 2..10_000 {
+        let candidate = format!("{normalized_base}-{index}");
+        if used.insert(candidate.clone()) {
+            return candidate;
+        }
+    }
+
+    let fallback = format!("{normalized_base}-x");
+    let _ = used.insert(fallback.clone());
+    fallback
+}
+
+fn resolve_projected_workspace_entries(
+    entries: &[WorkspaceSkillRuntimeEntry],
+) -> Vec<WorkspaceSkillRuntimeEntry> {
+    let mut used = std::collections::HashSet::new();
+    entries
+        .iter()
+        .cloned()
+        .map(|mut entry| {
+            entry.projected_dir_name =
+                resolve_unique_projected_skill_dir_name(&entry.projected_dir_name, &mut used);
+            entry
+        })
+        .collect()
 }
 
 pub fn build_workspace_skill_command_specs(
@@ -251,21 +288,35 @@ pub fn resolve_workspace_skill_runtime_entry(
 ) -> Result<WorkspaceSkillRuntimeEntry, String> {
     let manifest: skillpack_rs::SkillManifest =
         serde_json::from_str(manifest_json).map_err(|e| e.to_string())?;
-    let projected_dir_name = normalize_workspace_skill_dir_name(skill_id);
-    let (content, raw_skill_markdown) =
+    let (projected_dir_name, content, raw_skill_markdown) =
         if let Some(skill_root) = resolve_directory_backed_skill_root(source_type, pack_path) {
+            let projected_dir_name = skill_root
+                .file_name()
+                .and_then(|name| name.to_str())
+                .filter(|name| !name.trim().is_empty())
+                .map(|name| name.to_string())
+                .unwrap_or_else(|| normalize_workspace_skill_dir_name(skill_id));
             (
+                projected_dir_name,
                 WorkspaceSkillContent::LocalDir(skill_root),
                 read_local_skill_prompt(pack_path),
             )
         } else if source_type == "builtin" {
             let (files, markdown) = load_legacy_builtin_embedded_files(skill_id);
-            (WorkspaceSkillContent::FileTree(files), Some(markdown))
+            (
+                normalize_workspace_skill_dir_name(skill_id),
+                WorkspaceSkillContent::FileTree(files),
+                Some(markdown),
+            )
         } else {
             let unpacked = skillpack_rs::verify_and_unpack(pack_path, username)
                 .map_err(|e| format!("解包 Skill 失败: {}", e))?;
             let markdown = extract_skill_prompt_from_decrypted_files(&unpacked.files);
-            (WorkspaceSkillContent::FileTree(unpacked.files), markdown)
+            (
+                normalize_workspace_skill_dir_name(skill_id),
+                WorkspaceSkillContent::FileTree(unpacked.files),
+                markdown,
+            )
         };
     let config = raw_skill_markdown
         .as_deref()
@@ -348,17 +399,26 @@ fn write_skill_file_tree(
     Ok(())
 }
 
+fn write_workspace_skill_id_marker(
+    dest_dir: &std::path::Path,
+    skill_id: &str,
+) -> Result<(), String> {
+    std::fs::write(dest_dir.join(WORKSPACE_SKILL_ID_MARKER_FILE), skill_id)
+        .map_err(|e| e.to_string())
+}
+
 pub fn sync_workspace_skills_to_directory(
     work_dir: &std::path::Path,
     entries: &[WorkspaceSkillRuntimeEntry],
 ) -> Result<(), String> {
+    let projected_entries = resolve_projected_workspace_entries(entries);
     let skills_root = work_dir.join("skills");
     if skills_root.exists() {
         std::fs::remove_dir_all(&skills_root).map_err(|e| e.to_string())?;
     }
     std::fs::create_dir_all(&skills_root).map_err(|e| e.to_string())?;
 
-    for entry in entries {
+    for entry in &projected_entries {
         let dest_dir = skills_root.join(&entry.projected_dir_name);
         match &entry.content {
             WorkspaceSkillContent::LocalDir(source_dir) => {
@@ -366,6 +426,7 @@ pub fn sync_workspace_skills_to_directory(
             }
             WorkspaceSkillContent::FileTree(files) => write_skill_file_tree(&dest_dir, files)?,
         }
+        write_workspace_skill_id_marker(&dest_dir, &entry.skill_id)?;
     }
 
     Ok(())
@@ -375,15 +436,18 @@ pub fn build_workspace_skill_prompt_entries(
     work_dir: &std::path::Path,
     entries: &[WorkspaceSkillRuntimeEntry],
 ) -> Vec<WorkspaceSkillPromptEntry> {
-    entries
-        .iter()
+    resolve_projected_workspace_entries(entries)
+        .into_iter()
         .filter(|entry| !entry.invocation.disable_model_invocation)
         .map(|entry| WorkspaceSkillPromptEntry {
             skill_id: entry.skill_id.clone(),
             invoke_name: entry.skill_id.clone(),
             name: entry.name.clone(),
             description: entry.description.clone(),
-            skill_md_path: build_workspace_skill_markdown_path(work_dir, &entry.skill_id)
+            skill_md_path: build_workspace_skill_markdown_path(
+                work_dir,
+                &entry.projected_dir_name,
+            )
                 .to_string_lossy()
                 .to_string(),
         })
@@ -508,8 +572,8 @@ pub fn build_skill_roots(
                 .join("skills"),
         );
     }
-    skill_roots.sort();
-    skill_roots.dedup();
+    let mut seen = std::collections::HashSet::new();
+    skill_roots.retain(|path| seen.insert(path.clone()));
     skill_roots
 }
 
@@ -568,6 +632,15 @@ mod workspace_skill_projection_tests {
     }
 
     #[test]
+    fn build_skill_roots_keep_workspace_roots_first() {
+        let work_dir = Path::new("E:\\workspace\\session-a");
+        let roots = build_skill_roots(&work_dir.to_string_lossy(), "builtin", "");
+
+        assert_eq!(roots.first(), Some(&work_dir.join(".claude").join("skills")));
+        assert_eq!(roots.get(1), Some(&work_dir.join("skills")));
+    }
+
+    #[test]
     fn build_workspace_skill_prompt_entry_includes_location() {
         let entry = WorkspaceSkillPromptEntry {
             skill_id: "local-auto-redbook".to_string(),
@@ -603,6 +676,11 @@ mod workspace_skill_projection_tests {
 
     #[test]
     fn resolve_workspace_skill_runtime_entry_for_local_skill_uses_local_dir() {
+        let tmp = tempdir().unwrap();
+        let skill_dir = tmp.path().join("auto-redbook");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(skill_dir.join("SKILL.md"), "# Local Skill").unwrap();
+
         let manifest = SkillManifest {
             id: "local-auto-redbook".to_string(),
             name: "xhs-note-creator".to_string(),
@@ -620,18 +698,50 @@ mod workspace_skill_projection_tests {
             "local-auto-redbook",
             &serde_json::to_string(&manifest).unwrap(),
             "",
-            "E:\\skills\\auto-redbook",
+            &skill_dir.to_string_lossy(),
             "local",
         )
         .unwrap();
 
-        assert_eq!(entry.projected_dir_name, "local-auto-redbook");
+        assert_eq!(entry.projected_dir_name, "auto-redbook");
         match entry.content {
             WorkspaceSkillContent::LocalDir(path) => {
-                assert_eq!(path, Path::new("E:\\skills\\auto-redbook"));
+                assert_eq!(path, skill_dir);
             }
             WorkspaceSkillContent::FileTree(_) => panic!("expected local dir content"),
         }
+    }
+
+    #[test]
+    fn resolve_workspace_skill_runtime_entry_preserves_source_directory_basename_for_local_skill() {
+        let tmp = tempdir().unwrap();
+        let source_dir = tmp.path().join("feishu-pm-runtime");
+        std::fs::create_dir_all(&source_dir).unwrap();
+        std::fs::write(source_dir.join("SKILL.md"), "# Feishu PM Runtime").unwrap();
+
+        let manifest = SkillManifest {
+            id: "feishu-pm-runtime-local".to_string(),
+            name: "feishu-pm-runtime".to_string(),
+            description: "Runtime helpers".to_string(),
+            version: "1.0.0".to_string(),
+            author: "tester".to_string(),
+            recommended_model: "gpt-4o".to_string(),
+            tags: vec![],
+            created_at: Utc::now(),
+            username_hint: None,
+            encrypted_verify: String::new(),
+        };
+
+        let entry = resolve_workspace_skill_runtime_entry(
+            "feishu-pm-runtime-local",
+            &serde_json::to_string(&manifest).unwrap(),
+            "",
+            &source_dir.to_string_lossy(),
+            "local",
+        )
+        .unwrap();
+
+        assert_eq!(entry.projected_dir_name, "feishu-pm-runtime");
     }
 
     #[test]
@@ -702,6 +812,116 @@ mod workspace_skill_projection_tests {
             }
             WorkspaceSkillContent::LocalDir(_) => panic!("expected builtin file tree content"),
         }
+    }
+
+    #[test]
+    fn sync_workspace_skills_to_directory_keeps_sibling_local_skills_addressable_after_projection() {
+        let tmp = tempdir().unwrap();
+        let source_root = tmp.path().join("source");
+        let runtime_dir = source_root.join("feishu-pm-runtime");
+        let summary_dir = source_root.join("feishu-pm-weekly-work-summary");
+        std::fs::create_dir_all(&runtime_dir).unwrap();
+        std::fs::create_dir_all(&summary_dir).unwrap();
+        std::fs::write(runtime_dir.join("SKILL.md"), "# Feishu PM Runtime").unwrap();
+        std::fs::write(summary_dir.join("SKILL.md"), "# Weekly Summary").unwrap();
+        std::fs::write(summary_dir.join("reference.txt"), "../feishu-pm-runtime").unwrap();
+
+        let manifest_runtime = SkillManifest {
+            id: "feishu-pm-runtime-local".to_string(),
+            name: "feishu-pm-runtime".to_string(),
+            description: "Runtime helpers".to_string(),
+            version: "1.0.0".to_string(),
+            author: "tester".to_string(),
+            recommended_model: "gpt-4o".to_string(),
+            tags: vec![],
+            created_at: Utc::now(),
+            username_hint: None,
+            encrypted_verify: String::new(),
+        };
+        let manifest_summary = SkillManifest {
+            id: "feishu-pm-weekly-work-summary-local".to_string(),
+            name: "feishu-pm-weekly-work-summary".to_string(),
+            description: "Weekly summaries".to_string(),
+            version: "1.0.0".to_string(),
+            author: "tester".to_string(),
+            recommended_model: "gpt-4o".to_string(),
+            tags: vec![],
+            created_at: Utc::now(),
+            username_hint: None,
+            encrypted_verify: String::new(),
+        };
+
+        let runtime_entry = resolve_workspace_skill_runtime_entry(
+            "feishu-pm-runtime-local",
+            &serde_json::to_string(&manifest_runtime).unwrap(),
+            "",
+            &runtime_dir.to_string_lossy(),
+            "local",
+        )
+        .unwrap();
+        let summary_entry = resolve_workspace_skill_runtime_entry(
+            "feishu-pm-weekly-work-summary-local",
+            &serde_json::to_string(&manifest_summary).unwrap(),
+            "",
+            &summary_dir.to_string_lossy(),
+            "local",
+        )
+        .unwrap();
+
+        let work_dir = tmp.path().join("workspace");
+        sync_workspace_skills_to_directory(&work_dir, &[runtime_entry, summary_entry]).unwrap();
+
+        let projected_runtime = work_dir.join("skills").join("feishu-pm-runtime");
+        let projected_summary = work_dir.join("skills").join("feishu-pm-weekly-work-summary");
+        assert!(projected_runtime.join("SKILL.md").exists());
+        assert!(projected_summary.join("SKILL.md").exists());
+        assert!(projected_summary
+            .join("..")
+            .join("feishu-pm-runtime")
+            .join("SKILL.md")
+            .exists());
+    }
+
+    #[test]
+    fn build_workspace_skill_prompt_entries_use_projected_skill_paths_for_local_skills() {
+        let tmp = tempdir().unwrap();
+        let source_dir = tmp.path().join("feishu-pm-runtime");
+        std::fs::create_dir_all(&source_dir).unwrap();
+        std::fs::write(source_dir.join("SKILL.md"), "# Feishu PM Runtime").unwrap();
+
+        let manifest = SkillManifest {
+            id: "feishu-pm-runtime-local".to_string(),
+            name: "feishu-pm-runtime".to_string(),
+            description: "Runtime helpers".to_string(),
+            version: "1.0.0".to_string(),
+            author: "tester".to_string(),
+            recommended_model: "gpt-4o".to_string(),
+            tags: vec![],
+            created_at: Utc::now(),
+            username_hint: None,
+            encrypted_verify: String::new(),
+        };
+
+        let entry = resolve_workspace_skill_runtime_entry(
+            "feishu-pm-runtime-local",
+            &serde_json::to_string(&manifest).unwrap(),
+            "",
+            &source_dir.to_string_lossy(),
+            "local",
+        )
+        .unwrap();
+
+        let prompt_entries = build_workspace_skill_prompt_entries(tmp.path(), &[entry]);
+        assert_eq!(prompt_entries.len(), 1);
+        assert_eq!(
+            prompt_entries[0].skill_md_path,
+            tmp.path()
+                .join("skills")
+                .join("feishu-pm-runtime")
+                .join("SKILL.md")
+                .to_string_lossy()
+                .to_string()
+        );
     }
 
     #[test]
@@ -1017,6 +1237,38 @@ Run exec directly.
     }
 
     #[test]
+    fn sync_workspace_skills_to_directory_writes_skill_id_marker() {
+        let tmp = tempdir().unwrap();
+        let work_dir = tmp.path().join("workspace");
+        let mut files = std::collections::HashMap::new();
+        files.insert("SKILL.md".to_string(), b"# Builtin".to_vec());
+
+        let entry = WorkspaceSkillRuntimeEntry {
+            skill_id: "local-feishu-pm-runtime".to_string(),
+            name: "Builtin".to_string(),
+            description: "Builtin".to_string(),
+            source_type: "local".to_string(),
+            projected_dir_name: "feishu-pm-runtime".to_string(),
+            config: SkillConfig::default(),
+            invocation: runtime_skill_core::SkillInvocationPolicy::default(),
+            metadata: None,
+            command_dispatch: None,
+            content: WorkspaceSkillContent::FileTree(files),
+        };
+
+        sync_workspace_skills_to_directory(&work_dir, &[entry]).unwrap();
+
+        let marker = work_dir
+            .join("skills")
+            .join("feishu-pm-runtime")
+            .join(".workclaw-skill-id");
+        assert_eq!(
+            std::fs::read_to_string(marker).unwrap(),
+            "local-feishu-pm-runtime"
+        );
+    }
+
+    #[test]
     fn sync_workspace_skills_to_directory_projects_builtin_docx_assets() {
         let tmp = tempdir().unwrap();
         let work_dir = tmp.path().join("workspace");
@@ -1292,6 +1544,59 @@ Run exec directly.
             .join("fresh-skill")
             .join("SKILL.md")
             .exists());
+    }
+
+    #[test]
+    fn prepare_workspace_skills_prompt_deduplicates_colliding_projected_dir_names() {
+        let tmp = tempdir().unwrap();
+        let work_dir = tmp.path().join("workspace");
+
+        let mut first_files = std::collections::HashMap::new();
+        first_files.insert("SKILL.md".to_string(), b"# First".to_vec());
+        let mut second_files = std::collections::HashMap::new();
+        second_files.insert("SKILL.md".to_string(), b"# Second".to_vec());
+
+        let entries = vec![
+            WorkspaceSkillRuntimeEntry {
+                skill_id: "local-first-runtime".to_string(),
+                name: "First Runtime".to_string(),
+                description: "First runtime".to_string(),
+                source_type: "local".to_string(),
+                projected_dir_name: "feishu-pm-runtime".to_string(),
+                config: SkillConfig::default(),
+                invocation: runtime_skill_core::SkillInvocationPolicy::default(),
+                metadata: None,
+                command_dispatch: None,
+                content: WorkspaceSkillContent::FileTree(first_files),
+            },
+            WorkspaceSkillRuntimeEntry {
+                skill_id: "local-second-runtime".to_string(),
+                name: "Second Runtime".to_string(),
+                description: "Second runtime".to_string(),
+                source_type: "local".to_string(),
+                projected_dir_name: "feishu-pm-runtime".to_string(),
+                config: SkillConfig::default(),
+                invocation: runtime_skill_core::SkillInvocationPolicy::default(),
+                metadata: None,
+                command_dispatch: None,
+                content: WorkspaceSkillContent::FileTree(second_files),
+            },
+        ];
+
+        let prompt = prepare_workspace_skills_prompt(&work_dir, &entries).unwrap();
+
+        assert!(work_dir
+            .join("skills")
+            .join("feishu-pm-runtime")
+            .join("SKILL.md")
+            .exists());
+        assert!(work_dir
+            .join("skills")
+            .join("feishu-pm-runtime-2")
+            .join("SKILL.md")
+            .exists());
+        assert!(prompt.contains("feishu-pm-runtime\\SKILL.md"));
+        assert!(prompt.contains("feishu-pm-runtime-2\\SKILL.md"));
     }
 
     #[tokio::test]

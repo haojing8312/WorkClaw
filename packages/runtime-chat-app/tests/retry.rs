@@ -21,6 +21,12 @@ fn classifies_route_errors_and_retry_policy() {
         classify_model_route_error("permission denied"),
         ModelRouteErrorKind::Auth
     );
+    assert_eq!(
+        classify_model_route_error(
+            r#"{"type":"error","error":{"type":"api_error","message":"unknown error, 794 (1000)"}}"#
+        ),
+        ModelRouteErrorKind::Network
+    );
     assert!(should_retry_same_candidate(ModelRouteErrorKind::Network));
     assert_eq!(retry_budget_for_error(ModelRouteErrorKind::Network, 0), 5);
     assert_eq!(retry_budget_for_error(ModelRouteErrorKind::Network, 2), 5);

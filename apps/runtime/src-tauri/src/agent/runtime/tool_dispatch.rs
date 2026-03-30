@@ -18,10 +18,13 @@ use runtime_executor_core::{
     extract_tool_call_parse_error, split_error_code_and_message, truncate_tool_output,
     update_tool_failure_streak, ToolFailureStreak, MAX_TOOL_OUTPUT_CHARS,
 };
-use serde_json::json;
+use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter};
+
+pub(crate) const INTERNAL_SKILL_DISPATCH_INPUT_KEY: &str =
+    "__workclaw_internal_skill_dispatch";
 
 pub(crate) struct ToolDispatchContext<'a> {
     pub registry: &'a ToolRegistry,
@@ -59,6 +62,15 @@ pub(crate) async fn dispatch_skill_command(
     spec: &WorkspaceSkillCommandSpec,
     raw_args: &str,
 ) -> Result<String> {
+    dispatch_skill_command_with_mode(ctx, spec, raw_args, false).await
+}
+
+async fn dispatch_skill_command_with_mode(
+    ctx: &ToolDispatchContext<'_>,
+    spec: &WorkspaceSkillCommandSpec,
+    raw_args: &str,
+    mark_internal_bridge: bool,
+) -> Result<String> {
     let dispatch = spec
         .dispatch
         .as_ref()
@@ -78,14 +90,23 @@ pub(crate) async fn dispatch_skill_command(
         }
     }
 
+    let mut input = json!({
+        "command": raw_args,
+        "commandName": spec.name,
+        "skillName": spec.skill_name,
+    });
+    if mark_internal_bridge {
+        if let Some(obj) = input.as_object_mut() {
+            obj.insert(
+                INTERNAL_SKILL_DISPATCH_INPUT_KEY.to_string(),
+                Value::Bool(true),
+            );
+        }
+    }
     let call = ToolCall {
         id: format!("skill-command-{}", uuid::Uuid::new_v4()),
         name: dispatch.tool_name.clone(),
-        input: json!({
-            "command": raw_args,
-            "commandName": spec.name,
-            "skillName": spec.skill_name,
-        }),
+        input,
     };
     let mut tool_results = Vec::new();
     let mut repeated_failure_summary = None;
@@ -102,7 +123,7 @@ pub(crate) async fn dispatch_skill_command(
         latest_browser_progress: &mut latest_browser_progress,
     };
 
-    match dispatch_tool_call(ctx, &mut dispatch_state, 0, &call).await? {
+    match Box::pin(dispatch_tool_call(ctx, &mut dispatch_state, 0, &call)).await? {
         ToolDispatchOutcome::Cancelled => {
             Err(anyhow!("CANCELLED: Skill command /{} 已取消", spec.name))
         }
@@ -112,6 +133,68 @@ pub(crate) async fn dispatch_skill_command(
             .map(|result| result.content)
             .ok_or_else(|| anyhow!("SKILL_COMMAND_NO_RESULT: Skill command /{} 未返回结果", spec.name)),
     }
+}
+
+fn raw_skill_call_arguments(call: &ToolCall) -> String {
+    call.input
+        .get("arguments")
+        .and_then(Value::as_array)
+        .map(|args| {
+            args.iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .unwrap_or_default()
+}
+
+fn resolve_skill_dispatch_bridge(
+    tool: &Arc<dyn Tool>,
+    call: &ToolCall,
+    tool_ctx: &ToolContext,
+) -> Result<Option<(WorkspaceSkillCommandSpec, String)>> {
+    let Some(structured) = tool.structured_output(&call.input, tool_ctx)? else {
+        return Ok(None);
+    };
+    let mode = structured
+        .get("mode")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if mode != "command_dispatch" {
+        return Ok(None);
+    }
+
+    let Some(dispatch_value) = structured.get("command_dispatch").cloned() else {
+        return Ok(None);
+    };
+    let dispatch = serde_json::from_value::<runtime_skill_core::SkillCommandDispatchSpec>(
+        dispatch_value,
+    )
+    .map_err(|err| anyhow!("SKILL_RESOLUTION_PARSE_FAILED: {}", err))?;
+    let skill_name = structured
+        .get("skill_name")
+        .and_then(Value::as_str)
+        .unwrap_or("skill")
+        .to_string();
+    let description = structured
+        .get("description")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(skill_name.as_str())
+        .to_string();
+
+    Ok(Some((
+        WorkspaceSkillCommandSpec {
+            name: skill_name.clone(),
+            skill_id: skill_name.clone(),
+            skill_name,
+            description,
+            dispatch: Some(dispatch),
+        },
+        raw_skill_call_arguments(call),
+    )))
 }
 
 enum ApprovalOutcome {
@@ -479,6 +562,58 @@ pub(crate) async fn dispatch_tool_call(
                             if !whitelist.iter().any(|w| w == &call.name) {
                                 (format!("此 Skill 不允许使用工具: {}", call.name), true)
                             } else {
+                                if is_skill_call {
+                                    match resolve_skill_dispatch_bridge(&tool, call, ctx.tool_ctx) {
+                                        Ok(Some((spec, raw_args))) => match dispatch_skill_command_with_mode(ctx, &spec, &raw_args, true).await {
+                                            Ok(output) => (output, false),
+                                            Err(err) => (format!("工具执行错误: {}", err), true),
+                                        },
+                                        Ok(None) => {
+                                            run_tool(
+                                                tool,
+                                                call,
+                                                ctx.tool_ctx,
+                                                ctx.cancel_flag.clone(),
+                                                ctx.route_node_timeout_secs,
+                                                is_skill_call,
+                                            )
+                                            .await
+                                        }
+                                        Err(err) => (format!("工具执行错误: {}", err), true),
+                                    }
+                                } else {
+                                    run_tool(
+                                        tool,
+                                        call,
+                                        ctx.tool_ctx,
+                                        ctx.cancel_flag.clone(),
+                                        ctx.route_node_timeout_secs,
+                                        is_skill_call,
+                                    )
+                                    .await
+                                }
+                            }
+                        } else {
+                            if is_skill_call {
+                                match resolve_skill_dispatch_bridge(&tool, call, ctx.tool_ctx) {
+                                    Ok(Some((spec, raw_args))) => match dispatch_skill_command_with_mode(ctx, &spec, &raw_args, true).await {
+                                        Ok(output) => (output, false),
+                                        Err(err) => (format!("工具执行错误: {}", err), true),
+                                    },
+                                    Ok(None) => {
+                                        run_tool(
+                                            tool,
+                                            call,
+                                            ctx.tool_ctx,
+                                            ctx.cancel_flag.clone(),
+                                            ctx.route_node_timeout_secs,
+                                            is_skill_call,
+                                        )
+                                        .await
+                                    }
+                                    Err(err) => (format!("工具执行错误: {}", err), true),
+                                }
+                            } else {
                                 run_tool(
                                     tool,
                                     call,
@@ -489,16 +624,6 @@ pub(crate) async fn dispatch_tool_call(
                                 )
                                 .await
                             }
-                        } else {
-                            run_tool(
-                                tool,
-                                call,
-                                ctx.tool_ctx,
-                                ctx.cancel_flag.clone(),
-                                ctx.route_node_timeout_secs,
-                                is_skill_call,
-                            )
-                            .await
                         }
                     }
                     None => {
@@ -648,6 +773,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     use std::time::Duration;
+    use tempfile::TempDir;
 
     struct BlockingTool {
         started: Arc<AtomicBool>,
@@ -659,6 +785,12 @@ mod tests {
     }
 
     struct EchoCommandTool;
+
+    fn create_skill(root: &TempDir, name: &str, skill_md: &str) {
+        let skill_dir = root.path().join(name);
+        std::fs::create_dir_all(&skill_dir).expect("create skill dir");
+        std::fs::write(skill_dir.join("SKILL.md"), skill_md).expect("write SKILL.md");
+    }
 
     impl Tool for BlockingTool {
         fn name(&self) -> &str {
@@ -977,5 +1109,81 @@ mod tests {
 
         assert!(err.to_string().contains("PERMISSION_DENIED"));
         assert!(err.to_string().contains("exec"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_tool_call_bridges_skill_dispatchable_resolution_into_exec_tool() {
+        let skills_root = TempDir::new().expect("temp dir");
+        create_skill(
+            &skills_root,
+            "dispatch-skill",
+            "---\nname: dispatch-skill\ndisable-model-invocation: true\ncommand-dispatch: tool\ncommand-tool: exec\ncommand-arg-mode: raw\n---\n\nChild prompt",
+        );
+
+        let registry = ToolRegistry::new();
+        registry.register(Arc::new(crate::agent::tools::SkillInvokeTool::new(
+            "sess-1".to_string(),
+            vec![skills_root.path().to_path_buf()],
+        )));
+        registry.register(Arc::new(EchoCommandTool));
+
+        let tool_ctx = ToolContext {
+            work_dir: None,
+            allowed_tools: Some(vec!["skill".to_string(), "exec".to_string()]),
+            session_id: Some("sess-1".to_string()),
+            task_temp_dir: None,
+            execution_caps: None,
+            file_task_caps: None,
+        };
+        let mut tool_results = Vec::new();
+        let mut repeated_failure_summary = None;
+        let mut tool_failure_streak = None;
+        let mut tool_call_history = Vec::new();
+        let mut tool_result_history = Vec::new();
+        let mut latest_browser_progress = None;
+        let dispatch_context = ToolDispatchContext {
+            registry: &registry,
+            app_handle: None,
+            session_id: None,
+            persisted_run_id: None,
+            allowed_tools: Some(&["skill".to_string(), "exec".to_string()]),
+            permission_mode: PermissionMode::Unrestricted,
+            tool_ctx: &tool_ctx,
+            tool_confirm_tx: None,
+            cancel_flag: None,
+            route_run_id: "route-skill-bridge",
+            route_node_timeout_secs: 5,
+            route_retry_count: 0,
+            iteration: 1,
+            run_budget_policy: crate::agent::run_guard::RunBudgetPolicy::for_scope(
+                crate::agent::run_guard::RunBudgetScope::Skill,
+            ),
+        };
+        let call = ToolCall {
+            id: "call-skill-bridge".to_string(),
+            name: "skill".to_string(),
+            input: json!({
+                "skill_name": "dispatch-skill",
+                "arguments": ["--employee", "xt"],
+            }),
+        };
+        let mut dispatch_state = ToolDispatchState {
+            tool_results: &mut tool_results,
+            repeated_failure_summary: &mut repeated_failure_summary,
+            tool_failure_streak: &mut tool_failure_streak,
+            tool_call_history: &mut tool_call_history,
+            tool_result_history: &mut tool_result_history,
+            latest_browser_progress: &mut latest_browser_progress,
+        };
+
+        let outcome = dispatch_tool_call(&dispatch_context, &mut dispatch_state, 0, &call)
+            .await
+            .expect("skill bridge should succeed");
+
+        assert!(matches!(outcome, ToolDispatchOutcome::Continue));
+        assert_eq!(tool_results.len(), 1);
+        assert!(tool_results[0].content.contains("command=--employee xt"));
+        assert!(tool_results[0].content.contains("commandName=dispatch-skill"));
+        assert!(!tool_results[0].content.contains("解析模式:"));
     }
 }

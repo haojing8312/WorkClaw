@@ -19,6 +19,34 @@ enum AllowedToolsValue {
     CommaSeparated(String),
 }
 
+#[derive(Deserialize, Debug, Clone)]
+#[serde(untagged)]
+enum FrontMatterBoolValue {
+    Bool(bool),
+    String(String),
+    Signed(i64),
+    Unsigned(u64),
+}
+
+impl FrontMatterBoolValue {
+    fn into_bool(self) -> Option<bool> {
+        match self {
+            FrontMatterBoolValue::Bool(value) => Some(value),
+            FrontMatterBoolValue::String(value) => parse_frontmatter_bool_string(&value),
+            FrontMatterBoolValue::Signed(value) => match value {
+                0 => Some(false),
+                1 => Some(true),
+                _ => None,
+            },
+            FrontMatterBoolValue::Unsigned(value) => match value {
+                0 => Some(false),
+                1 => Some(true),
+                _ => None,
+            },
+        }
+    }
+}
+
 impl AllowedToolsValue {
     fn into_vec(self) -> Vec<String> {
         match self {
@@ -75,6 +103,7 @@ pub struct OpenClawSkillMetadata {
     pub primary_env: Option<String>,
     pub os: Vec<String>,
     pub requires: Option<OpenClawSkillMetadataRequires>,
+    pub install: Option<Vec<OpenClawSkillInstallSpec>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
@@ -83,6 +112,55 @@ pub struct OpenClawSkillMetadataRequires {
     pub any_bins: Vec<String>,
     pub env: Vec<String>,
     pub config: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum OpenClawSkillInstallKind {
+    Brew,
+    Node,
+    Go,
+    Uv,
+    Download,
+}
+
+impl OpenClawSkillInstallKind {
+    fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "brew" => Some(Self::Brew),
+            "node" => Some(Self::Node),
+            "go" => Some(Self::Go),
+            "uv" => Some(Self::Uv),
+            "download" => Some(Self::Download),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Brew => "brew",
+            Self::Node => "node",
+            Self::Go => "go",
+            Self::Uv => "uv",
+            Self::Download => "download",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct OpenClawSkillInstallSpec {
+    pub id: Option<String>,
+    pub kind: OpenClawSkillInstallKind,
+    pub label: Option<String>,
+    pub bins: Vec<String>,
+    pub os: Vec<String>,
+    pub formula: Option<String>,
+    pub package: Option<String>,
+    pub module: Option<String>,
+    pub url: Option<String>,
+    pub archive: Option<String>,
+    pub extract: Option<bool>,
+    pub strip_components: Option<usize>,
+    pub target_dir: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -152,9 +230,9 @@ struct FrontMatter {
     #[serde(alias = "argument-hint")]
     argument_hint: Option<String>,
     #[serde(alias = "disable-model-invocation", default)]
-    disable_model_invocation: bool,
-    #[serde(alias = "user-invocable", default = "default_true")]
-    user_invocable: bool,
+    disable_model_invocation: Option<FrontMatterBoolValue>,
+    #[serde(alias = "user-invocable", default)]
+    user_invocable: Option<FrontMatterBoolValue>,
     metadata: Option<serde_yaml::Value>,
     #[serde(alias = "command-dispatch")]
     command_dispatch: Option<String>,
@@ -168,8 +246,18 @@ struct FrontMatter {
     mcp_servers: Vec<McpServerDep>,
 }
 
-fn default_true() -> bool {
-    true
+fn parse_frontmatter_bool_string(raw: &str) -> Option<bool> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "true" | "1" | "yes" | "on" => Some(true),
+        "false" | "0" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+fn resolve_frontmatter_bool(value: Option<FrontMatterBoolValue>, default: bool) -> bool {
+    value
+        .and_then(FrontMatterBoolValue::into_bool)
+        .unwrap_or(default)
 }
 
 impl SkillConfig {
@@ -201,9 +289,12 @@ impl SkillConfig {
         };
 
         let fm: FrontMatter = serde_yaml::from_str(yaml_str).unwrap_or_default();
+        let user_invocable = resolve_frontmatter_bool(fm.user_invocable, true);
+        let disable_model_invocation =
+            resolve_frontmatter_bool(fm.disable_model_invocation, false);
         let invocation = SkillInvocationPolicy {
-            user_invocable: fm.user_invocable,
-            disable_model_invocation: fm.disable_model_invocation,
+            user_invocable,
+            disable_model_invocation,
         };
         let metadata = fm.metadata.as_ref().and_then(parse_openclaw_metadata_block);
         let command_dispatch = parse_command_dispatch(
@@ -219,8 +310,8 @@ impl SkillConfig {
             model: fm.model,
             max_iterations: fm.max_iterations,
             argument_hint: fm.argument_hint,
-            disable_model_invocation: fm.disable_model_invocation,
-            user_invocable: fm.user_invocable,
+            disable_model_invocation,
+            user_invocable,
             invocation,
             metadata,
             command_dispatch,
@@ -271,6 +362,71 @@ fn yaml_string_list(value: Option<&JsonValue>) -> Vec<String> {
     }
 }
 
+fn yaml_string(value: Option<&JsonValue>) -> Option<String> {
+    match value {
+        Some(JsonValue::String(raw)) => {
+            let trimmed = raw.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        }
+        _ => None,
+    }
+}
+
+fn yaml_bool(value: Option<&JsonValue>) -> Option<bool> {
+    match value {
+        Some(JsonValue::Bool(value)) => Some(*value),
+        _ => None,
+    }
+}
+
+fn yaml_usize(value: Option<&JsonValue>) -> Option<usize> {
+    match value {
+        Some(JsonValue::Number(number)) => number.as_u64().and_then(|value| usize::try_from(value).ok()),
+        _ => None,
+    }
+}
+
+fn parse_openclaw_install_spec(value: &JsonValue) -> Option<OpenClawSkillInstallSpec> {
+    let JsonValue::Object(spec) = value else {
+        return None;
+    };
+    let kind = spec
+        .get("kind")
+        .or_else(|| spec.get("type"))
+        .and_then(JsonValue::as_str)
+        .and_then(OpenClawSkillInstallKind::parse)?;
+
+    let formula = yaml_string(spec.get("formula")).or_else(|| yaml_string(spec.get("cask")));
+    let package = yaml_string(spec.get("package"));
+    let module = yaml_string(spec.get("module"));
+    let url = yaml_string(spec.get("url"));
+
+    let parsed = OpenClawSkillInstallSpec {
+        id: yaml_string(spec.get("id")),
+        kind,
+        label: yaml_string(spec.get("label")),
+        bins: yaml_string_list(spec.get("bins")),
+        os: yaml_string_list(spec.get("os")),
+        formula,
+        package,
+        module,
+        url,
+        archive: yaml_string(spec.get("archive")),
+        extract: yaml_bool(spec.get("extract")),
+        strip_components: yaml_usize(spec.get("stripComponents")),
+        target_dir: yaml_string(spec.get("targetDir")),
+    };
+
+    match parsed.kind {
+        OpenClawSkillInstallKind::Brew if parsed.formula.is_some() => Some(parsed),
+        OpenClawSkillInstallKind::Node if parsed.package.is_some() => Some(parsed),
+        OpenClawSkillInstallKind::Go if parsed.module.is_some() => Some(parsed),
+        OpenClawSkillInstallKind::Uv if parsed.package.is_some() => Some(parsed),
+        OpenClawSkillInstallKind::Download if parsed.url.is_some() => Some(parsed),
+        _ => None,
+    }
+}
+
 fn parse_metadata_json_value(value: &serde_yaml::Value) -> Option<JsonValue> {
     match value {
         serde_yaml::Value::String(raw) => {
@@ -299,6 +455,16 @@ fn parse_openclaw_metadata_block(value: &serde_yaml::Value) -> Option<OpenClawSk
             env: yaml_string_list(requires.get("env")),
             config: yaml_string_list(requires.get("config")),
         });
+    let install = metadata
+        .get("install")
+        .and_then(JsonValue::as_array)
+        .map(|install| {
+            install
+                .iter()
+                .filter_map(parse_openclaw_install_spec)
+                .collect::<Vec<_>>()
+        })
+        .filter(|install| !install.is_empty());
 
     Some(OpenClawSkillMetadata {
         always: metadata.get("always").and_then(JsonValue::as_bool),
@@ -320,6 +486,7 @@ fn parse_openclaw_metadata_block(value: &serde_yaml::Value) -> Option<OpenClawSk
             .map(ToString::to_string),
         os: yaml_string_list(metadata.get("os")),
         requires,
+        install,
     })
 }
 
@@ -337,6 +504,7 @@ fn parse_command_dispatch(
     Some(SkillCommandDispatchSpec {
         kind,
         tool_name: tool_name.to_string(),
-        arg_mode: SkillCommandArgMode::parse(arg_mode.unwrap_or_default())?,
+        arg_mode: SkillCommandArgMode::parse(arg_mode.unwrap_or_default())
+            .unwrap_or(SkillCommandArgMode::Raw),
     })
 }

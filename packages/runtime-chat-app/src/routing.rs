@@ -86,6 +86,9 @@ pub fn classify_model_route_error(error_message: &str) -> ModelRouteErrorKind {
     if lower.contains("timeout") || lower.contains("timed out") || lower.contains("deadline") {
         return ModelRouteErrorKind::Timeout;
     }
+    if is_retryable_minimax_gateway_error(&lower) {
+        return ModelRouteErrorKind::Network;
+    }
     if lower.contains("connection")
         || lower.contains("network")
         || lower.contains("dns")
@@ -97,6 +100,10 @@ pub fn classify_model_route_error(error_message: &str) -> ModelRouteErrorKind {
         return ModelRouteErrorKind::Network;
     }
     ModelRouteErrorKind::Unknown
+}
+
+fn is_retryable_minimax_gateway_error(lower: &str) -> bool {
+    lower.contains("unknown error, 794") && lower.contains("(1000)")
 }
 
 pub fn should_retry_same_candidate(kind: ModelRouteErrorKind) -> bool {

@@ -59,6 +59,8 @@ pub(crate) fn normalize_model_error(raw_message: &str) -> NormalizedModelError {
     } else if lower.contains("timeout") || lower.contains("timed out") || lower.contains("deadline")
     {
         ModelErrorKind::Timeout
+    } else if is_retryable_minimax_gateway_error(&lower) {
+        ModelErrorKind::Network
     } else if lower.contains("connection")
         || lower.contains("network")
         || lower.contains("dns")
@@ -137,6 +139,10 @@ fn normalized_error_search_text(raw_message: &str) -> String {
     raw_message.to_ascii_lowercase()
 }
 
+fn is_retryable_minimax_gateway_error(lower: &str) -> bool {
+    lower.contains("unknown error, 794") && lower.contains("(1000)")
+}
+
 fn collect_error_strings(value: &Value, out: &mut Vec<String>) {
     match value {
         Value::String(text) => {
@@ -197,6 +203,13 @@ mod tests {
     #[test]
     fn normalize_model_error_treats_response_body_decode_failures_as_network_errors() {
         let result = normalize_model_error("error decoding response body");
+        assert_eq!(result.kind, ModelErrorKind::Network);
+    }
+
+    #[test]
+    fn normalize_model_error_treats_minimax_794_gateway_failures_as_network_errors() {
+        let raw = r#"{"type":"error","error":{"type":"api_error","message":"unknown error, 794 (1000)"},"request_id":"0619614fa6873d3861ed0c9dfe062551"}"#;
+        let result = normalize_model_error(raw);
         assert_eq!(result.kind, ModelErrorKind::Network);
     }
 

@@ -67,6 +67,38 @@ fn skill_tool_only_denies_explicit_dispatch_when_parent_scope_blocks_target_tool
 }
 
 #[test]
+fn skill_tool_resolve_invocation_reports_dispatch_mode() {
+    let tmp = TempDir::new().expect("temp dir");
+    create_skill(
+        &tmp,
+        "child-skill",
+        "---\nname: child-skill\ndisable-model-invocation: true\ncommand-dispatch: tool\ncommand-tool: exec\n---\n\nChild prompt",
+    );
+
+    let tool = SkillInvokeTool::new("sess-1".to_string(), vec![tmp.path().to_path_buf()]);
+    let ctx = ToolContext {
+        work_dir: None,
+        allowed_tools: Some(vec!["exec".to_string(), "read_file".to_string()]),
+        session_id: None,
+        task_temp_dir: None,
+        execution_caps: None,
+        file_task_caps: None,
+    };
+    let resolved = tool
+        .resolve_invocation(json!({"skill_name": "child-skill"}), &ctx)
+        .expect("dispatch skill should resolve");
+
+    assert_eq!(resolved.mode.as_str(), "command_dispatch");
+    assert_eq!(
+        resolved
+            .command_dispatch
+            .as_ref()
+            .map(|dispatch| dispatch.tool_name.as_str()),
+        Some("exec")
+    );
+}
+
+#[test]
 fn skill_tool_keeps_prompt_skill_even_when_declared_tools_do_not_overlap_parent_scope() {
     let tmp = TempDir::new().expect("temp dir");
     create_skill(

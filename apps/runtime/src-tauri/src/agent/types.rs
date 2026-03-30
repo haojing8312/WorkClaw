@@ -96,6 +96,9 @@ pub trait Tool: Send + Sync {
     fn description(&self) -> &str;
     fn input_schema(&self) -> Value;
     fn execute(&self, input: Value, ctx: &ToolContext) -> Result<String>;
+    fn structured_output(&self, _input: &Value, _ctx: &ToolContext) -> Result<Option<Value>> {
+        Ok(None)
+    }
 }
 
 #[derive(Debug, Clone)]

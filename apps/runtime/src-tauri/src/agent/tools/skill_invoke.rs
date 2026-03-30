@@ -7,14 +7,17 @@ use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SkillResolutionMode {
+const WORKSPACE_SKILL_ID_MARKER_FILE: &str = ".workclaw-skill-id";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillResolutionMode {
     PromptFollowing,
     CommandDispatch,
 }
 
 impl SkillResolutionMode {
-    fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             SkillResolutionMode::PromptFollowing => "prompt_following",
             SkillResolutionMode::CommandDispatch => "command_dispatch",
@@ -27,6 +30,22 @@ struct SkillResolution {
     mode: SkillResolutionMode,
     narrowed_tools: Vec<String>,
     unrestricted_tools: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SkillResolvedInvocation {
+    pub skill_name: String,
+    pub skill_path: PathBuf,
+    pub description: Option<String>,
+    pub declared_tools: Vec<String>,
+    pub narrowed_tools: Vec<String>,
+    pub unrestricted_tools: bool,
+    pub user_invocable: bool,
+    pub disable_model_invocation: bool,
+    pub max_iterations: Option<usize>,
+    pub mode: SkillResolutionMode,
+    pub command_dispatch: Option<SkillCommandDispatchSpec>,
+    pub system_prompt: String,
 }
 
 /// Skill 调用工具：按名称加载本地 SKILL.md，并返回可执行指令文本。
@@ -200,6 +219,38 @@ impl SkillInvokeTool {
         })
     }
 
+    fn find_skill_by_workspace_skill_id(&self, raw: &str) -> Option<(String, PathBuf)> {
+        let target = raw.trim();
+        if target.is_empty() {
+            return None;
+        }
+
+        self.search_roots.iter().find_map(|root| {
+            let entries = std::fs::read_dir(root).ok()?;
+            for entry in entries.flatten() {
+                let Ok(file_type) = entry.file_type() else {
+                    continue;
+                };
+                if !file_type.is_dir() {
+                    continue;
+                }
+
+                let skill_dir = entry.path();
+                let marker_path = skill_dir.join(WORKSPACE_SKILL_ID_MARKER_FILE);
+                let Ok(marker_value) = std::fs::read_to_string(marker_path) else {
+                    continue;
+                };
+                if marker_value.trim() != target {
+                    continue;
+                }
+
+                let skill_md = Self::find_skill_md_in_dir(&skill_dir)?;
+                return Some((target.to_string(), skill_md));
+            }
+            None
+        })
+    }
+
     fn resolve_skill_target(&self, raw: &str) -> Result<(String, PathBuf)> {
         let trimmed = raw.trim();
         if trimmed.is_empty() {
@@ -212,6 +263,9 @@ impl SkillInvokeTool {
 
         match Self::normalize_skill_name(trimmed) {
             Ok(skill_name) => {
+                if let Some(mapped) = self.find_skill_by_workspace_skill_id(&skill_name) {
+                    return Ok(mapped);
+                }
                 if let Some(skill_path) = self.find_skill_md(&skill_name) {
                     return Ok((skill_name, skill_path));
                 }
@@ -274,15 +328,8 @@ impl SkillInvokeTool {
         Ok(())
     }
 
-    fn render_skill_result(
-        skill_name: &str,
-        skill_path: &Path,
-        config: &SkillConfig,
-        declared_tools: &str,
-        narrowed_tools_text: &str,
-        resolution: &SkillResolution,
-    ) -> String {
-        let dispatch_summary = match &config.command_dispatch {
+    fn render_skill_result(invocation: &SkillResolvedInvocation) -> String {
+        let dispatch_summary = match &invocation.command_dispatch {
             Some(dispatch) => format!(
                 "kind={}, tool_name={}, arg_mode={:?}",
                 match dispatch.kind {
@@ -293,6 +340,19 @@ impl SkillInvokeTool {
             ),
             None => "(none)".to_string(),
         };
+        let declared_tools = if invocation.declared_tools.is_empty() {
+            "(未声明)".to_string()
+        } else {
+            invocation.declared_tools.join(", ")
+        };
+        let narrowed_tools_text = if invocation.unrestricted_tools {
+            "(继承父会话全部工具 / unrestricted)".to_string()
+        } else if invocation.narrowed_tools.is_empty() {
+            "(无显式收紧结果)".to_string()
+        } else {
+            invocation.narrowed_tools.join(", ")
+        };
+
         format!(
             "## Skill: {}\n\
 解析模式: {}\n\
@@ -305,21 +365,95 @@ impl SkillInvokeTool {
 收紧后工具: {}\n\
 最大迭代: {}\n\n\
 请严格执行以下 Skill 指令（原文）:\n\n{}",
-            skill_name,
-            resolution.mode.as_str(),
-            skill_path.display(),
-            config.description.clone().unwrap_or_default(),
-            config.user_invocable,
-            config.disable_model_invocation,
+            invocation.skill_name,
+            invocation.mode.as_str(),
+            invocation.skill_path.display(),
+            invocation.description.clone().unwrap_or_default(),
+            invocation.user_invocable,
+            invocation.disable_model_invocation,
             dispatch_summary,
             declared_tools,
             narrowed_tools_text,
-            config
+            invocation
                 .max_iterations
                 .map(|v| v.to_string())
                 .unwrap_or_else(|| "(未声明)".to_string()),
-            config.system_prompt
+            invocation.system_prompt
         )
+    }
+
+    pub fn resolve_invocation(&self, input: Value, ctx: &ToolContext) -> Result<SkillResolvedInvocation> {
+        let raw_name = input["skill_name"]
+            .as_str()
+            .ok_or_else(|| anyhow!("BAD_REQUEST: 缺少 skill_name 参数"))?;
+        let (skill_name, skill_path) = self.resolve_skill_target(raw_name)?;
+
+        let mut stack_guard = self
+            .call_stack
+            .lock()
+            .map_err(|e| anyhow!("调用栈锁失败: {}", e))?;
+        if stack_guard.len() >= self.max_depth {
+            return Err(anyhow!(
+                "CALL_DEPTH_EXCEEDED: Skill 调用深度超过限制({})，当前调用栈: {}",
+                self.max_depth,
+                stack_guard.join(" -> ")
+            ));
+        }
+        if stack_guard.iter().any(|s| s == &skill_name) {
+            return Err(anyhow!(
+                "CALL_CYCLE_DETECTED: 检测到循环调用: {} -> {}",
+                stack_guard.join(" -> "),
+                skill_name
+            ));
+        }
+        stack_guard.push(skill_name.clone());
+        drop(stack_guard);
+
+        let result = (|| -> Result<SkillResolvedInvocation> {
+            let content = std::fs::read_to_string(&skill_path)
+                .map_err(|e| anyhow!("SKILL_READ_FAILED: 读取 SKILL.md 失败: {}", e))?;
+            let mut config = SkillConfig::parse(&content);
+
+            let args: Vec<String> = input["arguments"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+            config.substitute_arguments(&arg_refs, &self.session_id);
+
+            let child_declared = config.allowed_tools.clone().unwrap_or_default();
+            let mut resolution =
+                Self::resolve_allowed_tools(ctx.allowed_tools.as_deref(), &child_declared);
+            if let Some(dispatch) = &config.command_dispatch {
+                Self::ensure_dispatch_is_allowed(dispatch, ctx.allowed_tools.as_deref())?;
+                resolution.mode = SkillResolutionMode::CommandDispatch;
+            }
+
+            Ok(SkillResolvedInvocation {
+                skill_name: skill_name.clone(),
+                skill_path: skill_path.clone(),
+                description: config.description.clone(),
+                declared_tools: child_declared,
+                narrowed_tools: resolution.narrowed_tools,
+                unrestricted_tools: resolution.unrestricted_tools,
+                user_invocable: config.user_invocable,
+                disable_model_invocation: config.disable_model_invocation,
+                max_iterations: config.max_iterations,
+                mode: resolution.mode,
+                command_dispatch: config.command_dispatch.clone(),
+                system_prompt: config.system_prompt,
+            })
+        })();
+
+        if let Ok(mut stack_guard) = self.call_stack.lock() {
+            let _ = stack_guard.pop();
+        }
+
+        result
     }
 }
 
@@ -350,89 +484,22 @@ impl Tool for SkillInvokeTool {
         })
     }
 
+    fn structured_output(&self, input: &Value, ctx: &ToolContext) -> Result<Option<Value>> {
+        let resolved = self.resolve_invocation(input.clone(), ctx)?;
+        serde_json::to_value(resolved)
+            .map(Some)
+            .map_err(|err| anyhow!("SKILL_RESOLUTION_SERIALIZE_FAILED: {}", err))
+    }
+
     fn execute(&self, input: Value, ctx: &ToolContext) -> Result<String> {
-        let raw_name = input["skill_name"]
-            .as_str()
-            .ok_or_else(|| anyhow!("BAD_REQUEST: 缺少 skill_name 参数"))?;
-        let (skill_name, skill_path) = self.resolve_skill_target(raw_name)?;
-
-        let mut stack_guard = self
-            .call_stack
-            .lock()
-            .map_err(|e| anyhow!("调用栈锁失败: {}", e))?;
-        if stack_guard.len() >= self.max_depth {
-            return Err(anyhow!(
-                "CALL_DEPTH_EXCEEDED: Skill 调用深度超过限制({})，当前调用栈: {}",
-                self.max_depth,
-                stack_guard.join(" -> ")
-            ));
-        }
-        if stack_guard.iter().any(|s| s == &skill_name) {
-            return Err(anyhow!(
-                "CALL_CYCLE_DETECTED: 检测到循环调用: {} -> {}",
-                stack_guard.join(" -> "),
-                skill_name
-            ));
-        }
-        stack_guard.push(skill_name.clone());
-        drop(stack_guard);
-
-        let result = (|| -> Result<String> {
-            let content = std::fs::read_to_string(&skill_path)
-                .map_err(|e| anyhow!("SKILL_READ_FAILED: 读取 SKILL.md 失败: {}", e))?;
-            let mut config = SkillConfig::parse(&content);
-
-            let args: Vec<String> = input["arguments"]
-                .as_array()
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default();
-            let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-            config.substitute_arguments(&arg_refs, &self.session_id);
-
-            let child_declared = config.allowed_tools.clone().unwrap_or_default();
-            let mut resolution = Self::resolve_allowed_tools(ctx.allowed_tools.as_deref(), &child_declared);
-            if let Some(dispatch) = &config.command_dispatch {
-                Self::ensure_dispatch_is_allowed(dispatch, ctx.allowed_tools.as_deref())?;
-                resolution.mode = SkillResolutionMode::CommandDispatch;
-            }
-            let declared_tools = if child_declared.is_empty() {
-                "(未声明)".to_string()
-            } else {
-                child_declared.join(", ")
-            };
-            let narrowed_tools_text = if resolution.unrestricted_tools {
-                "(继承父会话全部工具 / unrestricted)".to_string()
-            } else if resolution.narrowed_tools.is_empty() {
-                "(无显式收紧结果)".to_string()
-            } else {
-                resolution.narrowed_tools.join(", ")
-            };
-            let rendered = Self::render_skill_result(
-                &skill_name,
-                &skill_path,
-                &config,
-                &declared_tools,
-                &narrowed_tools_text,
-                &resolution,
-            );
-            Ok(rendered)
-        })();
-
-        if let Ok(mut stack_guard) = self.call_stack.lock() {
-            let _ = stack_guard.pop();
-        }
-
-        result
+        let resolved = self.resolve_invocation(input, ctx)?;
+        Ok(Self::render_skill_result(&resolved))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::SkillInvokeTool;
+    use super::{SkillInvokeTool, SkillResolutionMode};
     use crate::agent::types::{Tool, ToolContext};
     use serde_json::json;
     use tempfile::TempDir;
@@ -546,6 +613,150 @@ mod tests {
         assert!(out.contains("解析模式: command_dispatch"));
         assert!(out.contains("禁用模型自动调用: true"));
         assert!(out.contains("命令分派: kind=tool, tool_name=exec"));
+    }
+
+    #[test]
+    fn skill_tool_resolve_invocation_returns_prompt_following_state() {
+        let tmp = TempDir::new().expect("temp dir");
+        create_skill(
+            &tmp,
+            "instruction-only-skill",
+            "---\nname: instruction-only-skill\ndescription: helper\nallowed_tools: \"read_file\"\n---\n\nChild prompt",
+        );
+
+        let tool = SkillInvokeTool::new("sess-1".to_string(), vec![tmp.path().to_path_buf()]);
+        let ctx = ToolContext {
+            work_dir: None,
+            allowed_tools: Some(vec!["read_file".to_string(), "glob".to_string()]),
+            session_id: None,
+            task_temp_dir: None,
+            execution_caps: None,
+            file_task_caps: None,
+        };
+        let resolved = tool
+            .resolve_invocation(json!({"skill_name": "instruction-only-skill"}), &ctx)
+            .expect("resolution should succeed");
+
+        assert_eq!(resolved.mode, SkillResolutionMode::PromptFollowing);
+        assert_eq!(resolved.skill_name, "instruction-only-skill");
+        assert_eq!(resolved.declared_tools, vec!["read_file".to_string()]);
+        assert_eq!(resolved.narrowed_tools, vec!["read_file".to_string()]);
+        assert!(!resolved.disable_model_invocation);
+        assert!(resolved.command_dispatch.is_none());
+        assert!(resolved.system_prompt.contains("Child prompt"));
+    }
+
+    #[test]
+    fn skill_tool_resolve_invocation_returns_dispatch_state() {
+        let tmp = TempDir::new().expect("temp dir");
+        create_skill(
+            &tmp,
+            "dispatch-skill",
+            "---\nname: dispatch-skill\ndisable-model-invocation: true\ncommand-dispatch: tool\ncommand-tool: exec\ncommand-arg-mode: raw\n---\n\nChild prompt",
+        );
+
+        let tool = SkillInvokeTool::new("sess-1".to_string(), vec![tmp.path().to_path_buf()]);
+        let ctx = ToolContext {
+            work_dir: None,
+            allowed_tools: Some(vec!["exec".to_string(), "read_file".to_string()]),
+            session_id: None,
+            task_temp_dir: None,
+            execution_caps: None,
+            file_task_caps: None,
+        };
+        let resolved = tool
+            .resolve_invocation(json!({"skill_name": "dispatch-skill"}), &ctx)
+            .expect("dispatch resolution should succeed");
+
+        assert_eq!(resolved.mode, SkillResolutionMode::CommandDispatch);
+        assert!(resolved.disable_model_invocation);
+        assert_eq!(
+            resolved
+                .command_dispatch
+                .as_ref()
+                .map(|dispatch| dispatch.tool_name.as_str()),
+            Some("exec")
+        );
+    }
+
+    #[test]
+    fn skill_tool_resolves_projected_skill_directory_by_workspace_skill_id_marker() {
+        let tmp = TempDir::new().expect("temp dir");
+        create_skill(
+            &tmp,
+            "feishu-pm-runtime",
+            "---\nname: feishu-pm-runtime\n---\n\nChild prompt",
+        );
+        std::fs::write(
+            tmp.path()
+                .join("feishu-pm-runtime")
+                .join(".workclaw-skill-id"),
+            "local-feishu-pm-runtime",
+        )
+        .expect("write skill id marker");
+
+        let tool = SkillInvokeTool::new("sess-1".to_string(), vec![tmp.path().to_path_buf()]);
+        let ctx = ToolContext {
+            work_dir: None,
+            allowed_tools: None,
+            session_id: None,
+            task_temp_dir: None,
+            execution_caps: None,
+            file_task_caps: None,
+        };
+        let out = tool
+            .execute(json!({"skill_name": "local-feishu-pm-runtime"}), &ctx)
+            .expect("workspace skill id alias should resolve");
+
+        assert!(out.contains("## Skill: local-feishu-pm-runtime"));
+        assert!(out.contains("Child prompt"));
+    }
+
+    #[test]
+    fn skill_tool_prefers_workspace_skill_id_marker_over_same_named_directory() {
+        let projected_root = TempDir::new().expect("projected root");
+        create_skill(
+            &projected_root,
+            "feishu-pm-runtime",
+            "---\nname: feishu-pm-runtime\n---\n\nProjected prompt",
+        );
+        std::fs::write(
+            projected_root
+                .path()
+                .join("feishu-pm-runtime")
+                .join(".workclaw-skill-id"),
+            "local-feishu-pm-runtime",
+        )
+        .expect("write skill id marker");
+
+        let conflicting_root = TempDir::new().expect("conflicting root");
+        create_skill(
+            &conflicting_root,
+            "local-feishu-pm-runtime",
+            "---\nname: conflicting\n---\n\nConflicting prompt",
+        );
+
+        let tool = SkillInvokeTool::new(
+            "sess-1".to_string(),
+            vec![
+                projected_root.path().to_path_buf(),
+                conflicting_root.path().to_path_buf(),
+            ],
+        );
+        let ctx = ToolContext {
+            work_dir: None,
+            allowed_tools: None,
+            session_id: None,
+            task_temp_dir: None,
+            execution_caps: None,
+            file_task_caps: None,
+        };
+        let out = tool
+            .execute(json!({"skill_name": "local-feishu-pm-runtime"}), &ctx)
+            .expect("workspace skill id marker should win");
+
+        assert!(out.contains("Projected prompt"));
+        assert!(!out.contains("Conflicting prompt"));
     }
 
     #[test]

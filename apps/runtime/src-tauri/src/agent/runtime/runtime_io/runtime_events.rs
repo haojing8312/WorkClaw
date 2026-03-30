@@ -2,6 +2,7 @@ use crate::agent::run_guard::RunStopReason;
 use crate::agent::runtime::session_runs::{
     append_session_run_event_with_pool, attach_assistant_message_to_run_with_pool,
 };
+use crate::agent::runtime::tool_dispatch::INTERNAL_SKILL_DISPATCH_INPUT_KEY;
 use crate::session_journal::{SessionJournalStore, SessionRunEvent};
 use chrono::Utc;
 use serde_json::{json, Value};
@@ -233,6 +234,9 @@ async fn load_structured_tool_calls_for_run_with_pool(
                 input,
                 ..
             } => {
+                if is_internal_skill_dispatch_tool_input(&input) {
+                    continue;
+                }
                 if let Some(existing) = tool_calls
                     .iter_mut()
                     .find(|entry| entry["toolCall"]["id"].as_str() == Some(call_id.as_str()))
@@ -260,6 +264,9 @@ async fn load_structured_tool_calls_for_run_with_pool(
                 is_error,
                 ..
             } => {
+                if is_internal_skill_dispatch_tool_input(&input) {
+                    continue;
+                }
                 let status = if is_error { "error" } else { "completed" };
                 if let Some(existing) = tool_calls
                     .iter_mut()
@@ -287,6 +294,13 @@ async fn load_structured_tool_calls_for_run_with_pool(
     }
 
     Ok(tool_calls)
+}
+
+fn is_internal_skill_dispatch_tool_input(input: &Value) -> bool {
+    input
+        .get(INTERNAL_SKILL_DISPATCH_INPUT_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
 }
 
 pub(crate) async fn persist_partial_assistant_message_for_run_with_pool(
@@ -607,6 +621,104 @@ mod run_guard_persistence_tests {
         assert_eq!(
             parsed["items"][1]["toolCall"]["output"].as_str(),
             Some("hi")
+        );
+    }
+
+    #[tokio::test]
+    async fn persist_partial_assistant_message_for_run_filters_internal_skill_dispatch_exec_calls() {
+        let pool = setup_partial_message_pool().await;
+
+        sqlx::query(
+            "INSERT INTO session_runs (id, session_id, user_message_id, assistant_message_id, status, buffered_text, error_kind, error_message, created_at, updated_at)
+             VALUES ('run-2', 'session-2', 'user-2', '', 'thinking', 'partial text', '', '', '2026-03-29T00:00:00Z', '2026-03-29T00:00:01Z')",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed session run");
+
+        sqlx::query(
+            "INSERT INTO session_run_events (id, run_id, session_id, event_type, payload_json, created_at)
+             VALUES
+             ('evt-10', 'run-2', 'session-2', 'tool_started', ?, '2026-03-29T00:00:02Z'),
+             ('evt-11', 'run-2', 'session-2', 'tool_completed', ?, '2026-03-29T00:00:03Z'),
+             ('evt-12', 'run-2', 'session-2', 'tool_started', ?, '2026-03-29T00:00:04Z'),
+             ('evt-13', 'run-2', 'session-2', 'tool_completed', ?, '2026-03-29T00:00:05Z')",
+        )
+        .bind(
+            serde_json::to_string(&crate::session_journal::SessionRunEvent::ToolStarted {
+                run_id: "run-2".to_string(),
+                tool_name: "skill".to_string(),
+                call_id: "call-skill-1".to_string(),
+                input: json!({"skill_name": "dispatch-skill", "arguments": ["--employee", "xt"]}),
+            })
+            .expect("serialize skill tool started"),
+        )
+        .bind(
+            serde_json::to_string(&crate::session_journal::SessionRunEvent::ToolCompleted {
+                run_id: "run-2".to_string(),
+                tool_name: "skill".to_string(),
+                call_id: "call-skill-1".to_string(),
+                input: json!({"skill_name": "dispatch-skill", "arguments": ["--employee", "xt"]}),
+                output: "{\"ok\":true}".to_string(),
+                is_error: false,
+            })
+            .expect("serialize skill tool completed"),
+        )
+        .bind(
+            serde_json::to_string(&crate::session_journal::SessionRunEvent::ToolStarted {
+                run_id: "run-2".to_string(),
+                tool_name: "exec".to_string(),
+                call_id: "skill-command-bridge-1".to_string(),
+                input: json!({
+                    "command": "--employee xt",
+                    "commandName": "dispatch-skill",
+                    "skillName": "dispatch-skill",
+                    "__workclaw_internal_skill_dispatch": true
+                }),
+            })
+            .expect("serialize exec tool started"),
+        )
+        .bind(
+            serde_json::to_string(&crate::session_journal::SessionRunEvent::ToolCompleted {
+                run_id: "run-2".to_string(),
+                tool_name: "exec".to_string(),
+                call_id: "skill-command-bridge-1".to_string(),
+                input: json!({
+                    "command": "--employee xt",
+                    "commandName": "dispatch-skill",
+                    "skillName": "dispatch-skill",
+                    "__workclaw_internal_skill_dispatch": true
+                }),
+                output: "{\"ok\":true}".to_string(),
+                is_error: false,
+            })
+            .expect("serialize exec tool completed"),
+        )
+        .execute(&pool)
+        .await
+        .expect("seed session run events");
+
+        let msg_id = persist_partial_assistant_message_for_run_with_pool(
+            &pool,
+            "session-2",
+            "run-2",
+            "我先调用飞书技能。",
+        )
+        .await
+        .expect("persist partial assistant")
+        .expect("assistant message id");
+
+        let (content,): (String,) = sqlx::query_as("SELECT content FROM messages WHERE id = ?")
+            .bind(&msg_id)
+            .fetch_one(&pool)
+            .await
+            .expect("query partial assistant content");
+        let parsed: Value = serde_json::from_str(&content).expect("structured assistant content");
+
+        assert_eq!(parsed["items"].as_array().map(|items| items.len()), Some(2));
+        assert_eq!(
+            parsed["items"][1]["toolCall"]["name"].as_str(),
+            Some("skill")
         );
     }
 
