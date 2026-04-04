@@ -61,13 +61,23 @@ struct ScoredCandidate {
 struct QueryProfile {
     compact: String,
     tokens: HashSet<String>,
+    ngrams: HashSet<String>,
 }
 
 impl QueryProfile {
     fn from_query(query: &str) -> Self {
         let compact = normalize_compact(query);
         let tokens = tokenize(query).into_iter().collect();
-        Self { compact, tokens }
+        let ngrams = if contains_non_ascii(&compact) {
+            char_ngrams(&compact, 2, 4)
+        } else {
+            HashSet::new()
+        };
+        Self {
+            compact,
+            tokens,
+            ngrams,
+        }
     }
 
     fn is_empty(&self) -> bool {
@@ -122,44 +132,95 @@ fn score_projection(query: &QueryProfile, projection: &WorkspaceSkillRouteProjec
     let profile = ProjectionProfile::from_projection(projection);
     let mut score = 0u32;
 
-    score += score_exact_compact_match(query, &profile);
+    score += score_compact_field(
+        query,
+        &profile.skill_id_compact,
+        30,
+        18,
+        8,
+        2,
+        6,
+    );
+    score += score_compact_field(
+        query,
+        &profile.display_name_compact,
+        24,
+        22,
+        10,
+        3,
+        8,
+    );
+    score += score_aliases(query, &profile.alias_compacts);
+    score += score_compact_field(
+        query,
+        &profile.description_compact,
+        14,
+        18,
+        10,
+        4,
+        12,
+    );
+    score += score_compact_field(
+        query,
+        &profile.when_to_use_compact,
+        16,
+        20,
+        12,
+        5,
+        14,
+    );
     score += score_token_overlap(query, &profile);
     score += score_domain_tags(query, &profile);
 
     score
 }
 
-fn score_exact_compact_match(query: &QueryProfile, profile: &ProjectionProfile) -> u32 {
+fn score_compact_field(
+    query: &QueryProfile,
+    field: &str,
+    exact_weight: u32,
+    query_contains_weight: u32,
+    field_contains_weight: u32,
+    ngram_weight: u32,
+    ngram_cap: u32,
+) -> u32 {
+    if field.is_empty() {
+        return 0;
+    }
+
     let mut score = 0;
 
-    if profile.skill_id_compact == query.compact
-        || profile.display_name_compact == query.compact
-        || profile.alias_compacts.iter().any(|alias| alias == &query.compact)
-    {
-        score += 120;
+    if query.compact == field {
+        score += exact_weight;
     }
 
-    if profile.skill_id_compact.contains(&query.compact) {
-        score += 30;
+    if query.compact.contains(field) {
+        score += query_contains_weight;
     }
 
-    if profile.display_name_compact.contains(&query.compact) {
-        score += 18;
+    if field.contains(&query.compact) {
+        score += field_contains_weight;
     }
 
-    if profile.alias_compacts.iter().any(|alias| alias.contains(&query.compact)) {
-        score += 40;
-    }
-
-    if profile.description_compact.contains(&query.compact) {
-        score += 12;
-    }
-
-    if profile.when_to_use_compact.contains(&query.compact) {
-        score += 15;
+    if !query.ngrams.is_empty() {
+        let field_ngrams = char_ngrams(field, 2, 4);
+        let overlap = query
+            .ngrams
+            .intersection(&field_ngrams)
+            .take(ngram_cap as usize)
+            .count() as u32;
+        score += overlap * ngram_weight;
     }
 
     score
+}
+
+fn score_aliases(query: &QueryProfile, alias_compacts: &[String]) -> u32 {
+    alias_compacts
+        .iter()
+        .map(|alias| score_compact_field(query, alias, 42, 28, 12, 4, 10))
+        .max()
+        .unwrap_or_default()
 }
 
 fn score_token_overlap(query: &QueryProfile, profile: &ProjectionProfile) -> u32 {
@@ -184,17 +245,23 @@ fn score_token_overlap(query: &QueryProfile, profile: &ProjectionProfile) -> u32
 }
 
 fn score_domain_tags(query: &QueryProfile, profile: &ProjectionProfile) -> u32 {
-    profile
+    let score = profile
         .domain_tag_compacts
         .iter()
         .fold(0, |mut score, tag| {
             if query.compact == *tag {
-                score += 38;
+                score += 6;
             } else if query.compact.contains(tag) || tag.contains(&query.compact) {
-                score += 22;
+                score += 4;
+            } else if !query.ngrams.is_empty() {
+                let tag_ngrams = char_ngrams(tag, 2, 3);
+                let overlap = query.ngrams.intersection(&tag_ngrams).take(2).count() as u32;
+                score += overlap * 1;
             }
             score
-        })
+        });
+
+    score.min(12)
 }
 
 fn normalize_compact(value: &str) -> String {
@@ -222,6 +289,31 @@ fn tokenize(value: &str) -> Vec<String> {
     }
 
     tokens
+}
+
+fn contains_non_ascii(value: &str) -> bool {
+    value.chars().any(|ch| !ch.is_ascii())
+}
+
+fn char_ngrams(value: &str, min_size: usize, max_size: usize) -> HashSet<String> {
+    let chars = value.chars().collect::<Vec<_>>();
+    let mut ngrams = HashSet::new();
+
+    if chars.len() < min_size {
+        return ngrams;
+    }
+
+    let upper = max_size.min(chars.len());
+    for size in min_size..=upper {
+        for start in 0..=chars.len() - size {
+            let ngram = chars[start..start + size].iter().collect::<String>();
+            if !ngram.is_empty() {
+                ngrams.insert(ngram);
+            }
+        }
+    }
+
+    ngrams
 }
 
 #[cfg(test)]
@@ -292,13 +384,13 @@ mod tests {
     }
 
     #[test]
-    fn recall_prefers_family_domain_tags_for_chinese_vocabulary() {
+    fn recall_prefers_skill_specific_chinese_text_over_family_tags() {
         let index = build_index(vec![
             build_entry(
                 "feishu-pm-daily-sync",
                 "PM Daily Sync",
-                "Coordinate routine reporting",
-                "## When to Use\n- Keep the routine reporting flow aligned.\n",
+                "同步项管日报到看板",
+                "## When to Use\n- 同步项管日报到看板并更新状态。\n",
                 None,
                 Some(vec!["read_file"]),
                 Some(4),
@@ -310,10 +402,25 @@ mod tests {
                 None,
             ),
             build_entry(
-                "feishu-bitable-analyst",
-                "Bitable Analyst",
-                "Inspect table health and relationships",
-                "## When to Use\n- Review table layout and fields.\n",
+                "feishu-pm-weekly-work-summary",
+                "PM Weekly Summary",
+                "项管日报汇总",
+                "## When to Use\n- 汇总项管日报并整理任务。\n",
+                None,
+                Some(vec!["read_file"]),
+                Some(3),
+                SkillInvocationPolicy {
+                    user_invocable: true,
+                    disable_model_invocation: false,
+                },
+                Some("weekly-summary"),
+                None,
+            ),
+            build_entry(
+                "feishu-pm-general-helper",
+                "PM Helper",
+                "处理项管常规工作",
+                "## When to Use\n- 处理项管基础事项。\n",
                 None,
                 Some(vec!["read_file"]),
                 None,
@@ -321,15 +428,19 @@ mod tests {
                     user_invocable: true,
                     disable_model_invocation: false,
                 },
-                None,
+                Some("general-helper"),
                 None,
             ),
         ]);
 
-        let candidates = recall_skill_candidates(&index, "帮我整理项管日报并同步");
-        assert_eq!(candidates.len(), 1);
+        let candidates = recall_skill_candidates(&index, "帮我同步项管日报到看板");
+        assert_eq!(candidates.len(), 3);
         assert_eq!(candidates[0].projection.skill_id, "feishu-pm-daily-sync");
-        assert!(candidates[0].score > 0);
+        assert_eq!(candidates[1].projection.skill_id, "feishu-pm-weekly-work-summary");
+        assert_eq!(candidates[2].projection.skill_id, "feishu-pm-general-helper");
+        assert!(candidates[0].score > candidates[1].score);
+        assert!(candidates[1].score > candidates[2].score);
+        assert!(candidates[2].score > 0);
     }
 
     #[test]
@@ -411,10 +522,10 @@ mod tests {
                 None,
             ),
             build_entry(
-                "feishu-bitable-analyst",
-                "Bitable Analyst",
-                "Inspect table health and relationships",
-                "## When to Use\n- Review table layout and fields.\n",
+                "feishu-pm-general-helper",
+                "PM Helper",
+                "处理项管常规工作",
+                "## When to Use\n- 处理项管基础事项。\n",
                 None,
                 Some(vec!["read_file"]),
                 None,
@@ -422,7 +533,7 @@ mod tests {
                     user_invocable: true,
                     disable_model_invocation: false,
                 },
-                None,
+                Some("general-helper"),
                 None,
             ),
         ]);
@@ -435,9 +546,15 @@ mod tests {
 
         assert_eq!(
             skill_ids,
-            vec!["feishu-pm-weekly-work-summary", "feishu-pm-daily-sync"]
+            vec![
+                "feishu-pm-weekly-work-summary",
+                "feishu-pm-daily-sync",
+                "feishu-pm-general-helper",
+            ]
         );
         assert!(candidates[0].score > candidates[1].score);
+        assert!(candidates[1].score > candidates[2].score);
+        assert!(candidates[2].score > 0);
     }
 
     #[test]
