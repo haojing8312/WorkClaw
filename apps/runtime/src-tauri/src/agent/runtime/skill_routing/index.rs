@@ -23,11 +23,7 @@ impl SkillRouteIndex {
                     aliases: collect_aliases(entry),
                     description: entry.description.trim().to_string(),
                     when_to_use: extract_when_to_use(&entry.config.system_prompt, &entry.description),
-                    execution_mode: if entry.command_dispatch.is_some() {
-                        WorkspaceSkillRouteExecutionMode::DirectDispatch
-                    } else {
-                        WorkspaceSkillRouteExecutionMode::Inline
-                    },
+                    execution_mode: resolve_execution_mode(entry),
                     command_dispatch: entry.command_dispatch.clone(),
                 };
 
@@ -44,6 +40,10 @@ impl SkillRouteIndex {
 
     pub fn get(&self, skill_id: &str) -> Option<&WorkspaceSkillRouteProjection> {
         self.entries.get(skill_id)
+    }
+
+    pub fn entries(&self) -> impl Iterator<Item = &WorkspaceSkillRouteProjection> {
+        self.entries.values()
     }
 }
 
@@ -113,11 +113,19 @@ fn extract_when_to_use(system_prompt: &str, description: &str) -> String {
         }
     }
 
-    let fallback = description.trim();
-    if fallback.is_empty() {
-        system_prompt.trim().to_string()
+    description.trim().to_string()
+}
+
+fn resolve_execution_mode(entry: &WorkspaceSkillRuntimeEntry) -> WorkspaceSkillRouteExecutionMode {
+    if entry.command_dispatch.is_some() {
+        WorkspaceSkillRouteExecutionMode::DirectDispatch
+    } else if matches!(
+        entry.config.context.as_deref().map(str::trim),
+        Some("fork")
+    ) {
+        WorkspaceSkillRouteExecutionMode::Fork
     } else {
-        fallback.to_string()
+        WorkspaceSkillRouteExecutionMode::Inline
     }
 }
 
@@ -130,6 +138,7 @@ mod tests {
         name: &str,
         description: &str,
         system_prompt: &str,
+        context: Option<&str>,
         metadata_skill_key: Option<&str>,
         command_dispatch: Option<SkillCommandDispatchSpec>,
     ) -> WorkspaceSkillRuntimeEntry {
@@ -158,7 +167,7 @@ mod tests {
                     ..Default::default()
                 }),
                 command_dispatch: command_dispatch_for_config,
-                context: None,
+                context: context.map(|value| value.to_string()),
                 agent: None,
                 mcp_servers: vec![],
                 system_prompt: system_prompt.to_string(),
@@ -186,6 +195,7 @@ mod tests {
                 "PM Task Dispatch",
                 "Create or dispatch PM follow-up tasks",
                 "## When to Use\n- Use when a leader wants to create a correction task.\n\n## Workflow\n- Resolve assignee.\n- Dispatch task.",
+                None,
                 Some("task-dispatch"),
                 Some(SkillCommandDispatchSpec {
                     kind: SkillCommandDispatchKind::Tool,
@@ -194,10 +204,29 @@ mod tests {
                 }),
             ),
             build_entry(
+                "feishu-pm-fork-skill",
+                "PM Fork Skill",
+                "Run PM flow in a forked context",
+                "## When to Use\n- Use when the task needs isolated execution.\n",
+                Some("fork"),
+                None,
+                None,
+            ),
+            build_entry(
                 "feishu-pm-weekly-work-summary",
                 "项管周工作汇总",
                 "Summarize PM work",
                 "## When to Use\n- Use when you need to summarize PM updates for a week.\n",
+                None,
+                None,
+                None,
+            ),
+            build_entry(
+                "feishu-pm-bare-skill",
+                "Bare Skill",
+                "",
+                "No heading here, just body text.",
+                None,
                 None,
                 None,
             ),
@@ -205,7 +234,17 @@ mod tests {
 
         let index = SkillRouteIndex::build(&entries);
 
-        assert_eq!(index.len(), 2);
+        assert_eq!(index.len(), 4);
+        let corpus_skill_ids = index
+            .entries()
+            .map(|entry| entry.skill_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(corpus_skill_ids.len(), 4);
+        assert!(corpus_skill_ids.contains(&"feishu-pm-task-dispatch"));
+        assert!(corpus_skill_ids.contains(&"feishu-pm-fork-skill"));
+        assert!(corpus_skill_ids.contains(&"feishu-pm-weekly-work-summary"));
+        assert!(corpus_skill_ids.contains(&"feishu-pm-bare-skill"));
+
         let dispatch = index.get("feishu-pm-task-dispatch").expect("dispatch entry");
         assert_eq!(dispatch.skill_id, "feishu-pm-task-dispatch");
         assert_eq!(dispatch.display_name, "PM Task Dispatch");
@@ -259,5 +298,17 @@ mod tests {
             WorkspaceSkillRouteExecutionMode::Inline
         );
         assert!(inline.command_dispatch.is_none());
+
+        let fork = index.get("feishu-pm-fork-skill").expect("fork entry");
+        assert_eq!(fork.skill_id, "feishu-pm-fork-skill");
+        assert_eq!(fork.execution_mode, WorkspaceSkillRouteExecutionMode::Fork);
+        assert_eq!(fork.when_to_use, "Use when the task needs isolated execution.");
+
+        let bare = index.get("feishu-pm-bare-skill").expect("bare entry");
+        assert_eq!(bare.when_to_use, "");
+        assert_eq!(
+            bare.execution_mode,
+            WorkspaceSkillRouteExecutionMode::Inline
+        );
     }
 }
