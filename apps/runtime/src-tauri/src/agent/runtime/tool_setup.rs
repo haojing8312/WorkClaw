@@ -1,5 +1,6 @@
 use super::events::{AskUserState, SearchCacheState};
 use super::runtime_io as chat_io;
+use crate::agent::runtime::runtime_io::WorkspaceSkillRuntimeEntry;
 use crate::agent::tools::search_providers::create_provider;
 use crate::agent::tools::{
     browser_compat::register_browser_compat_tool, browser_tools::register_browser_tools,
@@ -227,6 +228,7 @@ pub(crate) struct ToolSetupParams<'a> {
     pub app: &'a AppHandle,
     pub db: &'a sqlx::SqlitePool,
     pub agent_executor: &'a Arc<AgentExecutor>,
+    pub workspace_skill_entries: &'a [WorkspaceSkillRuntimeEntry],
     pub session_id: &'a str,
     pub api_format: &'a str,
     pub base_url: &'a str,
@@ -388,14 +390,12 @@ pub(crate) async fn prepare_runtime_tools(
         .resolve_executor_work_dir(params.execution_guidance)
     {
         Some(work_dir) => {
-            let entries =
-                chat_io::load_workspace_skill_runtime_entries_with_pool(params.db).await?;
             (
                 Some(chat_io::prepare_workspace_skills_prompt(
                     std::path::Path::new(&work_dir),
-                    &entries,
+                    params.workspace_skill_entries,
                 )?),
-                chat_io::build_workspace_skill_command_specs(&entries),
+                chat_io::build_workspace_skill_command_specs(params.workspace_skill_entries),
             )
         }
         None => (None, Vec::new()),

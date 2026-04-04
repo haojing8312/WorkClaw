@@ -21,7 +21,12 @@ use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
 use super::runtime_io as chat_io;
+use crate::agent::runtime::skill_routing::index::SkillRouteIndex;
+use crate::agent::runtime::skill_routing::runner::{
+    execute_implicit_route_plan, plan_implicit_route, RouteRunOutcome,
+};
 use crate::model_transport::{resolve_model_transport, ModelTransportKind};
+use runtime_chat_app::ChatExecutionGuidance;
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct SessionRuntime;
@@ -36,8 +41,16 @@ pub(crate) struct PreparedSendMessageContext {
     pub permission_mode: PermissionMode,
     pub executor_work_dir: Option<String>,
     pub max_iterations: Option<usize>,
+    pub max_call_depth: usize,
     pub node_timeout_seconds: u64,
     pub route_retry_count: usize,
+    pub source_type: String,
+    pub pack_path: String,
+    pub execution_guidance: ChatExecutionGuidance,
+    pub memory_bucket_employee_id: String,
+    pub employee_collaboration_guidance: Option<String>,
+    pub workspace_skill_entries: Vec<chat_io::WorkspaceSkillRuntimeEntry>,
+    pub route_index: SkillRouteIndex,
 }
 
 #[derive(Clone)]
@@ -265,6 +278,75 @@ impl SessionRuntime {
             }
         }
 
+        let route_plan = plan_implicit_route(
+            &prepared_context.route_index,
+            &prepared_context.workspace_skill_entries,
+            &prepared_context.prepared_runtime_tools.skill_command_specs,
+            user_message,
+        );
+
+        match execute_implicit_route_plan(
+            app,
+            agent_executor,
+            db,
+            session_id,
+            &run_id,
+            &prepared_context,
+            route_plan,
+            cancel_flag.clone(),
+            tool_confirm_responder.clone(),
+        )
+        .await?
+        {
+            RouteRunOutcome::OpenTask => {}
+            RouteRunOutcome::DirectDispatch(output) => {
+                chat_io::finalize_run_success_with_pool(
+                    db,
+                    journal,
+                    session_id,
+                    &run_id,
+                    &output,
+                    false,
+                    &output,
+                    "",
+                    None,
+                )
+                .await?;
+                let _ = app.emit(
+                    "stream-token",
+                    StreamToken {
+                        session_id: session_id.to_string(),
+                        token: output,
+                        done: false,
+                        sub_agent: false,
+                    },
+                );
+                let _ = app.emit(
+                    "stream-token",
+                    StreamToken {
+                        session_id: session_id.to_string(),
+                        token: String::new(),
+                        done: true,
+                        sub_agent: false,
+                    },
+                );
+                return Ok(());
+            }
+            RouteRunOutcome::Prompt(route_execution) => {
+                let route_execution = route_execution;
+                return Self::finalize_send_message_execution(
+                    app,
+                    db,
+                    journal,
+                    session_id,
+                    &run_id,
+                    route_execution,
+                    prepared_context.messages.len(),
+                )
+                .await;
+            }
+        }
+
         let route_execution = execute_route_candidates(RouteExecutionParams {
             app,
             agent_executor: agent_executor.as_ref(),
@@ -348,6 +430,9 @@ impl SessionRuntime {
             &source_type,
         )?;
         let history = chat_io::load_session_history_with_pool(params.db, params.session_id).await?;
+        let workspace_skill_entries =
+            chat_io::load_workspace_skill_runtime_entries_with_pool(params.db).await?;
+        let route_index = SkillRouteIndex::build(&workspace_skill_entries);
 
         let per_candidate_retry_count = prepared_routes.retry_count_per_candidate;
         let mut route_candidates: Vec<(String, String, String, String, String)> = prepared_routes
@@ -423,6 +508,7 @@ impl SessionRuntime {
             app: params.app,
             db: params.db,
             agent_executor: params.agent_executor,
+            workspace_skill_entries: &workspace_skill_entries,
             session_id: params.session_id,
             api_format: &api_format,
             base_url: &base_url,
@@ -468,8 +554,18 @@ impl SessionRuntime {
             executor_work_dir: execution_preparation_service
                 .resolve_executor_work_dir(&execution_guidance),
             max_iterations: Some(max_iter),
+            max_call_depth: chat_preparation.max_call_depth,
             node_timeout_seconds: chat_preparation.node_timeout_seconds,
             route_retry_count: chat_preparation.retry_count,
+            source_type,
+            pack_path,
+            execution_guidance,
+            memory_bucket_employee_id: execution_preparation_service
+                .resolve_memory_bucket_employee_id(&execution_context)
+                .to_string(),
+            employee_collaboration_guidance,
+            workspace_skill_entries,
+            route_index,
         })
     }
 
