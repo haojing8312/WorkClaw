@@ -30,6 +30,10 @@ pub struct ModelProviderProfile {
     pub provider: String,
     pub model: String,
     pub api_key_env: String,
+    #[serde(default)]
+    pub api_format: Option<String>,
+    #[serde(default)]
+    pub base_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
