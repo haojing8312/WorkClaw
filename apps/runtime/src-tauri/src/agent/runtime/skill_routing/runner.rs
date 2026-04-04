@@ -1,6 +1,7 @@
 use super::adjudicator::adjudicate_route;
 use super::index::SkillRouteIndex;
 use super::intent::RouteFallbackReason;
+use super::observability::{build_implicit_route_observation, PlannedImplicitRoute};
 use super::recall::recall_skill_candidates;
 use crate::agent::context::build_tool_context;
 use crate::agent::run_guard::{RunBudgetPolicy, RunBudgetScope};
@@ -103,10 +104,26 @@ pub(crate) fn plan_implicit_route(
     command_specs: &[WorkspaceSkillCommandSpec],
     user_message: &str,
 ) -> RouteRunPlan {
+    plan_implicit_route_with_observation(
+        route_index,
+        workspace_skill_entries,
+        command_specs,
+        user_message,
+    )
+    .route_plan
+}
+
+pub(crate) fn plan_implicit_route_with_observation(
+    route_index: &SkillRouteIndex,
+    workspace_skill_entries: &[WorkspaceSkillRuntimeEntry],
+    command_specs: &[WorkspaceSkillCommandSpec],
+    user_message: &str,
+) -> PlannedImplicitRoute {
+    let started_at = std::time::Instant::now();
     let candidates = recall_skill_candidates(route_index, user_message);
     let decision = adjudicate_route(&candidates);
 
-    match decision {
+    let route_plan = match decision {
         super::intent::RouteDecision::OpenTask {
             fallback_reason, ..
         } => RouteRunPlan::OpenTask { fallback_reason },
@@ -135,39 +152,55 @@ pub(crate) fn plan_implicit_route(
             }
         }
         super::intent::RouteDecision::DirectDispatchSkill { skill_id, .. } => {
-            let Some(entry) = workspace_skill_entries
+            match workspace_skill_entries
                 .iter()
                 .find(|entry| entry.skill_id == skill_id)
-            else {
-                return RouteRunPlan::OpenTask {
+            {
+                Some(entry) => {
+                    let setup = build_routed_skill_tool_setup(entry);
+                    match command_specs
+                        .iter()
+                        .find(|spec| spec.skill_id == skill_id && spec.dispatch.is_some())
+                        .cloned()
+                    {
+                        Some(command_spec) => {
+                            match resolve_direct_dispatch_raw_args(
+                                user_message,
+                                &command_spec,
+                                entry,
+                            ) {
+                                Some(raw_args) => RouteRunPlan::DirectDispatchSkill {
+                                    skill_id,
+                                    setup,
+                                    command_spec,
+                                    raw_args,
+                                },
+                                None => RouteRunPlan::OpenTask {
+                                    fallback_reason: Some(
+                                        RouteFallbackReason::DispatchArgumentResolutionFailed,
+                                    ),
+                                },
+                            }
+                        }
+                        None => RouteRunPlan::OpenTask {
+                            fallback_reason: Some(RouteFallbackReason::InvalidSkillContract),
+                        },
+                    }
+                }
+                None => RouteRunPlan::OpenTask {
                     fallback_reason: Some(RouteFallbackReason::InvalidSkillContract),
-                };
-            };
-            let setup = build_routed_skill_tool_setup(entry);
-            let Some(command_spec) = command_specs
-                .iter()
-                .find(|spec| spec.skill_id == skill_id && spec.dispatch.is_some())
-                .cloned()
-            else {
-                return RouteRunPlan::OpenTask {
-                    fallback_reason: Some(RouteFallbackReason::InvalidSkillContract),
-                };
-            };
-            let Some(raw_args) =
-                resolve_direct_dispatch_raw_args(user_message, &command_spec, entry)
-            else {
-                return RouteRunPlan::OpenTask {
-                    fallback_reason: Some(RouteFallbackReason::DispatchArgumentResolutionFailed),
-                };
-            };
-
-            RouteRunPlan::DirectDispatchSkill {
-                skill_id,
-                setup,
-                command_spec,
-                raw_args,
+                },
             }
         }
+    };
+
+    PlannedImplicitRoute {
+        observation: build_implicit_route_observation(
+            &route_plan,
+            candidates.len(),
+            started_at.elapsed().as_millis() as u64,
+        ),
+        route_plan,
     }
 }
 

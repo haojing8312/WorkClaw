@@ -4,7 +4,7 @@ use crate::agent::runtime::{
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs::{self, OpenOptions};
@@ -90,11 +90,12 @@ impl SessionJournalStore {
         let mut state = self.read_state(session_id).await?;
         apply_event(&mut state, &event);
         self.run_registry.apply_event(session_id, &event);
-        self.observability.record_recent_event(build_observed_session_run_event(
-            session_id,
-            &record.recorded_at,
-            &event,
-        ));
+        self.observability
+            .record_recent_event(build_observed_session_run_event(
+                session_id,
+                &record.recorded_at,
+                &event,
+            ));
         state.current_run_id = self
             .run_registry
             .restore_session(session_id, state.current_run_id.as_deref());
@@ -205,6 +206,14 @@ pub enum SessionRunEvent {
         run_id: String,
         user_message_id: String,
     },
+    SkillRouteRecorded {
+        run_id: String,
+        route_latency_ms: u64,
+        candidate_count: usize,
+        selected_runner: String,
+        selected_skill: Option<String>,
+        fallback_reason: Option<String>,
+    },
     AssistantChunkAppended {
         run_id: String,
         chunk: String,
@@ -270,6 +279,7 @@ pub struct SessionJournalRecord {
 fn apply_event(state: &mut SessionJournalState, event: &SessionRunEvent) {
     let run_id = match event {
         SessionRunEvent::RunStarted { run_id, .. }
+        | SessionRunEvent::SkillRouteRecorded { run_id, .. }
         | SessionRunEvent::AssistantChunkAppended { run_id, .. }
         | SessionRunEvent::ToolStarted { run_id, .. }
         | SessionRunEvent::ToolCompleted { run_id, .. }
@@ -294,6 +304,7 @@ fn apply_event(state: &mut SessionJournalState, event: &SessionRunEvent) {
             run.last_error_kind = None;
             run.last_error_message = None;
         }
+        SessionRunEvent::SkillRouteRecorded { .. } => {}
         SessionRunEvent::AssistantChunkAppended { chunk, .. } => {
             let run = &mut state.runs[run_index];
             run.buffered_text.push_str(chunk);
@@ -408,6 +419,35 @@ fn build_observed_session_run_event(
             error_kind: None,
             child_session_id: None,
             message: Some(format!("user_message_id={user_message_id}")),
+        },
+        SessionRunEvent::SkillRouteRecorded {
+            run_id,
+            route_latency_ms,
+            candidate_count,
+            selected_runner,
+            selected_skill,
+            fallback_reason,
+        } => RuntimeObservedRunEvent {
+            session_id: session_id.to_string(),
+            run_id: run_id.clone(),
+            event_type: "skill_route_recorded".to_string(),
+            created_at: recorded_at.to_string(),
+            status: Some(selected_runner.clone()),
+            tool_name: None,
+            approval_id: None,
+            warning_kind: fallback_reason.clone(),
+            error_kind: None,
+            child_session_id: None,
+            message: Some(truncate_observed_message(
+                &json!({
+                    "route_latency_ms": route_latency_ms,
+                    "candidate_count": candidate_count,
+                    "selected_runner": selected_runner,
+                    "selected_skill": selected_skill,
+                    "fallback_reason": fallback_reason,
+                })
+                .to_string(),
+            )),
         },
         SessionRunEvent::AssistantChunkAppended { run_id, chunk } => RuntimeObservedRunEvent {
             session_id: session_id.to_string(),
@@ -776,7 +816,10 @@ mod tests {
         let snapshot = observability.snapshot();
         assert_eq!(snapshot.turns.active, 0);
         assert_eq!(snapshot.turns.completed, 1);
-        assert_eq!(snapshot.guard.warnings_by_kind.get("loop_detected"), Some(&1));
+        assert_eq!(
+            snapshot.guard.warnings_by_kind.get("loop_detected"),
+            Some(&1)
+        );
         assert_eq!(snapshot.recent_events.buffered, 3);
     }
 }

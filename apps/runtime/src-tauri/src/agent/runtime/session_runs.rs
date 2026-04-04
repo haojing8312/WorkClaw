@@ -59,6 +59,7 @@ pub(crate) async fn append_session_run_event_with_pool(
             .await
             .map_err(|e| format!("写入 session run 启动投影失败: {e}"))?;
         }
+        SessionRunEvent::SkillRouteRecorded { .. } => {}
         SessionRunEvent::AssistantChunkAppended { run_id, chunk } => {
             sqlx::query(
                 "INSERT INTO session_runs (id, session_id, user_message_id, assistant_message_id, status, buffered_text, error_kind, error_message, created_at, updated_at)
@@ -260,6 +261,7 @@ async fn upsert_run_status(
 fn event_type(event: &SessionRunEvent) -> &'static str {
     match event {
         SessionRunEvent::RunStarted { .. } => "run_started",
+        SessionRunEvent::SkillRouteRecorded { .. } => "skill_route_recorded",
         SessionRunEvent::AssistantChunkAppended { .. } => "assistant_chunk_appended",
         SessionRunEvent::ToolStarted { .. } => "tool_started",
         SessionRunEvent::ToolCompleted { .. } => "tool_completed",
@@ -275,6 +277,7 @@ fn event_type(event: &SessionRunEvent) -> &'static str {
 fn event_run_id(event: &SessionRunEvent) -> &str {
     match event {
         SessionRunEvent::RunStarted { run_id, .. }
+        | SessionRunEvent::SkillRouteRecorded { run_id, .. }
         | SessionRunEvent::AssistantChunkAppended { run_id, .. }
         | SessionRunEvent::ToolStarted { run_id, .. }
         | SessionRunEvent::ToolCompleted { run_id, .. }

@@ -2,6 +2,9 @@ use crate::agent::run_guard::RunStopReason;
 use crate::agent::runtime::session_runs::{
     append_session_run_event_with_pool, attach_assistant_message_to_run_with_pool,
 };
+use crate::agent::runtime::skill_routing::observability::{
+    route_fallback_reason_key, ImplicitRouteObservation,
+};
 use crate::agent::runtime::tool_dispatch::INTERNAL_SKILL_DISPATCH_INPUT_KEY;
 use crate::session_journal::{SessionJournalStore, SessionRunEvent};
 use chrono::Utc;
@@ -77,6 +80,31 @@ pub(crate) async fn append_run_started_with_pool(
         SessionRunEvent::RunStarted {
             run_id: run_id.to_string(),
             user_message_id: user_message_id.to_string(),
+        },
+    )
+    .await
+}
+
+pub(crate) async fn append_skill_route_recorded_with_pool(
+    pool: &sqlx::SqlitePool,
+    journal: &SessionJournalStore,
+    session_id: &str,
+    run_id: &str,
+    observation: &ImplicitRouteObservation,
+) -> Result<(), String> {
+    append_session_run_event_with_pool(
+        pool,
+        journal,
+        session_id,
+        SessionRunEvent::SkillRouteRecorded {
+            run_id: run_id.to_string(),
+            route_latency_ms: observation.route_latency_ms,
+            candidate_count: observation.candidate_count,
+            selected_runner: observation.selected_runner.clone(),
+            selected_skill: observation.selected_skill.clone(),
+            fallback_reason: observation
+                .fallback_reason
+                .map(|reason| route_fallback_reason_key(reason).to_string()),
         },
     )
     .await
@@ -330,7 +358,8 @@ pub(crate) async fn persist_partial_assistant_message_for_run_with_pool(
     }))
     .map_err(|e| format!("序列化部分助手消息失败: {e}"))?;
 
-    let msg_id = insert_session_message_with_pool(pool, session_id, "assistant", &content, None).await?;
+    let msg_id =
+        insert_session_message_with_pool(pool, session_id, "assistant", &content, None).await?;
     attach_assistant_message_to_run_with_pool(pool, run_id, &msg_id).await?;
     Ok(Some(msg_id))
 }
@@ -597,20 +626,18 @@ mod run_guard_persistence_tests {
         .expect("persist partial assistant")
         .expect("assistant message id");
 
-        let (assistant_message_id,): (String,) = sqlx::query_as(
-            "SELECT assistant_message_id FROM session_runs WHERE id = 'run-1'",
-        )
-        .fetch_one(&pool)
-        .await
-        .expect("query assistant message id");
-        assert_eq!(assistant_message_id, msg_id);
-
-        let (content,): (String,) =
-            sqlx::query_as("SELECT content FROM messages WHERE id = ?")
-                .bind(&msg_id)
+        let (assistant_message_id,): (String,) =
+            sqlx::query_as("SELECT assistant_message_id FROM session_runs WHERE id = 'run-1'")
                 .fetch_one(&pool)
                 .await
-                .expect("query partial assistant content");
+                .expect("query assistant message id");
+        assert_eq!(assistant_message_id, msg_id);
+
+        let (content,): (String,) = sqlx::query_as("SELECT content FROM messages WHERE id = ?")
+            .bind(&msg_id)
+            .fetch_one(&pool)
+            .await
+            .expect("query partial assistant content");
         let parsed: Value = serde_json::from_str(&content).expect("structured assistant content");
         assert_eq!(parsed["text"].as_str(), Some("我先检查一下环境。"));
         assert_eq!(parsed["items"].as_array().map(|items| items.len()), Some(2));
@@ -625,7 +652,8 @@ mod run_guard_persistence_tests {
     }
 
     #[tokio::test]
-    async fn persist_partial_assistant_message_for_run_filters_internal_skill_dispatch_exec_calls() {
+    async fn persist_partial_assistant_message_for_run_filters_internal_skill_dispatch_exec_calls()
+    {
         let pool = setup_partial_message_pool().await;
 
         sqlx::query(

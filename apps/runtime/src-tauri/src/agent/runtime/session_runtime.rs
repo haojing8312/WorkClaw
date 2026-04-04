@@ -23,7 +23,7 @@ use uuid::Uuid;
 use super::runtime_io as chat_io;
 use crate::agent::runtime::skill_routing::index::SkillRouteIndex;
 use crate::agent::runtime::skill_routing::runner::{
-    execute_implicit_route_plan, plan_implicit_route, RouteRunOutcome,
+    execute_implicit_route_plan, plan_implicit_route_with_observation, RouteRunOutcome,
 };
 use crate::model_transport::{resolve_model_transport, ModelTransportKind};
 use runtime_chat_app::ChatExecutionGuidance;
@@ -274,12 +274,20 @@ impl SessionRuntime {
             }
         }
 
-        let route_plan = plan_implicit_route(
+        let planned_route = plan_implicit_route_with_observation(
             &prepared_context.route_index,
             &prepared_context.workspace_skill_entries,
             &prepared_context.prepared_runtime_tools.skill_command_specs,
             user_message,
         );
+        chat_io::append_skill_route_recorded_with_pool(
+            db,
+            journal,
+            session_id,
+            &run_id,
+            &planned_route.observation,
+        )
+        .await?;
 
         match execute_implicit_route_plan(
             app,
@@ -288,7 +296,7 @@ impl SessionRuntime {
             session_id,
             &run_id,
             &prepared_context,
-            route_plan,
+            planned_route.route_plan,
             cancel_flag.clone(),
             tool_confirm_responder.clone(),
         )

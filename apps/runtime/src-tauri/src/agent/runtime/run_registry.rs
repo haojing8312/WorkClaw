@@ -60,6 +60,7 @@ impl RunRegistry {
                 self.cancel_run(session_id, run_id);
             }
             SessionRunEvent::AssistantChunkAppended { .. }
+            | SessionRunEvent::SkillRouteRecorded { .. }
             | SessionRunEvent::ToolStarted { .. }
             | SessionRunEvent::ToolCompleted { .. }
             | SessionRunEvent::ApprovalRequested { .. }

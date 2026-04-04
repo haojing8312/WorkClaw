@@ -59,11 +59,13 @@ pub async fn list_session_run_events_with_pool(
     run_id: Option<&str>,
     limit: Option<u32>,
 ) -> Result<Vec<SessionRunEventSummary>, String> {
-    Ok(load_session_run_event_rows_with_pool(pool, session_id, run_id, limit)
-        .await?
-        .into_iter()
-        .map(|record| summarize_stored_event(&record))
-        .collect())
+    Ok(
+        load_session_run_event_rows_with_pool(pool, session_id, run_id, limit)
+            .await?
+            .into_iter()
+            .map(|record| summarize_stored_event(&record))
+            .collect(),
+    )
 }
 
 async fn load_session_run_event_rows_with_pool(
@@ -85,8 +87,8 @@ async fn load_session_run_event_rows_with_pool(
         sql.push_str(" LIMIT ?");
     }
 
-    let mut query = sqlx::query_as::<_, (String, String, String, String, String)>(&sql)
-        .bind(session_id.trim());
+    let mut query =
+        sqlx::query_as::<_, (String, String, String, String, String)>(&sql).bind(session_id.trim());
     if let Some(run_id) = run_id {
         query = query.bind(run_id.trim());
     }
@@ -128,8 +130,13 @@ pub async fn export_session_run_trace_with_pool(
     session_id: &str,
     run_id: &str,
 ) -> Result<SessionRunTrace, String> {
-    let events = load_session_run_event_rows_with_pool(pool, session_id, Some(run_id), None).await?;
-    Ok(build_session_run_trace(session_id.trim(), run_id.trim(), &events))
+    let events =
+        load_session_run_event_rows_with_pool(pool, session_id, Some(run_id), None).await?;
+    Ok(build_session_run_trace(
+        session_id.trim(),
+        run_id.trim(),
+        &events,
+    ))
 }
 
 #[tauri::command]
@@ -196,6 +203,7 @@ pub async fn append_session_run_event_with_pool(
             .await
             .map_err(|e| format!("写入 session run 启动投影失败: {e}"))?;
         }
+        SessionRunEvent::SkillRouteRecorded { .. } => {}
         SessionRunEvent::AssistantChunkAppended { run_id, chunk } => {
             sqlx::query(
                 "INSERT INTO session_runs (id, session_id, user_message_id, assistant_message_id, status, buffered_text, error_kind, error_message, created_at, updated_at)
@@ -397,6 +405,7 @@ async fn upsert_run_status(
 fn event_type(event: &SessionRunEvent) -> &'static str {
     match event {
         SessionRunEvent::RunStarted { .. } => "run_started",
+        SessionRunEvent::SkillRouteRecorded { .. } => "skill_route_recorded",
         SessionRunEvent::AssistantChunkAppended { .. } => "assistant_chunk_appended",
         SessionRunEvent::ToolStarted { .. } => "tool_started",
         SessionRunEvent::ToolCompleted { .. } => "tool_completed",
@@ -412,6 +421,7 @@ fn event_type(event: &SessionRunEvent) -> &'static str {
 fn event_run_id(event: &SessionRunEvent) -> &str {
     match event {
         SessionRunEvent::RunStarted { run_id, .. }
+        | SessionRunEvent::SkillRouteRecorded { run_id, .. }
         | SessionRunEvent::AssistantChunkAppended { run_id, .. }
         | SessionRunEvent::ToolStarted { run_id, .. }
         | SessionRunEvent::ToolCompleted { run_id, .. }
@@ -644,7 +654,12 @@ mod tests {
                 .iter()
                 .map(|event| event.event_type.as_str())
                 .collect::<Vec<_>>(),
-            vec!["run_started", "run_started", "tool_started", "run_completed"]
+            vec![
+                "run_started",
+                "run_started",
+                "tool_started",
+                "run_completed"
+            ]
         );
         assert_eq!(events[0].run_id, "run-a");
         assert_eq!(events[1].run_id, "run-b");

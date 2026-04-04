@@ -119,7 +119,10 @@ pub fn summarize_stored_event(record: &StoredSessionRunEvent) -> SessionRunEvent
     }
 }
 
-fn summarize_event(record: &StoredSessionRunEvent, event: SessionRunEvent) -> SessionRunEventSummary {
+fn summarize_event(
+    record: &StoredSessionRunEvent,
+    event: SessionRunEvent,
+) -> SessionRunEventSummary {
     match event {
         SessionRunEvent::RunStarted {
             user_message_id, ..
@@ -140,6 +143,34 @@ fn summarize_event(record: &StoredSessionRunEvent, event: SessionRunEvent) -> Se
             last_completed_step: None,
             child_session_id: None,
             is_error: None,
+            parse_warning: None,
+        },
+        SessionRunEvent::SkillRouteRecorded {
+            route_latency_ms,
+            candidate_count,
+            selected_runner,
+            selected_skill,
+            fallback_reason,
+            ..
+        } => SessionRunEventSummary {
+            session_id: record.session_id.clone(),
+            run_id: record.run_id.clone(),
+            event_type: record.event_type.clone(),
+            created_at: record.created_at.clone(),
+            status: Some(selected_runner.clone()),
+            tool_name: None,
+            call_id: None,
+            approval_id: None,
+            warning_kind: fallback_reason,
+            error_kind: None,
+            message: selected_skill,
+            detail: Some(format!(
+                "route_latency_ms={route_latency_ms}, candidate_count={candidate_count}"
+            )),
+            irreversible: None,
+            last_completed_step: None,
+            child_session_id: None,
+            is_error: Some(false),
             parse_warning: None,
         },
         SessionRunEvent::AssistantChunkAppended { chunk, .. } => SessionRunEventSummary {
@@ -357,7 +388,8 @@ pub fn build_session_run_trace(
     run_id: &str,
     events: &[StoredSessionRunEvent],
 ) -> SessionRunTrace {
-    let summaries: Vec<SessionRunEventSummary> = events.iter().map(summarize_stored_event).collect();
+    let summaries: Vec<SessionRunEventSummary> =
+        events.iter().map(summarize_stored_event).collect();
     let mut lifecycle = SessionRunTraceLifecycle {
         started: false,
         completed: false,
@@ -532,13 +564,20 @@ fn render_tool_output_preview(output: &str) -> Option<String> {
 }
 
 fn extract_child_session_id(input: &Value, output: Option<&str>) -> Option<String> {
-    input.get("child_session_id").and_then(Value::as_str).map(str::to_string).or_else(|| {
-        output.and_then(|raw| {
-            serde_json::from_str::<Value>(raw)
-                .ok()
-                .and_then(|value| value.get("child_session_id").and_then(Value::as_str).map(str::to_string))
+    input
+        .get("child_session_id")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            output.and_then(|raw| {
+                serde_json::from_str::<Value>(raw).ok().and_then(|value| {
+                    value
+                        .get("child_session_id")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+            })
         })
-    })
 }
 
 fn truncate_text(value: &str, max_chars: usize) -> String {
@@ -609,8 +648,10 @@ fn normalize_trace_value(field_name: Option<&str>, value: &mut Value) {
     match value {
         Value::Object(map) => {
             for (key, nested) in map.iter_mut() {
-                if matches!(key.as_str(), "created_at" | "first_event_at" | "last_event_at")
-                    && !nested.is_null()
+                if matches!(
+                    key.as_str(),
+                    "created_at" | "first_event_at" | "last_event_at"
+                ) && !nested.is_null()
                 {
                     *nested = Value::String("<timestamp>".to_string());
                 } else {
@@ -631,8 +672,10 @@ fn normalize_trace_value(field_name: Option<&str>, value: &mut Value) {
 }
 
 fn normalize_trace_string(field_name: Option<&str>, value: &str) -> String {
-    if matches!(field_name, Some("created_at" | "first_event_at" | "last_event_at"))
-        || looks_like_rfc3339_timestamp(value)
+    if matches!(
+        field_name,
+        Some("created_at" | "first_event_at" | "last_event_at")
+    ) || looks_like_rfc3339_timestamp(value)
     {
         return "<timestamp>".to_string();
     }
@@ -791,7 +834,10 @@ mod tests {
         assert_eq!(trace.run_id, "run-success");
         assert_eq!(trace.final_status, "completed");
         assert_eq!(trace.event_count, 4);
-        assert_eq!(trace.first_event_at.as_deref(), Some("2026-03-27T01:00:00Z"));
+        assert_eq!(
+            trace.first_event_at.as_deref(),
+            Some("2026-03-27T01:00:00Z")
+        );
         assert_eq!(trace.last_event_at.as_deref(), Some("2026-03-27T01:00:03Z"));
         assert!(trace.lifecycle.started);
         assert!(trace.lifecycle.completed);
@@ -837,8 +883,10 @@ mod tests {
                     "2026-03-27T02:00:02Z",
                     SessionRunEvent::RunStopped {
                         run_id: "run-loop".to_string(),
-                        stop_reason: RunStopReason::loop_detected("browser_snapshot 连续 6 次返回相同结果。")
-                            .with_last_completed_step("已填写封面标题"),
+                        stop_reason: RunStopReason::loop_detected(
+                            "browser_snapshot 连续 6 次返回相同结果。",
+                        )
+                        .with_last_completed_step("已填写封面标题"),
                     },
                 ),
             ],
@@ -937,7 +985,9 @@ mod tests {
             ],
         );
 
-        let child_link = trace.child_session_link.expect("hidden child session linkage");
+        let child_link = trace
+            .child_session_link
+            .expect("hidden child session linkage");
         assert_eq!(child_link.parent_session_key, "parent_session");
         assert_eq!(trace.final_status, "completed");
     }
@@ -974,7 +1024,10 @@ mod tests {
                 &events,
             ));
 
-            assert_eq!(actual, fixture.expected, "fixture {file_name} did not match");
+            assert_eq!(
+                actual, fixture.expected,
+                "fixture {file_name} did not match"
+            );
         }
     }
 }
