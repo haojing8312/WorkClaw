@@ -1,0 +1,52 @@
+id: pm_weekly_summary_xietao_2026_03_30_2026_04_04
+title: 项管周报汇总-谢涛-固定日期窗口
+capability_id: pm_weekly_summary
+
+kind: real-agent
+mode: implicit-skill-routing
+side_effect: none
+enabled: true
+
+input:
+  user_text: 获取谢涛2026年3月30日到4月4日的工作日报并汇总成简报
+
+expect:
+  route:
+    family: feishu-pm
+    runner_not: OpenTaskRunner
+
+  execution:
+    leaf_exit_code: 0
+
+  structured:
+    equals:
+      employee: 谢涛
+      start_date: 2026-03-30
+      end_date: 2026-04-04
+      daily_count: 6
+      plan_count: 6
+      report_count: 5
+
+  output:
+    contains_all:
+      - 金川区域排水管网改造工程（一期）
+      - 土左2025老旧小区改造
+    contains_any:
+      - 排污通道图纸跟进
+      - 飞行数据整理
+
+thresholds:
+  pass_total_ms: 150000
+  warn_total_ms: 180000
+  max_turn_count: 4
+  max_tool_count: 6
+
+record_metrics:
+  - selected_skill
+  - selected_runner
+  - route_latency_ms
+  - total_duration_ms
+  - leaf_exec_duration_ms
+  - turn_count
+  - tool_count
+  - fallback_reason

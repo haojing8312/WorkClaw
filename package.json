@@ -18,6 +18,7 @@
     "test:local-build-script": "node --test scripts/check-local-build-script.test.mjs",
     "test:release-docs": "node --test scripts/check-release-docs.test.mjs",
     "test:openclaw-vendor-lane": "node --test scripts/check-openclaw-vendor-lane.test.mjs",
+    "eval:agent-real": "node scripts/run-agent-evals.mjs",
     "test:rust-fast": "node scripts/test-rust-fast.mjs",
     "cargo:isolated": "node scripts/run-cargo-isolated.mjs",
     "test:builtin-skills": "cargo test --manifest-path packages/builtin-skill-checks/Cargo.toml -- --nocapture",

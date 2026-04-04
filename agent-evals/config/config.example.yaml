@@ -1,0 +1,26 @@
+runtime:
+  workspace_root: D:\\code\\WorkClaw
+  cargo_manifest_path: apps/runtime/src-tauri/Cargo.toml
+
+models:
+  default_profile: replace_me
+
+providers:
+  replace_me:
+    provider: openai
+    model: gpt-5.4
+    api_key_env: OPENAI_API_KEY
+
+artifacts:
+  output_dir: D:\\code\\WorkClaw\\temp\\agent-evals
+
+capabilities:
+  pm_weekly_summary:
+    workspace_root: E:\\replace-me
+    entry_kind: workspace_skill
+    entry_name: replace-me
+
+diagnostics:
+  export_journal: true
+  export_trace: true
+  export_stdout_stderr: true

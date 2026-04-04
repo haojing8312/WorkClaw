@@ -20,6 +20,9 @@ AGENTS.md
 nul
 apps/runtime/sidecar/nul
 temp/
+agent-evals/config/config.local.yaml
+agent-evals/local/
+temp/agent-evals/
 scripts/sync-codex-skills.mjs
 .pnpm-store/
 .pnpm-store-local/
