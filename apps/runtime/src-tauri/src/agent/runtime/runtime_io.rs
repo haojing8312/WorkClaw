@@ -29,7 +29,10 @@ pub(crate) use session_titles::{
     derive_meaningful_session_title_from_messages, is_generic_session_title,
     maybe_update_session_title_from_first_user_message_with_pool,
 };
-pub use types::{WorkspaceSkillCommandSpec, WorkspaceSkillContent, WorkspaceSkillRuntimeEntry};
+pub use types::{
+    WorkspaceSkillCommandSpec, WorkspaceSkillContent, WorkspaceSkillRouteExecutionMode,
+    WorkspaceSkillRouteProjection, WorkspaceSkillRuntimeEntry,
+};
 pub use workspace_skills::{
     build_workspace_skill_command_specs, load_workspace_skill_runtime_entries_with_pool,
 };

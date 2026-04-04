@@ -2,6 +2,24 @@ use runtime_skill_core::{
     OpenClawSkillMetadata, SkillCommandDispatchSpec, SkillConfig, SkillInvocationPolicy,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkspaceSkillRouteExecutionMode {
+    Inline,
+    Fork,
+    DirectDispatch,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceSkillRouteProjection {
+    pub skill_id: String,
+    pub display_name: String,
+    pub aliases: Vec<String>,
+    pub description: String,
+    pub when_to_use: String,
+    pub execution_mode: WorkspaceSkillRouteExecutionMode,
+    pub command_dispatch: Option<SkillCommandDispatchSpec>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceSkillPromptEntry {
     pub skill_id: String,
