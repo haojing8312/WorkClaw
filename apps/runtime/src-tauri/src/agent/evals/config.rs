@@ -92,12 +92,12 @@ mod tests {
 runtime:
   workspace_root: D:\\code\\WorkClaw
 models:
-  default_profile: replace_me
+  default_profile: minimax_anthropic
 providers:
-  replace_me:
-    provider: openai
-    model: gpt-5.4
-    api_key_env: OPENAI_API_KEY
+  minimax_anthropic:
+    provider: minimax
+    model: MiniMax-M2.5
+    api_key_env: MINIMAX_API_KEY
 artifacts:
   output_dir: D:\\code\\WorkClaw\\temp\\agent-evals
 capabilities: {}
@@ -117,8 +117,8 @@ diagnostics:
         let config: LocalEvalConfig = serde_yaml::from_str(&raw).expect("parse config example");
 
         assert_eq!(config.runtime.workspace_root, r"D:\\code\\WorkClaw");
-        assert_eq!(config.models.default_profile, "replace_me");
-        assert!(config.providers.contains_key("replace_me"));
+        assert_eq!(config.models.default_profile, "minimax_anthropic");
+        assert!(config.providers.contains_key("minimax_anthropic"));
         assert!(config.capabilities.contains_key("pm_weekly_summary"));
     }
 }

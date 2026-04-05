@@ -7,25 +7,26 @@ use crate::agent::tools::new_responder;
 use crate::agent::tools::search_providers::cache::SearchCache;
 use crate::agent::{AgentExecutor, ToolRegistry};
 use crate::commands::chat::{
-    AskUserState, CancelFlagState, SendMessagePart, SendMessageRequest, ToolConfirmState,
-    create_session, send_message,
+    create_session, send_message, AskUserState, CancelFlagState, SendMessagePart,
+    SendMessageRequest, ToolConfirmState,
 };
-use crate::commands::models::{
-    ModelConfig, save_model_config_with_pool, set_default_model_with_pool,
-};
-use crate::commands::session_runs::{
-    SessionRunProjection, export_session_run_trace_with_pool, list_session_runs_with_pool,
-};
-use crate::commands::skills::{DbState, import_local_skills_to_pool};
 use crate::commands::chat_session_commands::export_session_markdown_with_pool;
 use crate::commands::chat_session_io::get_messages_with_pool;
+use crate::commands::models::RouteAttemptLog;
+use crate::commands::models::{
+    save_model_config_with_pool, set_default_model_with_pool, ModelConfig,
+};
+use crate::commands::session_runs::{
+    export_session_run_trace_with_pool, list_session_runs_with_pool, SessionRunProjection,
+};
+use crate::commands::skills::{import_local_skills_to_pool, DbState};
 use crate::session_journal::{SessionJournalState, SessionJournalStateHandle, SessionJournalStore};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use tauri::Manager;
+use std::sync::Arc;
 use tauri::test::{mock_context, noop_assets};
+use tauri::Manager;
 use tauri::Wry;
 
 pub struct RealAgentEvalRunner {
@@ -47,6 +48,7 @@ pub struct HeadlessEvalRun {
     pub missing_mcp: Vec<String>,
     pub execution_error: Option<String>,
     pub session_runs: Vec<SessionRunProjection>,
+    pub route_attempt_logs: Vec<RouteAttemptLog>,
     pub trace: Option<crate::agent::runtime::SessionRunTrace>,
     pub messages: Vec<Value>,
     pub session_markdown: String,
@@ -57,8 +59,7 @@ pub struct HeadlessEvalRun {
 impl RealAgentEvalRunner {
     pub async fn new(config: &LocalEvalConfig) -> Result<Self, String> {
         let output_root = PathBuf::from(&config.artifacts.output_dir);
-        std::fs::create_dir_all(&output_root)
-            .map_err(|e| format!("创建评测输出目录失败: {e}"))?;
+        std::fs::create_dir_all(&output_root).map_err(|e| format!("创建评测输出目录失败: {e}"))?;
 
         let app = tauri::Builder::default()
             .build(mock_context(noop_assets()))
@@ -77,8 +78,7 @@ impl RealAgentEvalRunner {
         let ask_user_responder = new_responder();
         app.manage(AskUserState(ask_user_responder));
 
-        let tool_confirm_responder: ToolConfirmResponder =
-            Arc::new(std::sync::Mutex::new(None));
+        let tool_confirm_responder: ToolConfirmResponder = Arc::new(std::sync::Mutex::new(None));
         app.manage(ToolConfirmState(tool_confirm_responder.clone()));
 
         let cancel_flag = Arc::new(AtomicBool::new(false));
@@ -88,8 +88,9 @@ impl RealAgentEvalRunner {
         app.manage(SearchCacheState(search_cache));
 
         let runtime_observability = Arc::new(RuntimeObservability::default());
-        let session_admission_gate =
-            Arc::new(SessionAdmissionGate::with_observability(runtime_observability.clone()));
+        let session_admission_gate = Arc::new(SessionAdmissionGate::with_observability(
+            runtime_observability.clone(),
+        ));
         app.manage(SessionAdmissionGateState(session_admission_gate));
         let run_registry = Arc::new(RunRegistry::default());
         app.manage(RunRegistryState(run_registry.clone()));
@@ -126,19 +127,15 @@ impl RealAgentEvalRunner {
             .ok_or_else(|| format!("未找到 capability_id 对应映射: {}", scenario.capability_id))?;
         let model_id = self.ensure_model_profile(config).await?;
         let import_root = resolve_skill_import_root(capability)?;
-        let import_batch = import_local_skills_to_pool(
-            import_root.to_string_lossy().to_string(),
-            &self.pool,
-            &[],
-        )
-        .await?;
+        let import_batch =
+            import_local_skills_to_pool(import_root.to_string_lossy().to_string(), &self.pool, &[])
+                .await?;
         let skill_id = resolve_capability_skill_id(capability, &import_batch)?;
 
         let work_dir = PathBuf::from(&config.artifacts.output_dir)
             .join("workspaces")
             .join(&scenario.id);
-        std::fs::create_dir_all(&work_dir)
-            .map_err(|e| format!("创建场景工作目录失败: {e}"))?;
+        std::fs::create_dir_all(&work_dir).map_err(|e| format!("创建场景工作目录失败: {e}"))?;
 
         let session_id = create_session(
             self.app.handle().clone(),
@@ -174,6 +171,7 @@ impl RealAgentEvalRunner {
         .err();
 
         let session_runs = list_session_runs_with_pool(&self.pool, &session_id).await?;
+        let route_attempt_logs = load_route_attempt_logs(&self.pool, &session_id).await?;
         let trace = if let Some(run) = session_runs.last() {
             Some(export_session_run_trace_with_pool(&self.pool, &session_id, &run.id).await?)
         } else {
@@ -201,6 +199,7 @@ impl RealAgentEvalRunner {
             missing_mcp: import_batch.missing_mcp,
             execution_error,
             session_runs,
+            route_attempt_logs,
             trace,
             messages,
             session_markdown,
@@ -211,13 +210,14 @@ impl RealAgentEvalRunner {
 
     async fn ensure_model_profile(&self, config: &LocalEvalConfig) -> Result<String, String> {
         let profile_id = &config.models.default_profile;
-        let profile = config.providers.get(profile_id).ok_or_else(|| {
-            format!("默认模型 profile 未在 providers 中定义: {profile_id}")
-        })?;
+        let profile = config
+            .providers
+            .get(profile_id)
+            .ok_or_else(|| format!("默认模型 profile 未在 providers 中定义: {profile_id}"))?;
 
-        let api_key = std::env::var(&profile.api_key_env).map_err(|_| {
-            format!("缺少真实评测所需环境变量: {}", profile.api_key_env)
-        })?;
+        validate_api_key_env_name(&profile.api_key_env, profile_id)?;
+        let api_key = std::env::var(&profile.api_key_env)
+            .map_err(|_| format!("缺少真实评测所需环境变量: {}", profile.api_key_env))?;
         let (api_format, base_url) = resolve_model_connection_defaults(profile)?;
 
         let model_id = format!("eval-{}", sanitize_id_component(profile_id));
@@ -253,6 +253,51 @@ impl RealAgentEvalRunner {
         }
         Ok(())
     }
+}
+
+async fn load_route_attempt_logs(
+    pool: &sqlx::SqlitePool,
+    session_id: &str,
+) -> Result<Vec<RouteAttemptLog>, String> {
+    let rows = sqlx::query_as::<_, (String, String, String, String, i64, i64, String, bool, String, String)>(
+        "SELECT session_id, capability, api_format, model_name, attempt_index, retry_index, error_kind, CAST(success AS BOOLEAN), error_message, created_at
+         FROM route_attempt_logs
+         WHERE session_id = ?
+         ORDER BY created_at ASC",
+    )
+    .bind(session_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("读取评测路由尝试日志失败: {e}"))?;
+
+    Ok(rows
+        .into_iter()
+        .map(
+            |(
+                session_id,
+                capability,
+                api_format,
+                model_name,
+                attempt_index,
+                retry_index,
+                error_kind,
+                success,
+                error_message,
+                created_at,
+            )| RouteAttemptLog {
+                session_id,
+                capability,
+                api_format,
+                model_name,
+                attempt_index,
+                retry_index,
+                error_kind,
+                success,
+                error_message,
+                created_at,
+            },
+        )
+        .collect())
 }
 
 fn resolve_skill_import_root(mapping: &CapabilityMapping) -> Result<PathBuf, String> {
@@ -298,7 +343,7 @@ fn resolve_model_connection_defaults(
 ) -> Result<(String, String), String> {
     let inferred_api_format = match profile.provider.trim().to_ascii_lowercase().as_str() {
         "openai" | "openrouter" => "openai".to_string(),
-        "anthropic" => "anthropic".to_string(),
+        "anthropic" | "minimax" | "minimax_cn" => "anthropic".to_string(),
         other => {
             return Err(format!(
                 "provider {} 需要在 config.local.yaml 中显式提供 api_format/base_url",
@@ -310,16 +355,35 @@ fn resolve_model_connection_defaults(
         "openai" => "https://api.openai.com/v1".to_string(),
         "openrouter" => "https://openrouter.ai/api/v1".to_string(),
         "anthropic" => "https://api.anthropic.com".to_string(),
+        "minimax" => "https://api.minimax.io/anthropic".to_string(),
+        "minimax_cn" => "https://api.minimaxi.com/anthropic".to_string(),
         _ => String::new(),
     };
 
     Ok((
-        profile
-            .api_format
-            .clone()
-            .unwrap_or(inferred_api_format),
+        profile.api_format.clone().unwrap_or(inferred_api_format),
         profile.base_url.clone().unwrap_or(inferred_base_url),
     ))
+}
+
+fn validate_api_key_env_name(raw: &str, profile_id: &str) -> Result<(), String> {
+    let trimmed = raw.trim();
+    let is_valid_env_name = !trimmed.is_empty()
+        && trimmed.chars().enumerate().all(|(idx, ch)| {
+            if idx == 0 {
+                ch == '_' || ch.is_ascii_alphabetic()
+            } else {
+                ch == '_' || ch.is_ascii_alphanumeric()
+            }
+        });
+
+    if is_valid_env_name {
+        Ok(())
+    } else {
+        Err(format!(
+            "providers.{profile_id}.api_key_env 必须填写环境变量名（例如 MINIMAX_API_KEY），不要直接填写真实 API key"
+        ))
+    }
 }
 
 fn sanitize_id_component(raw: &str) -> String {
@@ -358,7 +422,7 @@ fn extract_final_output(messages: &[Value]) -> String {
 mod tests {
     use super::{
         resolve_capability_skill_id, resolve_model_connection_defaults, resolve_skill_import_root,
-        sanitize_id_component,
+        sanitize_id_component, validate_api_key_env_name,
     };
     use crate::agent::evals::config::ModelProviderProfile;
     use crate::commands::skills::{LocalImportBatchResult, LocalImportInstalledItem};
@@ -426,10 +490,33 @@ mod tests {
             base_url: None,
         };
 
-        let (api_format, base_url) =
-            resolve_model_connection_defaults(&profile).expect("defaults");
+        let (api_format, base_url) = resolve_model_connection_defaults(&profile).expect("defaults");
         assert_eq!(api_format, "openai");
         assert_eq!(base_url, "https://openrouter.ai/api/v1");
+    }
+
+    #[test]
+    fn resolve_model_connection_defaults_supports_minimax_anthropic_defaults() {
+        let profile = ModelProviderProfile {
+            provider: "minimax".to_string(),
+            model: "MiniMax-M2.5".to_string(),
+            api_key_env: "MINIMAX_API_KEY".to_string(),
+            api_format: None,
+            base_url: None,
+        };
+
+        let (api_format, base_url) = resolve_model_connection_defaults(&profile).expect("defaults");
+        assert_eq!(api_format, "anthropic");
+        assert_eq!(base_url, "https://api.minimax.io/anthropic");
+    }
+
+    #[test]
+    fn validate_api_key_env_name_rejects_literal_secret_values() {
+        let err = validate_api_key_env_name("sk-demo-secret-value", "minimax_anthropic")
+            .expect_err("literal secret should be rejected");
+
+        assert!(err.contains("api_key_env"));
+        assert!(!err.contains("sk-demo-secret-value"));
     }
 
     #[test]

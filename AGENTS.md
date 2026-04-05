@@ -34,6 +34,7 @@ These skills should be treated as lightweight guardrails for the maintainer's ow
 - Rust fast path: `pnpm test:rust-fast`
 - Runtime E2E: `pnpm test:e2e:runtime`
 - Builtin skills: `pnpm test:builtin-skills`
+- Real agent evals: `pnpm eval:agent-real --scenario <id>`
 
 ## Release-Sensitive Commands
 - Version checks: `pnpm release:check-version`
@@ -135,6 +136,25 @@ A skill is a set of local instructions to follow that is stored in a `SKILL.md` 
 
 ## Project Docs Index
 - Windows contributor prerequisites, local Tauri startup, and GitHub Windows release: [windows-contributor-guide.md](/e:/code/yzpd/workclaw/docs/development/windows-contributor-guide.md)
+
+## Real Agent Eval Harness
+- Real agent evals are local-only, manually triggered runtime regressions for validating real model + real skill execution without checking secrets into git.
+- Keep scenario definitions in `agent-evals/scenarios/*.yaml` with anonymous `capability_id` values only. Do not store real skill paths, real API keys, or sensitive prompt internals in those tracked files.
+- Keep real model/provider settings, real skill mappings, and external-system credentials only in `agent-evals/config/config.local.yaml`, which stays local and untracked.
+- Use environment variable names in `config.local.yaml` such as `MINIMAX_API_KEY`; never paste raw API keys into the YAML file.
+- Reports, traces, journals, and stdout/stderr artifacts are written to `temp/agent-evals/...` and stay local-only.
+- First validated golden case:
+  - Scenario: `pm_weekly_summary_xietao_2026_03_30_2026_04_04`
+  - Prompt: `获取谢涛2026年3月30日到4月4日的工作日报并汇总成简报`
+  - Expected route: `feishu-pm` family through the skill session runner, not `OpenTaskRunner`
+  - Current verified baseline:
+    - `status=pass`
+    - `selected_skill=local-feishu-pm-hub`
+    - `selected_runner=SkillSessionRunner`
+    - `turn_count=1`
+    - `tool_count=2`
+    - `total_duration_ms≈39596`
+    - `leaf_exec_duration_ms≈13258`
 
 ## Local Tauri Quick Start (Windows)
 - Goal: launch the desktop window reliably for local testing.

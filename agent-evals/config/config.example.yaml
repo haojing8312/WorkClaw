@@ -3,22 +3,30 @@ runtime:
   cargo_manifest_path: apps/runtime/src-tauri/Cargo.toml
 
 models:
-  default_profile: replace_me
+  default_profile: minimax_anthropic
 
 providers:
-  replace_me:
-    provider: openai
-    model: gpt-5.4
-    api_key_env: OPENAI_API_KEY
+  minimax_anthropic:
+    # 支持值:
+    # - openai / openrouter / anthropic
+    # - minimax / minimax_cn
+    provider: minimax
+    # 按你的 MiniMax 账号实际可用模型填写
+    model: MiniMax-M2.5
+    # 只填环境变量名，不要把真实 key 写进 git
+    api_key_env: MINIMAX_API_KEY
+    # 如需覆盖默认兼容地址，可显式填写：
+    # api_format: anthropic
+    # base_url: https://api.minimax.io/anthropic
 
 artifacts:
   output_dir: D:\\code\\WorkClaw\\temp\\agent-evals
 
 capabilities:
   pm_weekly_summary:
-    workspace_root: E:\\replace-me
+    workspace_root: E:\\code\\work\\飞书多维表格自动化skill
     entry_kind: workspace_skill
-    entry_name: replace-me
+    entry_name: feishu-pm-hub
 
 diagnostics:
   export_journal: true
