@@ -335,7 +335,9 @@ pub fn discover_runtime_root_bootstrap(
 
     if let Some(legacy_root) = legacy_root {
         if legacy_root.exists() {
-            return Ok(default_runtime_root_bootstrap(legacy_root));
+            let bootstrap = default_runtime_root_bootstrap(legacy_root);
+            write_runtime_root_bootstrap(bootstrap_path, &bootstrap)?;
+            return Ok(bootstrap);
         }
     }
 

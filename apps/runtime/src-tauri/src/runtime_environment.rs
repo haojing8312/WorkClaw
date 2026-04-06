@@ -138,8 +138,12 @@ mod tests {
         write_runtime_root_bootstrap_pending_migration, BootstrapMigrationStatus,
         RuntimeRootBootstrapMigration,
     };
-    use crate::runtime_root_migration::set_managed_path_cleanup_failure_after_calls_for_tests;
+    use crate::runtime_root_migration::{
+        schedule_runtime_root_migration, set_managed_path_cleanup_failure_after_calls_for_tests,
+    };
+    use sqlx::{Row, SqlitePool};
     use std::fs;
+    use std::path::Path;
 
     fn make_bootstrap_location(root: &Path) -> RuntimeBootstrapLocation {
         let bootstrap_dir = root.join("bootstrap-store");
@@ -147,6 +151,72 @@ mod tests {
             bootstrap_path: bootstrap_dir.join("bootstrap-root.json"),
             bootstrap_dir,
         }
+    }
+
+    fn sqlite_url(path: &Path) -> String {
+        format!("sqlite://{}?mode=rwc", path.to_string_lossy())
+    }
+
+    fn seed_runtime_database(path: &Path) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("create db parent");
+        }
+
+        tauri::async_runtime::block_on(async {
+            let pool = SqlitePool::connect(&sqlite_url(path))
+                .await
+                .expect("connect runtime database");
+
+            for statement in [
+                "CREATE TABLE sessions (id TEXT PRIMARY KEY)",
+                "CREATE TABLE model_configs (id TEXT PRIMARY KEY)",
+                "CREATE TABLE provider_configs (id TEXT PRIMARY KEY)",
+            ] {
+                sqlx::query(statement)
+                    .execute(&pool)
+                    .await
+                    .expect("create table");
+            }
+
+            for session_id in ["sess-1", "sess-2", "sess-3", "sess-4", "sess-5", "sess-6"] {
+                sqlx::query("INSERT INTO sessions (id) VALUES (?)")
+                    .bind(session_id)
+                    .execute(&pool)
+                    .await
+                    .expect("insert session");
+            }
+
+            for model_id in ["model-a", "model-b"] {
+                sqlx::query("INSERT INTO model_configs (id) VALUES (?)")
+                    .bind(model_id)
+                    .execute(&pool)
+                    .await
+                    .expect("insert model config");
+            }
+
+            sqlx::query("INSERT INTO provider_configs (id) VALUES (?)")
+                .bind("provider-a")
+                .execute(&pool)
+                .await
+                .expect("insert provider config");
+
+            pool.close().await;
+        });
+    }
+
+    fn read_table_count(path: &Path, table: &str) -> i64 {
+        tauri::async_runtime::block_on(async {
+            let pool = SqlitePool::connect(&sqlite_url(path))
+                .await
+                .expect("connect runtime database");
+            let count = sqlx::query(&format!("SELECT COUNT(*) AS count FROM {table}"))
+                .fetch_one(&pool)
+                .await
+                .expect("fetch count")
+                .get::<i64, _>("count");
+            pool.close().await;
+            count
+        })
     }
 
     #[test]
@@ -217,5 +287,112 @@ mod tests {
                 .map(|result| result.status),
             Some(BootstrapMigrationStatus::Completed)
         );
+    }
+
+    #[test]
+    fn persists_legacy_root_bootstrap_before_scheduling_migration() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let bootstrap_location = make_bootstrap_location(temp_dir.path());
+        let legacy_root = bootstrap_location.bootstrap_dir.clone();
+        let default_root = temp_dir.path().join(".workclaw");
+        let target_root = temp_dir.path().join("new-root");
+
+        fs::create_dir_all(legacy_root.join("sessions")).expect("create legacy sessions");
+        fs::write(legacy_root.join("workclaw.db"), "db").expect("write legacy db");
+        fs::write(legacy_root.join("sessions").join("session.json"), "{}")
+            .expect("write legacy session");
+
+        let environment = initialize_runtime_environment_with_inputs(
+            Some(legacy_root.clone()),
+            bootstrap_location.clone(),
+            default_root,
+        )
+        .expect("initialize runtime environment");
+
+        assert_eq!(environment.paths.root, legacy_root);
+
+        let bootstrap = read_runtime_root_bootstrap(&bootstrap_location.bootstrap_path)
+            .expect("bootstrap should be persisted after legacy discovery");
+        assert_eq!(bootstrap.current_root, legacy_root.to_string_lossy());
+
+        schedule_runtime_root_migration(&bootstrap_location.bootstrap_path, &target_root)
+            .expect("schedule migration");
+
+        let scheduled_bootstrap = read_runtime_root_bootstrap(&bootstrap_location.bootstrap_path)
+            .expect("read scheduled bootstrap");
+        assert_eq!(
+            scheduled_bootstrap
+                .pending_migration
+                .as_ref()
+                .map(|pending| pending.from_root.as_str()),
+            Some(legacy_root.to_string_lossy().as_ref())
+        );
+    }
+
+    #[test]
+    fn migrates_legacy_appdata_runtime_data_into_new_root() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let bootstrap_location = make_bootstrap_location(temp_dir.path());
+        let legacy_root = bootstrap_location.bootstrap_dir.clone();
+        let default_root = temp_dir.path().join(".workclaw");
+        let target_root = temp_dir.path().join("appdata-root").join(".workclaw");
+        fs::create_dir_all(target_root.parent().expect("target parent"))
+            .expect("create target root parent");
+
+        let legacy_paths = crate::runtime_paths::RuntimePaths::new(legacy_root.clone());
+        seed_runtime_database(&legacy_paths.database.db_path);
+        fs::create_dir_all(legacy_paths.sessions_dir.join("session-1"))
+            .expect("create legacy sessions");
+        fs::write(
+            legacy_paths.sessions_dir.join("session-1").join("journal.json"),
+            "{}",
+        )
+        .expect("write legacy session journal");
+        fs::create_dir_all(legacy_paths.plugins.root.join("plugin-a"))
+            .expect("create legacy plugin dir");
+        fs::write(
+            legacy_paths.plugins.root.join("plugin-a").join("manifest.json"),
+            "{}",
+        )
+        .expect("write legacy plugin manifest");
+        fs::create_dir_all(&legacy_paths.plugins.state_dir).expect("create legacy plugin state");
+        fs::write(legacy_paths.plugins.state_dir.join("registry.json"), "{}")
+            .expect("write legacy plugin state");
+
+        let initial_environment = initialize_runtime_environment_with_inputs(
+            Some(legacy_root.clone()),
+            bootstrap_location.clone(),
+            default_root,
+        )
+        .expect("initialize runtime environment");
+        assert_eq!(initial_environment.paths.root, legacy_root);
+
+        schedule_runtime_root_migration(&bootstrap_location.bootstrap_path, &target_root)
+            .expect("schedule migration");
+
+        let migrated_environment = initialize_runtime_environment_with_inputs(
+            Some(legacy_root.clone()),
+            bootstrap_location.clone(),
+            temp_dir.path().join("ignored-default"),
+        )
+        .expect("finalize migration through environment initialization");
+
+        let target_paths = crate::runtime_paths::RuntimePaths::new(target_root.clone());
+        assert_eq!(migrated_environment.paths.root, target_root);
+        assert_eq!(read_table_count(&target_paths.database.db_path, "sessions"), 6);
+        assert_eq!(read_table_count(&target_paths.database.db_path, "model_configs"), 2);
+        assert_eq!(read_table_count(&target_paths.database.db_path, "provider_configs"), 1);
+        assert!(target_paths
+            .sessions_dir
+            .join("session-1")
+            .join("journal.json")
+            .exists());
+        assert!(target_paths
+            .plugins
+            .root
+            .join("plugin-a")
+            .join("manifest.json")
+            .exists());
+        assert!(target_paths.plugins.state_dir.join("registry.json").exists());
     }
 }
