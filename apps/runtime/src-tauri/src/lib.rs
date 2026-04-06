@@ -9,6 +9,7 @@ mod diagnostics;
 pub mod im;
 mod model_errors;
 mod model_transport;
+mod runtime_bootstrap;
 pub mod providers;
 pub mod session_journal;
 pub mod sidecar;
