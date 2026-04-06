@@ -1,5 +1,6 @@
-use super::events::{StreamToken, ToolConfirmResponder};
+use super::events::ToolConfirmResponder;
 use crate::agent::runtime::kernel::execution_plan::{ExecutionOutcome, SessionEngineError};
+use crate::agent::runtime::kernel::outcome_commit::{OutcomeCommitter, TerminalOutcome};
 use crate::agent::runtime::kernel::session_engine::SessionEngine;
 use crate::agent::context::build_tool_context;
 use crate::agent::permissions::PermissionMode;
@@ -17,7 +18,7 @@ use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 use uuid::Uuid;
 
 use super::runtime_io as chat_io;
@@ -263,89 +264,57 @@ impl SessionRuntime {
 
         match Self::classify_session_engine_result(session_engine_result) {
             SessionTurnCompletion::DirectDispatch(output) => {
-                chat_io::finalize_run_success_with_pool(
-                    db, journal, session_id, &run_id, &output, false, &output, "", None,
-                )
-                .await?;
-                let _ = app.emit(
-                    "stream-token",
-                    StreamToken {
-                        session_id: session_id.to_string(),
-                        token: output,
-                        done: false,
-                        sub_agent: false,
-                    },
-                );
-                let _ = app.emit(
-                    "stream-token",
-                    StreamToken {
-                        session_id: session_id.to_string(),
-                        token: String::new(),
-                        done: true,
-                        sub_agent: false,
-                    },
-                );
-                return Ok(());
-            }
-            SessionTurnCompletion::RouteExecution {
-                route_execution,
-                reconstructed_history_len,
-            } => {
-                return Self::finalize_send_message_execution(
+                OutcomeCommitter::commit_terminal_outcome(
                     app,
                     db,
                     journal,
                     session_id,
                     &run_id,
+                    TerminalOutcome::DirectDispatch(output),
+                )
+                .await
+            }
+            SessionTurnCompletion::RouteExecution {
+                route_execution,
+                reconstructed_history_len,
+            } => OutcomeCommitter::commit_terminal_outcome(
+                app,
+                db,
+                journal,
+                session_id,
+                &run_id,
+                TerminalOutcome::RouteExecution {
                     route_execution,
                     reconstructed_history_len,
-                )
-                .await;
-            }
+                },
+            )
+            .await,
             SessionTurnCompletion::SkillCommandFailed(error) => {
-                chat_io::append_run_failed_with_pool(
+                OutcomeCommitter::commit_terminal_outcome(
+                    app,
                     db,
                     journal,
                     session_id,
                     &run_id,
-                    "skill_command_dispatch",
-                    &error,
+                    TerminalOutcome::SkillCommandFailed(error),
                 )
-                .await;
-                let _ = app.emit(
-                    "stream-token",
-                    StreamToken {
-                        session_id: session_id.to_string(),
-                        token: String::new(),
-                        done: true,
-                        sub_agent: false,
-                    },
-                );
-                return Err(error);
+                .await
             }
             SessionTurnCompletion::SkillCommandStopped {
                 stop_reason,
                 error,
-            } => {
-                let _ = chat_io::append_run_stopped_with_pool(
-                    db,
-                    journal,
-                    session_id,
-                    &run_id,
-                    &stop_reason,
-                )
-                .await;
-                let _ = app.emit(
-                    "stream-token",
-                    StreamToken {
-                        session_id: session_id.to_string(),
-                        token: String::new(),
-                        done: true,
-                        sub_agent: false,
-                    },
-                );
-                return Err(error);
-            }
+            } => OutcomeCommitter::commit_terminal_outcome(
+                app,
+                db,
+                journal,
+                session_id,
+                &run_id,
+                TerminalOutcome::SkillCommandStopped {
+                    stop_reason,
+                    error,
+                },
+            )
+            .await,
             SessionTurnCompletion::GenericError(error) => {
                 return Err(error);
             }
@@ -582,129 +551,6 @@ impl SessionRuntime {
         })
     }
 
-    pub(crate) async fn finalize_send_message_execution(
-        app: &AppHandle,
-        db: &sqlx::SqlitePool,
-        journal: &SessionJournalStore,
-        session_id: &str,
-        run_id: &str,
-        route_execution: RouteExecutionOutcome,
-        reconstructed_history_len: usize,
-    ) -> Result<(), String> {
-        let final_messages = match route_execution.final_messages {
-            Some(messages) => messages,
-            None => {
-                let partial_text = route_execution.partial_text;
-                if !partial_text.is_empty() {
-                    chat_io::append_partial_assistant_chunk_with_pool(
-                        db,
-                        journal,
-                        session_id,
-                        run_id,
-                        &partial_text,
-                    )
-                    .await;
-                }
-                let _ = chat_io::persist_partial_assistant_message_for_run_with_pool(
-                    db,
-                    session_id,
-                    run_id,
-                    &partial_text,
-                )
-                .await;
-
-                let error_message = route_execution
-                    .last_error
-                    .unwrap_or_else(|| "所有候选模型执行失败".to_string());
-                let error_kind = route_execution
-                    .last_error_kind
-                    .unwrap_or_else(|| "unknown".to_string());
-                if let Some(stop_reason) = route_execution.last_stop_reason.as_ref() {
-                    let _ = chat_io::append_run_stopped_with_pool(
-                        db,
-                        journal,
-                        session_id,
-                        run_id,
-                        stop_reason,
-                    )
-                    .await;
-                } else {
-                    chat_io::append_run_failed_with_pool(
-                        db,
-                        journal,
-                        session_id,
-                        run_id,
-                        &error_kind,
-                        &error_message,
-                    )
-                    .await;
-                }
-                let _ = app.emit(
-                    "stream-token",
-                    StreamToken {
-                        session_id: session_id.to_string(),
-                        token: String::new(),
-                        done: true,
-                        sub_agent: false,
-                    },
-                );
-                return Err(error_message);
-            }
-        };
-
-        let (final_text, has_tool_calls, content) =
-            crate::agent::runtime::RuntimeTranscript::build_assistant_content_from_final_messages(
-                &final_messages,
-                reconstructed_history_len,
-            );
-
-        let finalize_result = chat_io::finalize_run_success_with_pool(
-            db,
-            journal,
-            session_id,
-            run_id,
-            &final_text,
-            has_tool_calls,
-            &content,
-            &route_execution.reasoning_text,
-            route_execution.reasoning_duration_ms,
-        )
-        .await;
-
-        if let Err(err) = finalize_result {
-            chat_io::append_run_failed_with_pool(
-                db,
-                journal,
-                session_id,
-                run_id,
-                "persistence",
-                &err,
-            )
-            .await;
-            let _ = app.emit(
-                "stream-token",
-                StreamToken {
-                    session_id: session_id.to_string(),
-                    token: String::new(),
-                    done: true,
-                    sub_agent: false,
-                },
-            );
-            return Err(err);
-        }
-
-        let _ = app.emit(
-            "stream-token",
-            StreamToken {
-                session_id: session_id.to_string(),
-                token: String::new(),
-                done: true,
-                sub_agent: false,
-            },
-        );
-
-        Ok(())
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
