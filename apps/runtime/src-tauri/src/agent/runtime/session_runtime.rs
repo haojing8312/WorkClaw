@@ -1,9 +1,9 @@
 use super::events::{StreamToken, ToolConfirmResponder};
-use crate::agent::runtime::kernel::execution_plan::ExecutionOutcome;
+use crate::agent::runtime::kernel::execution_plan::{ExecutionOutcome, SessionEngineError};
 use crate::agent::runtime::kernel::session_engine::SessionEngine;
 use crate::agent::context::build_tool_context;
 use crate::agent::permissions::PermissionMode;
-use crate::agent::run_guard::{parse_run_stop_reason, RunBudgetPolicy, RunBudgetScope};
+use crate::agent::run_guard::{RunBudgetPolicy, RunBudgetScope};
 use crate::agent::runtime::attempt_runner::RouteExecutionOutcome;
 use crate::agent::runtime::repo::{PoolChatEmployeeDirectory, PoolChatSettingsRepository};
 use crate::agent::runtime::tool_setup::{
@@ -27,6 +27,20 @@ use runtime_chat_app::ChatExecutionGuidance;
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct SessionRuntime;
+
+enum SessionTurnCompletion {
+    DirectDispatch(String),
+    RouteExecution {
+        route_execution: RouteExecutionOutcome,
+        reconstructed_history_len: usize,
+    },
+    SkillCommandFailed(String),
+    SkillCommandStopped {
+        stop_reason: crate::agent::run_guard::RunStopReason,
+        error: String,
+    },
+    GenericError(String),
+}
 
 #[derive(Clone)]
 pub(crate) struct PreparedSendMessageContext {
@@ -231,8 +245,7 @@ impl SessionRuntime {
         tool_confirm_responder: ToolConfirmResponder,
     ) -> Result<(), String> {
         let run_id = Uuid::new_v4().to_string();
-
-        match SessionEngine::run_local_turn(
+        let session_engine_result = SessionEngine::run_local_turn(
             app,
             agent_executor,
             db,
@@ -246,9 +259,10 @@ impl SessionRuntime {
             cancel_flag.clone(),
             tool_confirm_responder.clone(),
         )
-        .await
-        {
-            Ok(ExecutionOutcome::DirectDispatch(output)) => {
+        .await;
+
+        match Self::classify_session_engine_result(session_engine_result) {
+            SessionTurnCompletion::DirectDispatch(output) => {
                 chat_io::finalize_run_success_with_pool(
                     db, journal, session_id, &run_id, &output, false, &output, "", None,
                 )
@@ -273,10 +287,10 @@ impl SessionRuntime {
                 );
                 return Ok(());
             }
-            Ok(ExecutionOutcome::RouteExecution {
+            SessionTurnCompletion::RouteExecution {
                 route_execution,
                 reconstructed_history_len,
-            }) => {
+            } => {
                 return Self::finalize_send_message_execution(
                     app,
                     db,
@@ -288,27 +302,16 @@ impl SessionRuntime {
                 )
                 .await;
             }
-            Err(error) => {
-                if let Some(stop_reason) = parse_run_stop_reason(&error) {
-                    let _ = chat_io::append_run_stopped_with_pool(
-                        db,
-                        journal,
-                        session_id,
-                        &run_id,
-                        &stop_reason,
-                    )
-                    .await;
-                } else {
-                    chat_io::append_run_failed_with_pool(
-                        db,
-                        journal,
-                        session_id,
-                        &run_id,
-                        "skill_command_dispatch",
-                        &error,
-                    )
-                    .await;
-                }
+            SessionTurnCompletion::SkillCommandFailed(error) => {
+                chat_io::append_run_failed_with_pool(
+                    db,
+                    journal,
+                    session_id,
+                    &run_id,
+                    "skill_command_dispatch",
+                    &error,
+                )
+                .await;
                 let _ = app.emit(
                     "stream-token",
                     StreamToken {
@@ -319,6 +322,67 @@ impl SessionRuntime {
                     },
                 );
                 return Err(error);
+            }
+            SessionTurnCompletion::SkillCommandStopped {
+                stop_reason,
+                error,
+            } => {
+                let _ = chat_io::append_run_stopped_with_pool(
+                    db,
+                    journal,
+                    session_id,
+                    &run_id,
+                    &stop_reason,
+                )
+                .await;
+                let _ = app.emit(
+                    "stream-token",
+                    StreamToken {
+                        session_id: session_id.to_string(),
+                        token: String::new(),
+                        done: true,
+                        sub_agent: false,
+                    },
+                );
+                return Err(error);
+            }
+            SessionTurnCompletion::GenericError(error) => {
+                let _ = app.emit(
+                    "stream-token",
+                    StreamToken {
+                        session_id: session_id.to_string(),
+                        token: String::new(),
+                        done: true,
+                        sub_agent: false,
+                    },
+                );
+                return Err(error);
+            }
+        }
+    }
+
+    fn classify_session_engine_result(
+        result: Result<ExecutionOutcome, SessionEngineError>,
+    ) -> SessionTurnCompletion {
+        match result {
+            Ok(ExecutionOutcome::DirectDispatch(output)) => {
+                SessionTurnCompletion::DirectDispatch(output)
+            }
+            Ok(ExecutionOutcome::RouteExecution {
+                route_execution,
+                reconstructed_history_len,
+            }) => SessionTurnCompletion::RouteExecution {
+                route_execution,
+                reconstructed_history_len,
+            },
+            Ok(ExecutionOutcome::SkillCommandFailed(error)) => {
+                SessionTurnCompletion::SkillCommandFailed(error)
+            }
+            Ok(ExecutionOutcome::SkillCommandStopped { stop_reason, error }) => {
+                SessionTurnCompletion::SkillCommandStopped { stop_reason, error }
+            }
+            Err(SessionEngineError::Generic(error)) => {
+                SessionTurnCompletion::GenericError(error)
             }
         }
     }
@@ -663,7 +727,11 @@ struct ExplicitPromptSkillSelection {
 
 #[cfg(test)]
 mod tests {
-    use super::SessionRuntime;
+    use super::{SessionRuntime, SessionTurnCompletion};
+    use crate::agent::run_guard::RunStopReason;
+    use crate::agent::runtime::kernel::execution_plan::{
+        ExecutionOutcome, SessionEngineError,
+    };
     use crate::agent::runtime::runtime_io as chat_io;
     use crate::agent::runtime::runtime_io::{
         WorkspaceSkillContent, WorkspaceSkillRuntimeEntry,
@@ -720,6 +788,44 @@ mod tests {
             SessionRuntime::parse_user_skill_command("/pm_summary --employee xt"),
             Some(("pm_summary".to_string(), "--employee xt".to_string()))
         );
+    }
+
+    #[test]
+    fn classify_session_engine_result_keeps_generic_errors_out_of_terminal_handling() {
+        let classification = SessionRuntime::classify_session_engine_result(Err(
+            SessionEngineError::Generic("db failed".to_string()),
+        ));
+
+        assert!(matches!(
+            classification,
+            SessionTurnCompletion::GenericError(error) if error == "db failed"
+        ));
+    }
+
+    #[test]
+    fn classify_session_engine_result_keeps_explicit_skill_command_terminals() {
+        let failure = SessionRuntime::classify_session_engine_result(Ok(
+            ExecutionOutcome::SkillCommandFailed("dispatch failed".to_string()),
+        ));
+        assert!(matches!(
+            failure,
+            SessionTurnCompletion::SkillCommandFailed(error) if error == "dispatch failed"
+        ));
+
+        let stop_reason = RunStopReason::max_turns(12);
+        let stopped = SessionRuntime::classify_session_engine_result(Ok(
+            ExecutionOutcome::SkillCommandStopped {
+                stop_reason: stop_reason.clone(),
+                error: "max turns".to_string(),
+            },
+        ));
+        assert!(matches!(
+            stopped,
+            SessionTurnCompletion::SkillCommandStopped {
+                stop_reason: reason,
+                error
+            } if reason == stop_reason && error == "max turns"
+        ));
     }
 
     #[test]

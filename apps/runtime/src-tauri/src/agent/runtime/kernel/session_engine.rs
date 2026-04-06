@@ -1,9 +1,10 @@
-use super::execution_plan::ExecutionOutcome;
+use super::execution_plan::{ExecutionOutcome, SessionEngineError};
 use crate::agent::runtime::attempt_runner::{
     execute_route_candidates, RouteExecutionParams,
 };
 use crate::agent::runtime::events::ToolConfirmResponder;
 use crate::agent::runtime::runtime_io as chat_io;
+use crate::agent::run_guard::parse_run_stop_reason;
 use crate::agent::runtime::skill_routing::runner::{
     execute_implicit_route_plan, plan_implicit_route_with_observation, RouteRunOutcome,
 };
@@ -33,7 +34,7 @@ impl SessionEngine {
         max_iterations_override: Option<usize>,
         cancel_flag: Arc<AtomicBool>,
         tool_confirm_responder: ToolConfirmResponder,
-    ) -> Result<ExecutionOutcome, String> {
+    ) -> Result<ExecutionOutcome, SessionEngineError> {
         let prepared_context = SessionRuntime::prepare_send_message_context(PrepareSendMessageParams {
             app,
             db,
@@ -43,12 +44,14 @@ impl SessionEngine {
             user_message_parts,
             max_iterations_override,
         })
-        .await?;
+        .await
+        .map_err(SessionEngineError::Generic)?;
 
         chat_io::append_run_started_with_pool(db, journal, session_id, run_id, user_message_id)
-            .await?;
+            .await
+            .map_err(SessionEngineError::Generic)?;
 
-        if let Some(output) = SessionRuntime::maybe_execute_user_skill_command(
+        match SessionRuntime::maybe_execute_user_skill_command(
             app,
             agent_executor,
             session_id,
@@ -58,9 +61,19 @@ impl SessionEngine {
             cancel_flag.clone(),
             tool_confirm_responder.clone(),
         )
-        .await?
+        .await
         {
-            return Ok(ExecutionOutcome::DirectDispatch(output));
+            Ok(Some(output)) => return Ok(ExecutionOutcome::DirectDispatch(output)),
+            Ok(None) => {}
+            Err(error) => {
+                return Ok(match parse_run_stop_reason(&error) {
+                    Some(stop_reason) => ExecutionOutcome::SkillCommandStopped {
+                        stop_reason,
+                        error,
+                    },
+                    None => ExecutionOutcome::SkillCommandFailed(error),
+                });
+            }
         }
 
         let planned_route = plan_implicit_route_with_observation(
@@ -76,7 +89,8 @@ impl SessionEngine {
             run_id,
             &planned_route.observation,
         )
-        .await?;
+        .await
+        .map_err(SessionEngineError::Generic)?;
 
         let route_execution = match execute_implicit_route_plan(
             app,
@@ -89,7 +103,8 @@ impl SessionEngine {
             cancel_flag.clone(),
             tool_confirm_responder.clone(),
         )
-        .await?
+        .await
+        .map_err(SessionEngineError::Generic)?
         {
             RouteRunOutcome::OpenTask => execute_route_candidates(RouteExecutionParams {
                 app,

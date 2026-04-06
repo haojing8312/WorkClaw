@@ -1,4 +1,5 @@
 use crate::agent::runtime::attempt_runner::RouteExecutionOutcome;
+use crate::agent::run_guard::RunStopReason;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ExecutionLane {
@@ -23,6 +24,16 @@ pub(crate) enum ExecutionOutcome {
         route_execution: RouteExecutionOutcome,
         reconstructed_history_len: usize,
     },
+    SkillCommandFailed(String),
+    SkillCommandStopped {
+        stop_reason: RunStopReason,
+        error: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SessionEngineError {
+    Generic(String),
 }
 
 #[cfg(test)]
