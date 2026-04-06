@@ -347,15 +347,6 @@ impl SessionRuntime {
                 return Err(error);
             }
             SessionTurnCompletion::GenericError(error) => {
-                let _ = app.emit(
-                    "stream-token",
-                    StreamToken {
-                        session_id: session_id.to_string(),
-                        token: String::new(),
-                        done: true,
-                        sub_agent: false,
-                    },
-                );
                 return Err(error);
             }
         }
