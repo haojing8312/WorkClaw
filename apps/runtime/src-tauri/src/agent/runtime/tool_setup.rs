@@ -1,4 +1,5 @@
 use super::events::{AskUserState, SearchCacheState};
+use crate::agent::runtime::kernel::capability_snapshot::CapabilitySnapshot;
 use super::runtime_io as chat_io;
 use crate::agent::runtime::runtime_io::WorkspaceSkillRuntimeEntry;
 use crate::agent::tools::search_providers::create_provider;
@@ -221,6 +222,7 @@ pub(crate) struct PreparedRuntimeTools {
     pub allowed_tools: Option<Vec<String>>,
     pub system_prompt: String,
     pub skill_command_specs: Vec<chat_io::WorkspaceSkillCommandSpec>,
+    pub capability_snapshot: CapabilitySnapshot,
 }
 
 #[derive(Clone)]
@@ -436,7 +438,23 @@ pub(crate) async fn prepare_runtime_tools(
 
     let tool_names =
         chat_io::resolve_tool_names(&params.skill_allowed_tools, params.agent_executor);
+    let resolved_tool_names = match &params.skill_allowed_tools {
+        Some(whitelist) => whitelist.clone(),
+        None => params
+            .agent_executor
+            .registry()
+            .get_tool_definitions()
+            .iter()
+            .filter_map(|tool| tool["name"].as_str().map(str::to_string))
+            .collect(),
+    };
     let memory_content = chat_io::load_memory_content(&memory_dir);
+    let capability_snapshot = CapabilitySnapshot {
+        allowed_tools: params.skill_allowed_tools.clone(),
+        resolved_tool_names,
+        skill_command_specs: skill_command_specs.clone(),
+        runtime_notes: runtime_search_note.iter().cloned().collect(),
+    };
     let system_prompt = compose_system_prompt(
         params.skill_system_prompt,
         &tool_names,
@@ -453,11 +471,14 @@ pub(crate) async fn prepare_runtime_tools(
         system_prompt
     };
 
-    Ok(PreparedRuntimeTools {
+    let prepared_runtime_tools = PreparedRuntimeTools {
         allowed_tools: params.skill_allowed_tools,
         system_prompt,
         skill_command_specs,
-    })
+        capability_snapshot,
+    };
+    let _ = &prepared_runtime_tools.capability_snapshot;
+    Ok(prepared_runtime_tools)
 }
 
 #[cfg(test)]

@@ -1,4 +1,5 @@
 use crate::agent::runtime::attempt_runner::RouteExecutionOutcome;
+use crate::agent::runtime::kernel::capability_snapshot::CapabilitySnapshot;
 use crate::agent::run_guard::RunStopReason;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -15,7 +16,9 @@ pub(crate) struct ExecutionPlan {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct ExecutionContext;
+pub(crate) struct ExecutionContext {
+    pub capability_snapshot: Option<CapabilitySnapshot>,
+}
 
 #[derive(Debug, Clone)]
 pub(crate) enum ExecutionOutcome {
