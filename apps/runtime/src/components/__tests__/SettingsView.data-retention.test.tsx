@@ -8,6 +8,10 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
 }));
 
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  open: vi.fn(() => Promise.resolve(null)),
+}));
+
 function createRuntimePreferences() {
   return {
     default_work_dir: "E:\\workspace",
@@ -37,11 +41,10 @@ describe("SettingsView data retention", () => {
       }
       if (command === "get_desktop_lifecycle_paths") {
         return Promise.resolve({
-          app_data_dir: "C:\\Users\\me\\AppData\\Roaming\\WorkClaw",
-          cache_dir: "C:\\Users\\me\\AppData\\Local\\WorkClaw\\cache",
-          log_dir: "C:\\Users\\me\\AppData\\Local\\WorkClaw\\logs",
-          diagnostics_dir: "C:\\Users\\me\\AppData\\Roaming\\WorkClaw\\diagnostics",
-          default_work_dir: "E:\\workspace",
+          runtime_root_dir: "C:\\Users\\me\\.workclaw",
+          pending_runtime_root_dir: null,
+          last_runtime_migration_status: null,
+          last_runtime_migration_message: null,
         });
       }
       if (command === "get_desktop_diagnostics_status") {
@@ -85,27 +88,21 @@ describe("SettingsView data retention", () => {
     });
   });
 
-  test("shows data paths, uninstall guidance and maintenance actions", async () => {
+  test("shows the unified runtime root, uninstall guidance and maintenance actions", async () => {
     render(<SettingsView onClose={() => {}} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "桌面 / 系统" }));
 
-    expect(await screen.findByText("应用数据目录")).toBeInTheDocument();
-    expect(screen.getByText("C:\\Users\\me\\AppData\\Roaming\\WorkClaw")).toBeInTheDocument();
-    expect(screen.getByText("C:\\Users\\me\\AppData\\Local\\WorkClaw\\cache")).toBeInTheDocument();
-    expect(screen.getByText("E:\\workspace")).toBeInTheDocument();
-    expect(screen.getByText("诊断目录")).toBeInTheDocument();
-    expect(
-      screen.getByText("C:\\Users\\me\\AppData\\Roaming\\WorkClaw\\diagnostics"),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText("审计目录：C:\\Users\\me\\AppData\\Roaming\\WorkClaw\\diagnostics\\audit"),
-    ).toBeInTheDocument();
+    expect(await screen.findByText("WorkClaw 数据根目录")).toBeInTheDocument();
+    expect(screen.getByText("C:\\Users\\me\\.workclaw")).toBeInTheDocument();
+    expect(screen.queryByText("应用数据目录")).not.toBeInTheDocument();
+    expect(screen.queryByText("缓存目录")).not.toBeInTheDocument();
+    expect(screen.queryByText("默认工作目录")).not.toBeInTheDocument();
     expect(screen.getByText("检测到上次运行可能异常退出")).toBeInTheDocument();
     expect(screen.getByText(/panic occurred/)).toBeInTheDocument();
-    expect(screen.getByText("卸载程序不会删除你的工作目录。")).toBeInTheDocument();
+    expect(screen.getByText("卸载程序不会删除你的 WorkClaw 数据根目录。")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "打开应用数据目录" }));
+    fireEvent.click(screen.getByRole("button", { name: "打开目录" }));
     fireEvent.click(screen.getByRole("button", { name: "清理缓存与日志" }));
     fireEvent.click(screen.getByRole("button", { name: "导出诊断包" }));
 
@@ -117,7 +114,7 @@ describe("SettingsView data retention", () => {
 
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("open_desktop_path", {
-        path: "C:\\Users\\me\\AppData\\Roaming\\WorkClaw",
+        path: "C:\\Users\\me\\.workclaw",
       });
       expect(invokeMock).toHaveBeenCalledWith("clear_desktop_cache_and_logs");
       expect(invokeMock).toHaveBeenCalledWith("export_desktop_environment_summary");

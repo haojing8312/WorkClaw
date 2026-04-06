@@ -3,11 +3,10 @@ use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct DesktopLifecyclePaths {
-    pub app_data_dir: String,
-    pub cache_dir: String,
-    pub log_dir: String,
-    pub diagnostics_dir: String,
-    pub default_work_dir: String,
+    pub runtime_root_dir: String,
+    pub pending_runtime_root_dir: Option<String>,
+    pub last_runtime_migration_status: Option<String>,
+    pub last_runtime_migration_message: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]

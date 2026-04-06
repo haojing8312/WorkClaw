@@ -48,19 +48,11 @@ pub(crate) fn build_diagnostics_status(
 pub(crate) fn build_desktop_environment_summary(
     version: &str,
     platform: &str,
-    app_data_dir: &str,
-    cache_dir: &str,
-    log_dir: &str,
-    default_work_dir: &str,
+    runtime_root_dir: &str,
     diagnostics_status: &DesktopDiagnosticsStatus,
 ) -> String {
     format!(
-        "# WorkClaw Environment Summary\n\n- Version: {version}\n- Platform: {platform}\n- Application Data: {app_data_dir}\n- Cache: {cache_dir}\n- Logs: {log_dir}\n- Default Workspace: {}\n- Diagnostics: {}\n- Diagnostics Logs: {}\n- Diagnostics Audit: {}\n- Diagnostics Crashes: {}\n- Diagnostics Exports: {}\n- Current Run ID: {}\n- Abnormal Previous Run: {}\n- Last Clean Exit: {}\n- Latest Crash: {}\n",
-        if default_work_dir.trim().is_empty() {
-            "未设置".to_string()
-        } else {
-            default_work_dir.to_string()
-        },
+        "# WorkClaw Environment Summary\n\n- Version: {version}\n- Platform: {platform}\n- Runtime Root: {runtime_root_dir}\n- Diagnostics: {}\n- Diagnostics Logs: {}\n- Diagnostics Audit: {}\n- Diagnostics Crashes: {}\n- Diagnostics Exports: {}\n- Current Run ID: {}\n- Abnormal Previous Run: {}\n- Last Clean Exit: {}\n- Latest Crash: {}\n",
         diagnostics_status.diagnostics_dir,
         diagnostics_status.logs_dir,
         diagnostics_status.audit_dir,
@@ -151,7 +143,10 @@ pub(crate) fn export_diagnostics_bundle(
         "runtime-observability-snapshot.json",
         &payload.runtime_observability_snapshot_json,
     )?;
-    add_text("runtime-recent-events.json", &payload.runtime_recent_events_json)?;
+    add_text(
+        "runtime-recent-events.json",
+        &payload.runtime_recent_events_json,
+    )?;
     if let Some(crash_json) = &payload.latest_crash_json {
         add_text("latest-crash.json", crash_json)?;
     }
@@ -185,15 +180,12 @@ pub(crate) async fn export_desktop_diagnostics_bundle(
     pool: &SqlitePool,
     diagnostics_state: &diagnostics::DiagnosticsState,
 ) -> Result<String, String> {
-    let lifecycle_paths = super::filesystem::resolve_desktop_lifecycle_paths(app, pool).await?;
+    let lifecycle_paths = super::filesystem::resolve_desktop_lifecycle_paths(app).await?;
     let diagnostics_status = build_diagnostics_status(diagnostics_state)?;
     let environment_summary = build_desktop_environment_summary(
         &app.package_info().version.to_string(),
         std::env::consts::OS,
-        &lifecycle_paths.app_data_dir,
-        &lifecycle_paths.cache_dir,
-        &lifecycle_paths.log_dir,
-        &lifecycle_paths.default_work_dir,
+        &lifecycle_paths.runtime_root_dir,
         &diagnostics_status,
     );
 
@@ -204,13 +196,14 @@ pub(crate) async fn export_desktop_diagnostics_bundle(
     .fetch_all(pool)
     .await
     .map_err(|e| e.to_string())?;
-    let session_runs = sqlx::query_as::<_, (String, String, String, String, String, String, String)>(
-        "SELECT id, session_id, status, error_kind, error_message, created_at, updated_at
+    let session_runs =
+        sqlx::query_as::<_, (String, String, String, String, String, String, String)>(
+            "SELECT id, session_id, status, error_kind, error_message, created_at, updated_at
          FROM session_runs ORDER BY updated_at DESC LIMIT 100",
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(|e| e.to_string())?;
+        )
+        .fetch_all(pool)
+        .await
+        .map_err(|e| e.to_string())?;
     let session_run_events = sqlx::query_as::<_, (String, String, String, String)>(
         "SELECT session_id, event_type, payload_json, created_at
          FROM session_run_events ORDER BY created_at DESC LIMIT 100",
@@ -283,7 +276,9 @@ pub(crate) async fn export_desktop_diagnostics_bundle(
     let mut trace_exports = Vec::new();
     for (run_id, session_id) in trace_runs {
         match export_session_run_trace_with_pool(pool, &session_id, &run_id).await {
-            Ok(trace) => trace_exports.push(serde_json::to_value(trace).map_err(|e| e.to_string())?),
+            Ok(trace) => {
+                trace_exports.push(serde_json::to_value(trace).map_err(|e| e.to_string())?)
+            }
             Err(error) => trace_exports.push(serde_json::json!({
                 "session_id": session_id,
                 "run_id": run_id,

@@ -1,3 +1,4 @@
+import { open } from "@tauri-apps/plugin-dialog";
 import { useEffect, useState } from "react";
 import { RiskConfirmDialog } from "../../RiskConfirmDialog";
 import type { ModelConfig } from "../../../types";
@@ -10,19 +11,59 @@ import {
   getDesktopLifecyclePaths,
   getRuntimePreferences,
   normalizeRuntimePreferences,
-  openDesktopDiagnosticsDir,
   openDesktopPath,
   saveDesktopRuntimePreferences,
   saveRuntimeLanguagePreferences,
+  scheduleDesktopRuntimeRootMigration,
   type DesktopRuntimePreferencesInput,
-  type RuntimeLanguagePreferencesInput,
   type DesktopDiagnosticsStatus,
   type DesktopLifecyclePaths,
+  type RuntimeLanguagePreferencesInput,
 } from "./desktopSettingsService";
 
 interface DesktopSettingsSectionProps {
   models: ModelConfig[];
   visible: boolean;
+}
+
+function describeRuntimeMigrationState(paths: DesktopLifecyclePaths | null) {
+  if (!paths) {
+    return null;
+  }
+  if (paths.pending_runtime_root_dir?.trim()) {
+    return {
+      tone: "amber" as const,
+      title: "等待下次启动迁移",
+      message: `下次启动时会自动迁移到：${paths.pending_runtime_root_dir.trim()}`,
+    };
+  }
+  switch (paths.last_runtime_migration_status) {
+    case "completed":
+      return {
+        tone: "green" as const,
+        title: "最近一次迁移已完成",
+        message:
+          paths.last_runtime_migration_message?.trim() || `当前正在使用：${paths.runtime_root_dir}`,
+      };
+    case "failed":
+    case "rolled_back":
+      return {
+        tone: "red" as const,
+        title: "最近一次迁移未完成",
+        message:
+          paths.last_runtime_migration_message?.trim() ||
+          "应用已自动回退到旧目录，你可以调整目标目录后重试。",
+      };
+    case "in_progress":
+      return {
+        tone: "amber" as const,
+        title: "迁移进行中",
+        message:
+          paths.last_runtime_migration_message?.trim() || "应用会在启动早期继续完成目录迁移。",
+      };
+    default:
+      return null;
+  }
 }
 
 export function DesktopSettingsSection({ models, visible }: DesktopSettingsSectionProps) {
@@ -38,11 +79,12 @@ export function DesktopSettingsSection({ models, visible }: DesktopSettingsSecti
   const [desktopLifecyclePaths, setDesktopLifecyclePaths] = useState<DesktopLifecyclePaths | null>(null);
   const [desktopLifecycleLoading, setDesktopLifecycleLoading] = useState(false);
   const [desktopLifecycleActionState, setDesktopLifecycleActionState] =
-    useState<"idle" | "opening" | "clearing" | "exporting">("idle");
+    useState<"idle" | "opening" | "clearing" | "exporting" | "migrating">("idle");
   const [desktopLifecycleError, setDesktopLifecycleError] = useState("");
   const [desktopLifecycleMessage, setDesktopLifecycleMessage] = useState("");
   const [desktopDiagnosticsStatus, setDesktopDiagnosticsStatus] =
     useState<DesktopDiagnosticsStatus | null>(null);
+  const [pendingRuntimeRootSelection, setPendingRuntimeRootSelection] = useState("");
 
   const inputCls = "sm-input w-full text-sm py-1.5";
   const labelCls = "sm-field-label";
@@ -198,6 +240,58 @@ export function DesktopSettingsSection({ models, visible }: DesktopSettingsSecti
     }
   }
 
+  async function handleChooseRuntimeRoot() {
+    setDesktopLifecycleError("");
+    setDesktopLifecycleMessage("");
+    try {
+      const selection = await open({
+        directory: true,
+        multiple: false,
+        title: "选择 WorkClaw 数据根目录",
+        defaultPath: desktopLifecyclePaths?.runtime_root_dir || undefined,
+      });
+      const selectedPath = Array.isArray(selection) ? selection[0] : selection;
+      if (typeof selectedPath !== "string") {
+        return;
+      }
+      const trimmedPath = selectedPath.trim();
+      if (!trimmedPath) {
+        return;
+      }
+      const currentRoot = desktopLifecyclePaths?.runtime_root_dir?.trim() || "";
+      if (trimmedPath === currentRoot) {
+        setPendingRuntimeRootSelection("");
+        setDesktopLifecycleMessage("当前已在使用该目录");
+        return;
+      }
+      setPendingRuntimeRootSelection(trimmedPath);
+    } catch (cause) {
+      setDesktopLifecycleError("选择数据根目录失败: " + String(cause));
+    }
+  }
+
+  async function handleScheduleRuntimeRootMigration() {
+    const targetRoot = pendingRuntimeRootSelection.trim();
+    if (!targetRoot) {
+      return;
+    }
+    setDesktopLifecycleActionState("migrating");
+    setDesktopLifecycleError("");
+    setDesktopLifecycleMessage("");
+    try {
+      await scheduleDesktopRuntimeRootMigration(targetRoot);
+      setDesktopLifecycleMessage("已准备迁移，应用即将重启");
+    } catch (cause) {
+      setDesktopLifecycleError("设置数据根目录失败: " + String(cause));
+    } finally {
+      setDesktopLifecycleActionState("idle");
+    }
+  }
+
+  function handleCancelRuntimeRootMigration() {
+    setPendingRuntimeRootSelection("");
+  }
+
   async function handleClearDesktopCacheAndLogs() {
     setDesktopLifecycleActionState("clearing");
     setDesktopLifecycleError("");
@@ -228,19 +322,6 @@ export function DesktopSettingsSection({ models, visible }: DesktopSettingsSecti
     }
   }
 
-  async function handleOpenDesktopDiagnosticsDir() {
-    setDesktopLifecycleActionState("opening");
-    setDesktopLifecycleError("");
-    setDesktopLifecycleMessage("");
-    try {
-      await openDesktopDiagnosticsDir();
-    } catch (cause) {
-      setDesktopLifecycleError("打开诊断目录失败: " + String(cause));
-    } finally {
-      setDesktopLifecycleActionState("idle");
-    }
-  }
-
   async function handleExportDesktopDiagnosticsBundle() {
     setDesktopLifecycleActionState("exporting");
     setDesktopLifecycleError("");
@@ -255,6 +336,11 @@ export function DesktopSettingsSection({ models, visible }: DesktopSettingsSecti
       setDesktopLifecycleActionState("idle");
     }
   }
+
+  const hasPendingRuntimeRootSelection =
+    pendingRuntimeRootSelection.trim().length > 0 &&
+    pendingRuntimeRootSelection.trim() !== (desktopLifecyclePaths?.runtime_root_dir?.trim() || "");
+  const runtimeMigrationState = describeRuntimeMigrationState(desktopLifecyclePaths);
 
   return (
     <>
@@ -510,80 +596,103 @@ export function DesktopSettingsSection({ models, visible }: DesktopSettingsSecti
         {desktopLifecyclePaths && (
           <div className="space-y-3">
             <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-3">
-              <div className="text-xs font-medium text-gray-500">应用数据目录</div>
-              <div className="mt-1 break-all text-xs text-gray-700">{desktopLifecyclePaths.app_data_dir}</div>
-              <button
-                type="button"
-                onClick={() => void handleOpenDesktopPath(desktopLifecyclePaths.app_data_dir)}
-                disabled={desktopLifecycleActionState === "opening"}
-                className="mt-2 bg-white hover:bg-gray-100 border border-gray-200 text-gray-700 text-xs px-3 py-1.5 rounded-lg transition-all active:scale-[0.97]"
-              >
-                打开应用数据目录
-              </button>
-            </div>
-            <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-3">
-              <div className="text-xs font-medium text-gray-500">缓存目录</div>
-              <div className="mt-1 break-all text-xs text-gray-700">{desktopLifecyclePaths.cache_dir}</div>
-              <button
-                type="button"
-                onClick={() => void handleOpenDesktopPath(desktopLifecyclePaths.cache_dir)}
-                disabled={desktopLifecycleActionState === "opening"}
-                className="mt-2 bg-white hover:bg-gray-100 border border-gray-200 text-gray-700 text-xs px-3 py-1.5 rounded-lg transition-all active:scale-[0.97]"
-              >
-                打开缓存目录
-              </button>
-            </div>
-            <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-3">
-              <div className="text-xs font-medium text-gray-500">日志目录</div>
-              <div className="mt-1 break-all text-xs text-gray-700">{desktopLifecyclePaths.log_dir}</div>
-              <button
-                type="button"
-                onClick={() => void handleOpenDesktopPath(desktopLifecyclePaths.log_dir)}
-                disabled={desktopLifecycleActionState === "opening"}
-                className="mt-2 bg-white hover:bg-gray-100 border border-gray-200 text-gray-700 text-xs px-3 py-1.5 rounded-lg transition-all active:scale-[0.97]"
-              >
-                打开日志目录
-              </button>
-            </div>
-            <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-3">
-              <div className="text-xs font-medium text-gray-500">诊断目录</div>
-              <div className="mt-1 break-all text-xs text-gray-700">{desktopLifecyclePaths.diagnostics_dir}</div>
-              <button
-                type="button"
-                onClick={() => void handleOpenDesktopDiagnosticsDir()}
-                disabled={desktopLifecycleActionState === "opening"}
-                className="mt-2 bg-white hover:bg-gray-100 border border-gray-200 text-gray-700 text-xs px-3 py-1.5 rounded-lg transition-all active:scale-[0.97]"
-              >
-                打开诊断目录
-              </button>
-            </div>
-            <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-3">
-              <div className="text-xs font-medium text-gray-500">默认工作目录</div>
+              <div className="text-xs font-medium text-gray-500">WorkClaw 数据根目录</div>
               <div className="mt-1 break-all text-xs text-gray-700">
-                {desktopLifecyclePaths.default_work_dir || runtimePreferences.default_work_dir || "未设置"}
+                {desktopLifecyclePaths.runtime_root_dir}
               </div>
-              <button
-                type="button"
-                onClick={() =>
-                  void handleOpenDesktopPath(
-                    desktopLifecyclePaths.default_work_dir || runtimePreferences.default_work_dir,
-                  )
-                }
-                disabled={
-                  desktopLifecycleActionState === "opening" ||
-                  !(desktopLifecyclePaths.default_work_dir || runtimePreferences.default_work_dir).trim()
-                }
-                className="mt-2 bg-white hover:bg-gray-100 border border-gray-200 text-gray-700 text-xs px-3 py-1.5 rounded-lg transition-all active:scale-[0.97] disabled:opacity-50"
-              >
-                打开工作目录
-              </button>
+              <div className="mt-2 space-y-1 text-xs text-gray-500">
+                <div>数据库、缓存、日志、诊断、插件状态和会话记录都会保存在这个目录下。</div>
+                <div>默认工作目录会自动使用该目录下的 workspace 子目录，仍可在单次会话中按需覆盖。</div>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => void handleChooseRuntimeRoot()}
+                  disabled={desktopLifecycleActionState === "migrating"}
+                  className="bg-white hover:bg-gray-100 border border-gray-200 text-gray-700 text-xs px-3 py-1.5 rounded-lg transition-all active:scale-[0.97] disabled:opacity-50"
+                >
+                  选择目录
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleOpenDesktopPath(desktopLifecyclePaths.runtime_root_dir)}
+                  disabled={desktopLifecycleActionState === "opening"}
+                  className="bg-white hover:bg-gray-100 border border-gray-200 text-gray-700 text-xs px-3 py-1.5 rounded-lg transition-all active:scale-[0.97] disabled:opacity-50"
+                >
+                  打开目录
+                </button>
+              </div>
             </div>
+            {hasPendingRuntimeRootSelection && (
+              <div className="rounded-lg border border-amber-100 bg-amber-50 px-3 py-3 space-y-2">
+                <div className="text-xs font-medium text-amber-700">准备迁移到新的数据根目录</div>
+                <div className="break-all text-xs text-amber-700">{pendingRuntimeRootSelection}</div>
+                <div className="text-xs text-amber-700">
+                  应用将在重启时自动迁移数据库、缓存、日志、诊断、插件状态和会话记录。迁移失败时会自动回退到旧目录。
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void handleScheduleRuntimeRootMigration()}
+                    disabled={desktopLifecycleActionState === "migrating"}
+                    className="bg-amber-600 hover:bg-amber-700 text-white text-xs px-3 py-1.5 rounded-lg transition-all active:scale-[0.97] disabled:opacity-50"
+                  >
+                    {desktopLifecycleActionState === "migrating" ? "准备中..." : "迁移并重启"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleCancelRuntimeRootMigration}
+                    disabled={desktopLifecycleActionState === "migrating"}
+                    className="bg-white hover:bg-amber-100 border border-amber-200 text-amber-700 text-xs px-3 py-1.5 rounded-lg transition-all active:scale-[0.97] disabled:opacity-50"
+                  >
+                    取消
+                  </button>
+                </div>
+              </div>
+            )}
+            {runtimeMigrationState && !hasPendingRuntimeRootSelection && (
+              <div
+                className={[
+                  "rounded-lg border px-3 py-3 space-y-1",
+                  runtimeMigrationState.tone === "green"
+                    ? "border-green-100 bg-green-50"
+                    : runtimeMigrationState.tone === "red"
+                      ? "border-red-100 bg-red-50"
+                      : "border-amber-100 bg-amber-50",
+                ].join(" ")}
+              >
+                <div
+                  className={[
+                    "text-xs font-medium",
+                    runtimeMigrationState.tone === "green"
+                      ? "text-green-700"
+                      : runtimeMigrationState.tone === "red"
+                        ? "text-red-700"
+                        : "text-amber-700",
+                  ].join(" ")}
+                >
+                  {runtimeMigrationState.title}
+                </div>
+                <div
+                  className={[
+                    "break-all text-xs",
+                    runtimeMigrationState.tone === "green"
+                      ? "text-green-700"
+                      : runtimeMigrationState.tone === "red"
+                        ? "text-red-700"
+                        : "text-amber-700",
+                  ].join(" ")}
+                >
+                  {runtimeMigrationState.message}
+                </div>
+              </div>
+            )}
             {desktopDiagnosticsStatus && (
               <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-3 space-y-2">
                 <div className="text-xs font-medium text-blue-700">诊断状态</div>
-                <div className="text-xs text-blue-700 break-all">当前运行 ID：{desktopDiagnosticsStatus.current_run_id}</div>
-                <div className="text-xs text-blue-700 break-all">导出目录：{desktopDiagnosticsStatus.exports_dir}</div>
-                <div className="text-xs text-blue-700 break-all">审计目录：{desktopDiagnosticsStatus.audit_dir}</div>
+                <div className="text-xs text-blue-700 break-all">
+                  当前运行 ID：{desktopDiagnosticsStatus.current_run_id}
+                </div>
                 {desktopDiagnosticsStatus.abnormal_previous_run && (
                   <div className="text-xs text-amber-700">检测到上次运行可能异常退出</div>
                 )}
@@ -629,8 +738,8 @@ export function DesktopSettingsSection({ models, visible }: DesktopSettingsSecti
           </button>
         </div>
         <div className="rounded-lg border border-amber-100 bg-amber-50 px-3 py-3 text-xs text-amber-700 space-y-1">
-          <div>卸载程序不会删除你的工作目录。</div>
-          <div>如需彻底清理，请先清理缓存与日志，再手动删除应用数据目录。</div>
+          <div>卸载程序不会删除你的 WorkClaw 数据根目录。</div>
+          <div>如需彻底清理，请先清理缓存与日志，再手动删除数据根目录。</div>
         </div>
         {desktopLifecycleError && (
           <div className="bg-red-50 text-red-600 text-xs px-2 py-1 rounded">{desktopLifecycleError}</div>

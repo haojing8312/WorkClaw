@@ -9,10 +9,11 @@ mod diagnostics;
 pub mod im;
 mod model_errors;
 mod model_transport;
-mod runtime_bootstrap;
-mod runtime_root_migration;
-mod runtime_paths;
 pub mod providers;
+mod runtime_bootstrap;
+mod runtime_environment;
+mod runtime_paths;
+mod runtime_root_migration;
 pub mod session_journal;
 pub mod sidecar;
 pub mod team_templates;
@@ -34,6 +35,7 @@ use commands::feishu_gateway::FeishuEventRelayState;
 use commands::openclaw_plugins::OpenClawPluginFeishuRuntimeState;
 use commands::skills::DbState;
 use diagnostics::{DiagnosticsState, ManagedDiagnosticsState};
+use runtime_environment::ManagedRuntimeEnvironment;
 use session_journal::{SessionJournalStateHandle, SessionJournalStore};
 use sidecar::SidecarManager;
 use std::path::PathBuf;
@@ -52,7 +54,7 @@ impl Drop for DiagnosticsStateHandle {
 struct RuntimeAuditStateHandle {
     diagnostics: Arc<DiagnosticsState>,
     pool: sqlx::SqlitePool,
-    app_data_dir: PathBuf,
+    runtime_root: PathBuf,
 }
 
 impl Drop for RuntimeAuditStateHandle {
@@ -69,8 +71,8 @@ impl Drop for RuntimeAuditStateHandle {
                 "run_id": self.diagnostics.run_id,
                 "counts": counts,
                 "storage": {
-                    "app_data_dir": self.app_data_dir.to_string_lossy().to_string(),
-                    "sqlite_files": diagnostics::collect_sqlite_storage_snapshot(&self.app_data_dir),
+                    "runtime_root": self.runtime_root.to_string_lossy().to_string(),
+                    "sqlite_files": diagnostics::collect_sqlite_storage_snapshot(&self.runtime_root),
                 },
             })),
         );
@@ -95,7 +97,11 @@ impl Default for SingleInstanceActivationState {
 const SINGLE_INSTANCE_FOCUS_DEBOUNCE: Duration = Duration::from_secs(5);
 const TRAY_BEHAVIOR_ENABLED: bool = false;
 
-fn initialize_runtime_state(app: &mut tauri::App, pool: sqlx::SqlitePool) -> ManagedRuntimeHandles {
+fn initialize_runtime_state(
+    app: &mut tauri::App,
+    pool: sqlx::SqlitePool,
+    runtime_paths: &runtime_paths::RuntimePaths,
+) -> ManagedRuntimeHandles {
     app.manage(DbState(pool.clone()));
 
     let registry = Arc::new(ToolRegistry::with_standard_tools());
@@ -125,11 +131,7 @@ fn initialize_runtime_state(app: &mut tauri::App, pool: sqlx::SqlitePool) -> Man
     ));
     app.manage(SessionAdmissionGateState(session_admission_gate));
 
-    let journal_root = app
-        .path()
-        .app_data_dir()
-        .unwrap_or_else(|_| std::env::temp_dir().join("workclaw"))
-        .join("sessions");
+    let journal_root = runtime_paths.sessions_dir.clone();
     let run_registry = Arc::new(RunRegistry::default());
     app.manage(RunRegistryState(run_registry.clone()));
     app.manage(RuntimeObservabilityState(runtime_observability.clone()));
@@ -295,7 +297,7 @@ fn spawn_approval_recovery_bootstrap(
 fn write_startup_audit_snapshot(
     diagnostics_state: &Arc<DiagnosticsState>,
     pool: &sqlx::SqlitePool,
-    app_data_dir: &std::path::Path,
+    runtime_root: &std::path::Path,
 ) {
     let counts =
         tauri::async_runtime::block_on(commands::desktop_lifecycle::collect_database_counts(pool));
@@ -309,8 +311,8 @@ fn write_startup_audit_snapshot(
             "abnormal_previous_run": diagnostics_state.abnormal_previous_run.was_abnormal_exit,
             "counts": counts,
             "storage": {
-                "app_data_dir": app_data_dir.to_string_lossy().to_string(),
-                "sqlite_files": diagnostics::collect_sqlite_storage_snapshot(app_data_dir),
+                "runtime_root": runtime_root.to_string_lossy().to_string(),
+                "sqlite_files": diagnostics::collect_sqlite_storage_snapshot(runtime_root),
             },
         })),
     );
@@ -373,8 +375,13 @@ pub fn run() {
             }
         }))
         .setup(|app| {
-            let diagnostics_state = diagnostics::initialize_for_app(
-                app.handle(),
+            let runtime_environment = runtime_environment::initialize_runtime_environment(app.handle())
+                .expect("failed to init runtime environment");
+            let runtime_environment = Arc::new(runtime_environment);
+            app.manage(ManagedRuntimeEnvironment(Arc::clone(&runtime_environment)));
+
+            let diagnostics_state = diagnostics::initialize_with_paths(
+                diagnostics::DiagnosticsPaths::from_runtime_paths(&runtime_environment.paths),
                 app.package_info().version.to_string(),
             )
             .expect("failed to init diagnostics");
@@ -382,7 +389,9 @@ pub fn run() {
             app.manage(DiagnosticsStateHandle(Arc::clone(&diagnostics_state)));
             app.manage(ManagedDiagnosticsState(Arc::clone(&diagnostics_state)));
 
-            let pool = match tauri::async_runtime::block_on(db::init_db(app.handle())) {
+            let pool = match tauri::async_runtime::block_on(
+                db::init_db_at_runtime_paths(&runtime_environment.paths),
+            ) {
                 Ok(pool) => pool,
                 Err(error) => {
                     let _ = diagnostics::write_log_record(
@@ -396,17 +405,13 @@ pub fn run() {
                     panic!("failed to init db: {error}");
                 }
             };
-            let app_data_dir = app
-                .path()
-                .app_data_dir()
-                .unwrap_or_else(|_| std::env::temp_dir().join("WorkClaw"));
-            write_startup_audit_snapshot(&diagnostics_state, &pool, &app_data_dir);
+            write_startup_audit_snapshot(&diagnostics_state, &pool, &runtime_environment.paths.root);
             app.manage(RuntimeAuditStateHandle {
                 diagnostics: Arc::clone(&diagnostics_state),
                 pool: pool.clone(),
-                app_data_dir,
+                runtime_root: runtime_environment.paths.root.clone(),
             });
-            let handles = initialize_runtime_state(app, pool.clone());
+            let handles = initialize_runtime_state(app, pool.clone(), &runtime_environment.paths);
             let journal_store = app.state::<SessionJournalStateHandle>().0.clone();
             apply_startup_preferences(app, &pool);
             spawn_approval_recovery_bootstrap(
@@ -520,6 +525,7 @@ pub fn run() {
             commands::desktop_lifecycle::get_desktop_lifecycle_paths,
             commands::desktop_lifecycle::get_desktop_diagnostics_status,
             commands::desktop_lifecycle::open_desktop_path,
+            commands::desktop_lifecycle::schedule_desktop_runtime_root_migration,
             commands::desktop_lifecycle::open_desktop_diagnostics_dir,
             commands::desktop_lifecycle::clear_desktop_cache_and_logs,
             commands::desktop_lifecycle::export_desktop_environment_summary,

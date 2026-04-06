@@ -2,11 +2,10 @@ import { invoke } from "@tauri-apps/api/core";
 import type { RuntimePreferences } from "../../../types";
 
 export interface DesktopLifecyclePaths {
-  app_data_dir: string;
-  cache_dir: string;
-  log_dir: string;
-  diagnostics_dir: string;
-  default_work_dir: string;
+  runtime_root_dir: string;
+  pending_runtime_root_dir: string | null;
+  last_runtime_migration_status: string | null;
+  last_runtime_migration_message: string | null;
 }
 
 export interface DesktopCleanupResult {
@@ -107,6 +106,10 @@ export async function saveDesktopRuntimePreferences(input: DesktopRuntimePrefere
 
 export async function getDesktopLifecyclePaths() {
   return invoke<DesktopLifecyclePaths>("get_desktop_lifecycle_paths");
+}
+
+export async function scheduleDesktopRuntimeRootMigration(targetRoot: string) {
+  return invoke("schedule_desktop_runtime_root_migration", { targetRoot });
 }
 
 export async function getDesktopDiagnosticsStatus() {

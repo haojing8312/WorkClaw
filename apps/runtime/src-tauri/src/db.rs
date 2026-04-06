@@ -1,6 +1,8 @@
+use crate::runtime_environment::initialize_runtime_environment;
+use crate::runtime_paths::RuntimePaths;
 use anyhow::Result;
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 mod migrations;
 mod schema;
@@ -16,9 +18,13 @@ use migrations::ensure_im_thread_sessions_channel_column;
 use seed::{build_builtin_manifest_json, sync_builtin_skills_with_root};
 
 pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
-    let app_dir = app.path().app_data_dir()?;
-    std::fs::create_dir_all(&app_dir)?;
-    let db_path = app_dir.join("workclaw.db");
+    let runtime_environment = initialize_runtime_environment(app).map_err(anyhow::Error::msg)?;
+    init_db_at_runtime_paths(&runtime_environment.paths).await
+}
+
+pub async fn init_db_at_runtime_paths(runtime_paths: &RuntimePaths) -> Result<SqlitePool> {
+    std::fs::create_dir_all(&runtime_paths.root)?;
+    let db_path = runtime_paths.database.db_path.clone();
     let db_url = format!("sqlite://{}?mode=rwc", db_path.to_string_lossy());
 
     let pool = SqlitePoolOptions::new()
@@ -41,7 +47,7 @@ pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
 
     apply_current_schema(&pool).await?;
     apply_legacy_migrations(&pool).await?;
-    seed_runtime_defaults(&pool, &app_dir).await?;
+    seed_runtime_defaults(&pool, &runtime_paths.root).await?;
 
     Ok(pool)
 }

@@ -212,7 +212,7 @@ fn maybe_fail_managed_path_cleanup_for_tests(path: &Path) -> Result<(), ManagedP
 }
 
 #[cfg(test)]
-fn set_managed_path_cleanup_failure_after_calls_for_tests(
+pub(crate) fn set_managed_path_cleanup_failure_after_calls_for_tests(
     remaining_successful_calls: Option<usize>,
 ) {
     MANAGED_PATH_CLEANUP_FAILURE_AFTER_CALLS

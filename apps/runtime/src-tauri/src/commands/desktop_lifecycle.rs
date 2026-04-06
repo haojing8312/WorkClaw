@@ -12,6 +12,8 @@ mod diagnostics_service;
 
 use crate::commands::skills::DbState;
 use crate::diagnostics::ManagedDiagnosticsState;
+use crate::runtime_environment::runtime_paths_from_app;
+use crate::runtime_root_migration;
 use std::collections::HashSet;
 use std::path::Path;
 use tauri::{AppHandle, Manager, State};
@@ -28,11 +30,8 @@ pub(crate) use types::{
 };
 
 #[tauri::command]
-pub async fn get_desktop_lifecycle_paths(
-    app: AppHandle,
-    db: State<'_, DbState>,
-) -> Result<DesktopLifecyclePaths, String> {
-    resolve_desktop_lifecycle_paths(&app, &db.0).await
+pub async fn get_desktop_lifecycle_paths(app: AppHandle) -> Result<DesktopLifecyclePaths, String> {
+    resolve_desktop_lifecycle_paths(&app).await
 }
 
 #[tauri::command]
@@ -48,10 +47,8 @@ pub async fn open_desktop_path(path: String) -> Result<(), String> {
 pub async fn clear_desktop_cache_and_logs(app: AppHandle) -> Result<DesktopCleanupResult, String> {
     let mut result = DesktopCleanupResult::default();
     let mut seen = HashSet::new();
-    let candidate_dirs = [
-        app.path().app_cache_dir().map_err(|e| e.to_string())?,
-        app.path().app_log_dir().map_err(|e| e.to_string())?,
-    ];
+    let runtime_paths = runtime_paths_from_app(&app)?;
+    let candidate_dirs = [runtime_paths.cache_dir, runtime_paths.diagnostics.logs_dir];
 
     for dir in candidate_dirs {
         let key = dir.to_string_lossy().to_string();
@@ -65,20 +62,37 @@ pub async fn clear_desktop_cache_and_logs(app: AppHandle) -> Result<DesktopClean
 }
 
 #[tauri::command]
+pub fn schedule_desktop_runtime_root_migration(
+    app: AppHandle,
+    target_root: String,
+) -> Result<(), String> {
+    let runtime_environment = app.state::<crate::runtime_environment::ManagedRuntimeEnvironment>();
+    let trimmed = target_root.trim();
+    if trimmed.is_empty() {
+        return Err("目录路径不能为空".to_string());
+    }
+
+    runtime_root_migration::schedule_runtime_root_migration(
+        &runtime_environment.0.bootstrap_location.bootstrap_path,
+        Path::new(trimmed),
+    )
+    .map_err(|error| error.to_string())?;
+
+    app.restart();
+}
+
+#[tauri::command]
 pub async fn export_desktop_environment_summary(
     app: AppHandle,
-    db: State<'_, DbState>,
+    _db: State<'_, DbState>,
     diagnostics_state: State<'_, ManagedDiagnosticsState>,
 ) -> Result<String, String> {
-    let paths = resolve_desktop_lifecycle_paths(&app, &db.0).await?;
+    let paths = resolve_desktop_lifecycle_paths(&app).await?;
     let status = build_diagnostics_status(diagnostics_state.0.as_ref())?;
     Ok(build_desktop_environment_summary(
         &app.package_info().version.to_string(),
         std::env::consts::OS,
-        &paths.app_data_dir,
-        &paths.cache_dir,
-        &paths.log_dir,
-        &paths.default_work_dir,
+        &paths.runtime_root_dir,
         &status,
     ))
 }
@@ -103,8 +117,12 @@ pub async fn export_desktop_diagnostics_bundle(
     db: State<'_, DbState>,
     diagnostics_state: State<'_, ManagedDiagnosticsState>,
 ) -> Result<String, String> {
-    diagnostics_service::export_desktop_diagnostics_bundle(&app, &db.0, diagnostics_state.0.as_ref())
-        .await
+    diagnostics_service::export_desktop_diagnostics_bundle(
+        &app,
+        &db.0,
+        diagnostics_state.0.as_ref(),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -118,7 +136,9 @@ pub async fn record_frontend_diagnostic_event(
 #[cfg(test)]
 mod tests {
     use super::diagnostics_service::export_diagnostics_bundle;
-    use super::types::{CrashSummaryInfo, DesktopDiagnosticsExportPayload, DesktopDiagnosticsStatus};
+    use super::types::{
+        CrashSummaryInfo, DesktopDiagnosticsExportPayload, DesktopDiagnosticsStatus,
+    };
     use super::{build_desktop_environment_summary, clear_directory_contents};
     use tempfile::tempdir;
 
@@ -161,13 +181,11 @@ mod tests {
             "0.2.12",
             "windows",
             "C:\\Users\\me\\AppData\\Roaming\\WorkClaw",
-            "C:\\Users\\me\\AppData\\Local\\WorkClaw\\cache",
-            "C:\\Users\\me\\AppData\\Local\\WorkClaw\\logs",
-            "E:\\workspace",
             &status,
         );
 
         assert!(summary.contains("Diagnostics"));
+        assert!(summary.contains("Runtime Root: C:\\Users\\me\\AppData\\Roaming\\WorkClaw"));
         assert!(summary.contains("Diagnostics Audit"));
         assert!(summary.contains("Abnormal Previous Run: yes"));
         assert!(summary.contains("Latest Crash: 2026-03-13T10:00:00Z panic occurred"));

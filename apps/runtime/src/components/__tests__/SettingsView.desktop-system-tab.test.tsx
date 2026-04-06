@@ -1,11 +1,16 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { SettingsView } from "../SettingsView";
 
 const invokeMock = vi.fn();
+const openDialogMock = vi.fn();
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
+}));
+
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  open: (...args: unknown[]) => openDialogMock(...args),
 }));
 
 function createRuntimePreferences() {
@@ -26,6 +31,8 @@ function createRuntimePreferences() {
 describe("SettingsView desktop/system tab", () => {
   beforeEach(() => {
     invokeMock.mockReset();
+    openDialogMock.mockReset();
+    openDialogMock.mockResolvedValue(null);
     invokeMock.mockImplementation((command: string) => {
       if (command === "list_model_configs") {
         return Promise.resolve([]);
@@ -41,11 +48,14 @@ describe("SettingsView desktop/system tab", () => {
       }
       if (command === "get_desktop_lifecycle_paths") {
         return Promise.resolve({
-          app_data_dir: "C:\\Users\\me\\AppData\\Roaming\\WorkClaw",
-          cache_dir: "C:\\Users\\me\\AppData\\Local\\WorkClaw\\cache",
-          log_dir: "C:\\Users\\me\\AppData\\Local\\WorkClaw\\logs",
-          default_work_dir: "E:\\workspace",
+          runtime_root_dir: "C:\\Users\\me\\.workclaw",
+          pending_runtime_root_dir: null,
+          last_runtime_migration_status: null,
+          last_runtime_migration_message: null,
         });
+      }
+      if (command === "schedule_desktop_runtime_root_migration") {
+        return Promise.resolve(null);
       }
       return Promise.resolve(null);
     });
@@ -64,6 +74,9 @@ describe("SettingsView desktop/system tab", () => {
     expect(screen.queryByText("软件更新")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "检查更新" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "清理缓存与日志" })).toBeInTheDocument();
+    expect(screen.getByText("WorkClaw 数据根目录")).toBeInTheDocument();
+    expect(screen.queryByText("应用数据目录")).not.toBeInTheDocument();
+    expect(screen.queryByText("默认工作目录")).not.toBeInTheDocument();
     expect(screen.queryByTestId("settings-model-provider-preset")).not.toBeInTheDocument();
   });
 
@@ -81,5 +94,24 @@ describe("SettingsView desktop/system tab", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "桌面 / 系统" }));
     expect(await screen.findByLabelText("默认语言")).toHaveValue("en-US");
+  });
+
+  test("selects a new runtime root and schedules migration on restart", async () => {
+    openDialogMock.mockResolvedValue("D:\\WorkClawData");
+    render(<SettingsView onClose={() => {}} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "桌面 / 系统" }));
+    fireEvent.click(await screen.findByRole("button", { name: "选择目录" }));
+
+    expect(await screen.findByText("准备迁移到新的数据根目录")).toBeInTheDocument();
+    expect(screen.getByText("D:\\WorkClawData")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "迁移并重启" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("schedule_desktop_runtime_root_migration", {
+        targetRoot: "D:\\WorkClawData",
+      });
+    });
   });
 });

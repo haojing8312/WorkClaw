@@ -1,11 +1,12 @@
 use crate::commands::feishu_gateway::{
     get_app_setting, list_feishu_pairing_requests_with_pool, set_app_setting,
 };
+use crate::runtime_environment::runtime_paths_from_app;
 use reqwest::Client;
 use sqlx::SqlitePool;
 use std::fs;
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 use super::{
     current_feishu_runtime_status, get_feishu_plugin_environment_status_internal,
@@ -210,11 +211,8 @@ pub(crate) fn should_auto_restore_feishu_runtime(progress: &FeishuSetupProgress)
 }
 
 pub(crate) fn resolve_openclaw_shim_root(app: &AppHandle) -> Result<PathBuf, String> {
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("failed to resolve app_data_dir: {e}"))?;
-    Ok(app_data_dir.join("openclaw-cli-shim"))
+    let runtime_paths = runtime_paths_from_app(app)?;
+    Ok(runtime_paths.plugins.cli_shim_dir)
 }
 
 pub(crate) fn build_openclaw_shim_state_file_path(shim_root: &Path) -> PathBuf {
@@ -222,11 +220,8 @@ pub(crate) fn build_openclaw_shim_state_file_path(shim_root: &Path) -> PathBuf {
 }
 
 pub(crate) fn resolve_controlled_openclaw_state_root(app: &AppHandle) -> Result<PathBuf, String> {
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("failed to resolve app_data_dir: {e}"))?;
-    Ok(app_data_dir.join("openclaw-state"))
+    let runtime_paths = runtime_paths_from_app(app)?;
+    Ok(runtime_paths.plugins.state_dir)
 }
 
 #[derive(Debug, Default, serde::Deserialize)]

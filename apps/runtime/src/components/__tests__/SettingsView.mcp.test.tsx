@@ -9,6 +9,10 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
 }));
 
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  open: vi.fn(() => Promise.resolve(null)),
+}));
+
 function installDefaultInvokeMock() {
   invokeMock.mockImplementation((command: string, payload?: Record<string, unknown>) => {
     if (command === "list_model_configs") return Promise.resolve([]);

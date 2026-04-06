@@ -7,6 +7,10 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
 }));
 
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  open: vi.fn(() => Promise.resolve(null)),
+}));
+
 describe("SettingsView risk flow", () => {
   beforeEach(() => {
     invokeMock.mockReset();

@@ -7,6 +7,10 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
 }));
 
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  open: vi.fn(() => Promise.resolve(null)),
+}));
+
 describe("SettingsView connector management", () => {
   beforeEach(() => {
     invokeMock.mockReset();
@@ -27,15 +31,15 @@ describe("SettingsView connector management", () => {
           launch_minimized: false,
           close_to_tray: true,
         });
-      }
-      if (command === "get_desktop_lifecycle_paths") {
-        return Promise.resolve({
-          app_data_dir: "",
-          cache_dir: "",
-          log_dir: "",
-          default_work_dir: "",
-        });
-      }
+    }
+    if (command === "get_desktop_lifecycle_paths") {
+      return Promise.resolve({
+        runtime_root_dir: "",
+        pending_runtime_root_dir: null,
+        last_runtime_migration_status: null,
+        last_runtime_migration_message: null,
+      });
+    }
       if (command === "get_routing_settings") {
         return Promise.resolve({ max_call_depth: 4, node_timeout_seconds: 60, retry_count: 0 });
       }

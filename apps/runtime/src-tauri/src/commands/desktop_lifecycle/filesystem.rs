@@ -1,30 +1,47 @@
 use super::types::{DesktopCleanupResult, DesktopLifecyclePaths};
-use crate::commands::runtime_preferences::resolve_default_work_dir_with_pool;
-use crate::diagnostics;
-use sqlx::SqlitePool;
+use crate::runtime_bootstrap::BootstrapMigrationStatus;
+use crate::runtime_environment::runtime_environment_from_app;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
+
+fn bootstrap_migration_status_label(status: BootstrapMigrationStatus) -> String {
+    match status {
+        BootstrapMigrationStatus::Pending => "pending",
+        BootstrapMigrationStatus::InProgress => "in_progress",
+        BootstrapMigrationStatus::Failed => "failed",
+        BootstrapMigrationStatus::Completed => "completed",
+        BootstrapMigrationStatus::RolledBack => "rolled_back",
+    }
+    .to_string()
+}
 
 pub(crate) async fn resolve_desktop_lifecycle_paths(
     app: &AppHandle,
-    pool: &SqlitePool,
 ) -> Result<DesktopLifecyclePaths, String> {
-    let default_work_dir = resolve_default_work_dir_with_pool(pool)
-        .await
-        .unwrap_or_default();
-    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let cache_dir = app.path().app_cache_dir().map_err(|e| e.to_string())?;
-    let log_dir = app.path().app_log_dir().map_err(|e| e.to_string())?;
-    let diagnostics_dir = diagnostics::DiagnosticsPaths::from_app(app).root;
+    let environment = runtime_environment_from_app(app)?;
+    let pending_runtime_root_dir = environment
+        .bootstrap
+        .pending_migration
+        .as_ref()
+        .map(|migration| migration.to_root.clone());
+    let last_runtime_migration_status = environment
+        .bootstrap
+        .last_migration_result
+        .as_ref()
+        .map(|result| bootstrap_migration_status_label(result.status));
+    let last_runtime_migration_message = environment
+        .bootstrap
+        .last_migration_result
+        .as_ref()
+        .and_then(|result| result.message.clone());
 
     Ok(DesktopLifecyclePaths {
-        app_data_dir: app_data_dir.to_string_lossy().to_string(),
-        cache_dir: cache_dir.to_string_lossy().to_string(),
-        log_dir: log_dir.to_string_lossy().to_string(),
-        diagnostics_dir: diagnostics_dir.to_string_lossy().to_string(),
-        default_work_dir,
+        runtime_root_dir: environment.paths.root.to_string_lossy().to_string(),
+        pending_runtime_root_dir,
+        last_runtime_migration_status,
+        last_runtime_migration_message,
     })
 }
 

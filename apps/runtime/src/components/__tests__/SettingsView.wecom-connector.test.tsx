@@ -17,6 +17,10 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
 }));
 
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  open: vi.fn(() => Promise.resolve(null)),
+}));
+
 vi.mock("../../utils/openExternalUrl", () => ({
   openExternalUrl: openExternalUrlMock,
 }));
@@ -47,10 +51,10 @@ function installInvokeMock(overrides: Record<string, InvokeOverride> = {}) {
     }
     if (command === "get_desktop_lifecycle_paths") {
       return Promise.resolve({
-        app_data_dir: "",
-        cache_dir: "",
-        log_dir: "",
-        default_work_dir: "",
+        runtime_root_dir: "",
+        pending_runtime_root_dir: null,
+        last_runtime_migration_status: null,
+        last_runtime_migration_message: null,
       });
     }
     if (command === "get_routing_settings") {

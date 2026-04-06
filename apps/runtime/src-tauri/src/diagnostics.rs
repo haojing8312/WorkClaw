@@ -37,6 +37,10 @@ impl DiagnosticsPaths {
             .unwrap_or_else(|_| std::env::temp_dir().join("WorkClaw"));
         Self::new(base.join("diagnostics"))
     }
+
+    pub fn from_runtime_paths(runtime_paths: &crate::runtime_paths::RuntimePaths) -> Self {
+        Self::new(runtime_paths.diagnostics.root.clone())
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -369,6 +373,13 @@ pub fn install_panic_hook(paths: DiagnosticsPaths, run_id: String) {
 
 pub fn initialize_for_app(app: &AppHandle, version: String) -> Result<DiagnosticsState, String> {
     let paths = DiagnosticsPaths::from_app(app);
+    initialize_with_paths(paths, version)
+}
+
+pub fn initialize_with_paths(
+    paths: DiagnosticsPaths,
+    version: String,
+) -> Result<DiagnosticsState, String> {
     ensure_diagnostics_dirs(&paths)?;
     let abnormal_previous_run = detect_abnormal_previous_run(&paths)?;
     let run_id = uuid::Uuid::new_v4().to_string();
