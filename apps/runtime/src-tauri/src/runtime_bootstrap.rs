@@ -176,7 +176,7 @@ pub fn discover_runtime_root_bootstrap(
     default_root: &Path,
 ) -> Result<RuntimeRootBootstrap, RuntimeBootstrapError> {
     if bootstrap_path.exists() {
-        return read_runtime_root_bootstrap(bootstrap_path);
+        return load_or_create_runtime_root_bootstrap(bootstrap_path, default_root);
     }
 
     if let Some(legacy_root) = legacy_root {
@@ -317,6 +317,21 @@ mod tests {
             .expect("fallback bootstrap");
 
         assert_eq!(loaded.current_root, fallback_root.to_string_lossy());
+    }
+
+    #[test]
+    fn discovery_falls_back_safely_when_existing_bootstrap_is_malformed() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let bootstrap_path = temp_dir.path().join("bootstrap-root.json");
+        std::fs::write(&bootstrap_path, "{ this is not valid json")
+            .expect("write invalid bootstrap");
+        let fallback_root = PathBuf::from(r"D:\WorkClawData");
+
+        let discovered =
+            discover_runtime_root_bootstrap(&bootstrap_path, None, &fallback_root)
+                .expect("discover fallback bootstrap");
+
+        assert_eq!(discovered.current_root, fallback_root.to_string_lossy());
     }
 
     #[test]
