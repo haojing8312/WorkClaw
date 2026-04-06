@@ -413,4 +413,110 @@ mod tests {
             &[("session-1".to_string(), String::new(), true, false)]
         );
     }
+
+    #[tokio::test]
+    async fn commit_terminal_outcome_handles_skill_command_failure() {
+        let pool = setup_commit_pool().await;
+        let journal = setup_session_journal();
+        let emitted = std::sync::Mutex::new(Vec::<(String, String, bool, bool)>::new());
+
+        sqlx::query(
+            "INSERT INTO session_runs (id, session_id, user_message_id, assistant_message_id, status, buffered_text, error_kind, error_message, created_at, updated_at)
+             VALUES ('run-3', 'session-1', 'user-1', '', 'thinking', '', '', '', '2026-03-29T00:00:00Z', '2026-03-29T00:00:01Z')",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed session run");
+
+        let result = OutcomeCommitter::commit_terminal_outcome_with_emitter(
+            &pool,
+            &journal,
+            "session-1",
+            "run-3",
+            TerminalOutcome::SkillCommandFailed("dispatch failed".to_string()),
+            |session_id, token, done, sub_agent| {
+                emitted.lock().expect("lock emitted tokens").push((
+                    session_id.to_string(),
+                    token,
+                    done,
+                    sub_agent,
+                ));
+            },
+        )
+        .await;
+
+        assert_eq!(result.unwrap_err(), "dispatch failed");
+
+        let (status, error_kind, error_message): (String, String, String) = sqlx::query_as(
+            "SELECT status, error_kind, error_message FROM session_runs WHERE id = 'run-3'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("query failed run state");
+        assert_eq!(status, "failed");
+        assert_eq!(error_kind, "skill_command_dispatch");
+        assert_eq!(error_message, "dispatch failed");
+
+        let emitted = emitted.lock().expect("read emitted tokens");
+        assert_eq!(
+            emitted.as_slice(),
+            &[("session-1".to_string(), String::new(), true, false)]
+        );
+    }
+
+    #[tokio::test]
+    async fn commit_terminal_outcome_handles_skill_command_stop() {
+        let pool = setup_commit_pool().await;
+        let journal = setup_session_journal();
+        let emitted = std::sync::Mutex::new(Vec::<(String, String, bool, bool)>::new());
+
+        sqlx::query(
+            "INSERT INTO session_runs (id, session_id, user_message_id, assistant_message_id, status, buffered_text, error_kind, error_message, created_at, updated_at)
+             VALUES ('run-4', 'session-1', 'user-1', '', 'thinking', '', '', '', '2026-03-29T00:00:00Z', '2026-03-29T00:00:01Z')",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed session run");
+
+        let result = OutcomeCommitter::commit_terminal_outcome_with_emitter(
+            &pool,
+            &journal,
+            "session-1",
+            "run-4",
+            TerminalOutcome::SkillCommandStopped {
+                stop_reason: RunStopReason::loop_detected("exec repeated with the same input"),
+                error: "execution stopped".to_string(),
+            },
+            |session_id, token, done, sub_agent| {
+                emitted.lock().expect("lock emitted tokens").push((
+                    session_id.to_string(),
+                    token,
+                    done,
+                    sub_agent,
+                ));
+            },
+        )
+        .await;
+
+        assert_eq!(result.unwrap_err(), "execution stopped");
+
+        let (status, error_kind, error_message): (String, String, String) = sqlx::query_as(
+            "SELECT status, error_kind, error_message FROM session_runs WHERE id = 'run-4'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("query stopped run state");
+        assert_eq!(status, "failed");
+        assert_eq!(error_kind, "loop_detected");
+        assert!(
+            error_message.contains("连续重复步骤"),
+            "unexpected stop message: {error_message}"
+        );
+
+        let emitted = emitted.lock().expect("read emitted tokens");
+        assert_eq!(
+            emitted.as_slice(),
+            &[("session-1".to_string(), String::new(), true, false)]
+        );
+    }
 }
