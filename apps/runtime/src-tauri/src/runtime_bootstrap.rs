@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fs;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 pub const BOOTSTRAP_FILE_NAME: &str = "bootstrap-root.json";
@@ -54,6 +55,12 @@ pub enum RuntimeBootstrapError {
     Json(serde_json::Error),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeBootstrapLocation {
+    pub bootstrap_dir: PathBuf,
+    pub bootstrap_path: PathBuf,
+}
+
 impl fmt::Display for RuntimeBootstrapError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -79,6 +86,36 @@ impl From<serde_json::Error> for RuntimeBootstrapError {
 
 pub fn bootstrap_file_path(bootstrap_dir: &Path) -> PathBuf {
     bootstrap_dir.join(BOOTSTRAP_FILE_NAME)
+}
+
+fn build_runtime_bootstrap_location(base_dir: PathBuf) -> RuntimeBootstrapLocation {
+    let bootstrap_dir = base_dir.join("dev.workclaw.runtime");
+    let bootstrap_path = bootstrap_dir.join(BOOTSTRAP_FILE_NAME);
+    RuntimeBootstrapLocation {
+        bootstrap_dir,
+        bootstrap_path,
+    }
+}
+
+pub fn resolve_runtime_bootstrap_location() -> RuntimeBootstrapLocation {
+    resolve_runtime_bootstrap_location_with_env(std::env::var_os("APPDATA"), std::env::var_os("USERPROFILE"))
+}
+
+pub fn resolve_runtime_bootstrap_location_with_env(
+    appdata: Option<OsString>,
+    userprofile: Option<OsString>,
+) -> RuntimeBootstrapLocation {
+    if let Some(appdata) = appdata.filter(|value| !value.is_empty()) {
+        return build_runtime_bootstrap_location(PathBuf::from(appdata));
+    }
+
+    if let Some(userprofile) = userprofile.filter(|value| !value.is_empty()) {
+        return build_runtime_bootstrap_location(
+            PathBuf::from(userprofile).join("AppData").join("Roaming"),
+        );
+    }
+
+    build_runtime_bootstrap_location(std::env::temp_dir().join("WorkClaw"))
 }
 
 pub fn default_runtime_root_bootstrap(current_root: &Path) -> RuntimeRootBootstrap {
@@ -146,7 +183,49 @@ pub fn discover_runtime_root_bootstrap(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
     use std::path::PathBuf;
+
+    #[test]
+    fn resolves_stable_bootstrap_location_from_appdata_environment() {
+        let location = resolve_runtime_bootstrap_location_with_env(
+            Some(OsString::from(r"C:\Users\me\AppData\Roaming")),
+            Some(OsString::from(r"C:\Users\me")),
+        );
+
+        assert_eq!(
+            location.bootstrap_dir,
+            PathBuf::from(r"C:\Users\me\AppData\Roaming").join("dev.workclaw.runtime")
+        );
+        assert_eq!(
+            location.bootstrap_path,
+            PathBuf::from(r"C:\Users\me\AppData\Roaming")
+                .join("dev.workclaw.runtime")
+                .join(BOOTSTRAP_FILE_NAME)
+        );
+    }
+
+    #[test]
+    fn resolves_stable_bootstrap_location_from_userprofile_when_appdata_is_missing() {
+        let location = resolve_runtime_bootstrap_location_with_env(
+            None,
+            Some(OsString::from(r"C:\Users\me")),
+        );
+
+        let expected_dir = PathBuf::from(r"C:\Users\me")
+            .join("AppData")
+            .join("Roaming")
+            .join("dev.workclaw.runtime");
+        assert_eq!(location.bootstrap_dir, expected_dir);
+        assert_eq!(
+            location.bootstrap_path,
+            PathBuf::from(r"C:\Users\me")
+                .join("AppData")
+                .join("Roaming")
+                .join("dev.workclaw.runtime")
+                .join(BOOTSTRAP_FILE_NAME)
+        );
+    }
 
     #[test]
     fn creates_default_bootstrap_when_file_is_missing() {
