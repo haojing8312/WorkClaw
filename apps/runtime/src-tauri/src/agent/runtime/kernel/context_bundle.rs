@@ -1,12 +1,13 @@
 use crate::agent::runtime::kernel::capability_snapshot::CapabilitySnapshot;
-use runtime_chat_app::{compose_system_prompt_from_tool_names, ChatExecutionGuidance};
+use runtime_chat_app::{
+    build_system_prompt_sections, compose_system_prompt_from_sections, ChatExecutionGuidance,
+    SystemPromptSections,
+};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct ContextBundle {
     pub system_prompt: String,
-    pub workspace_skills_prompt: Option<String>,
-    pub memory_content: Option<String>,
-    pub runtime_notes: Vec<String>,
+    pub prompt_sections: SystemPromptSections,
 }
 
 impl ContextBundle {
@@ -20,29 +21,22 @@ impl ContextBundle {
         employee_collaboration_guidance: Option<String>,
         memory_content: Option<String>,
     ) -> Self {
-        let mut system_prompt = compose_system_prompt_from_tool_names(
-            &capability_snapshot.resolved_tool_names,
+        let prompt_sections = build_system_prompt_sections(
             base_prompt,
+            &capability_snapshot.resolved_tool_names.join(", "),
             model_name,
             max_iter,
             guidance,
             workspace_skills_prompt.as_deref(),
             employee_collaboration_guidance.as_deref(),
             memory_content.as_deref(),
+            &capability_snapshot.runtime_notes,
         );
-
-        if !capability_snapshot.runtime_notes.is_empty() {
-            system_prompt = format!(
-                "{system_prompt}\n\n[联网检索状态]\n{}",
-                capability_snapshot.runtime_notes.join("\n")
-            );
-        }
+        let system_prompt = compose_system_prompt_from_sections(&prompt_sections);
 
         Self {
             system_prompt,
-            workspace_skills_prompt,
-            memory_content,
-            runtime_notes: capability_snapshot.runtime_notes.clone(),
+            prompt_sections,
         }
     }
 }
@@ -58,9 +52,9 @@ mod tests {
         let bundle = ContextBundle::default();
 
         assert!(bundle.system_prompt.is_empty());
-        assert!(bundle.workspace_skills_prompt.is_none());
-        assert!(bundle.memory_content.is_none());
-        assert!(bundle.runtime_notes.is_empty());
+        assert!(bundle.prompt_sections.workspace_skills_prompt.is_none());
+        assert!(bundle.prompt_sections.memory_content.is_none());
+        assert!(bundle.prompt_sections.runtime_notes.is_empty());
     }
 
     #[test]
@@ -91,16 +85,27 @@ mod tests {
         assert!(bundle.system_prompt.contains("Base skill prompt"));
         assert!(bundle.system_prompt.contains("可用工具: browser, read"));
         assert!(bundle.system_prompt.contains("Collaborate with employee-1"));
-        assert!(bundle.system_prompt.contains("Remember previous delivery constraints."));
+        assert!(bundle
+            .system_prompt
+            .contains("Remember previous delivery constraints."));
         assert!(bundle.system_prompt.contains("当前未配置搜索引擎"));
         assert_eq!(
-            bundle.workspace_skills_prompt.as_deref(),
+            bundle.prompt_sections.workspace_skills_prompt.as_deref(),
             Some("<available_skills />")
         );
         assert_eq!(
-            bundle.memory_content.as_deref(),
+            bundle.prompt_sections.memory_content.as_deref(),
             Some("Remember previous delivery constraints.")
         );
-        assert_eq!(bundle.runtime_notes, vec!["当前未配置搜索引擎".to_string()]);
+        assert_eq!(
+            bundle.prompt_sections.runtime_notes,
+            vec!["当前未配置搜索引擎".to_string()]
+        );
+        assert!(bundle
+            .prompt_sections
+            .temporal_execution_guidance
+            .as_deref()
+            .expect("temporal execution guidance")
+            .contains("今天: 2026-03-20"));
     }
 }

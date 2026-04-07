@@ -1,5 +1,6 @@
 use runtime_chat_app::{
-    compose_system_prompt, compose_system_prompt_from_tool_names, ChatExecutionGuidance,
+    build_system_prompt_sections, compose_system_prompt, compose_system_prompt_from_sections,
+    compose_system_prompt_from_tool_names, ChatExecutionGuidance,
 };
 
 #[test]
@@ -104,7 +105,11 @@ fn compose_system_prompt_includes_structured_tool_result_guidance_for_core_tools
 
 #[test]
 fn compose_system_prompt_from_tool_names_matches_joined_tool_names() {
-    let tool_names = vec!["bash".to_string(), "read".to_string(), "browser".to_string()];
+    let tool_names = vec![
+        "bash".to_string(),
+        "read".to_string(),
+        "browser".to_string(),
+    ];
     let guidance = ChatExecutionGuidance {
         effective_work_dir: "E:/workspace/demo".to_string(),
         local_timezone: "Asia/Shanghai".to_string(),
@@ -135,4 +140,87 @@ fn compose_system_prompt_from_tool_names_matches_joined_tool_names() {
     );
 
     assert_eq!(prompt_from_list, prompt_from_joined);
+}
+
+#[test]
+fn build_system_prompt_sections_preserves_explicit_optional_sections() {
+    let sections = build_system_prompt_sections(
+        "Base skill prompt",
+        "bash, read, browser",
+        "gpt-4.1",
+        8,
+        &ChatExecutionGuidance {
+            effective_work_dir: "E:/workspace/demo".to_string(),
+            local_timezone: "Asia/Shanghai".to_string(),
+            local_date: "2026-03-20".to_string(),
+            local_tomorrow: "2026-03-21".to_string(),
+            local_month_range: "2026-03-01 ~ 2026-03-31".to_string(),
+        },
+        Some("<available_skills />"),
+        Some("Collaborate with employee-1"),
+        Some("Remember previous delivery constraints."),
+        &["当前未配置搜索引擎".to_string()],
+    );
+
+    assert_eq!(sections.base_prompt, "Base skill prompt");
+    assert!(sections
+        .capability_snapshot
+        .contains("可用工具: bash, read, browser"));
+    assert_eq!(
+        sections.workspace_skills_prompt.as_deref(),
+        Some("<available_skills />")
+    );
+    assert_eq!(
+        sections.employee_collaboration_guidance.as_deref(),
+        Some("Collaborate with employee-1")
+    );
+    assert_eq!(
+        sections.memory_content.as_deref(),
+        Some("Remember previous delivery constraints.")
+    );
+    assert_eq!(
+        sections.runtime_notes,
+        vec!["当前未配置搜索引擎".to_string()]
+    );
+    assert!(sections
+        .temporal_execution_guidance
+        .as_deref()
+        .expect("temporal execution guidance")
+        .contains("今天: 2026-03-20"));
+}
+
+#[test]
+fn compose_system_prompt_from_sections_matches_legacy_builder() {
+    let guidance = ChatExecutionGuidance {
+        effective_work_dir: "E:/workspace/demo".to_string(),
+        local_timezone: "Asia/Shanghai".to_string(),
+        local_date: "2026-03-20".to_string(),
+        local_tomorrow: "2026-03-21".to_string(),
+        local_month_range: "2026-03-01 ~ 2026-03-31".to_string(),
+    };
+
+    let sections = build_system_prompt_sections(
+        "Base skill prompt",
+        "bash, read, browser",
+        "gpt-4.1",
+        8,
+        &guidance,
+        Some("<available_skills />"),
+        Some("Collaborate with employee-1"),
+        Some("Remember previous delivery constraints."),
+        &[],
+    );
+    let prompt_from_sections = compose_system_prompt_from_sections(&sections);
+    let legacy_prompt = compose_system_prompt(
+        "Base skill prompt",
+        "bash, read, browser",
+        "gpt-4.1",
+        8,
+        &guidance,
+        Some("<available_skills />"),
+        Some("Collaborate with employee-1"),
+        Some("Remember previous delivery constraints."),
+    );
+
+    assert_eq!(prompt_from_sections, legacy_prompt);
 }

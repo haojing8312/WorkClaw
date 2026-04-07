@@ -10,7 +10,10 @@ pub use preparation::{
     normalize_permission_mode_for_storage, normalize_session_mode_for_storage,
     normalize_team_id_for_storage, parse_permission_mode_for_runtime, permission_mode_label,
 };
-pub use prompt_assembly::{compose_system_prompt, compose_system_prompt_from_tool_names};
+pub use prompt_assembly::{
+    build_system_prompt_sections, compose_system_prompt, compose_system_prompt_from_sections,
+    compose_system_prompt_from_tool_names, SystemPromptSections,
+};
 pub use routing::{
     classify_model_route_error, parse_fallback_chain_targets, retry_backoff_ms,
     retry_budget_for_error, should_retry_same_candidate,
