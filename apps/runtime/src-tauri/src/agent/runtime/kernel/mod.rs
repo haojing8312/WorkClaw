@@ -4,4 +4,6 @@ pub(crate) mod execution_plan;
 pub(crate) mod outcome_commit;
 pub(crate) mod routed_prompt;
 pub(crate) mod session_engine;
+pub(crate) mod tool_registry_setup;
 pub(crate) mod turn_preparation;
+pub(crate) mod workspace_skill_context;
