@@ -220,7 +220,6 @@ fn resolve_mcp_search_fallback(registry: &ToolRegistry) -> Option<McpSearchFallb
 pub(crate) struct PreparedRuntimeTools {
     pub allowed_tools: Option<Vec<String>>,
     pub system_prompt: String,
-    pub skill_command_specs: Vec<chat_io::WorkspaceSkillCommandSpec>,
     pub capability_snapshot: CapabilitySnapshot,
 }
 
@@ -458,7 +457,6 @@ pub(crate) async fn prepare_runtime_tools(
     Ok(PreparedRuntimeTools {
         allowed_tools: params.skill_allowed_tools,
         system_prompt: context_bundle.system_prompt,
-        skill_command_specs,
         capability_snapshot,
     })
 }

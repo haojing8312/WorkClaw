@@ -1,5 +1,7 @@
 use super::events::ToolConfirmResponder;
-use crate::agent::runtime::kernel::execution_plan::{ExecutionOutcome, SessionEngineError};
+use crate::agent::runtime::kernel::execution_plan::{
+    ExecutionContext, ExecutionOutcome, SessionEngineError,
+};
 use crate::agent::runtime::kernel::outcome_commit::{OutcomeCommitter, TerminalOutcome};
 use crate::agent::runtime::kernel::session_engine::SessionEngine;
 use crate::agent::context::build_tool_context;
@@ -8,7 +10,7 @@ use crate::agent::run_guard::{RunBudgetPolicy, RunBudgetScope};
 use crate::agent::runtime::attempt_runner::RouteExecutionOutcome;
 use crate::agent::runtime::repo::{PoolChatEmployeeDirectory, PoolChatSettingsRepository};
 use crate::agent::runtime::tool_setup::{
-    prepare_runtime_tools, PreparedRuntimeTools, ToolSetupParams,
+    prepare_runtime_tools, ToolSetupParams,
 };
 use crate::agent::runtime::RuntimeTranscript;
 use crate::agent::AgentExecutor;
@@ -24,7 +26,6 @@ use uuid::Uuid;
 use super::runtime_io as chat_io;
 use crate::agent::runtime::skill_routing::index::SkillRouteIndex;
 use crate::model_transport::{resolve_model_transport, ModelTransportKind};
-use runtime_chat_app::ChatExecutionGuidance;
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct SessionRuntime;
@@ -49,18 +50,7 @@ pub(crate) struct PreparedSendMessageContext {
     pub route_candidates: Vec<(String, String, String, String, String)>,
     pub per_candidate_retry_count: usize,
     pub messages: Vec<Value>,
-    pub prepared_runtime_tools: PreparedRuntimeTools,
-    pub permission_mode: PermissionMode,
-    pub executor_work_dir: Option<String>,
-    pub max_iterations: Option<usize>,
-    pub max_call_depth: usize,
-    pub node_timeout_seconds: u64,
-    pub route_retry_count: usize,
-    pub execution_guidance: ChatExecutionGuidance,
-    pub memory_bucket_employee_id: String,
-    pub employee_collaboration_guidance: Option<String>,
-    pub workspace_skill_entries: Vec<chat_io::WorkspaceSkillRuntimeEntry>,
-    pub route_index: SkillRouteIndex,
+    pub execution_context: ExecutionContext,
 }
 
 #[derive(Clone)]
@@ -182,8 +172,8 @@ impl SessionRuntime {
             return Ok(None);
         };
         let Some(spec) = prepared_context
-            .prepared_runtime_tools
-            .skill_command_specs
+            .execution_context
+            .skill_command_specs()
             .iter()
             .find(|spec| spec.name.eq_ignore_ascii_case(&command_name) && spec.dispatch.is_some())
         else {
@@ -193,13 +183,13 @@ impl SessionRuntime {
         let tool_ctx = build_tool_context(
             Some(session_id),
             prepared_context
+                .execution_context
                 .executor_work_dir
                 .as_ref()
                 .map(PathBuf::from),
             prepared_context
-                .prepared_runtime_tools
-                .allowed_tools
-                .as_deref(),
+                .execution_context
+                .allowed_tools(),
         )
         .map_err(|err| err.to_string())?;
         let dispatch_context = crate::agent::runtime::tool_dispatch::ToolDispatchContext {
@@ -208,15 +198,14 @@ impl SessionRuntime {
             session_id: Some(session_id),
             persisted_run_id: Some(run_id),
             allowed_tools: prepared_context
-                .prepared_runtime_tools
-                .allowed_tools
-                .as_deref(),
-            permission_mode: prepared_context.permission_mode,
+                .execution_context
+                .allowed_tools(),
+            permission_mode: prepared_context.execution_context.permission_mode,
             tool_ctx: &tool_ctx,
             tool_confirm_tx: Some(&tool_confirm_responder),
             cancel_flag: Some(cancel_flag),
             route_run_id: run_id,
-            route_node_timeout_secs: prepared_context.node_timeout_seconds,
+            route_node_timeout_secs: prepared_context.execution_context.node_timeout_seconds,
             route_retry_count: 0,
             iteration: 1,
             run_budget_policy: RunBudgetPolicy::for_scope(RunBudgetScope::Skill),
@@ -514,7 +503,7 @@ impl SessionRuntime {
 
         if let Some(rewritten_body) = Self::rewrite_user_skill_command_for_model(
             params.user_message,
-            &prepared_runtime_tools.skill_command_specs,
+            &prepared_runtime_tools.capability_snapshot.skill_command_specs,
         ) {
             let rewritten_parts = vec![serde_json::json!({
                 "type": "text",
@@ -528,12 +517,9 @@ impl SessionRuntime {
             }
         }
 
-        Ok(PreparedSendMessageContext {
-            requested_capability,
-            route_candidates,
-            per_candidate_retry_count,
-            messages,
-            prepared_runtime_tools,
+        let execution_context = ExecutionContext {
+            capability_snapshot: prepared_runtime_tools.capability_snapshot,
+            system_prompt: prepared_runtime_tools.system_prompt,
             permission_mode,
             executor_work_dir: execution_preparation_service
                 .resolve_executor_work_dir(&execution_guidance),
@@ -548,6 +534,14 @@ impl SessionRuntime {
             employee_collaboration_guidance,
             workspace_skill_entries,
             route_index,
+        };
+
+        Ok(PreparedSendMessageContext {
+            requested_capability,
+            route_candidates,
+            per_candidate_retry_count,
+            messages,
+            execution_context,
         })
     }
 

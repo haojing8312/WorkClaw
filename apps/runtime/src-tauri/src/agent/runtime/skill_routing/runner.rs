@@ -252,6 +252,8 @@ pub(crate) async fn execute_implicit_route_plan(
     cancel_flag: Arc<AtomicBool>,
     tool_confirm_responder: crate::agent::runtime::events::ToolConfirmResponder,
 ) -> Result<RouteRunOutcome, String> {
+    let execution_context = &prepared_context.execution_context;
+
     match route_plan {
         RouteRunPlan::OpenTask { .. } => Ok(RouteRunOutcome::OpenTask),
         RouteRunPlan::DirectDispatchSkill {
@@ -262,7 +264,7 @@ pub(crate) async fn execute_implicit_route_plan(
         } => {
             let tool_ctx = build_tool_context(
                 Some(session_id),
-                prepared_context
+                execution_context
                     .executor_work_dir
                     .as_ref()
                     .map(std::path::PathBuf::from),
@@ -275,12 +277,12 @@ pub(crate) async fn execute_implicit_route_plan(
                 session_id: Some(session_id),
                 persisted_run_id: Some(run_id),
                 allowed_tools: setup.skill_allowed_tools.as_deref(),
-                permission_mode: prepared_context.permission_mode,
+                permission_mode: execution_context.permission_mode,
                 tool_ctx: &tool_ctx,
                 tool_confirm_tx: Some(&tool_confirm_responder),
                 cancel_flag: Some(cancel_flag),
                 route_run_id: run_id,
-                route_node_timeout_secs: prepared_context.node_timeout_seconds,
+                route_node_timeout_secs: execution_context.node_timeout_seconds,
                 route_retry_count: 0,
                 iteration: 1,
                 run_budget_policy: RunBudgetPolicy::for_scope(RunBudgetScope::Skill),
@@ -307,7 +309,7 @@ pub(crate) async fn execute_implicit_route_plan(
                 app,
                 db,
                 agent_executor,
-                workspace_skill_entries: &prepared_context.workspace_skill_entries,
+                workspace_skill_entries: &execution_context.workspace_skill_entries,
                 session_id,
                 api_format: &prepared_context.route_candidates[0].1,
                 base_url: &prepared_context.route_candidates[0].2,
@@ -319,12 +321,12 @@ pub(crate) async fn execute_implicit_route_plan(
                 skill_system_prompt: &setup.skill_system_prompt,
                 skill_allowed_tools: setup.skill_allowed_tools.clone(),
                 max_iter,
-                max_call_depth: prepared_context.max_call_depth,
+                max_call_depth: execution_context.max_call_depth,
                 suppress_workspace_skills_prompt: false,
                 execution_preparation_service: &execution_preparation_service,
-                execution_guidance: &prepared_context.execution_guidance,
-                memory_bucket_employee_id: &prepared_context.memory_bucket_employee_id,
-                employee_collaboration_guidance: prepared_context
+                execution_guidance: &execution_context.execution_guidance,
+                memory_bucket_employee_id: &execution_context.memory_bucket_employee_id,
+                employee_collaboration_guidance: execution_context
                     .employee_collaboration_guidance
                     .as_deref(),
             })
@@ -341,13 +343,13 @@ pub(crate) async fn execute_implicit_route_plan(
                 system_prompt: &prepared_runtime_tools.system_prompt,
                 messages: &prepared_context.messages,
                 allowed_tools: prepared_runtime_tools.allowed_tools.as_deref(),
-                permission_mode: prepared_context.permission_mode,
+                permission_mode: execution_context.permission_mode,
                 tool_confirm_responder,
-                executor_work_dir: prepared_context.executor_work_dir.clone(),
+                executor_work_dir: execution_context.executor_work_dir.clone(),
                 max_iterations: Some(max_iter),
                 cancel_flag,
-                node_timeout_seconds: prepared_context.node_timeout_seconds,
-                route_retry_count: prepared_context.route_retry_count,
+                node_timeout_seconds: execution_context.node_timeout_seconds,
+                route_retry_count: execution_context.route_retry_count,
             })
             .await;
 
@@ -372,7 +374,7 @@ pub(crate) async fn execute_implicit_route_plan(
                 app,
                 db,
                 agent_executor,
-                workspace_skill_entries: &prepared_context.workspace_skill_entries,
+                workspace_skill_entries: &execution_context.workspace_skill_entries,
                 session_id,
                 api_format: &prepared_context.route_candidates[0].1,
                 base_url: &prepared_context.route_candidates[0].2,
@@ -384,12 +386,12 @@ pub(crate) async fn execute_implicit_route_plan(
                 skill_system_prompt: &setup.skill_system_prompt,
                 skill_allowed_tools: setup.skill_allowed_tools.clone(),
                 max_iter,
-                max_call_depth: prepared_context.max_call_depth,
+                max_call_depth: execution_context.max_call_depth,
                 suppress_workspace_skills_prompt: false,
                 execution_preparation_service: &execution_preparation_service,
-                execution_guidance: &prepared_context.execution_guidance,
-                memory_bucket_employee_id: &prepared_context.memory_bucket_employee_id,
-                employee_collaboration_guidance: prepared_context
+                execution_guidance: &execution_context.execution_guidance,
+                memory_bucket_employee_id: &execution_context.memory_bucket_employee_id,
+                employee_collaboration_guidance: execution_context
                     .employee_collaboration_guidance
                     .as_deref(),
             })
@@ -407,13 +409,13 @@ pub(crate) async fn execute_implicit_route_plan(
                 system_prompt: &prepared_runtime_tools.system_prompt,
                 messages: &fork_messages,
                 allowed_tools: prepared_runtime_tools.allowed_tools.as_deref(),
-                permission_mode: prepared_context.permission_mode,
+                permission_mode: execution_context.permission_mode,
                 tool_confirm_responder,
-                executor_work_dir: prepared_context.executor_work_dir.clone(),
+                executor_work_dir: execution_context.executor_work_dir.clone(),
                 max_iterations: Some(max_iter),
                 cancel_flag,
-                node_timeout_seconds: prepared_context.node_timeout_seconds,
-                route_retry_count: prepared_context.route_retry_count,
+                node_timeout_seconds: execution_context.node_timeout_seconds,
+                route_retry_count: execution_context.route_retry_count,
             })
             .await;
 

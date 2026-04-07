@@ -46,6 +46,7 @@ impl SessionEngine {
         })
         .await
         .map_err(SessionEngineError::Generic)?;
+        let execution_context = &prepared_context.execution_context;
 
         chat_io::append_run_started_with_pool(db, journal, session_id, run_id, user_message_id)
             .await
@@ -77,9 +78,9 @@ impl SessionEngine {
         }
 
         let planned_route = plan_implicit_route_with_observation(
-            &prepared_context.route_index,
-            &prepared_context.workspace_skill_entries,
-            &prepared_context.prepared_runtime_tools.skill_command_specs,
+            &execution_context.route_index,
+            &execution_context.workspace_skill_entries,
+            execution_context.skill_command_specs(),
             user_message,
         );
         let execution_plan = planned_route.execution_plan.clone();
@@ -115,19 +116,16 @@ impl SessionEngine {
                 requested_capability: &prepared_context.requested_capability,
                 route_candidates: &prepared_context.route_candidates,
                 per_candidate_retry_count: prepared_context.per_candidate_retry_count,
-                system_prompt: &prepared_context.prepared_runtime_tools.system_prompt,
+                system_prompt: &execution_context.system_prompt,
                 messages: &prepared_context.messages,
-                allowed_tools: prepared_context
-                    .prepared_runtime_tools
-                    .allowed_tools
-                    .as_deref(),
-                permission_mode: prepared_context.permission_mode,
+                allowed_tools: execution_context.allowed_tools(),
+                permission_mode: execution_context.permission_mode,
                 tool_confirm_responder,
-                executor_work_dir: prepared_context.executor_work_dir.clone(),
-                max_iterations: prepared_context.max_iterations,
+                executor_work_dir: execution_context.executor_work_dir.clone(),
+                max_iterations: execution_context.max_iterations,
                 cancel_flag,
-                node_timeout_seconds: prepared_context.node_timeout_seconds,
-                route_retry_count: prepared_context.route_retry_count,
+                node_timeout_seconds: execution_context.node_timeout_seconds,
+                route_retry_count: execution_context.route_retry_count,
             })
             .await,
             RouteRunOutcome::DirectDispatch(output) => {

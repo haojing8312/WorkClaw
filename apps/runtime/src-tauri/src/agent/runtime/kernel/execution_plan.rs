@@ -1,7 +1,11 @@
 use crate::agent::runtime::attempt_runner::RouteExecutionOutcome;
 use crate::agent::runtime::kernel::capability_snapshot::CapabilitySnapshot;
+use crate::agent::permissions::PermissionMode;
 use crate::agent::run_guard::RunStopReason;
+use crate::agent::runtime::runtime_io::WorkspaceSkillRuntimeEntry;
 use crate::agent::runtime::skill_routing::runner::RouteRunPlan;
+use crate::agent::runtime::skill_routing::index::SkillRouteIndex;
+use runtime_chat_app::ChatExecutionGuidance;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ExecutionLane {
@@ -36,9 +40,59 @@ impl ExecutionPlan {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub(crate) struct ExecutionContext {
-    pub capability_snapshot: Option<CapabilitySnapshot>,
+    pub capability_snapshot: CapabilitySnapshot,
+    pub system_prompt: String,
+    pub permission_mode: PermissionMode,
+    pub executor_work_dir: Option<String>,
+    pub max_iterations: Option<usize>,
+    pub max_call_depth: usize,
+    pub node_timeout_seconds: u64,
+    pub route_retry_count: usize,
+    pub execution_guidance: ChatExecutionGuidance,
+    pub memory_bucket_employee_id: String,
+    pub employee_collaboration_guidance: Option<String>,
+    pub workspace_skill_entries: Vec<WorkspaceSkillRuntimeEntry>,
+    pub route_index: SkillRouteIndex,
+}
+
+impl Default for ExecutionContext {
+    fn default() -> Self {
+        Self {
+            capability_snapshot: CapabilitySnapshot::default(),
+            system_prompt: String::new(),
+            permission_mode: PermissionMode::AcceptEdits,
+            executor_work_dir: None,
+            max_iterations: None,
+            max_call_depth: 0,
+            node_timeout_seconds: 0,
+            route_retry_count: 0,
+            execution_guidance: ChatExecutionGuidance {
+                effective_work_dir: String::new(),
+                local_timezone: String::new(),
+                local_date: String::new(),
+                local_tomorrow: String::new(),
+                local_month_range: String::new(),
+            },
+            memory_bucket_employee_id: String::new(),
+            employee_collaboration_guidance: None,
+            workspace_skill_entries: Vec::new(),
+            route_index: SkillRouteIndex::default(),
+        }
+    }
+}
+
+impl ExecutionContext {
+    pub(crate) fn allowed_tools(&self) -> Option<&[String]> {
+        self.capability_snapshot.allowed_tools.as_deref()
+    }
+
+    pub(crate) fn skill_command_specs(
+        &self,
+    ) -> &[crate::agent::runtime::runtime_io::WorkspaceSkillCommandSpec] {
+        &self.capability_snapshot.skill_command_specs
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -62,9 +116,13 @@ pub(crate) enum SessionEngineError {
 
 #[cfg(test)]
 mod tests {
-    use super::{ExecutionLane, ExecutionPlan};
+    use super::{ExecutionContext, ExecutionLane, ExecutionPlan};
+    use crate::agent::permissions::PermissionMode;
+    use crate::agent::runtime::kernel::capability_snapshot::CapabilitySnapshot;
     use crate::agent::runtime::skill_routing::intent::RouteFallbackReason;
+    use crate::agent::runtime::skill_routing::index::SkillRouteIndex;
     use crate::agent::runtime::skill_routing::runner::RouteRunPlan;
+    use runtime_chat_app::ChatExecutionGuidance;
 
     #[test]
     fn execution_plan_supports_all_desktop_runtime_lanes() {
@@ -90,5 +148,46 @@ mod tests {
         assert!(matches!(execution_plan.route_plan, RouteRunPlan::OpenTask {
             fallback_reason: Some(RouteFallbackReason::NoCandidates)
         }));
+    }
+
+    #[test]
+    fn execution_context_exposes_runtime_snapshot_contract() {
+        let execution_context = ExecutionContext {
+            capability_snapshot: CapabilitySnapshot {
+                allowed_tools: Some(vec!["read".to_string(), "exec".to_string()]),
+                resolved_tool_names: vec!["read".to_string(), "exec".to_string()],
+                skill_command_specs: Vec::new(),
+                runtime_notes: vec!["offline only".to_string()],
+            },
+            system_prompt: "Prompt".to_string(),
+            permission_mode: PermissionMode::AcceptEdits,
+            executor_work_dir: Some("E:/workspace/demo".to_string()),
+            max_iterations: Some(12),
+            max_call_depth: 4,
+            node_timeout_seconds: 90,
+            route_retry_count: 2,
+            execution_guidance: ChatExecutionGuidance {
+                effective_work_dir: "E:/workspace/demo".to_string(),
+                local_timezone: "Asia/Shanghai".to_string(),
+                local_date: "2026-04-07".to_string(),
+                local_tomorrow: "2026-04-08".to_string(),
+                local_month_range: "2026-04-01 ~ 2026-04-30".to_string(),
+            },
+            memory_bucket_employee_id: "employee-1".to_string(),
+            employee_collaboration_guidance: Some("Work with employee-1".to_string()),
+            workspace_skill_entries: Vec::new(),
+            route_index: SkillRouteIndex::default(),
+        };
+
+        assert_eq!(
+            execution_context.allowed_tools(),
+            Some(&["read".to_string(), "exec".to_string()][..])
+        );
+        assert!(execution_context.skill_command_specs().is_empty());
+        assert_eq!(execution_context.system_prompt, "Prompt");
+        assert_eq!(
+            execution_context.employee_collaboration_guidance.as_deref(),
+            Some("Work with employee-1")
+        );
     }
 }
