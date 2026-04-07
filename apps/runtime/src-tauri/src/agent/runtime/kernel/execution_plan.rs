@@ -104,6 +104,12 @@ pub(crate) struct TurnContext {
     pub messages: Vec<Value>,
 }
 
+impl TurnContext {
+    pub(crate) fn primary_route_candidate(&self) -> Option<&(String, String, String, String, String)> {
+        self.route_candidates.first()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) enum ExecutionOutcome {
     DirectDispatch(String),
@@ -222,5 +228,10 @@ mod tests {
         assert_eq!(turn_context.route_candidates.len(), 1);
         assert_eq!(turn_context.per_candidate_retry_count, 2);
         assert_eq!(turn_context.messages.len(), 1);
+        let primary = turn_context
+            .primary_route_candidate()
+            .expect("primary route candidate");
+        assert_eq!(primary.0, "provider-1");
+        assert_eq!(primary.3, "gpt-4.1");
     }
 }

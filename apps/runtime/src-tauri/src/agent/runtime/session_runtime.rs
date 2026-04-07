@@ -45,12 +45,6 @@ enum SessionTurnCompletion {
 }
 
 #[derive(Clone)]
-pub(crate) struct PreparedSendMessageContext {
-    pub turn_context: TurnContext,
-    pub execution_context: ExecutionContext,
-}
-
-#[derive(Clone)]
 pub(crate) struct PrepareSendMessageParams<'a> {
     pub app: &'a AppHandle,
     pub db: &'a sqlx::SqlitePool,
@@ -329,7 +323,7 @@ impl SessionRuntime {
 
     pub(crate) async fn prepare_send_message_context(
         params: PrepareSendMessageParams<'_>,
-    ) -> Result<PreparedSendMessageContext, String> {
+    ) -> Result<(TurnContext, ExecutionContext), String> {
         let (skill_id, model_id, perm_str, work_dir, session_employee_id) =
             chat_io::load_session_runtime_inputs_with_pool(params.db, params.session_id).await?;
 
@@ -527,15 +521,15 @@ impl SessionRuntime {
             route_index,
         };
 
-        Ok(PreparedSendMessageContext {
-            turn_context: TurnContext {
+        Ok((
+            TurnContext {
                 requested_capability,
                 route_candidates,
                 per_candidate_retry_count,
                 messages,
             },
             execution_context,
-        })
+        ))
     }
 
 }

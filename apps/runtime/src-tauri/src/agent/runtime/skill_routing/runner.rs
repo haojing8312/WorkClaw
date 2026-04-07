@@ -257,6 +257,10 @@ pub(crate) async fn execute_implicit_route_plan(
     cancel_flag: Arc<AtomicBool>,
     tool_confirm_responder: crate::agent::runtime::events::ToolConfirmResponder,
 ) -> Result<RouteRunOutcome, String> {
+    let primary_route_candidate = turn_context
+        .primary_route_candidate()
+        .ok_or_else(|| "route planning produced no model candidates".to_string())?;
+
     match route_plan {
         RouteRunPlan::OpenTask { .. } => Ok(RouteRunOutcome::OpenTask),
         RouteRunPlan::DirectDispatchSkill {
@@ -314,10 +318,10 @@ pub(crate) async fn execute_implicit_route_plan(
                 agent_executor,
                 workspace_skill_entries: &execution_context.workspace_skill_entries,
                 session_id,
-                api_format: &turn_context.route_candidates[0].1,
-                base_url: &turn_context.route_candidates[0].2,
-                model_name: &turn_context.route_candidates[0].3,
-                api_key: &turn_context.route_candidates[0].4,
+                api_format: &primary_route_candidate.1,
+                base_url: &primary_route_candidate.2,
+                model_name: &primary_route_candidate.3,
+                api_key: &primary_route_candidate.4,
                 skill_id: &skill_id,
                 source_type: &setup.source_type,
                 pack_path: &setup.pack_path,
@@ -379,10 +383,10 @@ pub(crate) async fn execute_implicit_route_plan(
                 agent_executor,
                 workspace_skill_entries: &execution_context.workspace_skill_entries,
                 session_id,
-                api_format: &turn_context.route_candidates[0].1,
-                base_url: &turn_context.route_candidates[0].2,
-                model_name: &turn_context.route_candidates[0].3,
-                api_key: &turn_context.route_candidates[0].4,
+                api_format: &primary_route_candidate.1,
+                base_url: &primary_route_candidate.2,
+                model_name: &primary_route_candidate.3,
+                api_key: &primary_route_candidate.4,
                 skill_id: &skill_id,
                 source_type: &setup.source_type,
                 pack_path: &setup.pack_path,

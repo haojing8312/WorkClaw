@@ -46,8 +46,7 @@ impl SessionEngine {
         })
         .await
         .map_err(SessionEngineError::Generic)?;
-        let execution_context = &prepared_context.execution_context;
-        let turn_context = &prepared_context.turn_context;
+        let (turn_context, execution_context) = &prepared_context;
 
         chat_io::append_run_started_with_pool(db, journal, session_id, run_id, user_message_id)
             .await
