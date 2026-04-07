@@ -1,10 +1,11 @@
 use crate::windows_process::hide_console_window;
+use crate::runtime_environment::runtime_paths_from_app;
 use sqlx::SqlitePool;
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 use super::{
     build_feishu_openclaw_config_with_pool,
@@ -398,9 +399,9 @@ pub(crate) fn resolve_openclaw_plugin_workspace_root(
     app: &AppHandle,
     plugin_id: &str,
 ) -> Result<PathBuf, String> {
-    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let runtime_paths = runtime_paths_from_app(app)?;
     let normalized = normalize_required(plugin_id, "plugin_id")?;
-    Ok(app_data_dir.join("openclaw-plugins").join(normalized))
+    Ok(runtime_paths.plugins.root.join(normalized))
 }
 
 pub(crate) fn resolve_plugin_host_dir() -> PathBuf {
@@ -451,18 +452,13 @@ pub(crate) fn resolve_plugin_host_run_feishu_script() -> PathBuf {
         .join("run-feishu-host.mjs")
 }
 
-pub(crate) fn build_plugin_host_fixture_root_from_app_data_dir(app_data_dir: &Path) -> PathBuf {
-    app_data_dir.join("plugin-host-fixtures")
+pub(crate) fn build_plugin_host_fixture_root_from_runtime_root(runtime_root: &Path) -> PathBuf {
+    runtime_root.join("plugin-host-fixtures")
 }
 
 pub(crate) fn resolve_plugin_host_fixture_root(app: &AppHandle) -> Result<PathBuf, String> {
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("failed to resolve app_data_dir: {e}"))?;
-    Ok(build_plugin_host_fixture_root_from_app_data_dir(
-        &app_data_dir,
-    ))
+    let runtime_paths = runtime_paths_from_app(app)?;
+    Ok(runtime_paths.plugins.fixture_dir)
 }
 
 pub(crate) fn derive_channel_capabilities(

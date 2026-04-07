@@ -4,10 +4,11 @@ use std::collections::HashSet;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, State};
 use tokio::sync::Mutex;
 
 use crate::commands::skills::{DbState, ImportResult};
+use crate::runtime_environment::runtime_paths_from_app;
 
 mod detail_service;
 mod download_service;
@@ -65,8 +66,8 @@ where
 }
 
 fn default_market_skill_base_dir(app: &AppHandle) -> PathBuf {
-    if let Ok(dir) = app.path().app_data_dir() {
-        return dir.join("market-skills");
+    if let Ok(runtime_paths) = runtime_paths_from_app(app) {
+        return runtime_paths.market_skills_dir;
     }
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))

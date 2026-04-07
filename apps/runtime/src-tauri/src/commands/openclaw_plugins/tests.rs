@@ -6,7 +6,7 @@
     };
     use super::plugin_host_service::{
         apply_command_search_path, build_effective_path_entries,
-        build_plugin_host_fixture_root_from_app_data_dir,
+        build_plugin_host_fixture_root_from_runtime_root,
         collect_windows_node_command_candidates, derive_channel_capabilities,
         derive_feishu_plugin_environment_status, parse_windows_registry_path_output,
         resolve_windows_node_command_path,
@@ -1478,12 +1478,12 @@
     }
 
     #[test]
-    fn build_plugin_host_fixture_root_uses_app_data_dir() {
-        let app_data_dir = Path::new(r"C:\Users\Alice\AppData\Roaming\dev.workclaw.runtime");
-        let fixture_root = build_plugin_host_fixture_root_from_app_data_dir(app_data_dir);
+    fn build_plugin_host_fixture_root_uses_runtime_root() {
+        let runtime_root = Path::new(r"C:\Users\Alice\AppData\Roaming\.workclaw");
+        let fixture_root = build_plugin_host_fixture_root_from_runtime_root(runtime_root);
         assert_eq!(
             fixture_root,
-            PathBuf::from(r"C:\Users\Alice\AppData\Roaming\dev.workclaw.runtime\plugin-host-fixtures")
+            PathBuf::from(r"C:\Users\Alice\AppData\Roaming\.workclaw\plugin-host-fixtures")
         );
     }
 

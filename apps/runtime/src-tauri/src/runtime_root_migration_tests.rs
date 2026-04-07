@@ -8,6 +8,8 @@ use crate::runtime_bootstrap::{
 use crate::runtime_paths::RuntimePaths;
 use std::fs;
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "windows")]
+use std::process::Command;
 
 fn make_bootstrap_path() -> (tempfile::TempDir, PathBuf) {
     set_bootstrap_write_failure_after_calls_for_tests(None);
@@ -49,6 +51,50 @@ fn seed_runtime_tree(root: &Path) {
     )
     .expect("write session journal");
 
+    fs::create_dir_all(&paths.transcripts_dir).expect("create transcripts");
+    fs::write(
+        paths.transcripts_dir.join("session-1.ndjson"),
+        "{\"event\":\"token\"}",
+    )
+    .expect("write transcript");
+
+    fs::create_dir_all(&paths.memory_dir).expect("create memory");
+    fs::create_dir_all(
+        paths
+            .memory_dir
+            .join("employees")
+            .join("pm")
+            .join("skills")
+            .join("skill-alpha"),
+    )
+    .expect("create employee memory");
+    fs::write(
+        paths
+            .memory_dir
+            .join("employees")
+            .join("pm")
+            .join("skills")
+            .join("skill-alpha")
+            .join("MEMORY.md"),
+        "memory",
+    )
+    .expect("write employee memory");
+
+    fs::create_dir_all(&paths.employees_dir).expect("create employees");
+    fs::create_dir_all(paths.employees_dir.join("pm")).expect("create employee profile");
+    fs::write(paths.employees_dir.join("pm").join("profile.md"), "profile")
+        .expect("write employee profile");
+
+    fs::create_dir_all(&paths.skills_dir).expect("create skills");
+    fs::create_dir_all(paths.skills_dir.join("local-skill")).expect("create local skill dir");
+    fs::write(paths.skills_dir.join("local-skill").join("SKILL.md"), "skill")
+        .expect("write local skill");
+
+    fs::create_dir_all(&paths.market_skills_dir).expect("create market skills");
+    fs::create_dir_all(paths.market_skills_dir.join("bundle-a")).expect("create market bundle");
+    fs::write(paths.market_skills_dir.join("bundle-a").join("SKILL.md"), "market")
+        .expect("write market skill");
+
     fs::create_dir_all(&paths.plugins.root).expect("create plugins root");
     fs::create_dir_all(paths.plugins.root.join("plugin-a")).expect("create plugin dir");
     fs::write(
@@ -60,6 +106,12 @@ fn seed_runtime_tree(root: &Path) {
     fs::write(paths.plugins.state_dir.join("registry.json"), "state").expect("write plugin state");
     fs::create_dir_all(&paths.plugins.cli_shim_dir).expect("create plugin cli shim");
     fs::write(paths.plugins.cli_shim_dir.join("shim.json"), "shim").expect("write cli shim");
+    fs::create_dir_all(&paths.plugins.fixture_dir).expect("create plugin fixtures");
+    fs::write(
+        paths.plugins.fixture_dir.join("openclaw-lark.json"),
+        "fixture",
+    )
+    .expect("write plugin fixture");
     fs::create_dir_all(&paths.plugins.skills_vendor_dir).expect("create skills vendor");
     fs::create_dir_all(paths.plugins.skills_vendor_dir.join("skill-a"))
         .expect("create vendored skill dir");
@@ -99,6 +151,18 @@ fn assert_runtime_tree_exists(root: &Path) {
         .join("session-1")
         .join("journal.json")
         .exists());
+    assert!(paths.transcripts_dir.join("session-1.ndjson").exists());
+    assert!(paths
+        .memory_dir
+        .join("employees")
+        .join("pm")
+        .join("skills")
+        .join("skill-alpha")
+        .join("MEMORY.md")
+        .exists());
+    assert!(paths.employees_dir.join("pm").join("profile.md").exists());
+    assert!(paths.skills_dir.join("local-skill").join("SKILL.md").exists());
+    assert!(paths.market_skills_dir.join("bundle-a").join("SKILL.md").exists());
     assert!(paths
         .plugins
         .root
@@ -109,11 +173,37 @@ fn assert_runtime_tree_exists(root: &Path) {
     assert!(paths.plugins.cli_shim_dir.join("shim.json").exists());
     assert!(paths
         .plugins
+        .fixture_dir
+        .join("openclaw-lark.json")
+        .exists());
+    assert!(paths
+        .plugins
         .skills_vendor_dir
         .join("skill-a")
         .join("SKILL.md")
         .exists());
     assert!(paths.workspace_dir.join("notes.txt").exists());
+}
+
+#[cfg(target_os = "windows")]
+fn create_junction(link: &Path, target: &Path) {
+    fs::create_dir_all(link.parent().expect("junction parent")).expect("create junction parent");
+    let output = Command::new("cmd")
+        .args([
+            "/C",
+            "mklink",
+            "/J",
+            &link.to_string_lossy(),
+            &target.to_string_lossy(),
+        ])
+        .output()
+        .expect("run mklink");
+    assert!(
+        output.status.success(),
+        "mklink failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
@@ -279,8 +369,80 @@ fn execute_migration_moves_managed_runtime_paths_and_records_completion_metadata
         .join("journal.json")
         .exists());
     assert!(!RuntimePaths::new(current_root.clone())
+        .transcripts_dir
+        .join("session-1.ndjson")
+        .exists());
+    assert!(!RuntimePaths::new(current_root.clone())
+        .employees_dir
+        .join("pm")
+        .join("profile.md")
+        .exists());
+    assert!(!RuntimePaths::new(current_root.clone())
+        .plugins
+        .fixture_dir
+        .join("openclaw-lark.json")
+        .exists());
+    assert!(!RuntimePaths::new(current_root.clone())
         .workspace_dir
         .join("notes.txt")
+        .exists());
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn execute_migration_skips_plugin_fixture_reparse_points() {
+    let (temp_dir, bootstrap_path) = make_bootstrap_path();
+    let current_root = temp_dir.path().join("old-root");
+    let target_root = temp_dir.path().join("new-root");
+    fs::create_dir_all(&current_root).expect("create old root");
+    fs::create_dir_all(target_root.parent().expect("target parent")).expect("create target parent");
+    seed_runtime_tree(&current_root);
+
+    let source_paths = RuntimePaths::new(current_root.clone());
+    let shared_node_modules = source_paths
+        .plugins
+        .root
+        .join("plugin-a")
+        .join("workspace")
+        .join("node_modules");
+    fs::create_dir_all(shared_node_modules.join("@scope").join("pkg")).expect("create node modules");
+    fs::write(
+        shared_node_modules
+            .join("@scope")
+            .join("pkg")
+            .join("index.js"),
+        "module.exports = true;",
+    )
+    .expect("write shared node module");
+    let fixture_link = source_paths
+        .plugins
+        .fixture_dir
+        .join("debug-openclaw-lark-runtime")
+        .join("node_modules");
+    create_junction(&fixture_link, &shared_node_modules);
+
+    let bootstrap = default_runtime_root_bootstrap(&current_root);
+    write_runtime_root_bootstrap(&bootstrap_path, &bootstrap).expect("seed bootstrap");
+    schedule_runtime_root_migration(&bootstrap_path, &target_root).expect("schedule migration");
+
+    execute_runtime_root_migration(&bootstrap_path).expect("execute migration");
+
+    let target_paths = RuntimePaths::new(target_root.clone());
+    assert!(target_paths
+        .plugins
+        .root
+        .join("plugin-a")
+        .join("workspace")
+        .join("node_modules")
+        .join("@scope")
+        .join("pkg")
+        .join("index.js")
+        .exists());
+    assert!(!target_paths
+        .plugins
+        .fixture_dir
+        .join("debug-openclaw-lark-runtime")
+        .join("node_modules")
         .exists());
 }
 
@@ -331,6 +493,11 @@ fn execute_migration_restores_bootstrap_after_partial_copy_failure() {
         .sessions_dir
         .join("session-1")
         .join("journal.json")
+        .exists());
+    assert!(!RuntimePaths::new(target_root.clone())
+        .employees_dir
+        .join("pm")
+        .join("profile.md")
         .exists());
     assert!(!RuntimePaths::new(target_root.clone())
         .workspace_dir

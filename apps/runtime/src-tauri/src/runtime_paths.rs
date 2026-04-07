@@ -26,6 +26,7 @@ pub struct RuntimePluginPaths {
     pub root: PathBuf,
     pub cli_shim_dir: PathBuf,
     pub state_dir: PathBuf,
+    pub fixture_dir: PathBuf,
     pub skills_vendor_dir: PathBuf,
 }
 
@@ -36,6 +37,11 @@ pub struct RuntimePaths {
     pub diagnostics: RuntimeDiagnosticsPaths,
     pub cache_dir: PathBuf,
     pub sessions_dir: PathBuf,
+    pub transcripts_dir: PathBuf,
+    pub memory_dir: PathBuf,
+    pub employees_dir: PathBuf,
+    pub skills_dir: PathBuf,
+    pub market_skills_dir: PathBuf,
     pub plugins: RuntimePluginPaths,
     pub workspace_dir: PathBuf,
 }
@@ -84,11 +90,17 @@ impl RuntimePaths {
         };
         let cache_dir = root.join("cache");
         let sessions_dir = root.join("sessions");
+        let transcripts_dir = root.join("transcripts");
+        let memory_dir = root.join("memory");
+        let employees_dir = root.join("employees");
+        let skills_dir = root.join("skills");
+        let market_skills_dir = root.join("market-skills");
         let plugins = RuntimePluginPaths {
             root: root.join("openclaw-plugins"),
             cli_shim_dir: root.join("openclaw-cli-shim"),
             state_dir: root.join("openclaw-state"),
-            skills_vendor_dir: root.join("skills").join("vendor"),
+            fixture_dir: root.join("plugin-host-fixtures"),
+            skills_vendor_dir: skills_dir.join("vendor"),
         };
         let workspace_dir = root.join("workspace");
 
@@ -98,6 +110,11 @@ impl RuntimePaths {
             diagnostics,
             cache_dir,
             sessions_dir,
+            transcripts_dir,
+            memory_dir,
+            employees_dir,
+            skills_dir,
+            market_skills_dir,
             plugins,
             workspace_dir,
         }
@@ -161,7 +178,13 @@ mod tests {
         assert!(paths.diagnostics.root.starts_with(&paths.root));
         assert!(paths.cache_dir.starts_with(&paths.root));
         assert!(paths.sessions_dir.starts_with(&paths.root));
+        assert!(paths.transcripts_dir.starts_with(&paths.root));
+        assert!(paths.memory_dir.starts_with(&paths.root));
+        assert!(paths.employees_dir.starts_with(&paths.root));
+        assert!(paths.skills_dir.starts_with(&paths.root));
+        assert!(paths.market_skills_dir.starts_with(&paths.root));
         assert!(paths.plugins.root.starts_with(&paths.root));
+        assert!(paths.plugins.fixture_dir.starts_with(&paths.root));
         assert!(paths.workspace_dir.starts_with(&paths.root));
     }
 

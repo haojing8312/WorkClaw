@@ -1,11 +1,12 @@
 use super::helpers::{
-    build_local_skill_id, default_skill_base_dir, merge_tags, normalize_display_name,
-    read_skill_markdown_with_fallback, render_local_skill_markdown, sanitize_slug,
+    build_local_skill_id, merge_tags, normalize_display_name, read_skill_markdown_with_fallback,
+    render_local_skill_markdown, sanitize_slug,
 };
 use super::types::{
     ImportResult, LocalImportBatchResult, LocalImportFailedItem, LocalImportInstalledItem,
     LocalSkillPreview,
 };
+use crate::runtime_environment::runtime_paths_from_app;
 use chrono::Utc;
 use skillpack_rs::{verify_and_unpack, SkillManifest};
 use sqlx::SqlitePool;
@@ -48,6 +49,7 @@ pub async fn render_local_skill_preview(
     description: String,
     when_to_use: String,
     target_dir: Option<String>,
+    app: &tauri::AppHandle,
 ) -> Result<LocalSkillPreview, String> {
     let preview_name = if name.trim().is_empty() {
         "expert-skill".to_string()
@@ -66,7 +68,7 @@ pub async fn render_local_skill_preview(
         .filter(|s| !s.is_empty())
     {
         Some(dir) => std::path::PathBuf::from(dir),
-        None => default_skill_base_dir(),
+        None => runtime_paths_from_app(app)?.skills_dir,
     };
     let save_path = base_dir.join(sanitize_slug(&preview_name));
 
@@ -81,6 +83,7 @@ pub async fn create_local_skill(
     description: String,
     when_to_use: String,
     target_dir: Option<String>,
+    app: &tauri::AppHandle,
 ) -> Result<String, String> {
     let clean_name = name.trim();
     let clean_when = when_to_use.trim();
@@ -98,7 +101,7 @@ pub async fn create_local_skill(
         .filter(|s| !s.is_empty())
     {
         Some(dir) => std::path::PathBuf::from(dir),
-        None => default_skill_base_dir(),
+        None => runtime_paths_from_app(app)?.skills_dir,
     };
 
     let skill_dir = base_dir.join(&slug);

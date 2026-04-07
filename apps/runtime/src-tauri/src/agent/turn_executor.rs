@@ -19,6 +19,7 @@ use super::types::{AgentStateEvent, LLMResponse, StreamDelta};
 use crate::adapters;
 use crate::agent::runtime::RuntimeObservabilityState;
 use crate::model_transport::{resolve_model_transport, ModelTransportKind, ResolvedModelTransport};
+use crate::runtime_environment::runtime_paths_from_app;
 use anyhow::{anyhow, Result};
 use runtime_executor_core::{
     estimate_tokens, micro_compact, trim_messages, ToolFailureStreak, DEFAULT_TOKEN_BUDGET,
@@ -127,11 +128,14 @@ impl AgentExecutor {
                 if super::compactor::needs_auto_compact(tokens) {
                     eprintln!("[agent] Token 数 {} 超过阈值，触发自动压缩", tokens);
                     if let (Some(app), Some(sid)) = (app_handle, session_id) {
-                        let transcript_dir = app
-                            .path()
-                            .app_data_dir()
-                            .unwrap_or_default()
-                            .join("transcripts");
+                        let transcript_dir = runtime_paths_from_app(app)
+                            .map(|paths| paths.transcripts_dir)
+                            .unwrap_or_else(|_| {
+                                crate::runtime_paths::RuntimePaths::new(
+                                    crate::runtime_paths::resolve_runtime_root(),
+                                )
+                                .transcripts_dir
+                            });
                         let runtime_observability = app
                             .try_state::<RuntimeObservabilityState>()
                             .map(|state| state.0.clone());

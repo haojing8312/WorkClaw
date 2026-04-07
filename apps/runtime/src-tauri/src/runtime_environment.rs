@@ -26,10 +26,15 @@ fn runtime_root_contains_managed_artifacts(candidate_root: &Path) -> bool {
         candidate_paths.diagnostics.root,
         candidate_paths.cache_dir,
         candidate_paths.sessions_dir,
+        candidate_paths.transcripts_dir,
+        candidate_paths.memory_dir,
+        candidate_paths.employees_dir,
+        candidate_paths.skills_dir,
+        candidate_paths.market_skills_dir,
         candidate_paths.plugins.root,
         candidate_paths.plugins.cli_shim_dir,
         candidate_paths.plugins.state_dir,
-        candidate_paths.plugins.skills_vendor_dir,
+        candidate_paths.plugins.fixture_dir,
         candidate_paths.workspace_dir,
     ]
     .into_iter()
@@ -348,6 +353,42 @@ mod tests {
             "{}",
         )
         .expect("write legacy session journal");
+        fs::create_dir_all(&legacy_paths.transcripts_dir).expect("create legacy transcripts");
+        fs::write(legacy_paths.transcripts_dir.join("session-1.ndjson"), "{}")
+            .expect("write legacy transcript");
+        fs::create_dir_all(
+            legacy_paths
+                .memory_dir
+                .join("employees")
+                .join("pm")
+                .join("skills")
+                .join("skill-alpha"),
+        )
+        .expect("create legacy memory");
+        fs::write(
+            legacy_paths
+                .memory_dir
+                .join("employees")
+                .join("pm")
+                .join("skills")
+                .join("skill-alpha")
+                .join("MEMORY.md"),
+            "memory",
+        )
+        .expect("write legacy memory");
+        fs::create_dir_all(legacy_paths.employees_dir.join("pm")).expect("create legacy employee");
+        fs::write(legacy_paths.employees_dir.join("pm").join("profile.md"), "pm")
+            .expect("write legacy employee profile");
+        fs::create_dir_all(legacy_paths.skills_dir.join("local-pm")).expect("create legacy skill");
+        fs::write(legacy_paths.skills_dir.join("local-pm").join("SKILL.md"), "# pm")
+            .expect("write legacy local skill");
+        fs::create_dir_all(legacy_paths.market_skills_dir.join("bundle-a"))
+            .expect("create legacy market skill");
+        fs::write(
+            legacy_paths.market_skills_dir.join("bundle-a").join("SKILL.md"),
+            "# market",
+        )
+        .expect("write legacy market skill");
         fs::create_dir_all(legacy_paths.plugins.root.join("plugin-a"))
             .expect("create legacy plugin dir");
         fs::write(
@@ -358,6 +399,13 @@ mod tests {
         fs::create_dir_all(&legacy_paths.plugins.state_dir).expect("create legacy plugin state");
         fs::write(legacy_paths.plugins.state_dir.join("registry.json"), "{}")
             .expect("write legacy plugin state");
+        fs::create_dir_all(&legacy_paths.plugins.fixture_dir)
+            .expect("create legacy plugin fixtures");
+        fs::write(
+            legacy_paths.plugins.fixture_dir.join("openclaw-lark.json"),
+            "{}",
+        )
+        .expect("write legacy plugin fixture");
 
         let initial_environment = initialize_runtime_environment_with_inputs(
             Some(legacy_root.clone()),
@@ -387,6 +435,22 @@ mod tests {
             .join("session-1")
             .join("journal.json")
             .exists());
+        assert!(target_paths.transcripts_dir.join("session-1.ndjson").exists());
+        assert!(target_paths
+            .memory_dir
+            .join("employees")
+            .join("pm")
+            .join("skills")
+            .join("skill-alpha")
+            .join("MEMORY.md")
+            .exists());
+        assert!(target_paths.employees_dir.join("pm").join("profile.md").exists());
+        assert!(target_paths.skills_dir.join("local-pm").join("SKILL.md").exists());
+        assert!(target_paths
+            .market_skills_dir
+            .join("bundle-a")
+            .join("SKILL.md")
+            .exists());
         assert!(target_paths
             .plugins
             .root
@@ -394,5 +458,10 @@ mod tests {
             .join("manifest.json")
             .exists());
         assert!(target_paths.plugins.state_dir.join("registry.json").exists());
+        assert!(target_paths
+            .plugins
+            .fixture_dir
+            .join("openclaw-lark.json")
+            .exists());
     }
 }

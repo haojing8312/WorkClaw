@@ -6,7 +6,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 #[derive(Debug, Clone)]
 pub struct DiagnosticsPaths {
@@ -31,11 +31,12 @@ impl DiagnosticsPaths {
     }
 
     pub fn from_app(app: &AppHandle) -> Self {
-        let base = app
-            .path()
-            .app_data_dir()
-            .unwrap_or_else(|_| std::env::temp_dir().join("WorkClaw"));
-        Self::new(base.join("diagnostics"))
+        if let Ok(runtime_paths) = crate::runtime_environment::runtime_paths_from_app(app) {
+            return Self::from_runtime_paths(&runtime_paths);
+        }
+
+        let fallback = crate::runtime_paths::RuntimePaths::new(crate::runtime_paths::resolve_runtime_root());
+        Self::from_runtime_paths(&fallback)
     }
 
     pub fn from_runtime_paths(runtime_paths: &crate::runtime_paths::RuntimePaths) -> Self {

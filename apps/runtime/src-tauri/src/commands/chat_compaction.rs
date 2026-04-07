@@ -12,11 +12,10 @@ pub struct CompactionResult {
 pub async fn compact_context_with_pool(
     pool: &sqlx::SqlitePool,
     session_id: &str,
-    app_data_dir: &Path,
+    transcript_root: &Path,
 ) -> Result<CompactionResult, String> {
     let (messages, api_format, base_url, api_key, model_name) =
         chat_session_io::load_compaction_inputs_with_pool(pool, session_id).await?;
-    let transcript_dir = app_data_dir.join("transcripts");
     let outcome = run_compaction(RuntimeCompactionRequest {
         api_format: &api_format,
         base_url: &base_url,
@@ -24,7 +23,7 @@ pub async fn compact_context_with_pool(
         model: &model_name,
         session_id,
         messages: &messages,
-        transcript_root: &transcript_dir,
+        transcript_root,
         observability: None,
     })
     .await

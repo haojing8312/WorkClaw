@@ -36,9 +36,16 @@ pub async fn render_local_skill_preview(
     description: String,
     when_to_use: String,
     target_dir: Option<String>,
+    app: tauri::AppHandle,
 ) -> Result<LocalSkillPreview, String> {
-    local_skill_service::render_local_skill_preview(name, description, when_to_use, target_dir)
-        .await
+    local_skill_service::render_local_skill_preview(
+        name,
+        description,
+        when_to_use,
+        target_dir,
+        &app,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -47,8 +54,10 @@ pub async fn create_local_skill(
     description: String,
     when_to_use: String,
     target_dir: Option<String>,
+    app: tauri::AppHandle,
 ) -> Result<String, String> {
-    local_skill_service::create_local_skill(name, description, when_to_use, target_dir).await
+    local_skill_service::create_local_skill(name, description, when_to_use, target_dir, &app)
+        .await
 }
 
 #[tauri::command]

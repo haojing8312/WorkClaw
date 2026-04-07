@@ -11,6 +11,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(target_os = "windows")]
+const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+
 #[derive(Debug)]
 pub enum RuntimeRootMigrationError {
     EmptyTargetRoot,
@@ -154,29 +157,114 @@ fn build_runtime_paths(root: &str) -> runtime_paths::RuntimePaths {
     runtime_paths::RuntimePaths::new(PathBuf::from(root))
 }
 
-fn managed_runtime_paths(source_root: &str, target_root: &str) -> Vec<(PathBuf, PathBuf, bool)> {
+#[derive(Clone, Debug)]
+struct ManagedRuntimePath {
+    source: PathBuf,
+    target: PathBuf,
+    is_directory: bool,
+    skip_reparse_points: bool,
+}
+
+fn managed_runtime_paths(source_root: &str, target_root: &str) -> Vec<ManagedRuntimePath> {
     let source = build_runtime_paths(source_root);
     let target = build_runtime_paths(target_root);
     vec![
-        (source.database.db_path, target.database.db_path, false),
-        (source.database.wal_path, target.database.wal_path, false),
-        (source.database.shm_path, target.database.shm_path, false),
-        (source.diagnostics.root, target.diagnostics.root, true),
-        (source.cache_dir, target.cache_dir, true),
-        (source.sessions_dir, target.sessions_dir, true),
-        (source.plugins.root, target.plugins.root, true),
-        (
-            source.plugins.cli_shim_dir,
-            target.plugins.cli_shim_dir,
-            true,
-        ),
-        (source.plugins.state_dir, target.plugins.state_dir, true),
-        (
-            source.plugins.skills_vendor_dir,
-            target.plugins.skills_vendor_dir,
-            true,
-        ),
-        (source.workspace_dir, target.workspace_dir, true),
+        ManagedRuntimePath {
+            source: source.database.db_path,
+            target: target.database.db_path,
+            is_directory: false,
+            skip_reparse_points: false,
+        },
+        ManagedRuntimePath {
+            source: source.database.wal_path,
+            target: target.database.wal_path,
+            is_directory: false,
+            skip_reparse_points: false,
+        },
+        ManagedRuntimePath {
+            source: source.database.shm_path,
+            target: target.database.shm_path,
+            is_directory: false,
+            skip_reparse_points: false,
+        },
+        ManagedRuntimePath {
+            source: source.diagnostics.root,
+            target: target.diagnostics.root,
+            is_directory: true,
+            skip_reparse_points: false,
+        },
+        ManagedRuntimePath {
+            source: source.cache_dir,
+            target: target.cache_dir,
+            is_directory: true,
+            skip_reparse_points: false,
+        },
+        ManagedRuntimePath {
+            source: source.sessions_dir,
+            target: target.sessions_dir,
+            is_directory: true,
+            skip_reparse_points: false,
+        },
+        ManagedRuntimePath {
+            source: source.transcripts_dir,
+            target: target.transcripts_dir,
+            is_directory: true,
+            skip_reparse_points: false,
+        },
+        ManagedRuntimePath {
+            source: source.memory_dir,
+            target: target.memory_dir,
+            is_directory: true,
+            skip_reparse_points: false,
+        },
+        ManagedRuntimePath {
+            source: source.employees_dir,
+            target: target.employees_dir,
+            is_directory: true,
+            skip_reparse_points: false,
+        },
+        ManagedRuntimePath {
+            source: source.skills_dir,
+            target: target.skills_dir,
+            is_directory: true,
+            skip_reparse_points: false,
+        },
+        ManagedRuntimePath {
+            source: source.market_skills_dir,
+            target: target.market_skills_dir,
+            is_directory: true,
+            skip_reparse_points: false,
+        },
+        ManagedRuntimePath {
+            source: source.plugins.root,
+            target: target.plugins.root,
+            is_directory: true,
+            skip_reparse_points: false,
+        },
+        ManagedRuntimePath {
+            source: source.plugins.cli_shim_dir,
+            target: target.plugins.cli_shim_dir,
+            is_directory: true,
+            skip_reparse_points: false,
+        },
+        ManagedRuntimePath {
+            source: source.plugins.state_dir,
+            target: target.plugins.state_dir,
+            is_directory: true,
+            skip_reparse_points: false,
+        },
+        ManagedRuntimePath {
+            source: source.plugins.fixture_dir,
+            target: target.plugins.fixture_dir,
+            is_directory: true,
+            skip_reparse_points: true,
+        },
+        ManagedRuntimePath {
+            source: source.workspace_dir,
+            target: target.workspace_dir,
+            is_directory: true,
+            skip_reparse_points: false,
+        },
     ]
 }
 
@@ -223,8 +311,18 @@ fn copy_managed_path(
     source: &Path,
     target: &Path,
     is_directory: bool,
+    skip_reparse_points: bool,
 ) -> Result<(), RuntimeRootMigrationError> {
     if !source.exists() {
+        return Ok(());
+    }
+
+    if skip_reparse_points && is_reparse_point(source).map_err(|reason| {
+        RuntimeRootMigrationError::MigrationExecutionFailed {
+            path: source.to_path_buf(),
+            reason,
+        }
+    })? {
         return Ok(());
     }
 
@@ -266,7 +364,12 @@ fn copy_managed_path(
                     },
                 )?
                 .is_dir();
-            copy_managed_path(&child_source, &child_target, child_is_directory)?;
+            copy_managed_path(
+                &child_source,
+                &child_target,
+                child_is_directory,
+                skip_reparse_points,
+            )?;
         }
         return Ok(());
     }
@@ -296,6 +399,19 @@ fn copy_managed_path(
     Ok(())
 }
 
+fn is_reparse_point(path: &Path) -> Result<bool, String> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| error.to_string())?;
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::fs::MetadataExt;
+        Ok((metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok(metadata.file_type().is_symlink())
+    }
+}
+
 fn remove_managed_path(path: &Path, _is_directory: bool) -> Result<(), ManagedPathCleanupError> {
     if !path.exists() {
         return Ok(());
@@ -320,12 +436,16 @@ fn remove_managed_path(path: &Path, _is_directory: bool) -> Result<(), ManagedPa
 }
 
 fn remove_managed_runtime_paths(
-    paths: &[(PathBuf, PathBuf, bool)],
+    paths: &[ManagedRuntimePath],
     target_side: bool,
 ) -> Result<(), ManagedPathCleanupError> {
-    for (source, target, is_directory) in paths.iter().rev() {
-        let path = if target_side { target } else { source };
-        remove_managed_path(path, *is_directory)?;
+    for spec in paths.iter().rev() {
+        let path = if target_side {
+            &spec.target
+        } else {
+            &spec.source
+        };
+        remove_managed_path(path, spec.is_directory)?;
     }
 
     Ok(())
@@ -444,9 +564,14 @@ pub fn execute_runtime_root_migration(
 
     let managed_paths = managed_runtime_paths(&from_root, &target_root);
     let copy_result: Result<(), RuntimeRootMigrationError> = (|| {
-        for (source, target, is_directory) in &managed_paths {
-            if source.exists() {
-                copy_managed_path(source, target, *is_directory)?;
+        for spec in &managed_paths {
+            if spec.source.exists() {
+                copy_managed_path(
+                    &spec.source,
+                    &spec.target,
+                    spec.is_directory,
+                    spec.skip_reparse_points,
+                )?;
             }
         }
         Ok(())

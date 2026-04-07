@@ -3,16 +3,16 @@ use super::{
     employee_memory_skills_root, export_employee_memory_from_root, normalize_employee_id,
     EmployeeMemoryExport, EmployeeMemoryStats, UpsertAgentEmployeeInput,
 };
-use tauri::Manager;
+use crate::runtime_environment::runtime_paths_from_app;
 
 pub async fn get_employee_memory_stats(
     employee_id: String,
     skill_id: Option<String>,
     app: tauri::AppHandle,
 ) -> Result<EmployeeMemoryStats, String> {
-    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let runtime_paths = runtime_paths_from_app(&app)?;
     let normalized_employee_id = normalize_employee_id(&employee_id)?;
-    let skills_root = employee_memory_skills_root(&app_data_dir, &normalized_employee_id);
+    let skills_root = employee_memory_skills_root(&runtime_paths.memory_dir, &normalized_employee_id);
     collect_employee_memory_stats_from_root(
         &normalized_employee_id,
         skill_id.as_deref(),
@@ -25,9 +25,9 @@ pub async fn export_employee_memory(
     skill_id: Option<String>,
     app: tauri::AppHandle,
 ) -> Result<EmployeeMemoryExport, String> {
-    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let runtime_paths = runtime_paths_from_app(&app)?;
     let normalized_employee_id = normalize_employee_id(&employee_id)?;
-    let skills_root = employee_memory_skills_root(&app_data_dir, &normalized_employee_id);
+    let skills_root = employee_memory_skills_root(&runtime_paths.memory_dir, &normalized_employee_id);
     export_employee_memory_from_root(&normalized_employee_id, skill_id.as_deref(), &skills_root)
 }
 
@@ -36,9 +36,9 @@ pub async fn clear_employee_memory(
     skill_id: Option<String>,
     app: tauri::AppHandle,
 ) -> Result<EmployeeMemoryStats, String> {
-    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let runtime_paths = runtime_paths_from_app(&app)?;
     let normalized_employee_id = normalize_employee_id(&employee_id)?;
-    let skills_root = employee_memory_skills_root(&app_data_dir, &normalized_employee_id);
+    let skills_root = employee_memory_skills_root(&runtime_paths.memory_dir, &normalized_employee_id);
     clear_employee_memory_from_root(&normalized_employee_id, skill_id.as_deref(), &skills_root)?;
     collect_employee_memory_stats_from_root(
         &normalized_employee_id,

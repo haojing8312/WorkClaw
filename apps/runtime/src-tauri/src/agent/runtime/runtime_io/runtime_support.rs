@@ -48,16 +48,16 @@ pub(crate) fn sanitize_memory_bucket_component(raw: &str, fallback: &str) -> Str
 }
 
 pub(crate) fn build_memory_dir_for_session(
-    app_data_dir: &std::path::Path,
+    memory_root: &std::path::Path,
     skill_id: &str,
     employee_id: &str,
 ) -> std::path::PathBuf {
-    let root = app_data_dir.join("memory");
     if employee_id.trim().is_empty() {
-        return root.join(skill_id);
+        return memory_root.join(skill_id);
     }
     let employee_bucket = sanitize_memory_bucket_component(employee_id, "employee");
-    root.join("employees")
+    memory_root
+        .join("employees")
         .join(employee_bucket)
         .join("skills")
         .join(skill_id)

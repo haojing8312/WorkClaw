@@ -7,6 +7,7 @@ use crate::agent::AgentExecutor;
 use crate::agent::runtime::{SessionAdmissionGateState, SessionRuntime};
 use crate::approval_bus::ApprovalManager;
 use crate::diagnostics::{self, ManagedDiagnosticsState};
+use crate::runtime_environment::runtime_paths_from_app;
 use crate::session_journal::SessionJournalStateHandle;
 use serde::Deserialize;
 use serde_json::Value;
@@ -374,19 +375,17 @@ mod tests {
 
     #[test]
     fn build_memory_dir_for_session_keeps_legacy_skill_bucket_without_employee() {
-        let base = Path::new("C:/workclaw/app-data");
+        let base = Path::new("C:/workclaw/runtime-root/memory");
         let dir = chat_runtime_io::build_memory_dir_for_session(base, "builtin-general", "");
         assert_eq!(
             dir,
-            Path::new("C:/workclaw/app-data")
-                .join("memory")
-                .join("builtin-general")
+            Path::new("C:/workclaw/runtime-root/memory").join("builtin-general")
         );
     }
 
     #[test]
     fn build_memory_dir_for_session_isolates_by_employee_when_provided() {
-        let base = Path::new("C:/workclaw/app-data");
+        let base = Path::new("C:/workclaw/runtime-root/memory");
         let dir = chat_runtime_io::build_memory_dir_for_session(
             base,
             "builtin-general",
@@ -394,8 +393,7 @@ mod tests {
         );
         assert_eq!(
             dir,
-            Path::new("C:/workclaw/app-data")
-                .join("memory")
+            Path::new("C:/workclaw/runtime-root/memory")
                 .join("employees")
                 .join("sales_lead")
                 .join("skills")
@@ -478,6 +476,7 @@ pub async fn compact_context(
     db: State<'_, DbState>,
     app: AppHandle,
 ) -> Result<CompactionResult, String> {
-    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    chat_compaction::compact_context_with_pool(&db.0, &session_id, &app_data_dir).await
+    let runtime_paths = runtime_paths_from_app(&app)?;
+    chat_compaction::compact_context_with_pool(&db.0, &session_id, &runtime_paths.transcripts_dir)
+        .await
 }

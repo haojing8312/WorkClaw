@@ -9,6 +9,7 @@ use crate::agent::tools::{
     MemoryTool, ProcessManager, SkillInvokeTool, TaskTool, WebSearchTool,
 };
 use crate::agent::{AgentExecutor, Tool, ToolContext, ToolRegistry};
+use crate::runtime_environment::runtime_paths_from_app;
 use crate::session_journal::SessionJournalStateHandle;
 use runtime_chat_app::{
     compose_system_prompt, ChatExecutionGuidance, ChatExecutionPreparationService,
@@ -370,9 +371,11 @@ pub(crate) async fn prepare_runtime_tools(
         eprintln!("[search] 当前没有可用搜索引擎或 MCP 搜索工具，运行时仅可离线回答");
     }
 
-    let app_data_dir = params.app.path().app_data_dir().unwrap_or_default();
+    let runtime_paths = runtime_paths_from_app(params.app).unwrap_or_else(|_| {
+        crate::runtime_paths::RuntimePaths::new(crate::runtime_paths::resolve_runtime_root())
+    });
     let memory_dir = chat_io::build_memory_dir_for_session(
-        &app_data_dir,
+        &runtime_paths.memory_dir,
         params.skill_id,
         params.memory_bucket_employee_id,
     );

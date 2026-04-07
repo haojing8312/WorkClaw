@@ -155,12 +155,11 @@ fn normalize_memory_skill_scope(skill_id: Option<&str>) -> Result<Option<String>
 }
 
 fn employee_memory_skills_root(
-    app_data_dir: &std::path::Path,
+    memory_root: &std::path::Path,
     employee_id: &str,
 ) -> std::path::PathBuf {
     let employee_bucket = sanitize_memory_bucket_component(employee_id, "employee");
-    app_data_dir
-        .join("memory")
+    memory_root
         .join("employees")
         .join(employee_bucket)
         .join("skills")
