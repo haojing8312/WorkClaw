@@ -599,7 +599,13 @@ fn resolve_continuation_turn_policy(
 ) -> ContinuationTurnPolicy {
     let should_clamp_retries = matches!(
         run.last_error_kind.as_deref(),
-        Some("max_turns" | "loop_detected" | "no_progress" | "tool_failure_circuit_breaker")
+        Some(
+            "max_turns"
+                | "loop_detected"
+                | "no_progress"
+                | "tool_failure_circuit_breaker"
+                | "auth"
+        )
     );
 
     if should_clamp_retries {
@@ -770,7 +776,8 @@ struct ExplicitPromptSkillSelection {
 mod tests {
     use super::{
         append_current_turn_message, apply_continuation_turn_policy,
-        build_employee_step_session_profile, build_local_chat_session_profile,
+        build_employee_step_session_profile, build_hidden_child_session_profile,
+        build_local_chat_session_profile,
         parse_user_skill_command, prepare_employee_step_turn, prepare_hidden_child_turn,
         resolve_compaction_continuation_preference, resolve_explicit_prompt_following_skill,
         resolve_recent_compaction_runtime_notes, resolve_session_continuation_preference,
@@ -1196,6 +1203,89 @@ mod tests {
 
         assert_eq!(preference.kind, ContinuationKind::EmployeeStepSession);
         assert_eq!(preference.selected_skill, None);
+    }
+
+    #[test]
+    fn resolve_session_continuation_preference_treats_cancelled_hidden_child_runs_as_recoverable() {
+        let state = SessionJournalState {
+            session_id: "child-session".to_string(),
+            current_run_id: None,
+            runs: vec![SessionRunSnapshot {
+                run_id: "run-1".to_string(),
+                user_message_id: "user-1".to_string(),
+                status: SessionRunStatus::Cancelled,
+                buffered_text: "已停止，保留当前分析上下文".to_string(),
+                last_error_kind: Some("cancelled".to_string()),
+                last_error_message: Some("user cancelled".to_string()),
+                turn_state: Some(SessionRunTurnStateSnapshot {
+                    session_surface: Some("hidden_child_session".to_string()),
+                    execution_lane: Some("open_task".to_string()),
+                    selected_runner: Some("OpenTaskRunner".to_string()),
+                    selected_skill: None,
+                    fallback_reason: None,
+                    allowed_tools: vec!["read".to_string()],
+                    invoked_skills: Vec::new(),
+                    partial_assistant_text: "还差最后一段结论".to_string(),
+                    tool_failure_streak: 0,
+                    reconstructed_history_len: Some(2),
+                    compaction_boundary: None,
+                }),
+            }],
+        };
+
+        let preference = resolve_session_continuation_preference(
+            "继续",
+            &state,
+            &build_hidden_child_session_profile(),
+        )
+        .expect("hidden child continuation preference");
+
+        assert_eq!(preference.kind, ContinuationKind::HiddenChildSession);
+        assert_eq!(preference.selected_skill, None);
+        assert_eq!(
+            preference.selected_runner.as_deref(),
+            Some("OpenTaskRunner")
+        );
+    }
+
+    #[test]
+    fn resolve_session_continuation_preference_clamps_retry_budgets_for_permission_errors() {
+        let state = SessionJournalState {
+            session_id: "employee-step-session".to_string(),
+            current_run_id: None,
+            runs: vec![SessionRunSnapshot {
+                run_id: "run-1".to_string(),
+                user_message_id: "user-1".to_string(),
+                status: SessionRunStatus::Failed,
+                buffered_text: "继续时需要保留当前受限工具上下文".to_string(),
+                last_error_kind: Some("auth".to_string()),
+                last_error_message: Some("permission denied".to_string()),
+                turn_state: Some(SessionRunTurnStateSnapshot {
+                    session_surface: Some("employee_step_session".to_string()),
+                    execution_lane: Some("open_task".to_string()),
+                    selected_runner: Some("OpenTaskRunner".to_string()),
+                    selected_skill: None,
+                    fallback_reason: None,
+                    allowed_tools: vec!["read".to_string()],
+                    invoked_skills: Vec::new(),
+                    partial_assistant_text: "当前操作仍受权限限制".to_string(),
+                    tool_failure_streak: 0,
+                    reconstructed_history_len: Some(4),
+                    compaction_boundary: None,
+                }),
+            }],
+        };
+
+        let preference = resolve_session_continuation_preference(
+            "继续",
+            &state,
+            &build_employee_step_session_profile(),
+        )
+        .expect("employee step continuation preference");
+
+        assert_eq!(preference.kind, ContinuationKind::EmployeeStepSession);
+        assert_eq!(preference.turn_policy.per_candidate_retry_count, Some(0));
+        assert_eq!(preference.turn_policy.route_retry_count, Some(0));
     }
 
     #[test]
