@@ -52,7 +52,7 @@ pub(crate) fn build_desktop_environment_summary(
     diagnostics_status: &DesktopDiagnosticsStatus,
 ) -> String {
     format!(
-        "# WorkClaw Environment Summary\n\n- Version: {version}\n- Platform: {platform}\n- Runtime Root: {runtime_root_dir}\n- Diagnostics: {}\n- Diagnostics Logs: {}\n- Diagnostics Audit: {}\n- Diagnostics Crashes: {}\n- Diagnostics Exports: {}\n- Current Run ID: {}\n- Abnormal Previous Run: {}\n- Last Clean Exit: {}\n- Latest Crash: {}\n",
+        "# Environment Summary\n\n- Version: {version}\n- Platform: {platform}\n- Runtime Root: {runtime_root_dir}\n- Diagnostics: {}\n- Diagnostics Logs: {}\n- Diagnostics Audit: {}\n- Diagnostics Crashes: {}\n- Diagnostics Exports: {}\n- Current Run ID: {}\n- Abnormal Previous Run: {}\n- Last Clean Exit: {}\n- Latest Crash: {}\n",
         diagnostics_status.diagnostics_dir,
         diagnostics_status.logs_dir,
         diagnostics_status.audit_dir,

@@ -3,6 +3,7 @@ pub mod agent;
 pub mod approval_bus;
 pub mod approval_rules;
 mod builtin_skills;
+mod branding_generated;
 pub mod commands;
 mod db;
 mod diagnostics;

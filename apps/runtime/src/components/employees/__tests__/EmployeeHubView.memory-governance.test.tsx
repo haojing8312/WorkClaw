@@ -19,11 +19,11 @@ describe("EmployeeHubView memory governance", () => {
     saveMock.mockResolvedValue("D:\\exports\\sales-memory.json");
     invokeMock.mockImplementation((command: string, payload?: any) => {
       if (command === "get_runtime_preferences") {
-        return Promise.resolve({ default_work_dir: "C:\\Users\\test\\WorkClaw\\workspace" });
+        return Promise.resolve({ default_work_dir: "C:\\Users\\test\\.workclaw\\workspace" });
       }
       if (command === "set_runtime_preferences") return Promise.resolve(null);
       if (command === "resolve_default_work_dir") {
-        return Promise.resolve("C:\\Users\\test\\WorkClaw\\workspace");
+        return Promise.resolve("C:\\Users\\test\\.workclaw\\workspace");
       }
       if (command === "get_openclaw_plugin_feishu_runtime_status") {
         return Promise.resolve({

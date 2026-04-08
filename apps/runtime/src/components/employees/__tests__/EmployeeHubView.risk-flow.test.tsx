@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { EmployeeHubView } from "../EmployeeHubView";
+import { brandDefaultWorkspacePathExample } from "../../../lib/branding";
 
 const invokeMock = vi.fn();
 
@@ -12,10 +13,10 @@ describe("EmployeeHubView risk flow", () => {
     invokeMock.mockReset();
     invokeMock.mockImplementation((command: string) => {
       if (command === "get_runtime_preferences") {
-        return Promise.resolve({ default_work_dir: "C:\\Users\\test\\WorkClaw\\workspace" });
+        return Promise.resolve({ default_work_dir: brandDefaultWorkspacePathExample("test") });
       }
       if (command === "set_runtime_preferences") return Promise.resolve(null);
-      if (command === "resolve_default_work_dir") return Promise.resolve("C:\\Users\\test\\WorkClaw\\workspace");
+      if (command === "resolve_default_work_dir") return Promise.resolve(brandDefaultWorkspacePathExample("test"));
       return Promise.resolve(null);
     });
   });
@@ -81,5 +82,28 @@ describe("EmployeeHubView risk flow", () => {
       expect(onDeleteEmployee).toHaveBeenCalledWith("emp-1");
       expect(onDeleteEmployee).toHaveBeenCalledTimes(1);
     });
+  });
+
+  test("settings tab explains the default workspace under the runtime root", async () => {
+    render(
+      <EmployeeHubView
+        employees={[]}
+        skills={[]}
+        selectedEmployeeId={null}
+        onSelectEmployee={() => {}}
+        onDeleteEmployee={async () => {}}
+        onSetAsMainAndEnter={() => {}}
+        onStartTaskWithEmployee={() => {}}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("tab", { name: "设置" }));
+
+    expect(await screen.findByDisplayValue(brandDefaultWorkspacePathExample("test"))).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        `默认：${brandDefaultWorkspacePathExample()}。支持 C/D/E 盘路径，目录不存在会自动创建。`,
+      ),
+    ).toBeInTheDocument();
   });
 });

@@ -198,7 +198,7 @@ mod tests {
         std::fs::create_dir_all(&export_dir).expect("create export dir");
 
         let payload = DesktopDiagnosticsExportPayload {
-            environment_summary: "# WorkClaw Environment Summary".to_string(),
+            environment_summary: "# Environment Summary".to_string(),
             route_attempt_logs_json: "[]".to_string(),
             session_runs_json: "[]".to_string(),
             session_run_events_json: "[]".to_string(),
@@ -237,7 +237,7 @@ mod tests {
         std::fs::write(&audit_log, "{\"event\":\"create_session\"}\n").expect("write audit");
 
         let payload = DesktopDiagnosticsExportPayload {
-            environment_summary: "# WorkClaw Environment Summary".to_string(),
+            environment_summary: "# Environment Summary".to_string(),
             route_attempt_logs_json: "[]".to_string(),
             session_runs_json: "[]".to_string(),
             session_run_events_json: "[]".to_string(),

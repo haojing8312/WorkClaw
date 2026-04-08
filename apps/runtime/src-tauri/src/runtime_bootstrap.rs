@@ -147,7 +147,7 @@ pub fn bootstrap_recovery_file_path(bootstrap_dir: &Path) -> PathBuf {
 }
 
 fn build_runtime_bootstrap_location(base_dir: PathBuf) -> RuntimeBootstrapLocation {
-    let bootstrap_dir = base_dir.join("dev.workclaw.runtime");
+    let bootstrap_dir = base_dir.join(crate::branding_generated::BUNDLE_IDENTIFIER);
     let bootstrap_path = bootstrap_dir.join(BOOTSTRAP_FILE_NAME);
     RuntimeBootstrapLocation {
         bootstrap_dir,
@@ -176,7 +176,9 @@ pub fn resolve_runtime_bootstrap_location_with_env(
         );
     }
 
-    build_runtime_bootstrap_location(std::env::temp_dir().join("WorkClaw"))
+    build_runtime_bootstrap_location(
+        std::env::temp_dir().join(crate::branding_generated::PRODUCT_NAME),
+    )
 }
 
 pub fn default_runtime_root_bootstrap(current_root: &Path) -> RuntimeRootBootstrap {

@@ -247,7 +247,7 @@ export function DesktopSettingsSection({ models, visible }: DesktopSettingsSecti
       const selection = await open({
         directory: true,
         multiple: false,
-        title: "选择 WorkClaw 数据根目录",
+        title: "选择数据根目录",
         defaultPath: desktopLifecyclePaths?.runtime_root_dir || undefined,
       });
       const selectedPath = Array.isArray(selection) ? selection[0] : selection;
@@ -596,7 +596,7 @@ export function DesktopSettingsSection({ models, visible }: DesktopSettingsSecti
         {desktopLifecyclePaths && (
           <div className="space-y-3">
             <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-3">
-              <div className="text-xs font-medium text-gray-500">WorkClaw 数据根目录</div>
+              <div className="text-xs font-medium text-gray-500">数据根目录</div>
               <div className="mt-1 break-all text-xs text-gray-700">
                 {desktopLifecyclePaths.runtime_root_dir}
               </div>
@@ -738,7 +738,7 @@ export function DesktopSettingsSection({ models, visible }: DesktopSettingsSecti
           </button>
         </div>
         <div className="rounded-lg border border-amber-100 bg-amber-50 px-3 py-3 text-xs text-amber-700 space-y-1">
-          <div>卸载程序不会删除你的 WorkClaw 数据根目录。</div>
+          <div>卸载程序不会删除你的数据根目录。</div>
           <div>如需彻底清理，请先清理缓存与日志，再手动删除数据根目录。</div>
         </div>
         {desktopLifecycleError && (

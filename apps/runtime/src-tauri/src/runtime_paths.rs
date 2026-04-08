@@ -2,7 +2,7 @@ use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-pub const DEFAULT_RUNTIME_ROOT_DIR_NAME: &str = ".workclaw";
+pub const DEFAULT_RUNTIME_ROOT_DIR_NAME: &str = crate::branding_generated::DEFAULT_RUNTIME_ROOT_DIR_NAME;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeDatabasePaths {
@@ -122,18 +122,40 @@ impl RuntimePaths {
 }
 
 pub fn resolve_runtime_root() -> PathBuf {
-    resolve_runtime_root_with_env(std::env::var_os("APPDATA"), std::env::var_os("USERPROFILE"))
+    resolve_runtime_root_with_home_env(std::env::var_os("USERPROFILE"), std::env::var_os("HOME"))
 }
 
 pub fn resolve_runtime_root_with_env(
     _appdata: Option<OsString>,
     userprofile: Option<OsString>,
 ) -> PathBuf {
+    resolve_runtime_root_with_home_env(userprofile, None)
+}
+
+pub fn resolve_runtime_root_with_home_env(
+    userprofile: Option<OsString>,
+    home: Option<OsString>,
+) -> PathBuf {
     if let Some(userprofile) = userprofile.filter(|value| !value.is_empty()) {
         return PathBuf::from(userprofile).join(DEFAULT_RUNTIME_ROOT_DIR_NAME);
     }
 
+    if let Some(home) = home.filter(|value| !value.is_empty()) {
+        return PathBuf::from(home).join(DEFAULT_RUNTIME_ROOT_DIR_NAME);
+    }
+
     std::env::temp_dir().join(DEFAULT_RUNTIME_ROOT_DIR_NAME)
+}
+
+pub fn resolve_default_work_dir() -> PathBuf {
+    resolve_runtime_root().join("workspace")
+}
+
+pub fn resolve_default_work_dir_with_home_env(
+    userprofile: Option<OsString>,
+    home: Option<OsString>,
+) -> PathBuf {
+    resolve_runtime_root_with_home_env(userprofile, home).join("workspace")
 }
 
 pub fn validate_migration_target(

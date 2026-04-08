@@ -11,21 +11,6 @@ use super::types::{
     KEY_RUNTIME_TRANSLATION_ENGINE, KEY_RUNTIME_TRANSLATION_MODEL_ID,
 };
 use sqlx::SqlitePool;
-use std::path::PathBuf;
-
-fn home_dir_from_env() -> Option<PathBuf> {
-    std::env::var("USERPROFILE")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var("HOME")
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-                .map(PathBuf::from)
-        })
-}
-
 fn normalize_path(raw: &str) -> String {
     raw.trim().to_string()
 }
@@ -81,10 +66,10 @@ fn normalize_operation_permission_mode(raw: &str) -> String {
 }
 
 pub(crate) fn compute_default_work_dir_with_home() -> String {
-    let fallback = PathBuf::from("C:\\Users\\Default");
-    let base = home_dir_from_env().unwrap_or(fallback);
-    base.join("WorkClaw")
-        .join("workspace")
+    crate::runtime_paths::resolve_default_work_dir_with_home_env(
+        std::env::var_os("USERPROFILE"),
+        std::env::var_os("HOME"),
+    )
         .to_string_lossy()
         .to_string()
 }

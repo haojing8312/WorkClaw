@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { after } from "node:test";
 
@@ -20,8 +21,31 @@ const frontendLogoOutputPath = path.join(
 );
 const tauriConfigOutputPath = path.join(projectRoot, "apps", "runtime", "src-tauri", "tauri.conf.json");
 const tauriIconOutputPath = path.join(projectRoot, "apps", "runtime", "src-tauri", "icons", "icon.ico");
+const rustBrandingOutputPath = path.join(
+  projectRoot,
+  "apps",
+  "runtime",
+  "src-tauri",
+  "src",
+  "branding_generated.rs",
+);
+const brandSelectionConfigPath = path.join(projectRoot, "branding", "brand-selection.json");
+const runtimePackageJsonPath = path.join(projectRoot, "apps", "runtime", "package.json");
+const runtimePackage = JSON.parse(readFileSync(runtimePackageJsonPath, "utf8"));
+const originalBrandSelectionRaw = existsSync(brandSelectionConfigPath)
+  ? readFileSync(brandSelectionConfigPath, "utf8")
+  : '{\n  "brandKey": "workclaw"\n}\n';
+
+function writeBrandSelection(brandKey) {
+  writeFileSync(
+    brandSelectionConfigPath,
+    `${JSON.stringify({ brandKey }, null, 2)}\n`,
+    "utf8",
+  );
+}
 
 after(() => {
+  writeFileSync(brandSelectionConfigPath, originalBrandSelectionRaw, "utf8");
   applyBrand({ brandKey: "workclaw", projectRoot });
 });
 
@@ -40,7 +64,7 @@ test("apply-brand generates the default WorkClaw frontend and Tauri outputs", ()
   assert.match(brandingOutput, /"localStoragePrefix": "workclaw"/);
   assert.equal(tauriConfig.productName, "WorkClaw");
   assert.equal(tauriConfig.identifier, "dev.workclaw.runtime");
-  assert.equal(tauriConfig.version, "0.5.5");
+  assert.equal(tauriConfig.version, runtimePackage.version);
   assert.equal(tauriConfig.app.windows[0].title, "WorkClaw");
   assert.equal(tauriConfig.bundle.windows.nsis.headerImage, "icons/installer/nsis-header.bmp");
 });
@@ -59,7 +83,105 @@ test("apply-brand generates the sample XXClaw frontend and Tauri outputs", () =>
   assert.match(brandingOutput, /"localStoragePrefix": "xxclaw"/);
   assert.equal(tauriConfig.productName, "XXClaw");
   assert.equal(tauriConfig.identifier, "dev.xxclaw.runtime");
-  assert.equal(tauriConfig.version, "0.5.5");
+  assert.equal(tauriConfig.version, runtimePackage.version);
   assert.equal(tauriConfig.app.windows[0].title, "XXClaw");
   assert.equal(tauriConfig.bundle.windows.nsis.headerImage, "icons/installer/nsis-header.bmp");
+});
+
+test("apply-brand generates the bifclaw frontend and Tauri outputs", () => {
+  const result = applyBrand({ brandKey: "bifclaw", projectRoot });
+  const brandingOutput = readFileSync(brandingOutputPath, "utf8");
+  const tauriConfig = JSON.parse(readFileSync(tauriConfigOutputPath, "utf8"));
+  const rustBrandingOutput = readFileSync(rustBrandingOutputPath, "utf8");
+
+  assert.equal(result.brandKey, "bifclaw");
+  assert.ok(existsSync(brandingOutputPath), "Expected branding.generated.ts to be written");
+  assert.ok(existsSync(frontendLogoOutputPath), "Expected current app logo to be written");
+  assert.ok(existsSync(tauriConfigOutputPath), "Expected tauri.conf.json to be written");
+  assert.ok(existsSync(tauriIconOutputPath), "Expected Tauri icon output to be written");
+  assert.ok(existsSync(rustBrandingOutputPath), "Expected Rust branding output to be written");
+  assert.match(brandingOutput, /"productName": "bifclaw"/);
+  assert.match(brandingOutput, /"localStoragePrefix": "bifclaw"/);
+  assert.match(rustBrandingOutput, /pub const BRAND_KEY: &str = "bifclaw";/);
+  assert.match(rustBrandingOutput, /pub const BUNDLE_IDENTIFIER: &str = "dev\.bifclaw\.runtime";/);
+  assert.match(rustBrandingOutput, /pub const DEFAULT_RUNTIME_ROOT_DIR_NAME: &str = "\.bifclaw";/);
+  assert.equal(tauriConfig.productName, "bifclaw");
+  assert.equal(tauriConfig.identifier, "dev.bifclaw.runtime");
+  assert.equal(tauriConfig.version, runtimePackage.version);
+  assert.equal(tauriConfig.app.windows[0].title, "bifclaw");
+  assert.equal(tauriConfig.bundle.windows.nsis.headerImage, "icons/installer/nsis-header.bmp");
+});
+
+test("apply-brand CLI honors WORKCLAW_BRAND from the environment", () => {
+  const scriptPath = path.join(projectRoot, "scripts", "apply-brand.mjs");
+  const result = spawnSync(
+    process.execPath,
+    [scriptPath],
+    {
+      cwd: projectRoot,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        WORKCLAW_BRAND: "bifclaw",
+      },
+      windowsHide: true,
+    },
+  );
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, /Applied brand "bifclaw"/);
+
+  const brandingOutput = readFileSync(brandingOutputPath, "utf8");
+  const tauriConfig = JSON.parse(readFileSync(tauriConfigOutputPath, "utf8"));
+  assert.match(brandingOutput, /"productName": "bifclaw"/);
+  assert.equal(tauriConfig.productName, "bifclaw");
+  assert.equal(tauriConfig.identifier, "dev.bifclaw.runtime");
+});
+
+test("apply-brand CLI falls back to branding/brand-selection.json when no override is set", () => {
+  writeBrandSelection("bifclaw");
+  const scriptPath = path.join(projectRoot, "scripts", "apply-brand.mjs");
+  const result = spawnSync(
+    process.execPath,
+    [scriptPath],
+    {
+      cwd: projectRoot,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        WORKCLAW_BRAND: "",
+      },
+      windowsHide: true,
+    },
+  );
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, /Applied brand "bifclaw"/);
+
+  const tauriConfig = JSON.parse(readFileSync(tauriConfigOutputPath, "utf8"));
+  assert.equal(tauriConfig.productName, "bifclaw");
+});
+
+test("apply-brand CLI --brand overrides branding/brand-selection.json", () => {
+  writeBrandSelection("workclaw");
+  const scriptPath = path.join(projectRoot, "scripts", "apply-brand.mjs");
+  const result = spawnSync(
+    process.execPath,
+    [scriptPath, "--brand", "bifclaw"],
+    {
+      cwd: projectRoot,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        WORKCLAW_BRAND: "",
+      },
+      windowsHide: true,
+    },
+  );
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, /Applied brand "bifclaw"/);
+
+  const tauriConfig = JSON.parse(readFileSync(tauriConfigOutputPath, "utf8"));
+  assert.equal(tauriConfig.productName, "bifclaw");
 });

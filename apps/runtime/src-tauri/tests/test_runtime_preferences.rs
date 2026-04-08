@@ -12,7 +12,7 @@ async fn runtime_preferences_returns_default_when_not_configured() {
         .await
         .expect("get runtime preferences");
     assert!(!prefs.default_work_dir.trim().is_empty());
-    assert!(prefs.default_work_dir.contains("WorkClaw"));
+    assert!(prefs.default_work_dir.ends_with(".workclaw\\workspace"));
     assert_eq!(prefs.default_language, "zh-CN");
     assert!(prefs.immersive_translation_enabled);
     assert_eq!(prefs.immersive_translation_display, "translated_only");

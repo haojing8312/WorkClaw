@@ -23,7 +23,7 @@ pub(crate) const DEFAULT_LAUNCH_AT_LOGIN: bool = false;
 pub(crate) const DEFAULT_LAUNCH_MINIMIZED: bool = false;
 pub(crate) const DEFAULT_CLOSE_TO_TRAY: bool = true;
 pub(crate) const DEFAULT_OPERATION_PERMISSION_MODE: &str = "standard";
-pub(crate) const AUTOSTART_NAME: &str = "dev.workclaw.runtime";
+pub(crate) const AUTOSTART_NAME: &str = crate::branding_generated::AUTOSTART_NAME;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct RuntimePreferences {

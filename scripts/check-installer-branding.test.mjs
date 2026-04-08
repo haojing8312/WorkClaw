@@ -79,7 +79,7 @@ test("windows installers are branded and localized for zh-CN", () => {
   );
   assert.equal(productName, brandManifest.productName, "Expected productName to come from the active brand manifest");
   assert.equal(identifier, brandManifest.bundleIdentifier, "Expected identifier to come from the active brand manifest");
-  assert.match(productName, /WorkClaw|[A-Za-z0-9]+Claw/, "Expected productName to be brand-derived");
+  assert.match(productName, /WorkClaw|[A-Za-z0-9]+claw/i, "Expected productName to be brand-derived");
   assert.match(identifier, /^dev\.[a-z0-9.-]+\.runtime$/, "Expected identifier to follow the brand-derived runtime pattern");
 
   for (const assetPath of [

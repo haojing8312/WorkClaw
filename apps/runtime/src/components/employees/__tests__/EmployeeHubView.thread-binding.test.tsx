@@ -12,7 +12,7 @@ describe("EmployeeHubView thread binding removal", () => {
     invokeMock.mockReset();
     invokeMock.mockImplementation((command: string) => {
       if (command === "get_runtime_preferences") {
-        return Promise.resolve({ default_work_dir: "C:\\Users\\test\\WorkClaw\\workspace" });
+        return Promise.resolve({ default_work_dir: "C:\\Users\\test\\.workclaw\\workspace" });
       }
       if (command === "get_openclaw_plugin_feishu_runtime_status") {
         return Promise.resolve({
@@ -26,7 +26,7 @@ describe("EmployeeHubView thread binding removal", () => {
         });
       }
       if (command === "resolve_default_work_dir") {
-        return Promise.resolve("C:\\Users\\test\\WorkClaw\\workspace");
+        return Promise.resolve("C:\\Users\\test\\.workclaw\\workspace");
       }
       if (command === "get_feishu_employee_connection_statuses") {
         return Promise.resolve({

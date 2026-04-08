@@ -1,0 +1,11 @@
+{
+  "brandKey": "bifclaw",
+  "productName": "bifclaw",
+  "desktopTitle": "bifclaw",
+  "bundleIdentifier": "dev.bifclaw.runtime",
+  "publisher": "bifclaw",
+  "exeName": "bifclaw",
+  "localStoragePrefix": "bifclaw",
+  "protocolScheme": "bifclaw",
+  "assetsDir": "./assets"
+}

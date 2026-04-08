@@ -71,7 +71,7 @@ describe("SettingsView data retention", () => {
         });
       }
       if (command === "export_desktop_environment_summary") {
-        return Promise.resolve("# WorkClaw Environment Summary");
+        return Promise.resolve("# Environment Summary");
       }
       if (command === "open_desktop_path") {
         return Promise.resolve(null);
@@ -93,14 +93,14 @@ describe("SettingsView data retention", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "桌面 / 系统" }));
 
-    expect(await screen.findByText("WorkClaw 数据根目录")).toBeInTheDocument();
+    expect(await screen.findByText("数据根目录")).toBeInTheDocument();
     expect(screen.getByText("C:\\Users\\me\\.workclaw")).toBeInTheDocument();
     expect(screen.queryByText("应用数据目录")).not.toBeInTheDocument();
     expect(screen.queryByText("缓存目录")).not.toBeInTheDocument();
     expect(screen.queryByText("默认工作目录")).not.toBeInTheDocument();
     expect(screen.getByText("检测到上次运行可能异常退出")).toBeInTheDocument();
     expect(screen.getByText(/panic occurred/)).toBeInTheDocument();
-    expect(screen.getByText("卸载程序不会删除你的 WorkClaw 数据根目录。")).toBeInTheDocument();
+    expect(screen.getByText("卸载程序不会删除你的数据根目录。")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "打开目录" }));
     fireEvent.click(screen.getByRole("button", { name: "清理缓存与日志" }));

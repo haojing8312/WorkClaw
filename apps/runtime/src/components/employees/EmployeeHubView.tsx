@@ -22,6 +22,7 @@ import { useEmployeeHubGroups } from "./hooks/useEmployeeHubGroups";
 import { toEmployeeHubFeishuRuntimeStatus, useEmployeeHubFeishu } from "./hooks/useEmployeeHubFeishu";
 import { useEmployeeHubRuntimeState } from "./hooks/useEmployeeHubRuntimeState";
 import { useEmployeeHubTools } from "./hooks/useEmployeeHubTools";
+import { brandDefaultWorkspacePathExample } from "../../lib/branding";
 
 export interface EmployeeHubViewProps {
   employees: AgentEmployee[];
@@ -281,6 +282,7 @@ export function EmployeeHubView({
   const clearMemoryDialogImpact = selectedEmployeeMemoryId ? `员工编号: ${selectedEmployeeMemoryId}` : undefined;
   const selectedEmployeeFeishuStatus = selectedEmployee ? resolveFeishuStatus(selectedEmployee, officialFeishuRuntimeStatus) : null;
   const selectedEmployeeFeishuRuntimeStatus = toEmployeeHubFeishuRuntimeStatus(officialFeishuRuntimeStatus);
+  const defaultWorkspacePathExample = brandDefaultWorkspacePathExample();
   const tabs: Array<{ id: EmployeeHubTab; label: string }> = [
     { id: "overview", label: "总览" },
     { id: "employees", label: "员工" },
@@ -426,8 +428,8 @@ export function EmployeeHubView({
           >
         <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-2">
           <div className="text-xs text-gray-500">全局默认工作目录（新建会话默认使用）</div>
-          <input className="w-full border border-gray-200 rounded px-2 py-1.5 text-sm" placeholder="例如 D:\\workspace\\workclaw" value={globalDefaultWorkDir} onChange={(e) => setGlobalDefaultWorkDir(e.target.value)} />
-          <div className="text-[11px] text-gray-500">默认：C:\Users\&lt;用户名&gt;\WorkClaw\workspace。支持 C/D/E 盘路径，目录不存在会自动创建。</div>
+          <input className="w-full border border-gray-200 rounded px-2 py-1.5 text-sm" placeholder={`例如 ${defaultWorkspacePathExample}`} value={globalDefaultWorkDir} onChange={(e) => setGlobalDefaultWorkDir(e.target.value)} />
+          <div className="text-[11px] text-gray-500">默认：{defaultWorkspacePathExample}。支持 C/D/E 盘路径，目录不存在会自动创建。</div>
           <button disabled={savingGlobalWorkDir} onClick={saveGlobalDefaultWorkDir} className="h-8 px-3 rounded bg-blue-500 hover:bg-blue-600 disabled:bg-blue-300 text-white text-xs">保存默认目录</button>
         </div>
           </div>

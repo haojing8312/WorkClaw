@@ -74,7 +74,7 @@ describe("SettingsView desktop/system tab", () => {
     expect(screen.queryByText("软件更新")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "检查更新" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "清理缓存与日志" })).toBeInTheDocument();
-    expect(screen.getByText("WorkClaw 数据根目录")).toBeInTheDocument();
+    expect(screen.getByText("数据根目录")).toBeInTheDocument();
     expect(screen.queryByText("应用数据目录")).not.toBeInTheDocument();
     expect(screen.queryByText("默认工作目录")).not.toBeInTheDocument();
     expect(screen.queryByTestId("settings-model-provider-preset")).not.toBeInTheDocument();
@@ -97,20 +97,20 @@ describe("SettingsView desktop/system tab", () => {
   });
 
   test("selects a new runtime root and schedules migration on restart", async () => {
-    openDialogMock.mockResolvedValue("D:\\WorkClawData");
+    openDialogMock.mockResolvedValue("D:\\bifclaw-data");
     render(<SettingsView onClose={() => {}} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "桌面 / 系统" }));
     fireEvent.click(await screen.findByRole("button", { name: "选择目录" }));
 
     expect(await screen.findByText("准备迁移到新的数据根目录")).toBeInTheDocument();
-    expect(screen.getByText("D:\\WorkClawData")).toBeInTheDocument();
+    expect(screen.getByText("D:\\bifclaw-data")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "迁移并重启" }));
 
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("schedule_desktop_runtime_root_migration", {
-        targetRoot: "D:\\WorkClawData",
+        targetRoot: "D:\\bifclaw-data",
       });
     });
   });

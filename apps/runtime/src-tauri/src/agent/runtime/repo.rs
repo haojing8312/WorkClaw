@@ -5,7 +5,6 @@ use runtime_chat_app::{
     RoutingSettingsSnapshot, SessionExecutionContextSnapshot, SessionModelSnapshot,
 };
 use sqlx::{Row, SqlitePool};
-use std::path::PathBuf;
 
 pub struct PoolChatSettingsRepository<'a> {
     db: &'a SqlitePool,
@@ -27,24 +26,11 @@ impl<'a> PoolChatEmployeeDirectory<'a> {
     }
 }
 
-fn home_dir_from_env() -> Option<PathBuf> {
-    std::env::var("USERPROFILE")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var("HOME")
-                .ok()
-                .filter(|value| !value.trim().is_empty())
-                .map(PathBuf::from)
-        })
-}
-
 fn compute_default_work_dir_with_home() -> String {
-    let fallback = PathBuf::from("C:\\Users\\Default");
-    let base = home_dir_from_env().unwrap_or(fallback);
-    base.join("WorkClaw")
-        .join("workspace")
+    crate::runtime_paths::resolve_default_work_dir_with_home_env(
+        std::env::var_os("USERPROFILE"),
+        std::env::var_os("HOME"),
+    )
         .to_string_lossy()
         .to_string()
 }

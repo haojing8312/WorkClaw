@@ -35,7 +35,7 @@ describe("EmployeeHubView feishu connection status", () => {
     invokeMock.mockReset();
     invokeMock.mockImplementation((command: string) => {
       if (command === "get_runtime_preferences") {
-        return Promise.resolve({ default_work_dir: "C:\\Users\\test\\WorkClaw\\workspace" });
+        return Promise.resolve({ default_work_dir: "C:\\Users\\test\\.workclaw\\workspace" });
       }
       if (command === "get_openclaw_plugin_feishu_runtime_status") {
         return Promise.resolve({
@@ -51,7 +51,7 @@ describe("EmployeeHubView feishu connection status", () => {
       if (command === "list_im_routing_bindings") return Promise.resolve([]);
       if (command === "upsert_im_routing_binding") return Promise.resolve("binding-1");
       if (command === "delete_im_routing_binding") return Promise.resolve(null);
-      if (command === "resolve_default_work_dir") return Promise.resolve("C:\\Users\\test\\WorkClaw\\workspace");
+      if (command === "resolve_default_work_dir") return Promise.resolve("C:\\Users\\test\\.workclaw\\workspace");
       return Promise.resolve(null);
     });
   });
@@ -106,7 +106,7 @@ describe("EmployeeHubView feishu connection status", () => {
   test("treats legacy feishu bindings as active reception even when scopes are empty", async () => {
     invokeMock.mockImplementation((command: string) => {
       if (command === "get_runtime_preferences") {
-        return Promise.resolve({ default_work_dir: "C:\\Users\\test\\WorkClaw\\workspace" });
+        return Promise.resolve({ default_work_dir: "C:\\Users\\test\\.workclaw\\workspace" });
       }
       if (command === "get_openclaw_plugin_feishu_runtime_status") {
         return Promise.resolve({
@@ -139,7 +139,7 @@ describe("EmployeeHubView feishu connection status", () => {
           },
         ]);
       }
-      if (command === "resolve_default_work_dir") return Promise.resolve("C:\\Users\\test\\WorkClaw\\workspace");
+      if (command === "resolve_default_work_dir") return Promise.resolve("C:\\Users\\test\\.workclaw\\workspace");
       return Promise.resolve(null);
     });
 
@@ -282,7 +282,7 @@ describe("EmployeeHubView feishu connection status", () => {
   test("shows default receiver replacement hint and removes previous default binding on save", async () => {
     invokeMock.mockImplementation((command: string) => {
       if (command === "get_runtime_preferences") {
-        return Promise.resolve({ default_work_dir: "C:\\Users\\test\\WorkClaw\\workspace" });
+        return Promise.resolve({ default_work_dir: "C:\\Users\\test\\.workclaw\\workspace" });
       }
       if (command === "get_openclaw_plugin_feishu_runtime_status") {
         return Promise.resolve({
@@ -323,7 +323,7 @@ describe("EmployeeHubView feishu connection status", () => {
       }
       if (command === "delete_im_routing_binding") return Promise.resolve(null);
       if (command === "upsert_im_routing_binding") return Promise.resolve("binding-tech");
-      if (command === "resolve_default_work_dir") return Promise.resolve("C:\\Users\\test\\WorkClaw\\workspace");
+      if (command === "resolve_default_work_dir") return Promise.resolve("C:\\Users\\test\\.workclaw\\workspace");
       return Promise.resolve(null);
     });
 
@@ -369,7 +369,7 @@ describe("EmployeeHubView feishu connection status", () => {
   test("shows scoped conflict hint and removes conflicting binding before saving", async () => {
     invokeMock.mockImplementation((command: string) => {
       if (command === "get_runtime_preferences") {
-        return Promise.resolve({ default_work_dir: "C:\\Users\\test\\WorkClaw\\workspace" });
+        return Promise.resolve({ default_work_dir: "C:\\Users\\test\\.workclaw\\workspace" });
       }
       if (command === "get_openclaw_plugin_feishu_runtime_status") {
         return Promise.resolve({
@@ -410,7 +410,7 @@ describe("EmployeeHubView feishu connection status", () => {
       }
       if (command === "delete_im_routing_binding") return Promise.resolve(null);
       if (command === "upsert_im_routing_binding") return Promise.resolve("binding-tech-room");
-      if (command === "resolve_default_work_dir") return Promise.resolve("C:\\Users\\test\\WorkClaw\\workspace");
+      if (command === "resolve_default_work_dir") return Promise.resolve("C:\\Users\\test\\.workclaw\\workspace");
       return Promise.resolve(null);
     });
 
