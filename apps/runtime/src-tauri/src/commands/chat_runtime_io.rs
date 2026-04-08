@@ -31,6 +31,7 @@ pub(crate) async fn maybe_handle_team_entry_pre_execution_with_pool(
         &group_run.final_report,
         "",
         None,
+        None,
     )
     .await?;
 

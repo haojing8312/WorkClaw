@@ -51,7 +51,7 @@ impl RunRegistry {
             SessionRunEvent::RunStarted { run_id, .. } => {
                 self.register_active_run(session_id, run_id);
             }
-            SessionRunEvent::RunCompleted { run_id }
+            SessionRunEvent::RunCompleted { run_id, .. }
             | SessionRunEvent::RunStopped { run_id, .. }
             | SessionRunEvent::RunFailed { run_id, .. } => {
                 self.complete_run(session_id, run_id);

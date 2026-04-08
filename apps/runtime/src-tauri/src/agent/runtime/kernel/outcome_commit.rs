@@ -72,12 +72,18 @@ impl OutcomeCommitter {
         F: FnMut(&str, String, bool, bool),
     {
         match outcome {
-            TerminalOutcome::DirectDispatch {
-                output,
-                turn_state: _turn_state,
-            } => {
+            TerminalOutcome::DirectDispatch { output, turn_state } => {
                 chat_io::finalize_run_success_with_pool(
-                    db, journal, session_id, run_id, &output, false, &output, "", None,
+                    db,
+                    journal,
+                    session_id,
+                    run_id,
+                    &output,
+                    false,
+                    &output,
+                    "",
+                    None,
+                    Some(&turn_state),
                 )
                 .await?;
                 emit_stream_token(session_id, output, false, false);
@@ -101,10 +107,7 @@ impl OutcomeCommitter {
                 )
                 .await
             }
-            TerminalOutcome::SkillCommandFailed {
-                error,
-                turn_state: _turn_state,
-            } => {
+            TerminalOutcome::SkillCommandFailed { error, turn_state } => {
                 chat_io::append_run_failed_with_pool(
                     db,
                     journal,
@@ -112,13 +115,14 @@ impl OutcomeCommitter {
                     run_id,
                     "skill_command_dispatch",
                     &error,
+                    Some(&turn_state),
                 )
                 .await;
                 emit_stream_token(session_id, String::new(), true, false);
                 Err(error)
             }
             TerminalOutcome::SkillCommandStopped {
-                turn_state: _turn_state,
+                turn_state,
                 stop_reason,
                 error,
             } => {
@@ -128,6 +132,7 @@ impl OutcomeCommitter {
                     session_id,
                     run_id,
                     &stop_reason,
+                    Some(&turn_state),
                 )
                 .await;
                 emit_stream_token(session_id, String::new(), true, false);
@@ -199,6 +204,7 @@ impl OutcomeCommitter {
                         session_id,
                         run_id,
                         stop_reason,
+                        Some(&turn_state),
                     )
                     .await;
                 } else {
@@ -209,6 +215,7 @@ impl OutcomeCommitter {
                         run_id,
                         &error_kind,
                         &error_message,
+                        Some(&turn_state),
                     )
                     .await;
                 }
@@ -233,6 +240,7 @@ impl OutcomeCommitter {
             &content,
             &reasoning_text,
             reasoning_duration_ms,
+            Some(&turn_state),
         )
         .await;
 
@@ -244,6 +252,7 @@ impl OutcomeCommitter {
                 run_id,
                 "persistence",
                 &err,
+                Some(&turn_state),
             )
             .await;
             emit_stream_token(session_id, String::new(), true, false);

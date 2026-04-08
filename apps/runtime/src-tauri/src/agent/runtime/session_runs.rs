@@ -142,13 +142,14 @@ pub(crate) async fn append_session_run_event_with_pool(
             )
             .await?;
         }
-        SessionRunEvent::RunCompleted { run_id } => {
+        SessionRunEvent::RunCompleted { run_id, .. } => {
             upsert_run_status(pool, &run_id, session_id, "completed", &now, None, None).await?;
         }
         SessionRunEvent::RunGuardWarning { .. } => {}
         SessionRunEvent::RunStopped {
             run_id,
             stop_reason,
+            ..
         } => {
             upsert_run_status(
                 pool,
@@ -165,6 +166,7 @@ pub(crate) async fn append_session_run_event_with_pool(
             run_id,
             error_kind,
             error_message,
+            ..
         } => {
             upsert_run_status(
                 pool,
@@ -282,7 +284,7 @@ fn event_run_id(event: &SessionRunEvent) -> &str {
         | SessionRunEvent::ToolStarted { run_id, .. }
         | SessionRunEvent::ToolCompleted { run_id, .. }
         | SessionRunEvent::ApprovalRequested { run_id, .. }
-        | SessionRunEvent::RunCompleted { run_id }
+        | SessionRunEvent::RunCompleted { run_id, .. }
         | SessionRunEvent::RunGuardWarning { run_id, .. }
         | SessionRunEvent::RunStopped { run_id, .. }
         | SessionRunEvent::RunFailed { run_id, .. }

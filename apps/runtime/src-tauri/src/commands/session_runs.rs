@@ -286,13 +286,14 @@ pub async fn append_session_run_event_with_pool(
             )
             .await?;
         }
-        SessionRunEvent::RunCompleted { run_id } => {
+        SessionRunEvent::RunCompleted { run_id, .. } => {
             upsert_run_status(pool, &run_id, session_id, "completed", &now, None, None).await?;
         }
         SessionRunEvent::RunGuardWarning { .. } => {}
         SessionRunEvent::RunStopped {
             run_id,
             stop_reason,
+            ..
         } => {
             upsert_run_status(
                 pool,
@@ -309,6 +310,7 @@ pub async fn append_session_run_event_with_pool(
             run_id,
             error_kind,
             error_message,
+            ..
         } => {
             upsert_run_status(
                 pool,
@@ -426,7 +428,7 @@ fn event_run_id(event: &SessionRunEvent) -> &str {
         | SessionRunEvent::ToolStarted { run_id, .. }
         | SessionRunEvent::ToolCompleted { run_id, .. }
         | SessionRunEvent::ApprovalRequested { run_id, .. }
-        | SessionRunEvent::RunCompleted { run_id }
+        | SessionRunEvent::RunCompleted { run_id, .. }
         | SessionRunEvent::RunGuardWarning { run_id, .. }
         | SessionRunEvent::RunStopped { run_id, .. }
         | SessionRunEvent::RunFailed { run_id, .. }
@@ -638,6 +640,7 @@ mod tests {
             "run_completed",
             &serde_json::to_string(&SessionRunEvent::RunCompleted {
                 run_id: "run-a".to_string(),
+                turn_state: None,
             })
             .expect("serialize run_completed"),
             "2026-03-27T00:00:04Z",
@@ -697,6 +700,7 @@ mod tests {
                 "2026-03-27T00:10:02Z",
                 serde_json::to_string(&SessionRunEvent::RunCompleted {
                     run_id: "run-a".to_string(),
+                    turn_state: None,
                 })
                 .expect("serialize run-a completed"),
                 "run_completed".to_string(),
@@ -798,6 +802,7 @@ mod tests {
             "run_completed",
             &serde_json::to_string(&SessionRunEvent::RunCompleted {
                 run_id: "run-a".to_string(),
+                turn_state: None,
             })
             .expect("serialize run_completed"),
             "2026-03-27T01:00:03Z",

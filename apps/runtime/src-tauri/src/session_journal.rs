@@ -1,4 +1,7 @@
 use crate::agent::run_guard::RunStopReason;
+use crate::agent::runtime::kernel::execution_plan::ExecutionLane;
+use crate::agent::runtime::kernel::turn_state::{TurnCompactionBoundary, TurnStateSnapshot};
+use crate::agent::runtime::skill_routing::observability::route_fallback_reason_key;
 use crate::agent::runtime::{
     RunRegistry, RuntimeObservability, RuntimeObservedEvent, RuntimeObservedRunEvent,
 };
@@ -171,6 +174,8 @@ pub struct SessionRunSnapshot {
     pub buffered_text: String,
     pub last_error_kind: Option<String>,
     pub last_error_message: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_state: Option<SessionRunTurnStateSnapshot>,
 }
 
 impl SessionRunSnapshot {
@@ -182,6 +187,81 @@ impl SessionRunSnapshot {
             buffered_text: String::new(),
             last_error_kind: None,
             last_error_message: None,
+            turn_state: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionRunTurnStateCompactionBoundary {
+    pub transcript_path: String,
+    pub original_tokens: usize,
+    pub compacted_tokens: usize,
+    pub summary: String,
+}
+
+impl From<&TurnCompactionBoundary> for SessionRunTurnStateCompactionBoundary {
+    fn from(value: &TurnCompactionBoundary) -> Self {
+        Self {
+            transcript_path: value.transcript_path.clone(),
+            original_tokens: value.original_tokens,
+            compacted_tokens: value.compacted_tokens,
+            summary: value.summary.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionRunTurnStateSnapshot {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_lane: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_runner: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_skill: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_tools: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub invoked_skills: Vec<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub partial_assistant_text: String,
+    #[serde(default, skip_serializing_if = "is_zero_usize")]
+    pub tool_failure_streak: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reconstructed_history_len: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compaction_boundary: Option<SessionRunTurnStateCompactionBoundary>,
+}
+
+impl From<&TurnStateSnapshot> for SessionRunTurnStateSnapshot {
+    fn from(value: &TurnStateSnapshot) -> Self {
+        Self {
+            execution_lane: value.execution_lane.map(execution_lane_key),
+            selected_runner: value
+                .route_observation
+                .as_ref()
+                .map(|observation| observation.selected_runner.clone()),
+            selected_skill: value
+                .route_observation
+                .as_ref()
+                .and_then(|observation| observation.selected_skill.clone())
+                .or_else(|| value.invoked_skills.first().cloned()),
+            fallback_reason: value
+                .route_observation
+                .as_ref()
+                .and_then(|observation| {
+                    observation
+                        .fallback_reason
+                        .map(|reason| route_fallback_reason_key(reason).to_string())
+                }),
+            allowed_tools: value.allowed_tools.clone(),
+            invoked_skills: value.invoked_skills.clone(),
+            partial_assistant_text: value.partial_assistant_text.clone(),
+            tool_failure_streak: value.tool_failure_streak,
+            reconstructed_history_len: value.reconstructed_history_len,
+            compaction_boundary: value.compaction_boundary.as_ref().map(Into::into),
         }
     }
 }
@@ -244,6 +324,8 @@ pub enum SessionRunEvent {
     },
     RunCompleted {
         run_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        turn_state: Option<SessionRunTurnStateSnapshot>,
     },
     RunGuardWarning {
         run_id: String,
@@ -256,11 +338,15 @@ pub enum SessionRunEvent {
     RunStopped {
         run_id: String,
         stop_reason: RunStopReason,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        turn_state: Option<SessionRunTurnStateSnapshot>,
     },
     RunFailed {
         run_id: String,
         error_kind: String,
         error_message: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        turn_state: Option<SessionRunTurnStateSnapshot>,
     },
     RunCancelled {
         run_id: String,
@@ -284,7 +370,7 @@ fn apply_event(state: &mut SessionJournalState, event: &SessionRunEvent) {
         | SessionRunEvent::ToolStarted { run_id, .. }
         | SessionRunEvent::ToolCompleted { run_id, .. }
         | SessionRunEvent::ApprovalRequested { run_id, .. }
-        | SessionRunEvent::RunCompleted { run_id }
+        | SessionRunEvent::RunCompleted { run_id, .. }
         | SessionRunEvent::RunGuardWarning { run_id, .. }
         | SessionRunEvent::RunStopped { run_id, .. }
         | SessionRunEvent::RunFailed { run_id, .. }
@@ -303,6 +389,7 @@ fn apply_event(state: &mut SessionJournalState, event: &SessionRunEvent) {
             run.status = SessionRunStatus::Thinking;
             run.last_error_kind = None;
             run.last_error_message = None;
+            run.turn_state = None;
         }
         SessionRunEvent::SkillRouteRecorded { .. } => {}
         SessionRunEvent::AssistantChunkAppended { chunk, .. } => {
@@ -324,8 +411,9 @@ fn apply_event(state: &mut SessionJournalState, event: &SessionRunEvent) {
             let run = &mut state.runs[run_index];
             run.status = SessionRunStatus::WaitingApproval;
         }
-        SessionRunEvent::RunCompleted { run_id } => {
+        SessionRunEvent::RunCompleted { run_id, turn_state } => {
             state.runs[run_index].status = SessionRunStatus::Completed;
+            state.runs[run_index].turn_state = turn_state.clone();
             if state.current_run_id.as_deref() == Some(run_id.as_str()) {
                 state.current_run_id = None;
             }
@@ -334,6 +422,7 @@ fn apply_event(state: &mut SessionJournalState, event: &SessionRunEvent) {
         SessionRunEvent::RunStopped {
             run_id,
             stop_reason,
+            turn_state,
         } => {
             if state.current_run_id.as_deref() == Some(run_id.as_str()) {
                 state.current_run_id = None;
@@ -342,11 +431,13 @@ fn apply_event(state: &mut SessionJournalState, event: &SessionRunEvent) {
             run.status = SessionRunStatus::Failed;
             run.last_error_kind = Some(stop_reason.kind.as_key().to_string());
             run.last_error_message = Some(format_run_stop_message(stop_reason));
+            run.turn_state = turn_state.clone();
         }
         SessionRunEvent::RunFailed {
             run_id,
             error_kind,
             error_message,
+            turn_state,
         } => {
             if state.current_run_id.as_deref() == Some(run_id.as_str()) {
                 state.current_run_id = None;
@@ -355,6 +446,7 @@ fn apply_event(state: &mut SessionJournalState, event: &SessionRunEvent) {
             run.status = SessionRunStatus::Failed;
             run.last_error_kind = Some(error_kind.clone());
             run.last_error_message = Some(error_message.clone());
+            run.turn_state = turn_state.clone();
         }
         SessionRunEvent::RunCancelled { run_id, reason } => {
             if state.current_run_id.as_deref() == Some(run_id.as_str()) {
@@ -366,6 +458,19 @@ fn apply_event(state: &mut SessionJournalState, event: &SessionRunEvent) {
             run.last_error_message = reason.clone();
         }
     }
+}
+
+fn execution_lane_key(lane: ExecutionLane) -> String {
+    match lane {
+        ExecutionLane::OpenTask => "open_task".to_string(),
+        ExecutionLane::PromptInline => "prompt_inline".to_string(),
+        ExecutionLane::PromptFork => "prompt_fork".to_string(),
+        ExecutionLane::DirectDispatch => "direct_dispatch".to_string(),
+    }
+}
+
+fn is_zero_usize(value: &usize) -> bool {
+    *value == 0
 }
 
 fn upsert_run_index(state: &mut SessionJournalState, run_id: &str) -> usize {
@@ -524,7 +629,7 @@ fn build_observed_session_run_event(
             child_session_id: observed_child_session_id(input),
             message: Some(truncate_observed_message(summary)),
         },
-        SessionRunEvent::RunCompleted { run_id } => RuntimeObservedRunEvent {
+        SessionRunEvent::RunCompleted { run_id, .. } => RuntimeObservedRunEvent {
             session_id: session_id.to_string(),
             run_id: run_id.clone(),
             event_type: "run_completed".to_string(),
@@ -559,6 +664,7 @@ fn build_observed_session_run_event(
         SessionRunEvent::RunStopped {
             run_id,
             stop_reason,
+            ..
         } => RuntimeObservedRunEvent {
             session_id: session_id.to_string(),
             run_id: run_id.clone(),
@@ -576,6 +682,7 @@ fn build_observed_session_run_event(
             run_id,
             error_kind,
             error_message,
+            ..
         } => RuntimeObservedRunEvent {
             session_id: session_id.to_string(),
             run_id: run_id.clone(),
@@ -674,6 +781,7 @@ impl SessionRunStatus {
 mod tests {
     use super::{
         format_run_stop_message, SessionJournalState, SessionJournalStore, SessionRunEvent,
+        SessionRunTurnStateSnapshot, SessionRunTurnStateCompactionBoundary,
     };
     use crate::agent::run_guard::RunStopReason;
     use crate::agent::runtime::{RunRegistry, RuntimeObservability};
@@ -755,6 +863,7 @@ mod tests {
                 "session-aligned",
                 SessionRunEvent::RunCompleted {
                     run_id: "run-1".to_string(),
+                    turn_state: None,
                 },
             )
             .await
@@ -808,6 +917,7 @@ mod tests {
                 "session-observability",
                 SessionRunEvent::RunCompleted {
                     run_id: "run-1".to_string(),
+                    turn_state: None,
                 },
             )
             .await
@@ -821,5 +931,71 @@ mod tests {
             Some(&1)
         );
         assert_eq!(snapshot.recent_events.buffered, 3);
+    }
+
+    #[tokio::test]
+    async fn append_event_projects_terminal_turn_state_into_session_state() {
+        let journal_root = tempdir().expect("journal tempdir");
+        let journal = SessionJournalStore::new(journal_root.path().to_path_buf());
+
+        journal
+            .append_event(
+                "session-turn-state",
+                SessionRunEvent::RunStarted {
+                    run_id: "run-1".to_string(),
+                    user_message_id: "user-1".to_string(),
+                },
+            )
+            .await
+            .expect("append run started");
+        journal
+            .append_event(
+                "session-turn-state",
+                SessionRunEvent::RunFailed {
+                    run_id: "run-1".to_string(),
+                    error_kind: "max_turns".to_string(),
+                    error_message: "达到最大迭代次数".to_string(),
+                    turn_state: Some(SessionRunTurnStateSnapshot {
+                        execution_lane: Some("open_task".to_string()),
+                        selected_runner: Some("open_task".to_string()),
+                        selected_skill: None,
+                        fallback_reason: None,
+                        allowed_tools: vec!["read".to_string(), "exec".to_string()],
+                        invoked_skills: Vec::new(),
+                        partial_assistant_text: "正在继续处理剩余步骤".to_string(),
+                        tool_failure_streak: 0,
+                        reconstructed_history_len: Some(5),
+                        compaction_boundary: Some(SessionRunTurnStateCompactionBoundary {
+                            transcript_path: "temp/transcripts/session-1.json".to_string(),
+                            original_tokens: 4096,
+                            compacted_tokens: 1024,
+                            summary: "压缩摘要".to_string(),
+                        }),
+                    }),
+                },
+            )
+            .await
+            .expect("append run failed");
+
+        let state = journal
+            .read_state("session-turn-state")
+            .await
+            .expect("read projected state");
+        let run = state.runs.first().expect("run snapshot");
+
+        assert_eq!(run.last_error_kind.as_deref(), Some("max_turns"));
+        assert_eq!(
+            run.turn_state
+                .as_ref()
+                .and_then(|turn_state| turn_state.compaction_boundary.as_ref())
+                .map(|boundary| boundary.original_tokens),
+            Some(4096)
+        );
+        assert_eq!(
+            run.turn_state
+                .as_ref()
+                .map(|turn_state| turn_state.allowed_tools.clone()),
+            Some(vec!["read".to_string(), "exec".to_string()])
+        );
     }
 }

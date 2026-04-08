@@ -456,6 +456,7 @@ mod tests {
                     "工具 browser_snapshot 已连续 6 次返回相同结果。",
                 )
                 .with_last_completed_step("已填写封面标题"),
+                turn_state: None,
             },
         )
         .await
@@ -601,6 +602,7 @@ mod tests {
             "session-structured-export",
             SessionRunEvent::RunCompleted {
                 run_id: "run-1".to_string(),
+                turn_state: None,
             },
         )
         .await
@@ -614,6 +616,148 @@ mod tests {
         assert!(markdown.contains("让我先检查正确的目录路径。"));
         assert!(!markdown.contains("## 恢复的运行记录"));
         assert_eq!(markdown.matches("让我先检查正确的目录路径。").count(), 1);
+    }
+
+    #[tokio::test]
+    async fn export_session_markdown_includes_recovered_compaction_boundary_summary() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("create sqlite memory pool");
+
+        sqlx::query(
+            "CREATE TABLE sessions (
+                id TEXT PRIMARY KEY,
+                skill_id TEXT NOT NULL,
+                title TEXT,
+                created_at TEXT NOT NULL,
+                model_id TEXT NOT NULL,
+                permission_mode TEXT NOT NULL DEFAULT 'standard',
+                work_dir TEXT NOT NULL DEFAULT '',
+                employee_id TEXT NOT NULL DEFAULT '',
+                session_mode TEXT NOT NULL DEFAULT 'general',
+                team_id TEXT NOT NULL DEFAULT ''
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create sessions table");
+
+        sqlx::query(
+            "CREATE TABLE messages (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                content_json TEXT,
+                created_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create messages table");
+
+        sqlx::query(
+            "CREATE TABLE session_runs (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                user_message_id TEXT NOT NULL DEFAULT '',
+                assistant_message_id TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'queued',
+                buffered_text TEXT NOT NULL DEFAULT '',
+                error_kind TEXT NOT NULL DEFAULT '',
+                error_message TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create session_runs table");
+
+        sqlx::query(
+            "CREATE TABLE session_run_events (
+                id TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create session_run_events table");
+
+        sqlx::query(
+            "INSERT INTO sessions (id, skill_id, title, created_at, model_id, permission_mode, work_dir, employee_id, session_mode, team_id)
+             VALUES ('session-compaction-export', 'skill-1', '压缩恢复导出', '2026-04-08T00:00:00Z', 'model-1', 'standard', '', '', 'general', '')",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed session");
+
+        sqlx::query(
+            "INSERT INTO messages (id, session_id, role, content, created_at)
+             VALUES ('user-1', 'session-compaction-export', 'user', '继续上次任务', '2026-04-08T00:00:01Z')",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed user message");
+
+        let journal_dir = tempdir().expect("journal tempdir");
+        let session_dir = journal_dir.path().join("session-compaction-export");
+        tokio::fs::create_dir_all(&session_dir)
+            .await
+            .expect("create journal session dir");
+        tokio::fs::write(
+            session_dir.join("state.json"),
+            serde_json::to_string_pretty(&serde_json::json!({
+                "session_id": "session-compaction-export",
+                "current_run_id": null,
+                "runs": [{
+                    "run_id": "run-recover-1",
+                    "user_message_id": "user-1",
+                    "status": "failed",
+                    "buffered_text": "正在继续处理剩余步骤",
+                    "last_error_kind": "max_turns",
+                    "last_error_message": "达到最大迭代次数",
+                    "turn_state": {
+                        "execution_lane": "open_task",
+                        "selected_runner": "open_task",
+                        "selected_skill": null,
+                        "fallback_reason": null,
+                        "allowed_tools": ["read", "exec"],
+                        "invoked_skills": [],
+                        "partial_assistant_text": "正在继续处理剩余步骤",
+                        "tool_failure_streak": 0,
+                        "reconstructed_history_len": 5,
+                        "compaction_boundary": {
+                            "transcript_path": "temp/transcripts/session-1.json",
+                            "original_tokens": 4096,
+                            "compacted_tokens": 1024,
+                            "summary": "压缩摘要"
+                        }
+                    }
+                }]
+            }))
+            .expect("serialize state json"),
+        )
+        .await
+        .expect("write journal state");
+
+        let journal = SessionJournalStore::new(journal_dir.path().to_path_buf());
+        let markdown =
+            export_session_markdown_with_pool(&pool, "session-compaction-export", Some(&journal))
+                .await
+                .expect("export markdown");
+
+        assert!(markdown.contains("## 恢复的运行记录"));
+        assert!(markdown.contains("压缩边界"));
+        assert!(markdown.contains("4096 -> 1024"));
+        assert!(markdown.contains("temp/transcripts/session-1.json"));
+        assert!(markdown.contains("压缩摘要"));
     }
 
     #[tokio::test]

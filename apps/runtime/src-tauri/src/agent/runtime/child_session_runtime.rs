@@ -88,6 +88,7 @@ pub(crate) async fn finalize_hidden_child_session_success_with_messages(
         &content,
         "",
         None,
+        None,
     )
     .await
     .map_err(anyhow::Error::msg)?;
@@ -121,6 +122,7 @@ async fn finalize_hidden_child_session_failure(
             &prepared.child_session_id,
             &prepared.run_id,
             &stop_reason,
+            None,
         )
         .await
         .map_err(anyhow::Error::msg)?;
@@ -132,6 +134,7 @@ async fn finalize_hidden_child_session_failure(
             &prepared.run_id,
             "child_session",
             &error_text,
+            None,
         )
         .await;
     }
