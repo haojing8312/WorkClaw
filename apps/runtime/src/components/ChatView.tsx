@@ -87,6 +87,50 @@ type ChatLinkToastState = {
   url: string;
 };
 
+const TOOL_ACTION_LABELS: Record<string, string> = {
+  file_delete: "删除文件",
+  write_file: "写入文件",
+  edit: "编辑文件",
+  bash: "执行命令",
+  web_search: "网页搜索",
+  web_fetch: "获取网页",
+};
+
+function buildApprovalReasonText(
+  approval: PendingApprovalView | null,
+  toolLabel: string,
+  readOnly: boolean,
+  destructive: boolean,
+  requiresApproval: boolean,
+): string | undefined {
+  if (!approval) return undefined;
+  if (approval.irreversible || destructive || approval.toolName === "file_delete") {
+    return `原因：这是不可逆的${toolLabel}操作，确认后会立即执行一次。`;
+  }
+  if (requiresApproval || approval.toolName === "bash") {
+    return `原因：这是${readOnly ? "读取环境" : "会修改环境的"}${toolLabel}操作，确认后才会继续。`;
+  }
+  if (!readOnly) {
+    return `原因：这是会修改环境的${toolLabel}操作。`;
+  }
+  return undefined;
+}
+
+function buildApprovalImpactText(
+  approval: PendingApprovalView | null,
+  readOnly: boolean,
+  destructive: boolean,
+): string | undefined {
+  if (approval?.impact?.trim()) return approval.impact;
+  if (approval?.irreversible || destructive || approval?.toolName === "file_delete") {
+    return "这类操作可能直接删除或覆盖本地内容。";
+  }
+  if (readOnly) {
+    return "这类操作通常只读取信息，不会直接修改本地内容。";
+  }
+  return "这类操作可能修改本地文件、命令环境或会话状态。";
+}
+
 const CONTINUE_MESSAGE_TEXT = "继续";
 const CONTINUE_BUDGET_INCREMENT = 100;
 const CHAT_SCROLL_EDGE_THRESHOLD = 48;
@@ -970,6 +1014,38 @@ export function ChatView({
   const displayWorkDirLabel = (workspace || "").trim() || "选择工作目录";
   const activePendingApproval = pendingApprovals[0] ?? null;
   const queuedApprovalCount = Math.max(0, pendingApprovals.length - 1);
+  const activePendingApprovalDialog = useMemo(() => {
+    if (!activePendingApproval) return null;
+    const manifestEntry = toolManifest.find((item) => item.name === activePendingApproval.toolName) ?? null;
+    const toolLabel =
+      manifestEntry?.display_name ||
+      TOOL_ACTION_LABELS[activePendingApproval.toolName] ||
+      activePendingApproval.title ||
+      activePendingApproval.toolName;
+    const impact = buildApprovalImpactText(
+      activePendingApproval,
+      manifestEntry?.read_only ?? false,
+      manifestEntry?.destructive ?? false,
+    );
+    const reason = buildApprovalReasonText(
+      activePendingApproval,
+      toolLabel,
+      manifestEntry?.read_only ?? false,
+      manifestEntry?.destructive ?? false,
+      manifestEntry?.requires_approval ?? false,
+    );
+    const noteParts = [
+      reason,
+      queuedApprovalCount > 0 ? `还有 ${queuedApprovalCount} 条待审批` : undefined,
+    ].filter((item): item is string => Boolean(item && item.trim()));
+    return {
+      title: activePendingApproval.title || "高危操作确认",
+      summary: activePendingApproval.summary || `将执行工具 ${activePendingApproval.toolName}`,
+      impact,
+      note: noteParts.length > 0 ? noteParts.join(" · ") : undefined,
+      irreversible: activePendingApproval.irreversible,
+    };
+  }, [activePendingApproval, queuedApprovalCount, toolManifest]);
   const activeDelegationCard = [...delegationCards]
     .reverse()
     .find((card) => card.status === "running");
@@ -1919,6 +1995,7 @@ export function ChatView({
           showStreamingThinkingState={showStreamingThinkingState}
           streamReasoning={streamReasoning}
           streamItems={streamItems}
+          toolManifest={toolManifest}
           subAgentBuffer={subAgentBuffer}
           subAgentRoleName={subAgentRoleName}
           askUserQuestion={askUserQuestion}
@@ -1972,11 +2049,11 @@ export function ChatView({
         <RiskConfirmDialog
           open={Boolean(activePendingApproval)}
           level="high"
-          title={activePendingApproval?.title || "高危操作确认"}
-          summary={activePendingApproval?.summary || "请确认是否继续执行。"}
-          impact={activePendingApproval?.impact}
-          note={queuedApprovalCount > 0 ? `还有 ${queuedApprovalCount} 条待审批` : undefined}
-          irreversible={activePendingApproval?.irreversible}
+          title={activePendingApprovalDialog?.title || "高危操作确认"}
+          summary={activePendingApprovalDialog?.summary || "请确认是否继续执行。"}
+          impact={activePendingApprovalDialog?.impact}
+          note={activePendingApprovalDialog?.note}
+          irreversible={activePendingApprovalDialog?.irreversible}
           confirmLabel="允许一次"
           secondaryActionLabel="始终允许"
           cancelLabel="取消"

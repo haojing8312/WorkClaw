@@ -5,7 +5,7 @@ import remarkGfm from "remark-gfm";
 
 import { ThinkingBlock } from "../ThinkingBlock";
 import { TaskJourneySummary } from "../chat-journey/TaskJourneySummary";
-import type { ChatMessagePart, Message, SessionRunProjection, StreamItem } from "../../types";
+import type { ChatMessagePart, Message, SessionRunProjection, SessionToolManifestEntry, StreamItem } from "../../types";
 import { createChatMarkdownComponents } from "./chatMarkdownComponents";
 import {
   extractPlainTextFromStreamItems,
@@ -55,6 +55,7 @@ type ChatMessageRailProps = {
       }
     | null;
   streamItems: StreamItem[];
+  toolManifest: SessionToolManifestEntry[];
   subAgentBuffer: string;
   subAgentRoleName: string;
   askUserQuestion: string | null;
@@ -92,6 +93,7 @@ export function ChatMessageRail({
   showStreamingThinkingState,
   streamReasoning,
   streamItems,
+  toolManifest,
   subAgentBuffer,
   subAgentRoleName,
   askUserQuestion,
@@ -163,6 +165,7 @@ export function ChatMessageRail({
                       items: message.streamItems,
                       subAgentBuffer,
                       markdownComponents,
+                      toolManifest,
                     })}
                     {renderInstallCandidates(extractInstallCandidates(message.streamItems, message.content))}
                   </>
@@ -172,6 +175,7 @@ export function ChatMessageRail({
                       items: message.toolCalls.map((toolCall) => ({ type: "tool_call", toolCall })),
                       subAgentBuffer,
                       markdownComponents,
+                      toolManifest,
                     })}
                     <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
                       {message.content}
@@ -254,6 +258,7 @@ export function ChatMessageRail({
                 items: streamItems,
                 subAgentBuffer,
                 markdownComponents,
+                toolManifest,
               })}
             {subAgentBuffer && (
               <div

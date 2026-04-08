@@ -3,7 +3,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { ToolIsland } from "../ToolIsland";
-import type { SessionRunProjection, StreamItem } from "../../types";
+import type { SessionRunProjection, SessionToolManifestEntry, StreamItem } from "../../types";
 
 const RUN_FAILURE_CARD_CLASS =
   "mr-auto max-w-[80%] rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-900 shadow-sm";
@@ -28,6 +28,7 @@ export type RenderChatStreamItemsArgs = {
   items: StreamItem[];
   subAgentBuffer: string;
   markdownComponents: Record<string, unknown>;
+  toolManifest: SessionToolManifestEntry[];
 };
 
 export type RenderChatRunFailureCardArgs = {
@@ -47,7 +48,7 @@ export function extractPlainTextFromStreamItems(items: StreamItem[]): string {
     .join("");
 }
 
-export function renderChatStreamItems({ items, subAgentBuffer, markdownComponents }: RenderChatStreamItemsArgs) {
+export function renderChatStreamItems({ items, subAgentBuffer, markdownComponents, toolManifest }: RenderChatStreamItemsArgs) {
   const groups: { type: "text" | "tools"; items: StreamItem[] }[] = [];
   for (const item of items) {
     if (item.type === "tool_call") {
@@ -74,6 +75,7 @@ export function renderChatStreamItems({ items, subAgentBuffer, markdownComponent
           toolCalls={toolCalls}
           isRunning={hasRunning}
           subAgentBuffer={hasRunning ? subAgentBuffer : undefined}
+          toolManifest={toolManifest}
         />
       );
     }

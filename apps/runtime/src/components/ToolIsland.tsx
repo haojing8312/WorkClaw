@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import ReactMarkdown from "react-markdown";
-import { StreamItem, ToolCallInfo } from "../types";
-import { getToolResultSummary, parseStructuredToolResult } from "../lib/tool-result";
+import type { SessionToolManifestEntry, ToolCallInfo } from "../types";
+import { getToolResultDetails, getToolResultSummary } from "../lib/tool-result";
 
 /** 工具名 → 人性化描述 */
 const TOOL_LABELS: Record<string, string> = {
@@ -56,6 +56,59 @@ function getToolOutputDisplay(tc: ToolCallInfo): string {
   return getToolResultSummary(tc.output);
 }
 
+function findToolManifestEntry(
+  name: string,
+  toolManifest: SessionToolManifestEntry[] | undefined,
+): SessionToolManifestEntry | null {
+  if (!toolManifest?.length) return null;
+  return toolManifest.find((item) => item.name === name) ?? null;
+}
+
+function getToolBadges(
+  tc: ToolCallInfo,
+  toolManifest: SessionToolManifestEntry[] | undefined,
+): string[] {
+  const manifestEntry = findToolManifestEntry(tc.name, toolManifest);
+  if (manifestEntry) {
+    if (manifestEntry.requires_approval) return ["需确认"];
+    if (manifestEntry.read_only) return ["只读"];
+    if (!manifestEntry.read_only) return ["会修改"];
+  }
+
+  if (tc.name === "read_file" || tc.name === "glob" || tc.name === "grep" || tc.name === "web_search" || tc.name === "web_fetch") {
+    return ["只读"];
+  }
+  if (tc.name === "write_file" || tc.name === "edit" || tc.name === "todo_write") {
+    return ["会修改"];
+  }
+  if (tc.name === "bash") {
+    return ["需确认"];
+  }
+  return [];
+}
+
+function getToolDetailHint(
+  tc: ToolCallInfo,
+  toolManifest: SessionToolManifestEntry[] | undefined,
+): string | null {
+  const manifestEntry = findToolManifestEntry(tc.name, toolManifest);
+  const toolLabel = manifestEntry?.display_name || TOOL_LABELS[tc.name] || tc.name;
+  const badges = getToolBadges(tc, toolManifest);
+  if (tc.status === "error") {
+    return `${toolLabel}执行失败，可以展开查看失败原因和原始参数。`;
+  }
+  if (badges.includes("需确认")) {
+    return `${toolLabel}属于需要确认的执行操作，确认后才会继续。`;
+  }
+  if (badges.includes("只读")) {
+    return `${toolLabel}属于只读操作，一般不会直接修改本地内容。`;
+  }
+  if (badges.includes("会修改")) {
+    return `${toolLabel}可能修改文件、命令环境或会话状态。`;
+  }
+  return null;
+}
+
 interface ToolIslandProps {
   /** 当前批次的工具调用 items（仅 type==="tool_call"） */
   toolCalls: ToolCallInfo[];
@@ -63,9 +116,11 @@ interface ToolIslandProps {
   isRunning: boolean;
   /** 子 Agent 实时输出 */
   subAgentBuffer?: string;
+  /** 当前会话工具元数据 */
+  toolManifest?: SessionToolManifestEntry[];
 }
 
-export function ToolIsland({ toolCalls, isRunning, subAgentBuffer }: ToolIslandProps) {
+export function ToolIsland({ toolCalls, isRunning, subAgentBuffer, toolManifest }: ToolIslandProps) {
   const [expanded, setExpanded] = useState(false);
   const [detailIndex, setDetailIndex] = useState<number | null>(null);
 
@@ -156,7 +211,11 @@ export function ToolIsland({ toolCalls, isRunning, subAgentBuffer }: ToolIslandP
               className="overflow-hidden"
             >
               <div className="space-y-0.5 border-t border-slate-200/80 px-3 py-2">
-                {toolCalls.map((tc, i) => (
+                {toolCalls.map((tc, i) => {
+                  const badges = getToolBadges(tc, toolManifest);
+                  const detailHint = getToolDetailHint(tc, toolManifest);
+                  const detailPayload = getToolResultDetails(tc.output);
+                  return (
                   <div key={tc.id}>
                     <button
                       data-testid={`tool-island-step-${tc.id}`}
@@ -186,6 +245,18 @@ export function ToolIsland({ toolCalls, isRunning, subAgentBuffer }: ToolIslandP
                       <span className="flex-1 truncate text-slate-400">
                         {getParamSummary(tc)}
                       </span>
+                      {badges.length > 0 && (
+                        <span className="flex shrink-0 gap-1">
+                          {badges.map((badge) => (
+                            <span
+                              key={badge}
+                              className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-medium text-slate-500"
+                            >
+                              {badge}
+                            </span>
+                          ))}
+                        </span>
+                      )}
                     </button>
                     {/* 二级展开：完整参数和输出 */}
                     <AnimatePresence>
@@ -198,6 +269,11 @@ export function ToolIsland({ toolCalls, isRunning, subAgentBuffer }: ToolIslandP
                           className="overflow-hidden"
                         >
                           <div className="ml-7 mr-2 mb-2 space-y-1.5">
+                            {detailHint && (
+                              <div className="rounded-xl border border-slate-200/80 bg-slate-50/80 px-3 py-2 text-[11px] text-slate-600">
+                                {detailHint}
+                              </div>
+                            )}
                             <pre className="max-h-32 overflow-x-auto overflow-y-auto rounded-xl bg-white/75 p-2.5 text-[11px] text-slate-600">
                               {tc.name === "task"
                                 ? String(tc.input.prompt || "")
@@ -221,9 +297,9 @@ export function ToolIsland({ toolCalls, isRunning, subAgentBuffer }: ToolIslandP
                                 )}
                               </pre>
                             )}
-                            {tc.name !== "task" && parseStructuredToolResult(tc.output)?.details && (
+                            {tc.name !== "task" && detailPayload && (
                               <pre className="max-h-32 overflow-x-auto overflow-y-auto rounded-xl bg-white/75 p-2.5 text-[11px] text-slate-500">
-                                {JSON.stringify(parseStructuredToolResult(tc.output)?.details, null, 2)}
+                                {JSON.stringify(detailPayload, null, 2)}
                               </pre>
                             )}
                           </div>
@@ -231,7 +307,8 @@ export function ToolIsland({ toolCalls, isRunning, subAgentBuffer }: ToolIslandP
                       )}
                     </AnimatePresence>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </motion.div>
           )}

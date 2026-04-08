@@ -211,6 +211,7 @@ describe("ChatView risk flow", () => {
     expect(screen.getByText("删除文件")).toBeInTheDocument();
     expect(screen.getByText("将删除 E:\\workspace\\danger.txt")).toBeInTheDocument();
     expect(screen.getByText("该操作不可逆，删除后无法自动恢复。")).toBeInTheDocument();
+    expect(screen.getByText("原因：这是不可逆的删除文件操作，确认后会立即执行一次。")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "允许一次" }));
 
@@ -269,7 +270,7 @@ describe("ChatView risk flow", () => {
     await waitFor(() => {
       expect(screen.getByText("删除文件 A")).toBeInTheDocument();
     });
-    expect(screen.getByText("还有 1 条待审批")).toBeInTheDocument();
+    expect(screen.getByText(/还有 1 条待审批/)).toBeInTheDocument();
 
     await act(async () => {
       listenHandlers.get("approval-resolved")?.({

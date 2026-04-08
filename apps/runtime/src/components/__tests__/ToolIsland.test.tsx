@@ -94,4 +94,52 @@ describe("ToolIsland", () => {
     expect(screen.queryByText(/"summary"/)).not.toBeInTheDocument();
     expect(screen.getByText(/"bytes_written": 12/)).toBeInTheDocument();
   });
+
+  test("shows lightweight capability badges and reads envelope data details", () => {
+    render(
+      <ToolIsland
+        isRunning={false}
+        toolManifest={[
+          {
+            name: "write_file",
+            description: "write file",
+            display_name: "写入文件",
+            category: "filesystem",
+            read_only: false,
+            destructive: false,
+            concurrency_safe: false,
+            open_world: false,
+            requires_approval: true,
+            source: "builtin",
+          },
+        ]}
+        toolCalls={[
+          {
+            id: "write-envelope",
+            name: "write_file",
+            input: { path: "notes.md" },
+            output: JSON.stringify({
+              ok: true,
+              summary: "已更新 notes.md",
+              data: {
+                path: "notes.md",
+                bytes_written: 24,
+              },
+              artifacts: [],
+            }),
+            status: "completed",
+          },
+        ]}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("tool-island-summary"));
+
+    expect(screen.getByText("需确认")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("tool-island-step-write-envelope"));
+
+    expect(screen.getByText("写入文件属于需要确认的执行操作，确认后才会继续。")).toBeInTheDocument();
+    expect(screen.getByText(/"bytes_written": 24/)).toBeInTheDocument();
+  });
 });
