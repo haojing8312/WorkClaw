@@ -3,6 +3,7 @@ use crate::agent::run_guard::RunStopReason;
 use crate::agent::runtime::attempt_runner::RouteExecutionOutcome;
 use crate::agent::runtime::kernel::capability_snapshot::CapabilitySnapshot;
 use crate::agent::runtime::kernel::route_lane::RouteRunPlan;
+use crate::agent::runtime::kernel::turn_state::TurnStateSnapshot;
 use crate::agent::runtime::runtime_io::WorkspaceSkillRuntimeEntry;
 use crate::agent::runtime::skill_routing::index::SkillRouteIndex;
 use runtime_chat_app::ChatExecutionGuidance;
@@ -111,13 +112,21 @@ impl TurnContext {
 
 #[derive(Debug, Clone)]
 pub(crate) enum ExecutionOutcome {
-    DirectDispatch(String),
+    DirectDispatch {
+        output: String,
+        turn_state: TurnStateSnapshot,
+    },
     RouteExecution {
         route_execution: RouteExecutionOutcome,
         reconstructed_history_len: usize,
+        turn_state: TurnStateSnapshot,
     },
-    SkillCommandFailed(String),
+    SkillCommandFailed {
+        error: String,
+        turn_state: TurnStateSnapshot,
+    },
     SkillCommandStopped {
+        turn_state: TurnStateSnapshot,
         stop_reason: RunStopReason,
         error: String,
     },

@@ -1,8 +1,9 @@
-use super::execution_plan::{ExecutionOutcome, SessionEngineError};
+use super::execution_plan::{ExecutionLane, ExecutionOutcome, SessionEngineError};
 use crate::agent::run_guard::parse_run_stop_reason;
 use crate::agent::runtime::events::ToolConfirmResponder;
 use crate::agent::runtime::kernel::lane_executor::{execute_execution_lane, LaneExecutionParams};
 use crate::agent::runtime::kernel::turn_preparation::{prepare_local_turn, PrepareLocalTurnParams};
+use crate::agent::runtime::kernel::turn_state::TurnStateSnapshot;
 use crate::agent::runtime::runtime_io as chat_io;
 use crate::agent::runtime::session_runtime::SessionRuntime;
 use crate::agent::runtime::skill_routing::runner::plan_implicit_route_with_observation;
@@ -59,14 +60,36 @@ impl SessionEngine {
         )
         .await
         {
-            Ok(Some(output)) => return Ok(ExecutionOutcome::DirectDispatch(output)),
+            Ok(Some(dispatch_outcome)) => {
+                let turn_state = TurnStateSnapshot::new(
+                    execution_context
+                        .allowed_tools()
+                        .map(|tools| tools.to_vec()),
+                )
+                .with_execution_lane(ExecutionLane::DirectDispatch)
+                .with_invoked_skill(dispatch_outcome.skill_id);
+                return Ok(ExecutionOutcome::DirectDispatch {
+                    output: dispatch_outcome.output,
+                    turn_state,
+                });
+            }
             Ok(None) => {}
-            Err(error) => {
+            Err(dispatch_error) => {
+                let error = dispatch_error.error;
+                let turn_state = TurnStateSnapshot::new(
+                    execution_context
+                        .allowed_tools()
+                        .map(|tools| tools.to_vec()),
+                )
+                .with_execution_lane(ExecutionLane::DirectDispatch)
+                .with_invoked_skill(dispatch_error.skill_id);
                 return Ok(match parse_run_stop_reason(&error) {
-                    Some(stop_reason) => {
-                        ExecutionOutcome::SkillCommandStopped { stop_reason, error }
-                    }
-                    None => ExecutionOutcome::SkillCommandFailed(error),
+                    Some(stop_reason) => ExecutionOutcome::SkillCommandStopped {
+                        turn_state: turn_state.with_stop_reason(stop_reason.clone()),
+                        stop_reason,
+                        error,
+                    },
+                    None => ExecutionOutcome::SkillCommandFailed { error, turn_state },
                 });
             }
         }
@@ -88,6 +111,13 @@ impl SessionEngine {
         .await
         .map_err(SessionEngineError::Generic)?;
 
+        let mut turn_state = TurnStateSnapshot::default()
+            .with_route_observation(planned_route.observation.clone())
+            .with_execution_lane(execution_plan.lane);
+        if let Some(skill_id) = planned_route.observation.selected_skill.as_deref() {
+            turn_state = turn_state.with_invoked_skill(skill_id);
+        }
+
         execute_execution_lane(LaneExecutionParams {
             app,
             agent_executor,
@@ -97,6 +127,7 @@ impl SessionEngine {
             turn_context,
             execution_context,
             execution_plan: &execution_plan,
+            turn_state,
             cancel_flag,
             tool_confirm_responder,
         })

@@ -3,7 +3,8 @@ use crate::agent::runtime::events::ToolConfirmResponder;
 use crate::agent::runtime::kernel::execution_plan::{
     ExecutionContext, ExecutionOutcome, ExecutionPlan, TurnContext,
 };
-use crate::agent::runtime::kernel::route_lane::RouteRunOutcome;
+use crate::agent::runtime::kernel::route_lane::{RouteRunOutcome, RouteRunPlan};
+use crate::agent::runtime::kernel::turn_state::TurnStateSnapshot;
 use crate::agent::runtime::skill_routing::runner::execute_planned_route;
 use crate::agent::AgentExecutor;
 use std::sync::atomic::AtomicBool;
@@ -19,13 +20,47 @@ pub(crate) struct LaneExecutionParams<'a> {
     pub turn_context: &'a TurnContext,
     pub execution_context: &'a ExecutionContext,
     pub execution_plan: &'a ExecutionPlan,
+    pub turn_state: TurnStateSnapshot,
     pub cancel_flag: Arc<AtomicBool>,
     pub tool_confirm_responder: ToolConfirmResponder,
+}
+
+fn decorate_turn_state(
+    turn_state: TurnStateSnapshot,
+    execution_plan: &ExecutionPlan,
+    execution_context: &ExecutionContext,
+) -> TurnStateSnapshot {
+    match &execution_plan.route_plan {
+        RouteRunPlan::OpenTask { .. } => turn_state
+            .with_execution_lane(execution_plan.lane)
+            .with_allowed_tools(
+                execution_context
+                    .allowed_tools()
+                    .map(|tools| tools.to_vec()),
+            ),
+        RouteRunPlan::PromptSkillInline { skill_id, setup }
+        | RouteRunPlan::PromptSkillFork { skill_id, setup } => turn_state
+            .with_execution_lane(execution_plan.lane)
+            .with_allowed_tools(setup.skill_allowed_tools.clone())
+            .with_invoked_skill(skill_id.clone()),
+        RouteRunPlan::DirectDispatchSkill {
+            skill_id, setup, ..
+        } => turn_state
+            .with_execution_lane(execution_plan.lane)
+            .with_allowed_tools(setup.skill_allowed_tools.clone())
+            .with_invoked_skill(skill_id.clone()),
+    }
 }
 
 pub(crate) async fn execute_execution_lane(
     params: LaneExecutionParams<'_>,
 ) -> Result<ExecutionOutcome, String> {
+    let turn_state = decorate_turn_state(
+        params.turn_state,
+        params.execution_plan,
+        params.execution_context,
+    );
+
     match execute_planned_route(
         params.app,
         params.agent_executor,
@@ -61,19 +96,29 @@ pub(crate) async fn execute_execution_lane(
                 route_retry_count: params.execution_context.route_retry_count,
             })
             .await;
+            let turn_state = turn_state
+                .with_route_execution(&route_execution, params.turn_context.messages.len());
 
             Ok(ExecutionOutcome::RouteExecution {
                 route_execution,
                 reconstructed_history_len: params.turn_context.messages.len(),
+                turn_state,
             })
         }
-        RouteRunOutcome::DirectDispatch(output) => Ok(ExecutionOutcome::DirectDispatch(output)),
+        RouteRunOutcome::DirectDispatch(output) => {
+            Ok(ExecutionOutcome::DirectDispatch { output, turn_state })
+        }
         RouteRunOutcome::Prompt {
             route_execution,
             reconstructed_history_len,
-        } => Ok(ExecutionOutcome::RouteExecution {
-            route_execution,
-            reconstructed_history_len,
-        }),
+        } => {
+            let turn_state =
+                turn_state.with_route_execution(&route_execution, reconstructed_history_len);
+            Ok(ExecutionOutcome::RouteExecution {
+                route_execution,
+                reconstructed_history_len,
+                turn_state,
+            })
+        }
     }
 }

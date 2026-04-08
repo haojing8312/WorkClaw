@@ -1,0 +1,190 @@
+use crate::agent::run_guard::RunStopReason;
+use crate::agent::runtime::attempt_runner::RouteExecutionOutcome;
+use crate::agent::runtime::compaction_pipeline::RuntimeCompactionOutcome;
+use crate::agent::runtime::kernel::execution_plan::ExecutionLane;
+use crate::agent::runtime::skill_routing::observability::ImplicitRouteObservation;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TurnCompactionBoundary {
+    pub transcript_path: String,
+    pub original_tokens: usize,
+    pub compacted_tokens: usize,
+    pub summary: String,
+}
+
+impl From<&RuntimeCompactionOutcome> for TurnCompactionBoundary {
+    fn from(value: &RuntimeCompactionOutcome) -> Self {
+        Self {
+            transcript_path: value.transcript_path.to_string_lossy().to_string(),
+            original_tokens: value.original_tokens,
+            compacted_tokens: value.new_tokens,
+            summary: value.summary.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct TurnStateSnapshot {
+    pub route_observation: Option<ImplicitRouteObservation>,
+    pub execution_lane: Option<ExecutionLane>,
+    pub allowed_tools: Vec<String>,
+    pub invoked_skills: Vec<String>,
+    pub partial_assistant_text: String,
+    pub tool_failure_streak: usize,
+    pub compaction_boundary: Option<TurnCompactionBoundary>,
+    pub stop_reason: Option<RunStopReason>,
+    pub reconstructed_history_len: Option<usize>,
+}
+
+impl TurnStateSnapshot {
+    pub(crate) fn new(allowed_tools: Option<Vec<String>>) -> Self {
+        Self {
+            allowed_tools: allowed_tools.unwrap_or_default(),
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn with_allowed_tools(mut self, allowed_tools: Option<Vec<String>>) -> Self {
+        self.allowed_tools = allowed_tools.unwrap_or_default();
+        self
+    }
+
+    pub(crate) fn with_route_observation(mut self, observation: ImplicitRouteObservation) -> Self {
+        self.route_observation = Some(observation);
+        self
+    }
+
+    pub(crate) fn with_execution_lane(mut self, lane: ExecutionLane) -> Self {
+        self.execution_lane = Some(lane);
+        self
+    }
+
+    pub(crate) fn with_invoked_skill(mut self, skill_id: impl Into<String>) -> Self {
+        let skill_id = skill_id.into();
+        if !skill_id.trim().is_empty() && !self.invoked_skills.iter().any(|id| id == &skill_id) {
+            self.invoked_skills.push(skill_id);
+        }
+        self
+    }
+
+    pub(crate) fn with_partial_assistant_text(mut self, text: impl Into<String>) -> Self {
+        self.partial_assistant_text = text.into();
+        self
+    }
+
+    pub(crate) fn with_tool_failure_streak(mut self, streak: usize) -> Self {
+        self.tool_failure_streak = streak;
+        self
+    }
+
+    pub(crate) fn with_stop_reason(mut self, stop_reason: RunStopReason) -> Self {
+        self.stop_reason = Some(stop_reason);
+        self
+    }
+
+    pub(crate) fn with_compaction_boundary(
+        mut self,
+        compaction_boundary: TurnCompactionBoundary,
+    ) -> Self {
+        self.compaction_boundary = Some(compaction_boundary);
+        self
+    }
+
+    pub(crate) fn with_reconstructed_history_len(
+        mut self,
+        reconstructed_history_len: usize,
+    ) -> Self {
+        self.reconstructed_history_len = Some(reconstructed_history_len);
+        self
+    }
+
+    pub(crate) fn with_route_execution(
+        mut self,
+        route_execution: &RouteExecutionOutcome,
+        reconstructed_history_len: usize,
+    ) -> Self {
+        if !route_execution.partial_text.is_empty() {
+            self.partial_assistant_text = route_execution.partial_text.clone();
+        }
+        if let Some(stop_reason) = route_execution.last_stop_reason.clone() {
+            self.stop_reason = Some(stop_reason);
+        }
+        self.with_reconstructed_history_len(reconstructed_history_len)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TurnCompactionBoundary, TurnStateSnapshot};
+    use crate::agent::run_guard::RunStopReason;
+    use crate::agent::runtime::kernel::execution_plan::ExecutionLane;
+    use crate::agent::runtime::skill_routing::intent::RouteFallbackReason;
+    use crate::agent::runtime::skill_routing::observability::ImplicitRouteObservation;
+
+    #[test]
+    fn turn_state_snapshot_keeps_route_and_tool_state_together() {
+        let snapshot = TurnStateSnapshot::new(Some(vec!["read".to_string(), "exec".to_string()]))
+            .with_route_observation(ImplicitRouteObservation {
+                route_latency_ms: 18,
+                candidate_count: 2,
+                selected_runner: "prompt_skill_inline".to_string(),
+                selected_skill: Some("pm-summary".to_string()),
+                fallback_reason: None,
+            })
+            .with_execution_lane(ExecutionLane::PromptInline)
+            .with_invoked_skill("pm-summary")
+            .with_partial_assistant_text("partial summary")
+            .with_tool_failure_streak(2)
+            .with_stop_reason(RunStopReason::max_turns(8))
+            .with_compaction_boundary(TurnCompactionBoundary {
+                transcript_path: "temp/transcripts/session-1.json".to_string(),
+                original_tokens: 1200,
+                compacted_tokens: 320,
+                summary: "summary".to_string(),
+            });
+
+        assert_eq!(
+            snapshot.allowed_tools,
+            vec!["read".to_string(), "exec".to_string()]
+        );
+        assert_eq!(snapshot.execution_lane, Some(ExecutionLane::PromptInline));
+        assert_eq!(snapshot.invoked_skills, vec!["pm-summary".to_string()]);
+        assert_eq!(snapshot.partial_assistant_text, "partial summary");
+        assert_eq!(snapshot.tool_failure_streak, 2);
+        assert!(snapshot.stop_reason.is_some());
+        assert_eq!(
+            snapshot
+                .route_observation
+                .as_ref()
+                .and_then(|observation| observation.selected_skill.as_deref()),
+            Some("pm-summary")
+        );
+        assert_eq!(
+            snapshot
+                .compaction_boundary
+                .as_ref()
+                .map(|boundary| boundary.original_tokens),
+            Some(1200)
+        );
+    }
+
+    #[test]
+    fn turn_state_snapshot_preserves_open_task_fallback_route_metadata() {
+        let snapshot =
+            TurnStateSnapshot::default().with_route_observation(ImplicitRouteObservation {
+                route_latency_ms: 7,
+                candidate_count: 0,
+                selected_runner: "open_task".to_string(),
+                selected_skill: None,
+                fallback_reason: Some(RouteFallbackReason::NoCandidates),
+            });
+
+        assert_eq!(
+            snapshot
+                .route_observation
+                .as_ref()
+                .and_then(|observation| observation.fallback_reason),
+            Some(RouteFallbackReason::NoCandidates)
+        );
+    }
+}

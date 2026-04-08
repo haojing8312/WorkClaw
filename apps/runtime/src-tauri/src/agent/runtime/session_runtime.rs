@@ -8,6 +8,7 @@ use crate::agent::runtime::kernel::execution_plan::{
 use crate::agent::runtime::kernel::outcome_commit::{OutcomeCommitter, TerminalOutcome};
 use crate::agent::runtime::kernel::session_engine::SessionEngine;
 use crate::agent::runtime::kernel::turn_preparation::parse_user_skill_command;
+use crate::agent::runtime::kernel::turn_state::TurnStateSnapshot;
 use crate::agent::AgentExecutor;
 use crate::session_journal::SessionJournalStore;
 use serde_json::Value;
@@ -20,14 +21,34 @@ use uuid::Uuid;
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct SessionRuntime;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SkillCommandDispatchOutcome {
+    pub output: String,
+    pub skill_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SkillCommandDispatchError {
+    pub error: String,
+    pub skill_id: String,
+}
+
 enum SessionTurnCompletion {
-    DirectDispatch(String),
+    DirectDispatch {
+        output: String,
+        turn_state: TurnStateSnapshot,
+    },
     RouteExecution {
         route_execution: RouteExecutionOutcome,
         reconstructed_history_len: usize,
+        turn_state: TurnStateSnapshot,
     },
-    SkillCommandFailed(String),
+    SkillCommandFailed {
+        error: String,
+        turn_state: TurnStateSnapshot,
+    },
     SkillCommandStopped {
+        turn_state: TurnStateSnapshot,
         stop_reason: crate::agent::run_guard::RunStopReason,
         error: String,
     },
@@ -48,7 +69,7 @@ impl SessionRuntime {
         execution_context: &ExecutionContext,
         cancel_flag: Arc<AtomicBool>,
         tool_confirm_responder: ToolConfirmResponder,
-    ) -> Result<Option<String>, String> {
+    ) -> Result<Option<SkillCommandDispatchOutcome>, SkillCommandDispatchError> {
         let Some((command_name, raw_args)) = parse_user_skill_command(user_message) else {
             return Ok(None);
         };
@@ -68,7 +89,10 @@ impl SessionRuntime {
                 .map(PathBuf::from),
             execution_context.allowed_tools(),
         )
-        .map_err(|err| err.to_string())?;
+        .map_err(|err| SkillCommandDispatchError {
+            error: err.to_string(),
+            skill_id: spec.skill_id.clone(),
+        })?;
         let dispatch_context = crate::agent::runtime::tool_dispatch::ToolDispatchContext {
             registry: agent_executor.registry(),
             app_handle: Some(app),
@@ -92,8 +116,16 @@ impl SessionRuntime {
             &raw_args,
         )
         .await
-        .map(Some)
-        .map_err(|err| err.to_string())
+        .map(|output| {
+            Some(SkillCommandDispatchOutcome {
+                output,
+                skill_id: spec.skill_id.clone(),
+            })
+        })
+        .map_err(|err| SkillCommandDispatchError {
+            error: err.to_string(),
+            skill_id: spec.skill_id.clone(),
+        })
     }
 
     pub(crate) async fn run_send_message(
@@ -127,20 +159,21 @@ impl SessionRuntime {
         .await;
 
         match Self::classify_session_engine_result(session_engine_result) {
-            SessionTurnCompletion::DirectDispatch(output) => {
+            SessionTurnCompletion::DirectDispatch { output, turn_state } => {
                 OutcomeCommitter::commit_terminal_outcome(
                     app,
                     db,
                     journal,
                     session_id,
                     &run_id,
-                    TerminalOutcome::DirectDispatch(output),
+                    TerminalOutcome::DirectDispatch { output, turn_state },
                 )
                 .await
             }
             SessionTurnCompletion::RouteExecution {
                 route_execution,
                 reconstructed_history_len,
+                turn_state,
             } => {
                 OutcomeCommitter::commit_terminal_outcome(
                     app,
@@ -151,29 +184,38 @@ impl SessionRuntime {
                     TerminalOutcome::RouteExecution {
                         route_execution,
                         reconstructed_history_len,
+                        turn_state,
                     },
                 )
                 .await
             }
-            SessionTurnCompletion::SkillCommandFailed(error) => {
+            SessionTurnCompletion::SkillCommandFailed { error, turn_state } => {
                 OutcomeCommitter::commit_terminal_outcome(
                     app,
                     db,
                     journal,
                     session_id,
                     &run_id,
-                    TerminalOutcome::SkillCommandFailed(error),
+                    TerminalOutcome::SkillCommandFailed { error, turn_state },
                 )
                 .await
             }
-            SessionTurnCompletion::SkillCommandStopped { stop_reason, error } => {
+            SessionTurnCompletion::SkillCommandStopped {
+                turn_state,
+                stop_reason,
+                error,
+            } => {
                 OutcomeCommitter::commit_terminal_outcome(
                     app,
                     db,
                     journal,
                     session_id,
                     &run_id,
-                    TerminalOutcome::SkillCommandStopped { stop_reason, error },
+                    TerminalOutcome::SkillCommandStopped {
+                        turn_state,
+                        stop_reason,
+                        error,
+                    },
                 )
                 .await
             }
@@ -187,22 +229,30 @@ impl SessionRuntime {
         result: Result<ExecutionOutcome, SessionEngineError>,
     ) -> SessionTurnCompletion {
         match result {
-            Ok(ExecutionOutcome::DirectDispatch(output)) => {
-                SessionTurnCompletion::DirectDispatch(output)
+            Ok(ExecutionOutcome::DirectDispatch { output, turn_state }) => {
+                SessionTurnCompletion::DirectDispatch { output, turn_state }
             }
             Ok(ExecutionOutcome::RouteExecution {
                 route_execution,
                 reconstructed_history_len,
+                turn_state,
             }) => SessionTurnCompletion::RouteExecution {
                 route_execution,
                 reconstructed_history_len,
+                turn_state,
             },
-            Ok(ExecutionOutcome::SkillCommandFailed(error)) => {
-                SessionTurnCompletion::SkillCommandFailed(error)
+            Ok(ExecutionOutcome::SkillCommandFailed { error, turn_state }) => {
+                SessionTurnCompletion::SkillCommandFailed { error, turn_state }
             }
-            Ok(ExecutionOutcome::SkillCommandStopped { stop_reason, error }) => {
-                SessionTurnCompletion::SkillCommandStopped { stop_reason, error }
-            }
+            Ok(ExecutionOutcome::SkillCommandStopped {
+                turn_state,
+                stop_reason,
+                error,
+            }) => SessionTurnCompletion::SkillCommandStopped {
+                turn_state,
+                stop_reason,
+                error,
+            },
             Err(SessionEngineError::Generic(error)) => SessionTurnCompletion::GenericError(error),
         }
     }
@@ -213,6 +263,7 @@ mod tests {
     use super::{SessionRuntime, SessionTurnCompletion};
     use crate::agent::run_guard::RunStopReason;
     use crate::agent::runtime::kernel::execution_plan::{ExecutionOutcome, SessionEngineError};
+    use crate::agent::runtime::kernel::turn_state::TurnStateSnapshot;
 
     #[test]
     fn classify_session_engine_result_keeps_generic_errors_out_of_terminal_handling() {
@@ -229,16 +280,20 @@ mod tests {
     #[test]
     fn classify_session_engine_result_keeps_explicit_skill_command_terminals() {
         let failure = SessionRuntime::classify_session_engine_result(Ok(
-            ExecutionOutcome::SkillCommandFailed("dispatch failed".to_string()),
+            ExecutionOutcome::SkillCommandFailed {
+                error: "dispatch failed".to_string(),
+                turn_state: TurnStateSnapshot::new(Some(vec!["exec".to_string()])),
+            },
         ));
         assert!(matches!(
             failure,
-            SessionTurnCompletion::SkillCommandFailed(error) if error == "dispatch failed"
+            SessionTurnCompletion::SkillCommandFailed { error, .. } if error == "dispatch failed"
         ));
 
         let stop_reason = RunStopReason::max_turns(12);
         let stopped = SessionRuntime::classify_session_engine_result(Ok(
             ExecutionOutcome::SkillCommandStopped {
+                turn_state: TurnStateSnapshot::new(Some(vec!["read".to_string()])),
                 stop_reason: stop_reason.clone(),
                 error: "max turns".to_string(),
             },
@@ -246,9 +301,32 @@ mod tests {
         assert!(matches!(
             stopped,
             SessionTurnCompletion::SkillCommandStopped {
+                turn_state: _,
                 stop_reason: reason,
                 error
             } if reason == stop_reason && error == "max turns"
+        ));
+    }
+
+    #[test]
+    fn classify_session_engine_result_preserves_turn_state_snapshot() {
+        let turn_state = TurnStateSnapshot::new(Some(vec!["read".to_string(), "exec".to_string()]))
+            .with_partial_assistant_text("partial answer")
+            .with_tool_failure_streak(1);
+
+        let classification =
+            SessionRuntime::classify_session_engine_result(Ok(ExecutionOutcome::DirectDispatch {
+                output: "done".to_string(),
+                turn_state: turn_state.clone(),
+            }));
+
+        assert!(matches!(
+            classification,
+            SessionTurnCompletion::DirectDispatch { output, turn_state: snapshot }
+                if output == "done"
+                    && snapshot.allowed_tools == turn_state.allowed_tools
+                    && snapshot.partial_assistant_text == "partial answer"
+                    && snapshot.tool_failure_streak == 1
         ));
     }
 }

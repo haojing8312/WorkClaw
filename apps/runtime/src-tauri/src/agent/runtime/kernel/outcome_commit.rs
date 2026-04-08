@@ -1,6 +1,7 @@
-use crate::agent::runtime::attempt_runner::RouteExecutionOutcome;
-use crate::agent::runtime::runtime_io as chat_io;
 use crate::agent::run_guard::RunStopReason;
+use crate::agent::runtime::attempt_runner::RouteExecutionOutcome;
+use crate::agent::runtime::kernel::turn_state::TurnStateSnapshot;
+use crate::agent::runtime::runtime_io as chat_io;
 use crate::session_journal::SessionJournalStore;
 use tauri::{AppHandle, Emitter, Runtime};
 
@@ -9,13 +10,21 @@ pub(crate) struct OutcomeCommitter;
 
 #[derive(Debug, Clone)]
 pub(crate) enum TerminalOutcome {
-    DirectDispatch(String),
+    DirectDispatch {
+        output: String,
+        turn_state: TurnStateSnapshot,
+    },
     RouteExecution {
         route_execution: RouteExecutionOutcome,
         reconstructed_history_len: usize,
+        turn_state: TurnStateSnapshot,
     },
-    SkillCommandFailed(String),
+    SkillCommandFailed {
+        error: String,
+        turn_state: TurnStateSnapshot,
+    },
     SkillCommandStopped {
+        turn_state: TurnStateSnapshot,
         stop_reason: RunStopReason,
         error: String,
     },
@@ -63,7 +72,10 @@ impl OutcomeCommitter {
         F: FnMut(&str, String, bool, bool),
     {
         match outcome {
-            TerminalOutcome::DirectDispatch(output) => {
+            TerminalOutcome::DirectDispatch {
+                output,
+                turn_state: _turn_state,
+            } => {
                 chat_io::finalize_run_success_with_pool(
                     db, journal, session_id, run_id, &output, false, &output, "", None,
                 )
@@ -75,17 +87,24 @@ impl OutcomeCommitter {
             TerminalOutcome::RouteExecution {
                 route_execution,
                 reconstructed_history_len,
-            } => Self::commit_route_execution(
-                db,
-                journal,
-                session_id,
-                run_id,
-                route_execution,
-                reconstructed_history_len,
-                &mut emit_stream_token,
-            )
-            .await,
-            TerminalOutcome::SkillCommandFailed(error) => {
+                turn_state,
+            } => {
+                Self::commit_route_execution(
+                    db,
+                    journal,
+                    session_id,
+                    run_id,
+                    route_execution,
+                    reconstructed_history_len,
+                    turn_state,
+                    &mut emit_stream_token,
+                )
+                .await
+            }
+            TerminalOutcome::SkillCommandFailed {
+                error,
+                turn_state: _turn_state,
+            } => {
                 chat_io::append_run_failed_with_pool(
                     db,
                     journal,
@@ -99,11 +118,16 @@ impl OutcomeCommitter {
                 Err(error)
             }
             TerminalOutcome::SkillCommandStopped {
+                turn_state: _turn_state,
                 stop_reason,
                 error,
             } => {
                 let _ = chat_io::append_run_stopped_with_pool(
-                    db, journal, session_id, run_id, &stop_reason,
+                    db,
+                    journal,
+                    session_id,
+                    run_id,
+                    &stop_reason,
                 )
                 .await;
                 emit_stream_token(session_id, String::new(), true, false);
@@ -119,15 +143,30 @@ impl OutcomeCommitter {
         run_id: &str,
         route_execution: RouteExecutionOutcome,
         reconstructed_history_len: usize,
+        turn_state: TurnStateSnapshot,
         emit_stream_token: &mut F,
     ) -> Result<(), String>
     where
         F: FnMut(&str, String, bool, bool),
     {
-        let final_messages = match route_execution.final_messages {
+        let RouteExecutionOutcome {
+            final_messages,
+            last_error,
+            last_error_kind,
+            last_stop_reason,
+            partial_text,
+            reasoning_text,
+            reasoning_duration_ms,
+        } = route_execution;
+
+        let final_messages = match final_messages {
             Some(messages) => messages,
             None => {
-                let partial_text = route_execution.partial_text;
+                let partial_text = if partial_text.is_empty() {
+                    turn_state.partial_assistant_text.clone()
+                } else {
+                    partial_text
+                };
                 if !partial_text.is_empty() {
                     chat_io::append_partial_assistant_chunk_with_pool(
                         db,
@@ -146,15 +185,19 @@ impl OutcomeCommitter {
                 )
                 .await;
 
-                let error_message = route_execution
-                    .last_error
-                    .unwrap_or_else(|| "所有候选模型执行失败".to_string());
-                let error_kind = route_execution
-                    .last_error_kind
-                    .unwrap_or_else(|| "unknown".to_string());
-                if let Some(stop_reason) = route_execution.last_stop_reason.as_ref() {
+                let error_message =
+                    last_error.unwrap_or_else(|| "所有候选模型执行失败".to_string());
+                let error_kind = last_error_kind.unwrap_or_else(|| "unknown".to_string());
+                if let Some(stop_reason) = last_stop_reason
+                    .as_ref()
+                    .or(turn_state.stop_reason.as_ref())
+                {
                     let _ = chat_io::append_run_stopped_with_pool(
-                        db, journal, session_id, run_id, stop_reason,
+                        db,
+                        journal,
+                        session_id,
+                        run_id,
+                        stop_reason,
                     )
                     .await;
                 } else {
@@ -187,8 +230,8 @@ impl OutcomeCommitter {
             &final_text,
             has_tool_calls,
             &content,
-            &route_execution.reasoning_text,
-            route_execution.reasoning_duration_ms,
+            &reasoning_text,
+            reasoning_duration_ms,
         )
         .await;
 
@@ -216,6 +259,7 @@ impl OutcomeCommitter {
 mod tests {
     use super::{OutcomeCommitter, TerminalOutcome};
     use crate::agent::run_guard::RunStopReason;
+    use crate::agent::runtime::kernel::turn_state::TurnStateSnapshot;
     use crate::session_journal::SessionJournalStore;
     use serde_json::Value;
     use sqlx::sqlite::SqlitePoolOptions;
@@ -315,7 +359,10 @@ mod tests {
             &journal,
             "session-1",
             "run-1",
-            TerminalOutcome::DirectDispatch("ok".to_string()),
+            TerminalOutcome::DirectDispatch {
+                output: "ok".to_string(),
+                turn_state: TurnStateSnapshot::new(Some(vec!["exec".to_string()])),
+            },
             |session_id, token, done, sub_agent| {
                 emitted.lock().expect("lock emitted tokens").push((
                     session_id.to_string(),
@@ -375,6 +422,7 @@ mod tests {
             TerminalOutcome::RouteExecution {
                 route_execution,
                 reconstructed_history_len: 1,
+                turn_state: TurnStateSnapshot::new(Some(vec!["read".to_string()])),
             },
             |session_id, token, done, sub_agent| {
                 emitted.lock().expect("lock emitted tokens").push((
@@ -433,7 +481,10 @@ mod tests {
             &journal,
             "session-1",
             "run-3",
-            TerminalOutcome::SkillCommandFailed("dispatch failed".to_string()),
+            TerminalOutcome::SkillCommandFailed {
+                error: "dispatch failed".to_string(),
+                turn_state: TurnStateSnapshot::new(Some(vec!["exec".to_string()])),
+            },
             |session_id, token, done, sub_agent| {
                 emitted.lock().expect("lock emitted tokens").push((
                     session_id.to_string(),
@@ -484,6 +535,7 @@ mod tests {
             "session-1",
             "run-4",
             TerminalOutcome::SkillCommandStopped {
+                turn_state: TurnStateSnapshot::new(Some(vec!["exec".to_string()])),
                 stop_reason: RunStopReason::loop_detected("exec repeated with the same input"),
                 error: "execution stopped".to_string(),
             },
@@ -518,5 +570,24 @@ mod tests {
             emitted.as_slice(),
             &[("session-1".to_string(), String::new(), true, false)]
         );
+    }
+
+    #[test]
+    fn terminal_outcome_keeps_turn_state_snapshot_alongside_payload() {
+        let turn_state = TurnStateSnapshot::new(Some(vec!["read".to_string()]))
+            .with_partial_assistant_text("partial");
+
+        let outcome = TerminalOutcome::DirectDispatch {
+            output: "done".to_string(),
+            turn_state: turn_state.clone(),
+        };
+
+        assert!(matches!(
+            outcome,
+            TerminalOutcome::DirectDispatch { output, turn_state: snapshot }
+                if output == "done"
+                    && snapshot.allowed_tools == turn_state.allowed_tools
+                    && snapshot.partial_assistant_text == "partial"
+        ));
     }
 }

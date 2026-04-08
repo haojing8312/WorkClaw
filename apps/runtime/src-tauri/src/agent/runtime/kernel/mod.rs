@@ -9,4 +9,5 @@ pub(crate) mod routed_prompt;
 pub(crate) mod session_engine;
 pub(crate) mod tool_registry_setup;
 pub(crate) mod turn_preparation;
+pub(crate) mod turn_state;
 pub(crate) mod workspace_skill_context;
