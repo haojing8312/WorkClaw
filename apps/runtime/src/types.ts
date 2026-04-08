@@ -255,6 +255,27 @@ export interface SessionRunProjection {
   error_message?: string | null;
   created_at: string;
   updated_at: string;
+  turn_state?: SessionRunTurnStateSnapshot | null;
+}
+
+export interface SessionRunTurnStateCompactionBoundary {
+  transcript_path: string;
+  original_tokens: number;
+  compacted_tokens: number;
+  summary: string;
+}
+
+export interface SessionRunTurnStateSnapshot {
+  execution_lane?: string | null;
+  selected_runner?: string | null;
+  selected_skill?: string | null;
+  fallback_reason?: string | null;
+  allowed_tools?: string[];
+  invoked_skills?: string[];
+  partial_assistant_text?: string;
+  tool_failure_streak?: number;
+  reconstructed_history_len?: number | null;
+  compaction_boundary?: SessionRunTurnStateCompactionBoundary | null;
 }
 
 export interface SessionInfo {

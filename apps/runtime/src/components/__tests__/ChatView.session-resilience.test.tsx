@@ -763,6 +763,72 @@ describe("ChatView session resilience", () => {
     });
   });
 
+  test("shows compaction boundary guidance for a max-turn failed run", async () => {
+    sessionRunsResponse = [
+      {
+        id: "run-max-compacted",
+        session_id: "sess-continue-compacted",
+        user_message_id: "user-1",
+        assistant_message_id: null,
+        status: "failed",
+        buffered_text: "已保留当前执行上下文",
+        error_kind: "max_turns",
+        error_message: "已达到执行步数上限，系统已自动停止。",
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        turn_state: {
+          reconstructed_history_len: 7,
+          compaction_boundary: {
+            transcript_path: "temp/transcripts/run-max-compacted.json",
+            original_tokens: 4096,
+            compacted_tokens: 1024,
+            summary: "保留最近的文件修改计划和工具结果",
+          },
+        },
+      },
+    ];
+
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_messages") return Promise.resolve([]);
+      if (command === "list_sessions") return Promise.resolve([]);
+      if (command === "get_sessions") return Promise.resolve([]);
+      if (command === "list_session_runs") return Promise.resolve(sessionRunsResponse);
+      return Promise.resolve(null);
+    });
+
+    render(
+      <ChatView
+        skill={{
+          id: "builtin-general",
+          name: "General",
+          description: "desc",
+          version: "1.0.0",
+          author: "test",
+          recommended_model: "",
+          tags: [],
+          created_at: new Date().toISOString(),
+        }}
+        models={[
+          {
+            id: "m1",
+            name: "model",
+            api_format: "openai",
+            base_url: "https://example.com",
+            model_name: "model",
+            is_default: true,
+          },
+        ]}
+        sessionId="sess-continue-compacted"
+      />
+    );
+
+    const failureCard = await screen.findByTestId("run-failure-card-run-max-compacted");
+    expect(failureCard).toHaveTextContent("任务达到执行步数上限");
+    expect(failureCard).toHaveTextContent("最近一次上下文压缩：4096 -> 1024");
+    expect(failureCard).toHaveTextContent("压缩摘要：保留最近的文件修改计划和工具结果");
+    expect(failureCard).toHaveTextContent("重建历史消息数：7");
+  });
+
   test("preserves slash command text when sending from the chat composer", async () => {
     invokeMock.mockImplementation((command: string) => {
       if (command === "get_messages") return Promise.resolve([]);

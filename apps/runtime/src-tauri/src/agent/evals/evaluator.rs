@@ -719,6 +719,7 @@ diagnostics:
                 error_message: None,
                 created_at: "2026-04-04T09:00:00Z".to_string(),
                 updated_at: completed,
+                turn_state: None,
             }],
             route_attempt_logs: vec![RouteAttemptLog {
                 session_id: "session-1".to_string(),
@@ -913,6 +914,7 @@ diagnostics:
                 error_message: None,
                 created_at: "2026-04-04T09:00:00Z".to_string(),
                 updated_at: completed,
+                turn_state: None,
             }],
             route_attempt_logs: vec![RouteAttemptLog {
                 session_id: "session-1".to_string(),

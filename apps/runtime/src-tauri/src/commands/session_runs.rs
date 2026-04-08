@@ -3,14 +3,16 @@ use crate::agent::runtime::trace_builder::{
     build_session_run_trace, summarize_stored_event, SessionRunEventSummary, SessionRunTrace,
     StoredSessionRunEvent,
 };
-use crate::session_journal::{SessionJournalStore, SessionRunEvent};
+use crate::session_journal::{
+    SessionJournalStateHandle, SessionJournalStore, SessionRunEvent, SessionRunTurnStateSnapshot,
+};
 use chrono::Utc;
 use serde::Serialize;
-use sqlx::{FromRow, SqlitePool};
+use sqlx::SqlitePool;
 use tauri::State;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Serialize, FromRow, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct SessionRunProjection {
     pub id: String,
     pub session_id: String,
@@ -22,13 +24,29 @@ pub struct SessionRunProjection {
     pub error_message: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_state: Option<SessionRunTurnStateSnapshot>,
 }
 
 pub async fn list_session_runs_with_pool(
     pool: &SqlitePool,
     session_id: &str,
 ) -> Result<Vec<SessionRunProjection>, String> {
-    sqlx::query_as::<_, SessionRunProjection>(
+    let rows = sqlx::query_as::<
+        _,
+        (
+            String,
+            String,
+            String,
+            Option<String>,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            String,
+            String,
+        ),
+    >(
         "SELECT id, session_id, user_message_id,
                 NULLIF(assistant_message_id, '') AS assistant_message_id,
                 status, buffered_text,
@@ -42,15 +60,70 @@ pub async fn list_session_runs_with_pool(
     .bind(session_id.trim())
     .fetch_all(pool)
     .await
-    .map_err(|e| format!("读取会话运行记录失败: {e}"))
+    .map_err(|e| format!("读取会话运行记录失败: {e}"))?;
+
+    Ok(rows
+        .into_iter()
+        .map(
+            |(
+                id,
+                session_id,
+                user_message_id,
+                assistant_message_id,
+                status,
+                buffered_text,
+                error_kind,
+                error_message,
+                created_at,
+                updated_at,
+            )| SessionRunProjection {
+                id,
+                session_id,
+                user_message_id,
+                assistant_message_id,
+                status,
+                buffered_text,
+                error_kind,
+                error_message,
+                created_at,
+                updated_at,
+                turn_state: None,
+            },
+        )
+        .collect())
+}
+
+pub async fn list_session_runs_with_runtime_state(
+    pool: &SqlitePool,
+    session_id: &str,
+    journal: Option<&SessionJournalStore>,
+) -> Result<Vec<SessionRunProjection>, String> {
+    let mut runs = list_session_runs_with_pool(pool, session_id).await?;
+    let Some(journal) = journal else {
+        return Ok(runs);
+    };
+    let Ok(state) = journal.read_state(session_id).await else {
+        return Ok(runs);
+    };
+
+    for run in &mut runs {
+        run.turn_state = state
+            .runs
+            .iter()
+            .find(|snapshot| snapshot.run_id == run.id)
+            .and_then(|snapshot| snapshot.turn_state.clone());
+    }
+
+    Ok(runs)
 }
 
 #[tauri::command]
 pub async fn list_session_runs(
     session_id: String,
     db: State<'_, DbState>,
+    journal: State<'_, SessionJournalStateHandle>,
 ) -> Result<Vec<SessionRunProjection>, String> {
-    list_session_runs_with_pool(&db.0, &session_id).await
+    list_session_runs_with_runtime_state(&db.0, &session_id, Some(journal.0.as_ref())).await
 }
 
 pub async fn list_session_run_events_with_pool(
@@ -458,9 +531,13 @@ mod tests {
         list_session_run_events_with_pool,
     };
     use crate::agent::run_guard::RunStopReason;
-    use crate::session_journal::SessionRunEvent;
+    use crate::session_journal::{
+        SessionJournalStore, SessionRunEvent, SessionRunTurnStateCompactionBoundary,
+        SessionRunTurnStateSnapshot,
+    };
     use serde_json::json;
     use sqlx::sqlite::SqlitePoolOptions;
+    use tempfile::tempdir;
 
     async fn setup_session_run_event_pool() -> sqlx::SqlitePool {
         let pool = SqlitePoolOptions::new()
@@ -857,5 +934,89 @@ mod tests {
         assert_eq!(trace.event_count, 2);
         assert_eq!(trace.parse_warnings.len(), 1);
         assert!(trace.parse_warnings[0].contains("failed to parse payload_json"));
+    }
+
+    #[tokio::test]
+    async fn list_session_runs_with_runtime_state_projects_turn_state_from_journal() {
+        let pool = setup_session_run_event_pool().await;
+        let journal_root = tempdir().expect("journal temp dir");
+        let journal = SessionJournalStore::new(journal_root.path().to_path_buf());
+
+        sqlx::query(
+            "INSERT INTO session_runs (id, session_id, user_message_id, assistant_message_id, status, buffered_text, error_kind, error_message, created_at, updated_at)
+             VALUES (?, ?, ?, '', ?, ?, ?, ?, ?, ?)",
+        )
+        .bind("run-compacted")
+        .bind("session-1")
+        .bind("user-1")
+        .bind("failed")
+        .bind("已保留当前执行上下文")
+        .bind("max_turns")
+        .bind("已达到执行步数上限")
+        .bind("2026-04-08T00:00:00Z")
+        .bind("2026-04-08T00:00:01Z")
+        .execute(&pool)
+        .await
+        .expect("insert session run");
+
+        journal
+            .append_event(
+                "session-1",
+                SessionRunEvent::RunStarted {
+                    run_id: "run-compacted".to_string(),
+                    user_message_id: "user-1".to_string(),
+                },
+            )
+            .await
+            .expect("append run started");
+        journal
+            .append_event(
+                "session-1",
+                SessionRunEvent::RunFailed {
+                    run_id: "run-compacted".to_string(),
+                    error_kind: "max_turns".to_string(),
+                    error_message: "已达到执行步数上限".to_string(),
+                    turn_state: Some(SessionRunTurnStateSnapshot {
+                        execution_lane: Some("open_task".to_string()),
+                        selected_runner: Some("OpenTaskRunner".to_string()),
+                        selected_skill: Some("builtin-general".to_string()),
+                        fallback_reason: None,
+                        allowed_tools: vec!["read".to_string(), "exec".to_string()],
+                        invoked_skills: vec!["builtin-general".to_string()],
+                        partial_assistant_text: "已保留当前执行上下文".to_string(),
+                        tool_failure_streak: 0,
+                        reconstructed_history_len: Some(7),
+                        compaction_boundary: Some(SessionRunTurnStateCompactionBoundary {
+                            transcript_path: "temp/transcripts/run-compacted.json".to_string(),
+                            original_tokens: 4096,
+                            compacted_tokens: 1024,
+                            summary: "保留最近的文件修改计划和工具结果".to_string(),
+                        }),
+                    }),
+                },
+            )
+            .await
+            .expect("append run failed");
+
+        let runs = super::list_session_runs_with_runtime_state(&pool, "session-1", Some(&journal))
+            .await
+            .expect("list session runs");
+
+        assert_eq!(runs.len(), 1);
+        assert_eq!(
+            runs[0]
+                .turn_state
+                .as_ref()
+                .and_then(|turn_state| turn_state.compaction_boundary.as_ref())
+                .map(|boundary| boundary.original_tokens),
+            Some(4096)
+        );
+        assert_eq!(
+            runs[0]
+                .turn_state
+                .as_ref()
+                .and_then(|turn_state| turn_state.reconstructed_history_len),
+            Some(7)
+        );
     }
 }
