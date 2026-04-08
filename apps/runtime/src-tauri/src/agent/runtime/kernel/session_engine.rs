@@ -1,4 +1,5 @@
 use super::execution_plan::{ExecutionLane, ExecutionOutcome, SessionEngineError};
+use super::session_profile::SessionSurfaceKind;
 use crate::agent::run_guard::parse_run_stop_reason;
 use crate::agent::runtime::events::ToolConfirmResponder;
 use crate::agent::runtime::kernel::lane_executor::{execute_execution_lane, LaneExecutionParams};
@@ -43,6 +44,10 @@ impl SessionEngine {
         .await
         .map_err(SessionEngineError::Generic)?;
         let (turn_context, execution_context) = &prepared_context;
+        debug_assert_eq!(
+            execution_context.session_profile.surface,
+            SessionSurfaceKind::LocalChat
+        );
 
         chat_io::append_run_started_with_pool(db, journal, session_id, run_id, user_message_id)
             .await

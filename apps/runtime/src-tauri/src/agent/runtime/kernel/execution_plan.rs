@@ -3,6 +3,7 @@ use crate::agent::run_guard::RunStopReason;
 use crate::agent::runtime::attempt_runner::RouteExecutionOutcome;
 use crate::agent::runtime::kernel::capability_snapshot::CapabilitySnapshot;
 use crate::agent::runtime::kernel::route_lane::RouteRunPlan;
+use crate::agent::runtime::kernel::session_profile::SessionExecutionProfile;
 use crate::agent::runtime::kernel::turn_state::TurnStateSnapshot;
 use crate::agent::runtime::runtime_io::WorkspaceSkillRuntimeEntry;
 use crate::agent::runtime::skill_routing::index::SkillRouteIndex;
@@ -41,6 +42,7 @@ impl ExecutionPlan {
 
 #[derive(Debug, Clone)]
 pub(crate) struct ExecutionContext {
+    pub session_profile: SessionExecutionProfile,
     pub capability_snapshot: CapabilitySnapshot,
     pub system_prompt: String,
     pub continuation_runtime_notes: Vec<String>,
@@ -60,6 +62,7 @@ pub(crate) struct ExecutionContext {
 impl Default for ExecutionContext {
     fn default() -> Self {
         Self {
+            session_profile: SessionExecutionProfile::default(),
             capability_snapshot: CapabilitySnapshot::default(),
             system_prompt: String::new(),
             continuation_runtime_notes: Vec::new(),
@@ -162,6 +165,9 @@ mod tests {
     };
     use crate::agent::permissions::PermissionMode;
     use crate::agent::runtime::kernel::capability_snapshot::CapabilitySnapshot;
+    use crate::agent::runtime::kernel::session_profile::{
+        SessionExecutionProfile, SessionSurfaceKind,
+    };
     use crate::agent::runtime::kernel::route_lane::RouteRunPlan;
     use crate::agent::runtime::skill_routing::index::SkillRouteIndex;
     use crate::agent::runtime::skill_routing::intent::RouteFallbackReason;
@@ -199,6 +205,7 @@ mod tests {
     #[test]
     fn execution_context_exposes_runtime_snapshot_contract() {
         let execution_context = ExecutionContext {
+            session_profile: SessionExecutionProfile::for_surface(SessionSurfaceKind::LocalChat),
             capability_snapshot: CapabilitySnapshot {
                 allowed_tools: Some(vec!["read".to_string(), "exec".to_string()]),
                 resolved_tool_names: vec!["read".to_string(), "exec".to_string()],
@@ -240,6 +247,17 @@ mod tests {
             execution_context.employee_collaboration_guidance.as_deref(),
             Some("Work with employee-1")
         );
+        assert_eq!(
+            execution_context.session_profile.surface,
+            SessionSurfaceKind::LocalChat
+        );
+    }
+
+    #[test]
+    fn session_execution_profile_defaults_to_local_chat_surface() {
+        let profile = SessionExecutionProfile::default();
+
+        assert_eq!(profile.surface, SessionSurfaceKind::LocalChat);
     }
 
     #[test]

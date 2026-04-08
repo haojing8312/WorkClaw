@@ -1,6 +1,7 @@
 use super::execution_plan::{
     ContinuationPreference, ContinuationTurnPolicy, ExecutionContext, TurnContext,
 };
+use super::session_profile::{SessionExecutionProfile, SessionSurfaceKind};
 use crate::agent::permissions::PermissionMode;
 use crate::agent::run_guard::{RunBudgetPolicy, RunBudgetScope};
 use crate::agent::runtime::repo::{PoolChatEmployeeDirectory, PoolChatSettingsRepository};
@@ -226,6 +227,7 @@ pub(crate) async fn prepare_local_turn(
     }
 
     let execution_context = ExecutionContext {
+        session_profile: build_local_chat_session_profile(),
         capability_snapshot: prepared_runtime_tools.capability_snapshot,
         system_prompt: prepared_runtime_tools.system_prompt,
         continuation_runtime_notes,
@@ -255,6 +257,10 @@ pub(crate) async fn prepare_local_turn(
         },
         execution_context,
     ))
+}
+
+fn build_local_chat_session_profile() -> SessionExecutionProfile {
+    SessionExecutionProfile::for_surface(SessionSurfaceKind::LocalChat)
 }
 
 #[derive(Debug, Default)]
@@ -523,13 +529,15 @@ struct ExplicitPromptSkillSelection {
 #[cfg(test)]
 mod tests {
     use super::{
-        append_current_turn_message, apply_continuation_turn_policy, parse_user_skill_command,
+        append_current_turn_message, apply_continuation_turn_policy,
+        build_local_chat_session_profile, parse_user_skill_command,
         resolve_compaction_continuation_preference, resolve_explicit_prompt_following_skill,
         resolve_recent_compaction_runtime_notes, rewrite_user_skill_command_for_model,
     };
     use crate::agent::runtime::kernel::execution_plan::{
         ContinuationPreference, ContinuationTurnPolicy,
     };
+    use crate::agent::runtime::kernel::session_profile::SessionSurfaceKind;
     use crate::agent::runtime::runtime_io as chat_io;
     use crate::agent::runtime::runtime_io::{WorkspaceSkillContent, WorkspaceSkillRuntimeEntry};
     use crate::session_journal::{
@@ -586,6 +594,13 @@ mod tests {
             parse_user_skill_command("/pm_summary --employee xt"),
             Some(("pm_summary".to_string(), "--employee xt".to_string()))
         );
+    }
+
+    #[test]
+    fn local_turn_preparation_uses_local_chat_surface_profile() {
+        let profile = build_local_chat_session_profile();
+
+        assert_eq!(profile.surface, SessionSurfaceKind::LocalChat);
     }
 
     #[test]
