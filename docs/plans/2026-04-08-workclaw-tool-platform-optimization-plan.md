@@ -44,6 +44,20 @@ git add apps/runtime/src-tauri/src/agent/registry.rs apps/runtime/src-tauri/src/
 git commit -m "test(tooling): snapshot standard tool surface"
 ```
 
+## Follow-on Status
+
+On 2026-04-08, the follow-on deferred-loading phase was completed in a separate design and plan:
+
+- `docs/plans/2026-04-08-workclaw-tool-defer-loading-and-selection-design.md`
+- `docs/plans/2026-04-08-workclaw-tool-defer-loading-and-selection-plan.md`
+
+That follow-on work added:
+
+- staged tool exposure with `full/recommended/active/deferred`
+- conservative expansion from deferred exposure to full exposure
+- structured tool discovery candidates with match reasons
+- route-side recommendation summaries in runtime records
+
 ### Task 2: Add Tool Metadata Types
 
 **Files:**

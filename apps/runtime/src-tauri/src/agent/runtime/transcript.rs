@@ -476,9 +476,7 @@ mod tests {
         )
         .expect("message");
 
-        let text = message["content"][0]["text"]
-            .as_str()
-            .expect("text block");
+        let text = message["content"][0]["text"].as_str().expect("text block");
         assert!(text.contains("PDF 附件"));
         assert!(text.contains("brief.pdf"));
         assert!(text.contains("这是 PDF 正文"));

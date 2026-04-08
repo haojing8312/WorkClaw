@@ -29,7 +29,10 @@ pub fn adjudicate_route(candidates: &[SkillRecallCandidate]) -> RouteDecision {
         };
     }
 
-    route_to_skill(&top.projection, routed_confidence(top.score, runner_up_score))
+    route_to_skill(
+        &top.projection,
+        routed_confidence(top.score, runner_up_score),
+    )
 }
 
 fn route_to_skill(
@@ -53,7 +56,10 @@ fn route_to_skill(
 }
 
 fn runner_up_score(candidates: &[SkillRecallCandidate]) -> u32 {
-    candidates.get(1).map(|candidate| candidate.score).unwrap_or(0)
+    candidates
+        .get(1)
+        .map(|candidate| candidate.score)
+        .unwrap_or(0)
 }
 
 fn is_clear_winner(top_score: u32, runner_up_score: u32) -> bool {
@@ -72,7 +78,11 @@ fn is_clear_winner(top_score: u32, runner_up_score: u32) -> bool {
 }
 
 fn ambiguous_confidence(top_score: u32) -> RouteConfidence {
-    let raw = if top_score >= ROUTE_SCORE_FLOOR { 0.55 } else { 0.45 };
+    let raw = if top_score >= ROUTE_SCORE_FLOOR {
+        0.55
+    } else {
+        0.45
+    };
     RouteConfidence::new(raw).expect("ambiguous confidence is normalized")
 }
 
@@ -102,11 +112,11 @@ mod tests {
     use crate::agent::runtime::runtime_io::{WorkspaceSkillContent, WorkspaceSkillRuntimeEntry};
     use crate::agent::runtime::skill_routing::index::SkillRouteIndex;
     use crate::agent::runtime::skill_routing::recall::recall_skill_candidates;
+    use crate::agent::runtime::skill_routing::recall::SkillRecallCandidate;
     use runtime_skill_core::{
         OpenClawSkillMetadata, SkillCommandArgMode, SkillCommandDispatchKind,
         SkillCommandDispatchSpec, SkillConfig, SkillInvocationPolicy,
     };
-    use crate::agent::runtime::skill_routing::recall::SkillRecallCandidate;
 
     fn build_projection(
         skill_id: &str,
@@ -159,6 +169,11 @@ mod tests {
                 name: Some(name.to_string()),
                 description: Some(description.to_string()),
                 allowed_tools: allowed_tools_for_config,
+                denied_tools: None,
+                allowed_tool_sources: None,
+                denied_tool_sources: None,
+                allowed_tool_categories: None,
+                denied_tool_categories: None,
                 model: None,
                 max_iterations,
                 argument_hint: None,

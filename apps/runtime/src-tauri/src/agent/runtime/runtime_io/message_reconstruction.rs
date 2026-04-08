@@ -206,7 +206,10 @@ mod tests {
 
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0]["role"].as_str(), Some("assistant"));
-        assert_eq!(messages[0]["content"].as_str(), Some("我是 WorkClaw 助手。"));
+        assert_eq!(
+            messages[0]["content"].as_str(),
+            Some("我是 WorkClaw 助手。")
+        );
     }
 
     #[test]

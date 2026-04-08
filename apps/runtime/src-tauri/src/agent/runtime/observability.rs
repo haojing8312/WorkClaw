@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
+use super::effective_tool_set::EffectiveToolDecisionRecord;
+
 const DEFAULT_MAX_EVENTS: usize = 400;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -24,6 +26,13 @@ pub struct RuntimeObservedRunEvent {
     pub warning_kind: Option<String>,
     pub error_kind: Option<String>,
     pub child_session_id: Option<String>,
+    pub route_latency_ms: Option<u64>,
+    pub candidate_count: Option<usize>,
+    pub selected_skill: Option<String>,
+    pub fallback_reason: Option<String>,
+    pub tool_recommendation_summary: Option<String>,
+    pub tool_recommendation_aligned: Option<bool>,
+    pub tool_plan_summary: Option<EffectiveToolDecisionRecord>,
     pub message: Option<String>,
 }
 
@@ -92,6 +101,22 @@ pub struct RuntimeObservabilitySnapshot {
     pub compaction: RuntimeCompactionSnapshot,
     pub failover: RuntimeFailoverSnapshot,
     pub errors_by_kind: BTreeMap<String, u64>,
+    pub latest_skill_route: Option<RuntimeLatestSkillRouteSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimeLatestSkillRouteSnapshot {
+    pub session_id: String,
+    pub run_id: String,
+    pub created_at: String,
+    pub route_latency_ms: u64,
+    pub candidate_count: usize,
+    pub selected_runner: String,
+    pub selected_skill: Option<String>,
+    pub fallback_reason: Option<String>,
+    pub tool_recommendation_summary: Option<String>,
+    pub tool_recommendation_aligned: Option<bool>,
+    pub tool_plan_summary: Option<EffectiveToolDecisionRecord>,
 }
 
 #[derive(Debug)]
@@ -120,6 +145,7 @@ struct RuntimeObservabilityInner {
     compaction_runs: u64,
     failover_errors_by_kind: BTreeMap<String, u64>,
     started_at_by_run: HashMap<String, i64>,
+    latest_skill_route: Option<RuntimeLatestSkillRouteSnapshot>,
 }
 
 impl Default for RuntimeObservability {
@@ -240,6 +266,7 @@ impl RuntimeObservability {
                 errors_by_kind: inner.failover_errors_by_kind.clone(),
             },
             errors_by_kind: inner.error_counts_by_kind.clone(),
+            latest_skill_route: inner.latest_skill_route.clone(),
         }
     }
 
@@ -287,11 +314,35 @@ impl RuntimeObservability {
                     "approval_requested" => {
                         inner.approval_requests += 1;
                     }
+                    "skill_route_recorded" => {
+                        if let (Some(route_latency_ms), Some(candidate_count)) =
+                            (event.route_latency_ms, event.candidate_count)
+                        {
+                            inner.latest_skill_route = Some(RuntimeLatestSkillRouteSnapshot {
+                                session_id: event.session_id.clone(),
+                                run_id: event.run_id.clone(),
+                                created_at: event.created_at.clone(),
+                                route_latency_ms,
+                                candidate_count,
+                                selected_runner: event.status.clone().unwrap_or_default(),
+                                selected_skill: event.selected_skill.clone(),
+                                fallback_reason: event.fallback_reason.clone(),
+                                tool_recommendation_summary: event
+                                    .tool_recommendation_summary
+                                    .clone(),
+                                tool_recommendation_aligned: event.tool_recommendation_aligned,
+                                tool_plan_summary: event.tool_plan_summary.clone(),
+                            });
+                        }
+                    }
                     _ => {}
                 }
 
                 if event.child_session_id.as_deref().is_some()
-                    && matches!(event.event_type.as_str(), "tool_started" | "approval_requested")
+                    && matches!(
+                        event.event_type.as_str(),
+                        "tool_started" | "approval_requested"
+                    )
                 {
                     inner.child_session_links += 1;
                 }
@@ -304,10 +355,9 @@ fn settle_run(inner: &mut RuntimeObservabilityInner, run_key: &str, terminal_at:
     if inner.active_runs > 0 {
         inner.active_runs -= 1;
     }
-    if let (Some(started_at), Some(terminal_at)) = (
-        inner.started_at_by_run.remove(run_key),
-        terminal_at,
-    ) {
+    if let (Some(started_at), Some(terminal_at)) =
+        (inner.started_at_by_run.remove(run_key), terminal_at)
+    {
         if terminal_at >= started_at {
             let latency_ms = (terminal_at - started_at) as u64;
             inner.total_latency_ms += latency_ms;
@@ -333,8 +383,12 @@ fn normalize_key(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        RuntimeObservedEvent, RuntimeObservedRunEvent, RuntimeObservability,
-        RuntimeObservabilitySnapshot,
+        RuntimeObservability, RuntimeObservabilitySnapshot, RuntimeObservedEvent,
+        RuntimeObservedRunEvent,
+    };
+    use crate::agent::runtime::effective_tool_set::{
+        EffectiveToolDecisionRecord, EffectiveToolExclusion, EffectiveToolPolicySummary,
+        EffectiveToolSetSource, ToolFilterReason, ToolLoadingPolicy,
     };
 
     fn run_event(
@@ -354,6 +408,13 @@ mod tests {
             warning_kind: None,
             error_kind: None,
             child_session_id: None,
+            route_latency_ms: None,
+            candidate_count: None,
+            selected_skill: None,
+            fallback_reason: None,
+            tool_recommendation_summary: None,
+            tool_recommendation_aligned: None,
+            tool_plan_summary: None,
             message: None,
         }
     }
@@ -415,6 +476,7 @@ mod tests {
         assert_eq!(snapshot.admissions.conflicts, 0);
         assert!(snapshot.guard.warnings_by_kind.is_empty());
         assert!(snapshot.errors_by_kind.is_empty());
+        assert!(snapshot.latest_skill_route.is_none());
     }
 
     #[test]
@@ -452,6 +514,97 @@ mod tests {
     }
 
     #[test]
+    fn skill_route_recorded_updates_latest_skill_route_snapshot() {
+        let subject = RuntimeObservability::new(16);
+        subject.record_recent_event(RuntimeObservedEvent::SessionRun(RuntimeObservedRunEvent {
+            session_id: "session-1".to_string(),
+            run_id: "run-1".to_string(),
+            event_type: "skill_route_recorded".to_string(),
+            created_at: "2026-04-08T10:00:00Z".to_string(),
+            status: Some("prompt_skill_inline".to_string()),
+            tool_name: None,
+            approval_id: None,
+            warning_kind: None,
+            error_kind: None,
+            child_session_id: None,
+            route_latency_ms: Some(12),
+            candidate_count: Some(3),
+            selected_skill: Some("repo-skill".to_string()),
+            fallback_reason: None,
+            tool_recommendation_summary: Some(
+                "tool_recommendation=web_fetch active=4 deferred=0 loading_policy=full".to_string(),
+            ),
+            tool_recommendation_aligned: Some(true),
+            tool_plan_summary: Some(EffectiveToolDecisionRecord {
+                source: EffectiveToolSetSource::ExplicitAllowList,
+                allowed_tool_count: 4,
+                active_tool_count: 4,
+                recommended_tool_count: 0,
+                deferred_tool_count: 0,
+                excluded_tool_count: 1,
+                active_tools: vec![
+                    "read_file".to_string(),
+                    "glob".to_string(),
+                    "grep".to_string(),
+                    "web_fetch".to_string(),
+                ],
+                recommended_tools: Vec::new(),
+                deferred_tools: Vec::new(),
+                missing_tools: Vec::new(),
+                filtered_out_tools: vec!["bash".to_string()],
+                excluded_tools: vec![EffectiveToolExclusion {
+                    name: "bash".to_string(),
+                    source: None,
+                    category: None,
+                    reason: ToolFilterReason::ExplicitDenyList,
+                }],
+                source_counts: vec![],
+                exclusion_counts: vec![],
+                policy: EffectiveToolPolicySummary {
+                    denied_tool_names: vec!["bash".to_string()],
+                    denied_categories: vec![],
+                    allowed_categories: None,
+                    allowed_sources: None,
+                    denied_sources: Vec::new(),
+                    allowed_mcp_servers: None,
+                    inputs: Vec::new(),
+                },
+                loading_policy: ToolLoadingPolicy::Full,
+                expanded_to_full: false,
+                expansion_reason: None,
+                discovery_candidates: Vec::new(),
+            }),
+            message: Some("route".to_string()),
+        }));
+
+        let snapshot = snapshot(&subject);
+        let latest = snapshot
+            .latest_skill_route
+            .expect("latest skill route snapshot");
+        assert_eq!(latest.session_id, "session-1");
+        assert_eq!(latest.run_id, "run-1");
+        assert_eq!(latest.route_latency_ms, 12);
+        assert_eq!(latest.candidate_count, 3);
+        assert_eq!(latest.selected_runner, "prompt_skill_inline");
+        assert_eq!(latest.selected_skill.as_deref(), Some("repo-skill"));
+        assert_eq!(latest.tool_recommendation_aligned, Some(true));
+        assert_eq!(
+            latest
+                .tool_plan_summary
+                .as_ref()
+                .map(|summary| summary.allowed_tool_count),
+            Some(4)
+        );
+        assert_eq!(
+            latest
+                .tool_plan_summary
+                .as_ref()
+                .map(|summary| summary.filtered_out_tools.clone()),
+            Some(vec!["bash".to_string()])
+        );
+    }
+
+    #[test]
     fn admission_conflicts_and_guard_warnings_accumulate() {
         let subject = RuntimeObservability::new(16);
         subject.record_admission_conflict("session-1");
@@ -467,10 +620,12 @@ mod tests {
 
         let snapshot = snapshot(&subject);
         assert_eq!(snapshot.admissions.conflicts, 2);
-        assert_eq!(snapshot.guard.warnings_by_kind.get("loop_detected"), Some(&1));
+        assert_eq!(
+            snapshot.guard.warnings_by_kind.get("loop_detected"),
+            Some(&1)
+        );
 
         let recent = subject.recent_events();
         assert_eq!(recent.len(), 3);
     }
 }
-

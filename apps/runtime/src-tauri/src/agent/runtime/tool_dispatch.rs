@@ -1,3 +1,4 @@
+use super::runtime_io::WorkspaceSkillCommandSpec;
 use crate::agent::browser_progress::BrowserProgressSnapshot;
 use crate::agent::event_bridge::{
     append_run_guard_warning_event, append_tool_run_event, build_skill_route_event,
@@ -13,7 +14,6 @@ use crate::agent::safety::classify_policy_blocked_tool_error;
 use crate::agent::types::{
     AgentStateEvent, Tool, ToolCall, ToolCallEvent, ToolContext, ToolResult,
 };
-use super::runtime_io::WorkspaceSkillCommandSpec;
 use crate::session_journal::SessionRunEvent;
 use anyhow::{anyhow, Result};
 use runtime_executor_core::{
@@ -25,8 +25,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter};
 
-pub(crate) const INTERNAL_SKILL_DISPATCH_INPUT_KEY: &str =
-    "__workclaw_internal_skill_dispatch";
+use super::effective_tool_set::{
+    EffectiveToolPolicyInputSource, EffectiveToolSet, ToolFilterReason,
+};
+
+pub(crate) const INTERNAL_SKILL_DISPATCH_INPUT_KEY: &str = "__workclaw_internal_skill_dispatch";
 
 pub(crate) struct ToolDispatchContext<'a> {
     pub registry: &'a ToolRegistry,
@@ -34,6 +37,7 @@ pub(crate) struct ToolDispatchContext<'a> {
     pub session_id: Option<&'a str>,
     pub persisted_run_id: Option<&'a str>,
     pub allowed_tools: Option<&'a [String]>,
+    pub effective_tool_plan: Option<&'a EffectiveToolSet>,
     pub permission_mode: PermissionMode,
     pub tool_ctx: &'a ToolContext,
     pub tool_confirm_tx: Option<&'a Arc<Mutex<Option<std::sync::mpsc::Sender<bool>>>>>,
@@ -73,11 +77,13 @@ async fn dispatch_skill_command_with_mode(
     raw_args: &str,
     mark_internal_bridge: bool,
 ) -> Result<String> {
-    let dispatch = spec
-        .dispatch
-        .as_ref()
-        .ok_or_else(|| anyhow!("SKILL_COMMAND_NOT_DISPATCHABLE: /{} 未声明 command-dispatch", spec.name))?;
-    if let Some(allowed_tools) = ctx.allowed_tools {
+    let dispatch = spec.dispatch.as_ref().ok_or_else(|| {
+        anyhow!(
+            "SKILL_COMMAND_NOT_DISPATCHABLE: /{} 未声明 command-dispatch",
+            spec.name
+        )
+    })?;
+    if let Some(allowed_tools) = effective_allowed_tools(ctx) {
         let target_tool = normalize_tool_name(&dispatch.tool_name);
         let tool_allowed = allowed_tools
             .iter()
@@ -133,7 +139,12 @@ async fn dispatch_skill_command_with_mode(
             .into_iter()
             .next()
             .map(|result| result.content)
-            .ok_or_else(|| anyhow!("SKILL_COMMAND_NO_RESULT: Skill command /{} 未返回结果", spec.name)),
+            .ok_or_else(|| {
+                anyhow!(
+                    "SKILL_COMMAND_NO_RESULT: Skill command /{} 未返回结果",
+                    spec.name
+                )
+            }),
     }
 }
 
@@ -171,10 +182,9 @@ fn resolve_skill_dispatch_bridge(
     let Some(dispatch_value) = structured.get("command_dispatch").cloned() else {
         return Ok(None);
     };
-    let dispatch = serde_json::from_value::<runtime_skill_core::SkillCommandDispatchSpec>(
-        dispatch_value,
-    )
-    .map_err(|err| anyhow!("SKILL_RESOLUTION_PARSE_FAILED: {}", err))?;
+    let dispatch =
+        serde_json::from_value::<runtime_skill_core::SkillCommandDispatchSpec>(dispatch_value)
+            .map_err(|err| anyhow!("SKILL_RESOLUTION_PARSE_FAILED: {}", err))?;
     let skill_name = structured
         .get("skill_name")
         .and_then(Value::as_str)
@@ -216,21 +226,153 @@ fn resolve_dispatch_permission_decision(
     call: &ToolCall,
 ) -> ToolPermissionDecision {
     let normalized_call_name = normalize_tool_name(&call.name);
-    if let Some(allowed_tools) = ctx.allowed_tools {
+    if let Some(allowed_tools) = effective_allowed_tools(ctx) {
         let tool_allowed = allowed_tools
             .iter()
             .map(|tool| normalize_tool_name(tool))
             .any(|tool| tool == normalized_call_name);
         if !tool_allowed {
-            return ToolPermissionDecision::deny(format!(
-                "此 Skill 不允许使用工具: {}",
-                call.name
+            return ToolPermissionDecision::deny(describe_tool_not_allowed(
+                ctx,
+                call.name.as_str(),
             ));
         }
     }
 
     ctx.permission_mode
         .decision(&call.name, &call.input, ctx.tool_ctx.work_dir.as_deref())
+}
+
+fn effective_allowed_tools<'a>(ctx: &'a ToolDispatchContext<'a>) -> Option<&'a [String]> {
+    ctx.allowed_tools.or_else(|| {
+        ctx.effective_tool_plan
+            .and_then(|plan| plan.allowed_tools.as_deref())
+    })
+}
+
+fn describe_tool_not_allowed(ctx: &ToolDispatchContext<'_>, tool_name: &str) -> String {
+    let normalized_tool_name = normalize_tool_name(tool_name);
+    let Some(plan) = ctx.effective_tool_plan else {
+        return format!("此 Skill 不允许使用工具: {}", tool_name);
+    };
+
+    let Some(exclusion) = plan
+        .excluded_tools
+        .iter()
+        .find(|entry| normalize_tool_name(&entry.name) == normalized_tool_name)
+    else {
+        return format!("此 Skill 不允许使用工具: {}", tool_name);
+    };
+
+    let reason = match exclusion.reason {
+        ToolFilterReason::MissingFromRegistry => "工具未注册到当前运行时",
+        ToolFilterReason::McpServerFiltered => "该工具所属的 MCP server 未被当前 Skill 启用",
+        ToolFilterReason::ExplicitDenyList => "该工具被当前 Skill 的 denied_tools 明确禁用",
+        ToolFilterReason::CategoryFiltered => {
+            "该工具所属分类被当前 Skill 的 denied_tool_categories 禁用"
+        }
+        ToolFilterReason::AllowedCategoryFiltered => {
+            "该工具所属分类不在当前 Skill 的 allowed_tool_categories 允许范围内"
+        }
+        ToolFilterReason::SourceFiltered => "该工具来源不在当前 Skill 允许范围内",
+        ToolFilterReason::DeniedSourceFiltered => "该工具来源被当前 Skill 或运行时策略明确禁用",
+    };
+    let policy_sources = describe_policy_sources(plan, exclusion);
+    if policy_sources.is_empty() {
+        format!("此 Skill 不允许使用工具: {}。原因：{}", tool_name, reason)
+    } else {
+        format!(
+            "此 Skill 不允许使用工具: {}。原因：{}。策略来源：{}",
+            tool_name,
+            reason,
+            policy_sources.join("、")
+        )
+    }
+}
+
+fn describe_policy_sources(
+    plan: &EffectiveToolSet,
+    exclusion: &super::effective_tool_set::EffectiveToolExclusion,
+) -> Vec<String> {
+    plan.policy
+        .inputs
+        .iter()
+        .filter(|input| policy_input_matches_exclusion(input, exclusion))
+        .map(|input| match input.source {
+            EffectiveToolPolicyInputSource::RuntimeDefault => {
+                format!("runtime 默认策略 ({})", input.label)
+            }
+            EffectiveToolPolicyInputSource::Session => format!("session 策略 ({})", input.label),
+            EffectiveToolPolicyInputSource::Skill => format!("skill 策略 ({})", input.label),
+        })
+        .collect()
+}
+
+fn policy_input_matches_exclusion(
+    input: &super::effective_tool_set::EffectiveToolPolicyInputSummary,
+    exclusion: &super::effective_tool_set::EffectiveToolExclusion,
+) -> bool {
+    match exclusion.reason {
+        ToolFilterReason::MissingFromRegistry => false,
+        ToolFilterReason::ExplicitDenyList => input
+            .denied_tool_names
+            .iter()
+            .any(|name| normalize_tool_name(name) == normalize_tool_name(&exclusion.name)),
+        ToolFilterReason::CategoryFiltered => exclusion
+            .category
+            .as_ref()
+            .map(|category| input.denied_categories.iter().any(|item| item == category))
+            .unwrap_or(false),
+        ToolFilterReason::AllowedCategoryFiltered => exclusion
+            .category
+            .as_ref()
+            .map(|category| {
+                input
+                    .allowed_categories
+                    .as_ref()
+                    .map(|allowed_categories| !allowed_categories.contains(category))
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false),
+        ToolFilterReason::SourceFiltered => exclusion
+            .source
+            .as_ref()
+            .map(|source| {
+                input
+                    .allowed_sources
+                    .as_ref()
+                    .map(|allowed_sources| !allowed_sources.contains(source))
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false),
+        ToolFilterReason::DeniedSourceFiltered => exclusion
+            .source
+            .as_ref()
+            .map(|source| input.denied_sources.iter().any(|item| item == source))
+            .unwrap_or(false),
+        ToolFilterReason::McpServerFiltered => input
+            .allowed_mcp_servers
+            .as_ref()
+            .map(|servers| {
+                exclusion.name.starts_with("mcp_")
+                    && !servers
+                        .iter()
+                        .any(|server| mcp_tool_matches_server(&exclusion.name, server))
+            })
+            .unwrap_or(false),
+    }
+}
+
+fn mcp_tool_matches_server(tool_name: &str, server_name: &str) -> bool {
+    let normalized_server = server_name
+        .trim()
+        .to_ascii_lowercase()
+        .replace([' ', '-'], "_");
+    if normalized_server.is_empty() {
+        return false;
+    }
+    tool_name == format!("mcp_{normalized_server}")
+        || tool_name.starts_with(&format!("mcp_{normalized_server}_"))
 }
 
 async fn resolve_approval_outcome(
@@ -580,71 +722,72 @@ pub(crate) async fn dispatch_tool_call(
     let mut attempt = 0usize;
     let (result, is_error) = loop {
         attempt += 1;
-        let (result, is_error) =
-            if let Some(parse_error) = extract_tool_call_parse_error(&call.input) {
-                (
-                    format!(
-                        "工具参数错误: {}。请提供完整且合法的 JSON 参数后再重试。",
-                        parse_error
-                    ),
-                    true,
-                )
-            } else {
-                match ctx.registry.get(&call.name) {
-                    Some(tool) => {
-                        if is_skill_call {
-                            match resolve_skill_dispatch_bridge(&tool, call, ctx.tool_ctx) {
-                                Ok(Some((spec, raw_args))) => {
-                                    match dispatch_skill_command_with_mode(ctx, &spec, &raw_args, true)
-                                        .await
-                                    {
-                                        Ok(output) => (output, false),
-                                        Err(err) => (format!("工具执行错误: {}", err), true),
-                                    }
-                                }
-                                Ok(None) => {
-                                    run_tool(
-                                        tool,
-                                        call,
-                                        ctx.tool_ctx,
-                                        ctx.cancel_flag.clone(),
-                                        ctx.route_node_timeout_secs,
-                                        is_skill_call,
-                                    )
+        let (result, is_error) = if let Some(parse_error) =
+            extract_tool_call_parse_error(&call.input)
+        {
+            (
+                format!(
+                    "工具参数错误: {}。请提供完整且合法的 JSON 参数后再重试。",
+                    parse_error
+                ),
+                true,
+            )
+        } else {
+            match ctx.registry.get(&call.name) {
+                Some(tool) => {
+                    if is_skill_call {
+                        match resolve_skill_dispatch_bridge(&tool, call, ctx.tool_ctx) {
+                            Ok(Some((spec, raw_args))) => {
+                                match dispatch_skill_command_with_mode(ctx, &spec, &raw_args, true)
                                     .await
+                                {
+                                    Ok(output) => (output, false),
+                                    Err(err) => (format!("工具执行错误: {}", err), true),
                                 }
-                                Err(err) => (format!("工具执行错误: {}", err), true),
                             }
-                        } else {
-                            run_tool(
-                                tool,
-                                call,
-                                ctx.tool_ctx,
-                                ctx.cancel_flag.clone(),
-                                ctx.route_node_timeout_secs,
-                                is_skill_call,
-                            )
-                            .await
+                            Ok(None) => {
+                                run_tool(
+                                    tool,
+                                    call,
+                                    ctx.tool_ctx,
+                                    ctx.cancel_flag.clone(),
+                                    ctx.route_node_timeout_secs,
+                                    is_skill_call,
+                                )
+                                .await
+                            }
+                            Err(err) => (format!("工具执行错误: {}", err), true),
                         }
-                    }
-                    None => {
-                        let available: Vec<String> = ctx
-                            .registry
-                            .get_tool_definitions()
-                            .iter()
-                            .filter_map(|t| t["name"].as_str().map(String::from))
-                            .collect();
-                        (
-                            format!(
-                                "错误: 工具 '{}' 不存在。请勿再次调用此工具。可用工具: {}",
-                                call.name,
-                                available.join(", ")
-                            ),
-                            true,
+                    } else {
+                        run_tool(
+                            tool,
+                            call,
+                            ctx.tool_ctx,
+                            ctx.cancel_flag.clone(),
+                            ctx.route_node_timeout_secs,
+                            is_skill_call,
                         )
+                        .await
                     }
                 }
-            };
+                None => {
+                    let available: Vec<String> = ctx
+                        .registry
+                        .get_tool_definitions()
+                        .iter()
+                        .filter_map(|t| t["name"].as_str().map(String::from))
+                        .collect();
+                    (
+                        format!(
+                            "错误: 工具 '{}' 不存在。请勿再次调用此工具。可用工具: {}",
+                            call.name,
+                            available.join(", ")
+                        ),
+                        true,
+                    )
+                }
+            }
+        };
         if !is_error || attempt >= max_attempts {
             break (result, is_error);
         }
@@ -757,13 +900,18 @@ async fn wait_for_cancel(cancel_flag: &Option<Arc<AtomicBool>>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        dispatch_skill_command, dispatch_tool_call, resolve_dispatch_permission_decision,
-        run_tool, ToolDispatchContext, ToolDispatchOutcome, ToolDispatchState,
+        dispatch_skill_command, dispatch_tool_call, resolve_dispatch_permission_decision, run_tool,
+        ToolDispatchContext, ToolDispatchOutcome, ToolDispatchState,
     };
     use crate::agent::permissions::{PermissionMode, ToolPermissionAction};
     use crate::agent::registry::ToolRegistry;
-    use crate::agent::runtime::runtime_io::WorkspaceSkillCommandSpec;
     use crate::agent::run_guard::{parse_run_stop_reason, RunStopReasonKind};
+    use crate::agent::runtime::effective_tool_set::{
+        EffectiveToolExclusion, EffectiveToolPolicyInputSource, EffectiveToolPolicyInputSummary,
+        EffectiveToolPolicySummary, EffectiveToolSet, EffectiveToolSetSource,
+        EffectiveToolSourceCount, ToolFilterReason,
+    };
+    use crate::agent::runtime::runtime_io::WorkspaceSkillCommandSpec;
     use crate::agent::types::{Tool, ToolCall, ToolContext};
     use anyhow::Result;
     use runtime_skill_core::{
@@ -996,6 +1144,7 @@ mod tests {
             session_id: None,
             persisted_run_id: None,
             allowed_tools: None,
+            effective_tool_plan: None,
             permission_mode: PermissionMode::Unrestricted,
             tool_ctx: &tool_ctx,
             tool_confirm_tx: None,
@@ -1055,6 +1204,7 @@ mod tests {
             session_id: None,
             persisted_run_id: None,
             allowed_tools: Some(&["read_file".to_string()]),
+            effective_tool_plan: None,
             permission_mode: PermissionMode::Unrestricted,
             tool_ctx: &tool_ctx,
             tool_confirm_tx: None,
@@ -1079,13 +1229,95 @@ mod tests {
         let decision = resolve_dispatch_permission_decision(&ctx, &call);
 
         assert_eq!(decision.action, ToolPermissionAction::Deny);
-        assert!(
-            decision
-                .reason
-                .as_deref()
-                .unwrap_or_default()
-                .contains("不允许使用工具")
-        );
+        assert!(decision
+            .reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("不允许使用工具"));
+    }
+
+    #[test]
+    fn resolve_dispatch_permission_decision_uses_effective_tool_plan_reason() {
+        let registry = ToolRegistry::new();
+        let tool_ctx = ToolContext::default();
+        let effective_tool_plan = EffectiveToolSet {
+            source: EffectiveToolSetSource::ExplicitAllowList,
+            allowed_tools: Some(vec!["read_file".to_string()]),
+            tool_names: vec!["read_file".to_string()],
+            tool_manifest: Vec::new(),
+            active_tools: vec!["read_file".to_string()],
+            active_tool_manifest: Vec::new(),
+            recommended_tools: Vec::new(),
+            deferred_tools: Vec::new(),
+            loading_policy: crate::agent::runtime::effective_tool_set::ToolLoadingPolicy::Full,
+            expanded_to_full: false,
+            expansion_reason: None,
+            missing_tools: Vec::new(),
+            filtered_out_tools: vec!["bash".to_string()],
+            excluded_tools: vec![EffectiveToolExclusion {
+                name: "bash".to_string(),
+                source: None,
+                category: None,
+                reason: ToolFilterReason::ExplicitDenyList,
+            }],
+            source_counts: Vec::<EffectiveToolSourceCount>::new(),
+            policy: EffectiveToolPolicySummary {
+                denied_tool_names: vec!["bash".to_string()],
+                denied_categories: Vec::new(),
+                allowed_categories: None,
+                allowed_sources: None,
+                denied_sources: Vec::new(),
+                allowed_mcp_servers: None,
+                inputs: vec![EffectiveToolPolicyInputSummary {
+                    source: EffectiveToolPolicyInputSource::Skill,
+                    label: "skill_declared_filters".to_string(),
+                    denied_tool_names: vec!["bash".to_string()],
+                    denied_categories: Vec::new(),
+                    allowed_categories: None,
+                    allowed_sources: None,
+                    denied_sources: Vec::new(),
+                    allowed_mcp_servers: None,
+                }],
+            },
+        };
+        let ctx = ToolDispatchContext {
+            registry: &registry,
+            app_handle: None,
+            session_id: None,
+            persisted_run_id: None,
+            allowed_tools: Some(&["read_file".to_string()]),
+            effective_tool_plan: Some(&effective_tool_plan),
+            permission_mode: PermissionMode::Unrestricted,
+            tool_ctx: &tool_ctx,
+            tool_confirm_tx: None,
+            cancel_flag: None,
+            route_run_id: "route-deny-reason",
+            route_node_timeout_secs: 5,
+            route_retry_count: 0,
+            iteration: 1,
+            run_budget_policy: crate::agent::run_guard::RunBudgetPolicy::for_scope(
+                crate::agent::run_guard::RunBudgetScope::GeneralChat,
+            ),
+        };
+        let call = ToolCall {
+            id: "call-deny-reason".to_string(),
+            name: "bash".to_string(),
+            input: json!({ "command": "echo hi" }),
+        };
+
+        let decision = resolve_dispatch_permission_decision(&ctx, &call);
+
+        assert_eq!(decision.action, ToolPermissionAction::Deny);
+        assert!(decision
+            .reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("denied_tools"));
+        assert!(decision
+            .reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("skill 策略"));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -1122,6 +1354,7 @@ mod tests {
             session_id: None,
             persisted_run_id: None,
             allowed_tools: None,
+            effective_tool_plan: None,
             permission_mode: PermissionMode::AcceptEdits,
             tool_ctx: &tool_ctx,
             tool_confirm_tx: Some(&confirm_state),
@@ -1149,7 +1382,10 @@ mod tests {
 
         driver.join().expect("manual confirmation driver");
         assert!(matches!(outcome, ToolDispatchOutcome::Continue));
-        assert!(target_dir.exists(), "target dir should remain after rejection");
+        assert!(
+            target_dir.exists(),
+            "target dir should remain after rejection"
+        );
         assert_eq!(tool_results.len(), 1);
         assert_eq!(tool_results[0].content, "用户拒绝了此操作");
     }
@@ -1165,6 +1401,7 @@ mod tests {
             session_id: None,
             persisted_run_id: None,
             allowed_tools: Some(&["exec".to_string()]),
+            effective_tool_plan: None,
             permission_mode: PermissionMode::Unrestricted,
             tool_ctx: &tool_ctx,
             tool_confirm_tx: None,
@@ -1210,6 +1447,7 @@ mod tests {
             session_id: None,
             persisted_run_id: None,
             allowed_tools: Some(allowed.as_slice()),
+            effective_tool_plan: None,
             permission_mode: PermissionMode::Unrestricted,
             tool_ctx: &tool_ctx,
             tool_confirm_tx: None,
@@ -1278,6 +1516,7 @@ mod tests {
             session_id: None,
             persisted_run_id: None,
             allowed_tools: Some(&["skill".to_string(), "exec".to_string()]),
+            effective_tool_plan: None,
             permission_mode: PermissionMode::Unrestricted,
             tool_ctx: &tool_ctx,
             tool_confirm_tx: None,
@@ -1314,7 +1553,9 @@ mod tests {
         assert!(matches!(outcome, ToolDispatchOutcome::Continue));
         assert_eq!(tool_results.len(), 1);
         assert!(tool_results[0].content.contains("command=--employee xt"));
-        assert!(tool_results[0].content.contains("commandName=dispatch-skill"));
+        assert!(tool_results[0]
+            .content
+            .contains("commandName=dispatch-skill"));
         assert!(!tool_results[0].content.contains("解析模式:"));
     }
 }

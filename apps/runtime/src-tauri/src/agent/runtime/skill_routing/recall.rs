@@ -115,7 +115,10 @@ impl ProjectionProfile {
             when_to_use_tokens: tokenize(&projection.when_to_use).into_iter().collect(),
             skill_id_compact: normalize_compact(&projection.skill_id),
             display_name_compact: normalize_compact(&projection.display_name),
-            alias_compacts: aliases.iter().map(|alias| normalize_compact(alias)).collect(),
+            alias_compacts: aliases
+                .iter()
+                .map(|alias| normalize_compact(alias))
+                .collect(),
             description_compact: normalize_compact(&projection.description),
             when_to_use_compact: normalize_compact(&projection.when_to_use),
             domain_tag_compacts: projection
@@ -132,43 +135,11 @@ fn score_projection(query: &QueryProfile, projection: &WorkspaceSkillRouteProjec
     let profile = ProjectionProfile::from_projection(projection);
     let mut score = 0u32;
 
-    score += score_compact_field(
-        query,
-        &profile.skill_id_compact,
-        30,
-        18,
-        8,
-        2,
-        6,
-    );
-    score += score_compact_field(
-        query,
-        &profile.display_name_compact,
-        24,
-        22,
-        10,
-        3,
-        8,
-    );
+    score += score_compact_field(query, &profile.skill_id_compact, 30, 18, 8, 2, 6);
+    score += score_compact_field(query, &profile.display_name_compact, 24, 22, 10, 3, 8);
     score += score_aliases(query, &profile.alias_compacts);
-    score += score_compact_field(
-        query,
-        &profile.description_compact,
-        14,
-        18,
-        10,
-        4,
-        12,
-    );
-    score += score_compact_field(
-        query,
-        &profile.when_to_use_compact,
-        16,
-        20,
-        12,
-        5,
-        14,
-    );
+    score += score_compact_field(query, &profile.description_compact, 14, 18, 10, 4, 12);
+    score += score_compact_field(query, &profile.when_to_use_compact, 16, 20, 12, 5, 14);
     score += score_token_overlap(query, &profile);
     score += score_domain_tags(query, &profile);
 
@@ -319,9 +290,7 @@ fn char_ngrams(value: &str, min_size: usize, max_size: usize) -> HashSet<String>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::runtime::runtime_io::{
-        WorkspaceSkillContent, WorkspaceSkillRuntimeEntry,
-    };
+    use crate::agent::runtime::runtime_io::{WorkspaceSkillContent, WorkspaceSkillRuntimeEntry};
     use runtime_skill_core::{
         OpenClawSkillMetadata, SkillCommandArgMode, SkillCommandDispatchKind,
         SkillCommandDispatchSpec, SkillConfig, SkillInvocationPolicy,
@@ -353,6 +322,11 @@ mod tests {
                 name: Some(name.to_string()),
                 description: Some(description.to_string()),
                 allowed_tools: allowed_tools_for_config,
+                denied_tools: None,
+                allowed_tool_sources: None,
+                denied_tool_sources: None,
+                allowed_tool_categories: None,
+                denied_tool_categories: None,
                 model: None,
                 max_iterations,
                 argument_hint: None,
@@ -436,8 +410,14 @@ mod tests {
         let candidates = recall_skill_candidates(&index, "帮我同步项管日报到看板");
         assert_eq!(candidates.len(), 3);
         assert_eq!(candidates[0].projection.skill_id, "feishu-pm-daily-sync");
-        assert_eq!(candidates[1].projection.skill_id, "feishu-pm-weekly-work-summary");
-        assert_eq!(candidates[2].projection.skill_id, "feishu-pm-general-helper");
+        assert_eq!(
+            candidates[1].projection.skill_id,
+            "feishu-pm-weekly-work-summary"
+        );
+        assert_eq!(
+            candidates[2].projection.skill_id,
+            "feishu-pm-general-helper"
+        );
         assert!(candidates[0].score > candidates[1].score);
         assert!(candidates[1].score > candidates[2].score);
         assert!(candidates[2].score > 0);

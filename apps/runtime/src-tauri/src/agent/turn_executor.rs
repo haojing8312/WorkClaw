@@ -179,10 +179,9 @@ impl AgentExecutor {
             let trimmed = trim_messages(&compacted, DEFAULT_TOKEN_BUDGET);
 
             // 调用 LLM（使用组合后的系统 prompt）
-            let transport =
-                transport_override
-                    .clone()
-                    .unwrap_or_else(|| resolve_model_transport(api_format, base_url, None));
+            let transport = transport_override
+                .clone()
+                .unwrap_or_else(|| resolve_model_transport(api_format, base_url, None));
             let response_result = if transport.kind == ModelTransportKind::AnthropicMessages {
                 adapters::anthropic::chat_stream_with_tools(
                     base_url,
@@ -279,6 +278,7 @@ impl AgentExecutor {
                         session_id,
                         persisted_run_id: persisted_run_id.as_deref(),
                         allowed_tools,
+                        effective_tool_plan: None,
                         permission_mode,
                         tool_ctx: &tool_ctx,
                         tool_confirm_tx: tool_confirm_tx.as_ref(),

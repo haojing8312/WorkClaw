@@ -1,9 +1,9 @@
 use crate::agent::runtime::events::AskUserState;
 use crate::agent::tools::{
     browser_compat::register_browser_compat_tool, browser_tools::register_browser_tools,
-    register_tool_alias, AskUserTool, BashKillTool, BashOutputTool, BashTool, CompactTool,
-    ClawhubRecommendTool, ClawhubSearchTool, EmployeeManageTool, GithubRepoDownloadTool,
-    MemoryTool, ProcessManager, SkillInvokeTool, TaskTool,
+    register_tool_alias, AskUserTool, BashKillTool, BashOutputTool, BashTool, ClawhubRecommendTool,
+    ClawhubSearchTool, CompactTool, EmployeeManageTool, GithubRepoDownloadTool, MemoryTool,
+    ProcessManager, SkillInvokeTool, TaskTool,
 };
 use crate::agent::{Tool, ToolContext, ToolRegistry};
 use serde_json::{json, Map, Value};
@@ -221,19 +221,16 @@ impl<'a> RuntimeToolRegistryBuilder<'a> {
         skill_roots: Vec<PathBuf>,
         max_call_depth: usize,
     ) {
-        let skill_tool =
-            SkillInvokeTool::new(session_id.to_string(), skill_roots).with_max_depth(max_call_depth);
+        let skill_tool = SkillInvokeTool::new(session_id.to_string(), skill_roots)
+            .with_max_depth(max_call_depth);
         self.registry.register(Arc::new(skill_tool));
         self.registry.register(Arc::new(CompactTool::new()));
     }
 
     pub(crate) fn register_ask_user_tool(&self, app: &AppHandle, session_id: &str) {
         let ask_user_responder = app.state::<AskUserState>().0.clone();
-        let ask_user_tool = AskUserTool::new(
-            app.clone(),
-            session_id.to_string(),
-            ask_user_responder,
-        );
+        let ask_user_tool =
+            AskUserTool::new(app.clone(), session_id.to_string(), ask_user_responder);
         self.registry.register(Arc::new(ask_user_tool));
     }
 
@@ -268,8 +265,7 @@ impl<'a> RuntimeToolRegistryBuilder<'a> {
                 let tool = self.registry.get(&tool_name)?;
                 let schema = tool.input_schema();
                 let query_key = infer_query_key(&schema)?;
-                let score =
-                    score_mcp_search_candidate(&tool_name, tool.description(), &query_key)?;
+                let score = score_mcp_search_candidate(&tool_name, tool.description(), &query_key)?;
                 Some((
                     score,
                     McpSearchFallbackSpec {

@@ -1,3 +1,4 @@
+use crate::agent::tool_manifest::{ToolCategory, ToolSource};
 use async_trait::async_trait;
 use runtime_chat_app::{
     ChatEmployeeDirectory, ChatEmployeeSnapshot, ChatRoutePolicySnapshot, ChatRoutingSnapshot,
@@ -12,6 +13,15 @@ pub struct PoolChatSettingsRepository<'a> {
 
 pub struct PoolChatEmployeeDirectory<'a> {
     db: &'a SqlitePool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimeToolPolicyDefaultsSnapshot {
+    pub label: String,
+    pub denied_tool_names: Vec<String>,
+    pub denied_categories: Vec<ToolCategory>,
+    pub allowed_sources: Option<Vec<ToolSource>>,
+    pub allowed_mcp_servers: Option<Vec<String>>,
 }
 
 impl<'a> PoolChatSettingsRepository<'a> {
@@ -31,8 +41,8 @@ fn compute_default_work_dir_with_home() -> String {
         std::env::var_os("USERPROFILE"),
         std::env::var_os("HOME"),
     )
-        .to_string_lossy()
-        .to_string()
+    .to_string_lossy()
+    .to_string()
 }
 
 async fn load_runtime_setting(db: &SqlitePool, key: &str) -> Result<Option<String>, String> {
@@ -41,6 +51,97 @@ async fn load_runtime_setting(db: &SqlitePool, key: &str) -> Result<Option<Strin
         .fetch_optional(db)
         .await
         .map_err(|e| format!("读取运行时设置失败 (key={key}): {e}"))
+}
+
+fn parse_list_setting(raw: Option<String>) -> Vec<String> {
+    let Some(raw) = raw.map(|value| value.trim().to_string()) else {
+        return Vec::new();
+    };
+    if raw.is_empty() {
+        return Vec::new();
+    }
+    if raw.starts_with('[') {
+        if let Ok(values) = serde_json::from_str::<Vec<String>>(&raw) {
+            return values
+                .into_iter()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .collect();
+        }
+    }
+    raw.split([',', '\n'])
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn parse_tool_category_name(raw: &str) -> Option<ToolCategory> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "file" => Some(ToolCategory::File),
+        "shell" => Some(ToolCategory::Shell),
+        "web" => Some(ToolCategory::Web),
+        "browser" => Some(ToolCategory::Browser),
+        "system" => Some(ToolCategory::System),
+        "planning" => Some(ToolCategory::Planning),
+        "agent" => Some(ToolCategory::Agent),
+        "memory" => Some(ToolCategory::Memory),
+        "search" => Some(ToolCategory::Search),
+        "integration" => Some(ToolCategory::Integration),
+        "other" => Some(ToolCategory::Other),
+        _ => None,
+    }
+}
+
+fn parse_tool_source_name(raw: &str) -> Option<ToolSource> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "native" => Some(ToolSource::Native),
+        "runtime" => Some(ToolSource::Runtime),
+        "sidecar" => Some(ToolSource::Sidecar),
+        "mcp" => Some(ToolSource::Mcp),
+        "plugin" => Some(ToolSource::Plugin),
+        "alias" => Some(ToolSource::Alias),
+        _ => None,
+    }
+}
+
+pub(crate) async fn load_runtime_tool_policy_defaults(
+    db: &SqlitePool,
+) -> Result<RuntimeToolPolicyDefaultsSnapshot, String> {
+    let denied_tool_names =
+        parse_list_setting(load_runtime_setting(db, "runtime_tool_policy_denied_tools").await?);
+    let denied_categories = parse_list_setting(
+        load_runtime_setting(db, "runtime_tool_policy_denied_categories").await?,
+    )
+    .into_iter()
+    .filter_map(|name| parse_tool_category_name(&name))
+    .collect::<Vec<_>>();
+    let allowed_sources = {
+        let sources = parse_list_setting(
+            load_runtime_setting(db, "runtime_tool_policy_allowed_sources").await?,
+        )
+        .into_iter()
+        .filter_map(|name| parse_tool_source_name(&name))
+        .collect::<Vec<_>>();
+        (!sources.is_empty()).then_some(sources)
+    };
+    let allowed_mcp_servers = {
+        let servers = parse_list_setting(
+            load_runtime_setting(db, "runtime_tool_policy_allowed_mcp_servers").await?,
+        );
+        (!servers.is_empty()).then_some(servers)
+    };
+    let operation_permission_mode = load_runtime_setting(db, "runtime_operation_permission_mode")
+        .await?
+        .unwrap_or_else(|| "standard".to_string());
+
+    Ok(RuntimeToolPolicyDefaultsSnapshot {
+        label: format!("runtime_preferences:{}", operation_permission_mode.trim()),
+        denied_tool_names,
+        denied_categories,
+        allowed_sources,
+        allowed_mcp_servers,
+    })
 }
 
 async fn load_routing_policy_snapshot(
@@ -311,5 +412,70 @@ impl ChatEmployeeDirectory for PoolChatEmployeeDirectory<'_> {
                     != 0,
             })
             .collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::load_runtime_tool_policy_defaults;
+    use crate::agent::tool_manifest::{ToolCategory, ToolSource};
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    async fn setup_pool() -> sqlx::SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite");
+        sqlx::query(
+            "CREATE TABLE app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create app_settings");
+        pool
+    }
+
+    #[tokio::test]
+    async fn load_runtime_tool_policy_defaults_parses_runtime_app_settings() {
+        let pool = setup_pool().await;
+        sqlx::query(
+            "INSERT INTO app_settings (key, value) VALUES (?, ?), (?, ?), (?, ?), (?, ?), (?, ?)",
+        )
+        .bind("runtime_operation_permission_mode")
+        .bind("full_access")
+        .bind("runtime_tool_policy_denied_tools")
+        .bind("[\"bash\", \"edit\"]")
+        .bind("runtime_tool_policy_denied_categories")
+        .bind("shell, browser")
+        .bind("runtime_tool_policy_allowed_sources")
+        .bind("native,mcp")
+        .bind("runtime_tool_policy_allowed_mcp_servers")
+        .bind("repo-files\nbrave-search")
+        .execute(&pool)
+        .await
+        .expect("seed app_settings");
+
+        let snapshot = load_runtime_tool_policy_defaults(&pool)
+            .await
+            .expect("load policy defaults");
+
+        assert_eq!(snapshot.label, "runtime_preferences:full_access");
+        assert_eq!(snapshot.denied_tool_names, vec!["bash", "edit"]);
+        assert_eq!(
+            snapshot.denied_categories,
+            vec![ToolCategory::Shell, ToolCategory::Browser]
+        );
+        assert_eq!(
+            snapshot.allowed_sources,
+            Some(vec![ToolSource::Native, ToolSource::Mcp])
+        );
+        assert_eq!(
+            snapshot.allowed_mcp_servers,
+            Some(vec!["repo-files".to_string(), "brave-search".to_string()])
+        );
     }
 }

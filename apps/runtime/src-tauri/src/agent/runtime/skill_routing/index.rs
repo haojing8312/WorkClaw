@@ -2,8 +2,8 @@ use crate::agent::runtime::runtime_io::{
     WorkspaceSkillRouteExecutionMode, WorkspaceSkillRouteProjection, WorkspaceSkillRuntimeEntry,
 };
 use runtime_skill_core::{
-    OpenClawSkillMetadata, SkillCommandArgMode, SkillCommandDispatchKind,
-    SkillCommandDispatchSpec, SkillConfig, SkillInvocationPolicy,
+    OpenClawSkillMetadata, SkillCommandArgMode, SkillCommandDispatchKind, SkillCommandDispatchSpec,
+    SkillConfig, SkillInvocationPolicy,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -29,7 +29,10 @@ impl SkillRouteIndex {
                     display_name: entry.name.trim().to_string(),
                     aliases: collect_aliases(entry),
                     description: entry.description.trim().to_string(),
-                    when_to_use: extract_when_to_use(&entry.config.system_prompt, &entry.description),
+                    when_to_use: extract_when_to_use(
+                        &entry.config.system_prompt,
+                        &entry.description,
+                    ),
                     family_key: family_key.clone(),
                     domain_tags: family_domain_tags(family_key.as_deref()),
                     allowed_tools: entry.config.allowed_tools.clone().unwrap_or_default(),
@@ -208,6 +211,11 @@ mod tests {
                 name: Some(name.to_string()),
                 description: Some(description.to_string()),
                 allowed_tools: allowed_tools_for_config,
+                denied_tools: None,
+                allowed_tool_sources: None,
+                denied_tool_sources: None,
+                allowed_tool_categories: None,
+                denied_tool_categories: None,
                 model: None,
                 max_iterations,
                 argument_hint: None,
@@ -326,7 +334,9 @@ mod tests {
         );
         assert!(!corpus_skill_ids.contains(&"feishu-pm-bare-skill"));
 
-        let dispatch = index.get("feishu-pm-task-dispatch").expect("dispatch entry");
+        let dispatch = index
+            .get("feishu-pm-task-dispatch")
+            .expect("dispatch entry");
         assert_eq!(dispatch.skill_id, "feishu-pm-task-dispatch");
         assert_eq!(dispatch.display_name, "PM Task Dispatch");
         assert_eq!(
@@ -436,7 +446,10 @@ mod tests {
                 "同步".to_string(),
             ]
         );
-        assert_eq!(fork.allowed_tools, vec!["read_file".to_string(), "edit".to_string()]);
+        assert_eq!(
+            fork.allowed_tools,
+            vec!["read_file".to_string(), "edit".to_string()]
+        );
         assert_eq!(fork.max_iterations, Some(7));
         assert_eq!(
             fork.invocation,
@@ -446,7 +459,10 @@ mod tests {
             }
         );
         assert_eq!(fork.execution_mode, WorkspaceSkillRouteExecutionMode::Fork);
-        assert_eq!(fork.when_to_use, "Use when the task needs isolated execution.");
+        assert_eq!(
+            fork.when_to_use,
+            "Use when the task needs isolated execution."
+        );
 
         assert!(
             index.get("feishu-pm-bare-skill").is_none(),

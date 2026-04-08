@@ -1,10 +1,10 @@
 use super::events::{StreamToken, ToolConfirmResponder};
-use super::observability::RuntimeObservabilityState;
 use super::failover::{
     runtime_failover_error_kind_from_error_text, runtime_failover_error_kind_from_stop_reason_kind,
     runtime_failover_error_kind_key, CandidateAttemptOutcome, RuntimeFailover,
     RuntimeFailoverOutcome, RuntimeFailoverParams,
 };
+use super::observability::RuntimeObservabilityState;
 use crate::agent::permissions::PermissionMode;
 use crate::agent::run_guard::parse_run_stop_reason;
 use crate::agent::types::{AgentStateEvent, StreamDelta};
@@ -32,6 +32,8 @@ pub(crate) struct RouteExecutionParams<'a> {
     pub system_prompt: &'a str,
     pub messages: &'a [Value],
     pub allowed_tools: Option<&'a [String]>,
+    pub full_allowed_tools: Option<&'a [String]>,
+    pub has_deferred_tools: bool,
     pub permission_mode: PermissionMode,
     pub tool_confirm_responder: ToolConfirmResponder,
     pub executor_work_dir: Option<String>,
@@ -129,20 +131,20 @@ fn emit_reasoning_completed_if_needed(
 ) -> Option<u64> {
     let mut emitted_guard = completion_emitted.lock().ok()?;
     if *emitted_guard {
-        return reasoning_started_at
-            .lock()
-            .ok()
-            .and_then(|started| last_reasoning_at.lock().ok().and_then(|ended| {
-                compute_reasoning_duration_ms(*started, *ended)
-            }));
+        return reasoning_started_at.lock().ok().and_then(|started| {
+            last_reasoning_at
+                .lock()
+                .ok()
+                .and_then(|ended| compute_reasoning_duration_ms(*started, *ended))
+        });
     }
 
-    let duration_ms = reasoning_started_at
-        .lock()
-        .ok()
-        .and_then(|started| last_reasoning_at.lock().ok().and_then(|ended| {
-            compute_reasoning_duration_ms(*started, *ended)
-        }))?;
+    let duration_ms = reasoning_started_at.lock().ok().and_then(|started| {
+        last_reasoning_at
+            .lock()
+            .ok()
+            .and_then(|ended| compute_reasoning_duration_ms(*started, *ended))
+    })?;
 
     let _ = app.emit(
         "assistant-reasoning-completed",
@@ -164,6 +166,12 @@ async fn execute_candidate_attempt(
     candidate_api_key: &str,
     attempt_idx: usize,
 ) -> CandidateAttemptOutcome {
+    let using_full_tool_exposure = attempt_idx > 0 && params.has_deferred_tools;
+    let effective_allowed_tools = if using_full_tool_exposure {
+        params.full_allowed_tools.or(params.allowed_tools)
+    } else {
+        params.allowed_tools
+    };
     let streamed_text = Arc::new(std::sync::Mutex::new(String::new()));
     let streamed_reasoning = Arc::new(std::sync::Mutex::new(String::new()));
     let reasoning_started_at = Arc::new(std::sync::Mutex::new(None::<std::time::Instant>));
@@ -276,7 +284,7 @@ async fn execute_candidate_attempt(
             },
             Some(params.app),
             Some(params.session_id),
-            params.allowed_tools,
+            effective_allowed_tools,
             params.permission_mode,
             Some(params.tool_confirm_responder.clone()),
             params.executor_work_dir.clone(),
@@ -324,6 +332,9 @@ async fn execute_candidate_attempt(
                     .map(|buffer| buffer.clone())
                     .unwrap_or_default(),
                 reasoning_duration_ms,
+                tool_exposure_expanded: using_full_tool_exposure,
+                tool_exposure_expansion_reason: using_full_tool_exposure
+                    .then(|| "deferred_tools_retry".to_string()),
             }
         }
         Err(err) => {
@@ -333,6 +344,16 @@ async fn execute_candidate_attempt(
                 .as_ref()
                 .map(|reason| runtime_failover_error_kind_from_stop_reason_kind(reason.kind))
                 .unwrap_or_else(|| runtime_failover_error_kind_from_error_text(&err_text));
+            let kind = if should_expand_tool_exposure(
+                &err_text,
+                kind,
+                params.has_deferred_tools,
+                using_full_tool_exposure,
+            ) {
+                super::failover::RuntimeFailoverErrorKind::DeferredTools
+            } else {
+                kind
+            };
             let kind_text = runtime_failover_error_kind_key(kind);
             let user_facing_error = parsed_stop_reason
                 .as_ref()
@@ -383,9 +404,32 @@ async fn execute_candidate_attempt(
                     .map(|buffer| buffer.clone())
                     .unwrap_or_default(),
                 reasoning_duration_ms: None,
+                tool_exposure_expanded: using_full_tool_exposure,
+                tool_exposure_expansion_reason: using_full_tool_exposure
+                    .then(|| "deferred_tools_retry".to_string()),
             }
         }
     }
+}
+
+fn should_expand_tool_exposure(
+    err_text: &str,
+    kind: super::failover::RuntimeFailoverErrorKind,
+    has_deferred_tools: bool,
+    using_full_tool_exposure: bool,
+) -> bool {
+    if !has_deferred_tools || using_full_tool_exposure {
+        return false;
+    }
+
+    let lower = err_text.to_ascii_lowercase();
+    matches!(
+        kind,
+        super::failover::RuntimeFailoverErrorKind::MaxTurns
+            | super::failover::RuntimeFailoverErrorKind::NoProgress
+            | super::failover::RuntimeFailoverErrorKind::PolicyBlocked
+    ) || lower.contains("此 skill 不允许使用工具")
+        || lower.contains("tool not allowed")
 }
 
 #[cfg(test)]
@@ -420,10 +464,7 @@ mod tests {
     fn compute_reasoning_duration_defaults_to_zero_without_end_boundary() {
         let started = std::time::Instant::now();
 
-        assert_eq!(
-            compute_reasoning_duration_ms(Some(started), None),
-            Some(0)
-        );
+        assert_eq!(compute_reasoning_duration_ms(Some(started), None), Some(0));
         assert_eq!(compute_reasoning_duration_ms(None, None), None);
     }
 }

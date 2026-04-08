@@ -103,7 +103,6 @@ mod tests {
         assert!(outcome.is_none());
     }
 
-
     #[tokio::test]
     async fn run_compaction_updates_observability_snapshot() {
         let temp_dir = tempfile::tempdir().expect("temp dir");

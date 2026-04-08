@@ -170,11 +170,12 @@ mod tests {
         assert_eq!(conflict.session_id(), "session-1");
     }
 
-
     #[test]
     fn admission_gate_records_conflicts_in_observability() {
         let observability = Arc::new(RuntimeObservability::new(8));
-        let gate = Arc::new(SessionAdmissionGate::with_observability(Arc::clone(&observability)));
+        let gate = Arc::new(SessionAdmissionGate::with_observability(Arc::clone(
+            &observability,
+        )));
         let _lease = gate.try_acquire("session-1").expect("first lease");
 
         gate.try_acquire("session-1")
@@ -184,7 +185,10 @@ mod tests {
         assert_eq!(snapshot.admissions.conflicts, 1);
         let recent = observability.recent_events();
         assert_eq!(recent.len(), 1);
-        assert!(matches!(recent[0], RuntimeObservedEvent::AdmissionConflict(_)));
+        assert!(matches!(
+            recent[0],
+            RuntimeObservedEvent::AdmissionConflict(_)
+        ));
     }
 
     #[test]

@@ -5,7 +5,12 @@ use crate::agent::run_guard::{parse_run_stop_reason, RunBudgetPolicy, RunBudgetS
 use crate::agent::runtime::attempt_runner::{
     execute_route_candidates, RouteExecutionOutcome, RouteExecutionParams,
 };
-use crate::agent::runtime::repo::{PoolChatEmployeeDirectory, PoolChatSettingsRepository};
+use crate::agent::runtime::effective_tool_set::{
+    runtime_default_tool_policy_input, EffectiveToolPolicyInput,
+};
+use crate::agent::runtime::repo::{
+    load_runtime_tool_policy_defaults, PoolChatEmployeeDirectory, PoolChatSettingsRepository,
+};
 use crate::agent::runtime::tool_setup::{
     prepare_runtime_tools, PreparedRuntimeTools, ToolSetupParams,
 };
@@ -22,9 +27,11 @@ use uuid::Uuid;
 
 use super::runtime_io as chat_io;
 use crate::agent::runtime::skill_routing::index::SkillRouteIndex;
+use crate::agent::runtime::skill_routing::observability::attach_tool_recommendation_observation;
 use crate::agent::runtime::skill_routing::runner::{
     execute_implicit_route_plan, plan_implicit_route_with_observation, RouteRunOutcome,
 };
+use crate::agent::tool_manifest::{ToolCategory, ToolSource};
 use crate::model_transport::{resolve_model_transport, ModelTransportKind};
 use runtime_chat_app::ChatExecutionGuidance;
 
@@ -39,6 +46,7 @@ pub(crate) struct PreparedSendMessageContext {
     pub messages: Vec<Value>,
     pub prepared_runtime_tools: PreparedRuntimeTools,
     pub permission_mode: PermissionMode,
+    pub runtime_default_tool_policy: EffectiveToolPolicyInput,
     pub executor_work_dir: Option<String>,
     pub max_iterations: Option<usize>,
     pub max_call_depth: usize,
@@ -49,6 +57,7 @@ pub(crate) struct PreparedSendMessageContext {
     pub employee_collaboration_guidance: Option<String>,
     pub workspace_skill_entries: Vec<chat_io::WorkspaceSkillRuntimeEntry>,
     pub route_index: SkillRouteIndex,
+    pub user_message: String,
 }
 
 #[derive(Clone)]
@@ -121,6 +130,12 @@ impl SessionRuntime {
                 skill_name: entry.name.clone(),
                 system_prompt: entry.config.system_prompt.clone(),
                 allowed_tools: entry.config.allowed_tools.clone(),
+                denied_tools: entry.config.denied_tools.clone(),
+                allowed_tool_sources: parse_skill_allowed_tool_sources(&entry.config),
+                denied_tool_sources: parse_skill_denied_tool_sources(&entry.config),
+                allowed_tool_categories: parse_skill_allowed_tool_categories(&entry.config),
+                denied_tool_categories: parse_skill_denied_tool_categories(&entry.config),
+                allowed_mcp_servers: skill_allowed_mcp_servers(entry),
                 max_iterations: entry.config.max_iterations,
             })
             .collect::<Vec<_>>();
@@ -199,6 +214,7 @@ impl SessionRuntime {
                 .prepared_runtime_tools
                 .allowed_tools
                 .as_deref(),
+            effective_tool_plan: Some(&prepared_context.prepared_runtime_tools.effective_tool_plan),
             permission_mode: prepared_context.permission_mode,
             tool_ctx: &tool_ctx,
             tool_confirm_tx: Some(&tool_confirm_responder),
@@ -334,12 +350,18 @@ impl SessionRuntime {
             &prepared_context.prepared_runtime_tools.skill_command_specs,
             user_message,
         );
+        let tool_plan_record = prepared_context.prepared_runtime_tools.tool_plan_record();
+        let planned_route_observation = attach_tool_recommendation_observation(
+            planned_route.observation.clone(),
+            &tool_plan_record,
+        );
         chat_io::append_skill_route_recorded_with_pool(
             db,
             journal,
             session_id,
             &run_id,
-            &planned_route.observation,
+            &planned_route_observation,
+            Some(tool_plan_record.clone()),
         )
         .await?;
 
@@ -386,6 +408,37 @@ impl SessionRuntime {
                 route_execution,
                 reconstructed_history_len,
             } => {
+                if route_execution.tool_exposure_expanded {
+                    let mut expanded_plan = prepared_context
+                        .prepared_runtime_tools
+                        .effective_tool_plan
+                        .clone();
+                    expanded_plan.expand_to_full(
+                        route_execution
+                            .tool_exposure_expansion_reason
+                            .clone()
+                            .unwrap_or_else(|| "deferred_tools_retry".to_string()),
+                    );
+                    let expanded_record = expanded_plan.decision_record_with_candidates(
+                        prepared_context
+                            .prepared_runtime_tools
+                            .discovery_candidates
+                            .clone(),
+                    );
+                    let expanded_observation = attach_tool_recommendation_observation(
+                        planned_route_observation.clone(),
+                        &expanded_record,
+                    );
+                    chat_io::append_skill_route_recorded_with_pool(
+                        db,
+                        journal,
+                        session_id,
+                        &run_id,
+                        &expanded_observation,
+                        Some(expanded_record),
+                    )
+                    .await?;
+                }
                 return Self::finalize_send_message_execution(
                     app,
                     db,
@@ -413,6 +466,11 @@ impl SessionRuntime {
                 .prepared_runtime_tools
                 .allowed_tools
                 .as_deref(),
+            full_allowed_tools: Some(&prepared_context.prepared_runtime_tools.full_allowed_tools),
+            has_deferred_tools: prepared_context
+                .prepared_runtime_tools
+                .effective_tool_plan
+                .has_deferred_tools(),
             permission_mode: prepared_context.permission_mode,
             tool_confirm_responder,
             executor_work_dir: prepared_context.executor_work_dir.clone(),
@@ -471,6 +529,14 @@ impl SessionRuntime {
         let employee_collaboration_guidance = prepared_execution.employee_collaboration_guidance;
         let permission_mode =
             Self::parse_permission_mode_for_runtime(&chat_preparation.permission_mode_storage);
+        let runtime_tool_policy_defaults = load_runtime_tool_policy_defaults(params.db).await?;
+        let runtime_default_tool_policy = runtime_default_tool_policy_input(
+            runtime_tool_policy_defaults.label,
+            runtime_tool_policy_defaults.denied_tool_names,
+            runtime_tool_policy_defaults.denied_categories,
+            runtime_tool_policy_defaults.allowed_sources,
+            runtime_tool_policy_defaults.allowed_mcp_servers,
+        );
 
         let (manifest_json, username, pack_path, source_type) =
             chat_io::load_installed_skill_source_with_pool(params.db, &skill_id).await?;
@@ -544,8 +610,10 @@ impl SessionRuntime {
             Self::append_current_turn_message(&mut messages, current_turn);
         }
         let skill_config = crate::agent::skill_config::SkillConfig::parse(&raw_prompt);
-        let explicit_skill_selection =
-            Self::resolve_explicit_prompt_following_skill(params.user_message, &workspace_skill_entries);
+        let explicit_skill_selection = Self::resolve_explicit_prompt_following_skill(
+            params.user_message,
+            &workspace_skill_entries,
+        );
         let effective_skill_id = explicit_skill_selection
             .as_ref()
             .map(|selection| selection.skill_id.clone())
@@ -558,11 +626,47 @@ impl SessionRuntime {
             .as_ref()
             .and_then(|selection| selection.allowed_tools.clone())
             .or_else(|| skill_config.allowed_tools.clone());
+        let effective_skill_denied_tools = explicit_skill_selection
+            .as_ref()
+            .and_then(|selection| selection.denied_tools.clone())
+            .or_else(|| skill_config.denied_tools.clone());
+        let effective_skill_allowed_tool_sources = explicit_skill_selection
+            .as_ref()
+            .and_then(|selection| selection.allowed_tool_sources.clone())
+            .or_else(|| parse_skill_allowed_tool_sources(&skill_config));
+        let effective_skill_denied_tool_sources = explicit_skill_selection
+            .as_ref()
+            .and_then(|selection| selection.denied_tool_sources.clone())
+            .or_else(|| parse_skill_denied_tool_sources(&skill_config));
+        let effective_skill_allowed_tool_categories = explicit_skill_selection
+            .as_ref()
+            .and_then(|selection| selection.allowed_tool_categories.clone())
+            .or_else(|| parse_skill_allowed_tool_categories(&skill_config));
+        let effective_skill_denied_tool_categories = explicit_skill_selection
+            .as_ref()
+            .and_then(|selection| selection.denied_tool_categories.clone())
+            .or_else(|| parse_skill_denied_tool_categories(&skill_config));
+        let effective_skill_allowed_mcp_servers = explicit_skill_selection
+            .as_ref()
+            .and_then(|selection| selection.allowed_mcp_servers.clone())
+            .or_else(|| {
+                let servers = skill_config
+                    .mcp_servers
+                    .iter()
+                    .map(|server| server.name.trim())
+                    .filter(|name| !name.is_empty())
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>();
+                (!servers.is_empty()).then_some(servers)
+            });
         let effective_skill_max_iterations = explicit_skill_selection
             .as_ref()
             .and_then(|selection| selection.max_iterations)
             .or(skill_config.max_iterations);
-        let budget_scope = if effective_skill_id.trim().eq_ignore_ascii_case("builtin-general") {
+        let budget_scope = if effective_skill_id
+            .trim()
+            .eq_ignore_ascii_case("builtin-general")
+        {
             RunBudgetScope::GeneralChat
         } else {
             RunBudgetScope::Skill
@@ -587,8 +691,17 @@ impl SessionRuntime {
             skill_id: &effective_skill_id,
             source_type: &source_type,
             pack_path: &pack_path,
+            permission_mode,
+            runtime_default_tool_policy: runtime_default_tool_policy.clone(),
             skill_system_prompt: &effective_skill_system_prompt,
             skill_allowed_tools: effective_skill_allowed_tools.clone(),
+            skill_denied_tools: effective_skill_denied_tools,
+            skill_allowed_tool_sources: effective_skill_allowed_tool_sources,
+            skill_denied_tool_sources: effective_skill_denied_tool_sources,
+            skill_allowed_tool_categories: effective_skill_allowed_tool_categories,
+            skill_denied_tool_categories: effective_skill_denied_tool_categories,
+            skill_allowed_mcp_servers: effective_skill_allowed_mcp_servers,
+            tool_discovery_query: Some(params.user_message),
             max_iter,
             max_call_depth: chat_preparation.max_call_depth,
             suppress_workspace_skills_prompt: explicit_skill_selection.is_some(),
@@ -623,6 +736,7 @@ impl SessionRuntime {
             messages,
             prepared_runtime_tools,
             permission_mode,
+            runtime_default_tool_policy,
             executor_work_dir: execution_preparation_service
                 .resolve_executor_work_dir(&execution_guidance),
             max_iterations: Some(max_iter),
@@ -636,6 +750,7 @@ impl SessionRuntime {
             employee_collaboration_guidance,
             workspace_skill_entries,
             route_index,
+            user_message: params.user_message.to_string(),
         })
     }
 
@@ -770,17 +885,120 @@ struct ExplicitPromptSkillSelection {
     skill_name: String,
     system_prompt: String,
     allowed_tools: Option<Vec<String>>,
+    denied_tools: Option<Vec<String>>,
+    allowed_tool_sources: Option<Vec<ToolSource>>,
+    denied_tool_sources: Option<Vec<ToolSource>>,
+    allowed_tool_categories: Option<Vec<ToolCategory>>,
+    denied_tool_categories: Option<Vec<ToolCategory>>,
+    allowed_mcp_servers: Option<Vec<String>>,
     max_iterations: Option<usize>,
+}
+
+fn skill_allowed_mcp_servers(entry: &chat_io::WorkspaceSkillRuntimeEntry) -> Option<Vec<String>> {
+    let servers = entry
+        .config
+        .mcp_servers
+        .iter()
+        .map(|server| server.name.trim())
+        .filter(|name| !name.is_empty())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+
+    (!servers.is_empty()).then_some(servers)
+}
+
+fn parse_skill_denied_tool_categories(
+    config: &runtime_skill_core::SkillConfig,
+) -> Option<Vec<ToolCategory>> {
+    let categories = config
+        .denied_tool_categories
+        .as_ref()
+        .into_iter()
+        .flatten()
+        .filter_map(|name| parse_tool_category_name(name))
+        .collect::<Vec<_>>();
+
+    (!categories.is_empty()).then_some(categories)
+}
+
+fn parse_skill_allowed_tool_categories(
+    config: &runtime_skill_core::SkillConfig,
+) -> Option<Vec<ToolCategory>> {
+    let categories = config
+        .allowed_tool_categories
+        .as_ref()
+        .into_iter()
+        .flatten()
+        .filter_map(|name| parse_tool_category_name(name))
+        .collect::<Vec<_>>();
+
+    (!categories.is_empty()).then_some(categories)
+}
+
+fn parse_skill_allowed_tool_sources(
+    config: &runtime_skill_core::SkillConfig,
+) -> Option<Vec<ToolSource>> {
+    let sources = config
+        .allowed_tool_sources
+        .as_ref()
+        .into_iter()
+        .flatten()
+        .filter_map(|name| parse_tool_source_name(name))
+        .collect::<Vec<_>>();
+
+    (!sources.is_empty()).then_some(sources)
+}
+
+fn parse_skill_denied_tool_sources(
+    config: &runtime_skill_core::SkillConfig,
+) -> Option<Vec<ToolSource>> {
+    let sources = config
+        .denied_tool_sources
+        .as_ref()
+        .into_iter()
+        .flatten()
+        .filter_map(|name| parse_tool_source_name(name))
+        .collect::<Vec<_>>();
+
+    (!sources.is_empty()).then_some(sources)
+}
+
+fn parse_tool_category_name(raw: &str) -> Option<ToolCategory> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "file" => Some(ToolCategory::File),
+        "shell" => Some(ToolCategory::Shell),
+        "web" => Some(ToolCategory::Web),
+        "browser" => Some(ToolCategory::Browser),
+        "system" => Some(ToolCategory::System),
+        "planning" => Some(ToolCategory::Planning),
+        "agent" => Some(ToolCategory::Agent),
+        "memory" => Some(ToolCategory::Memory),
+        "search" => Some(ToolCategory::Search),
+        "integration" => Some(ToolCategory::Integration),
+        "other" => Some(ToolCategory::Other),
+        _ => None,
+    }
+}
+
+fn parse_tool_source_name(raw: &str) -> Option<ToolSource> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "native" => Some(ToolSource::Native),
+        "runtime" => Some(ToolSource::Runtime),
+        "sidecar" => Some(ToolSource::Sidecar),
+        "mcp" => Some(ToolSource::Mcp),
+        "plugin" => Some(ToolSource::Plugin),
+        "alias" => Some(ToolSource::Alias),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::SessionRuntime;
     use crate::agent::runtime::runtime_io as chat_io;
-    use crate::agent::runtime::runtime_io::{
-        WorkspaceSkillContent, WorkspaceSkillRuntimeEntry,
-    };
-    use runtime_skill_core::{SkillConfig, SkillInvocationPolicy};
+    use crate::agent::runtime::runtime_io::{WorkspaceSkillContent, WorkspaceSkillRuntimeEntry};
+    use crate::agent::tool_manifest::{ToolCategory, ToolSource};
+    use runtime_skill_core::{McpServerDep, SkillConfig, SkillInvocationPolicy};
     use serde_json::json;
 
     fn prompt_following_entry(skill_id: &str, name: &str) -> WorkspaceSkillRuntimeEntry {
@@ -793,6 +1011,11 @@ mod tests {
             config: SkillConfig {
                 system_prompt: format!("Prompt for {name}"),
                 allowed_tools: Some(vec!["skill".to_string(), "exec".to_string()]),
+                denied_tools: Some(vec!["bash".to_string()]),
+                allowed_tool_sources: Some(vec!["native".to_string(), "mcp".to_string()]),
+                denied_tool_sources: Some(vec!["plugin".to_string()]),
+                allowed_tool_categories: Some(vec!["file".to_string(), "browser".to_string()]),
+                denied_tool_categories: Some(vec!["shell".to_string()]),
                 max_iterations: Some(7),
                 ..SkillConfig::default()
             },
@@ -893,7 +1116,14 @@ mod tests {
 
     #[test]
     fn resolve_explicit_prompt_following_skill_matches_skill_id_mentions() {
-        let entries = vec![prompt_following_entry("feishu-pm-hub", "Feishu PM Hub")];
+        let mut entry = prompt_following_entry("feishu-pm-hub", "Feishu PM Hub");
+        entry.config.mcp_servers = vec![McpServerDep {
+            name: "repo-files".to_string(),
+            command: None,
+            args: None,
+            env: None,
+        }];
+        let entries = vec![entry];
 
         let matched = SessionRuntime::resolve_explicit_prompt_following_skill(
             "请使用 feishu-pm-hub 技能帮我查询谢涛上周日报",
@@ -907,6 +1137,19 @@ mod tests {
         assert_eq!(
             matched.allowed_tools,
             Some(vec!["skill".to_string(), "exec".to_string()])
+        );
+        assert_eq!(matched.denied_tools, Some(vec!["bash".to_string()]));
+        assert_eq!(
+            matched.allowed_tool_sources,
+            Some(vec![ToolSource::Native, ToolSource::Mcp])
+        );
+        assert_eq!(
+            matched.denied_tool_categories,
+            Some(vec![ToolCategory::Shell])
+        );
+        assert_eq!(
+            matched.allowed_mcp_servers,
+            Some(vec!["repo-files".to_string()])
         );
     }
 

@@ -2,13 +2,30 @@ use runtime_skill_core::{SkillCommandArgMode, SkillConfig};
 
 #[test]
 fn parse_with_frontmatter() {
-    let content = "---\nname: test-skill\ndescription: A test skill\nallowed_tools:\n  - read_file\n  - edit\n  - bash\nmodel: gpt-4o\nmax_iterations: 5\n---\nYou are a helpful assistant.\n\nDo your best work.\n";
+    let content = "---\nname: test-skill\ndescription: A test skill\nallowed_tools:\n  - read_file\n  - edit\n  - bash\ndenied_tools:\n  - bash\n  - file_delete\nallowed_tool_sources:\n  - native\n  - mcp\ndenied_tool_sources:\n  - plugin\nallowed_tool_categories:\n  - file\n  - browser\ndenied_tool_categories:\n  - shell\n  - browser\nmodel: gpt-4o\nmax_iterations: 5\n---\nYou are a helpful assistant.\n\nDo your best work.\n";
     let config = SkillConfig::parse(content);
     assert_eq!(config.name.as_deref(), Some("test-skill"));
     assert_eq!(config.description.as_deref(), Some("A test skill"));
     assert_eq!(
         config.allowed_tools,
         Some(vec!["read_file".into(), "edit".into(), "bash".into()])
+    );
+    assert_eq!(
+        config.denied_tools,
+        Some(vec!["bash".into(), "file_delete".into()])
+    );
+    assert_eq!(
+        config.allowed_tool_sources,
+        Some(vec!["native".into(), "mcp".into()])
+    );
+    assert_eq!(config.denied_tool_sources, Some(vec!["plugin".into()]));
+    assert_eq!(
+        config.allowed_tool_categories,
+        Some(vec!["file".into(), "browser".into()])
+    );
+    assert_eq!(
+        config.denied_tool_categories,
+        Some(vec!["shell".into(), "browser".into()])
     );
     assert_eq!(config.model.as_deref(), Some("gpt-4o"));
     assert_eq!(config.max_iterations, Some(5));
@@ -218,7 +235,10 @@ Use the runtime.
     );
     assert_eq!(metadata.skill_key.as_deref(), Some("installable"));
     assert_eq!(metadata.primary_env.as_deref(), Some("FEISHU_API_KEY"));
-    assert_eq!(metadata.os, vec!["windows".to_string(), "linux".to_string()]);
+    assert_eq!(
+        metadata.os,
+        vec!["windows".to_string(), "linux".to_string()]
+    );
     assert_eq!(
         metadata
             .requires
@@ -241,10 +261,7 @@ Use the runtime.
         install[0].package.as_deref(),
         Some("feishu-pm-runtime@^1.0.0")
     );
-    assert_eq!(
-        install[0].bins,
-        vec!["feishu-pm-runtime".to_string()]
-    );
+    assert_eq!(install[0].bins, vec!["feishu-pm-runtime".to_string()]);
     assert_eq!(
         install[0].label.as_deref(),
         Some("Install the shared runtime via npm")
@@ -252,10 +269,7 @@ Use the runtime.
     assert_eq!(install[1].id.as_deref(), Some("runtime-brew"));
     assert_eq!(install[1].kind.as_str(), "brew");
     assert_eq!(install[1].formula.as_deref(), Some("feishu-pm-runtime"));
-    assert_eq!(
-        install[1].bins,
-        vec!["feishu-pm-runtime".to_string()]
-    );
+    assert_eq!(install[1].bins, vec!["feishu-pm-runtime".to_string()]);
     assert_eq!(
         install[1].label.as_deref(),
         Some("Install the shared runtime via Homebrew")
@@ -303,5 +317,79 @@ fn substitute_arguments_replaces_supported_placeholders() {
     assert_eq!(
         config.system_prompt,
         "All: hello world, First: hello, Session: s1"
+    );
+}
+
+#[test]
+fn parse_denied_tools_from_comma_separated_frontmatter() {
+    let content = "---\nname: deny-skill\ndenied_tools: bash, file_delete, edit\n---\nStay safe.\n";
+
+    let config = SkillConfig::parse(content);
+
+    assert_eq!(
+        config.denied_tools,
+        Some(vec![
+            "bash".to_string(),
+            "file_delete".to_string(),
+            "edit".to_string()
+        ])
+    );
+}
+
+#[test]
+fn parse_denied_tool_categories_from_comma_separated_frontmatter() {
+    let content =
+        "---\nname: deny-category-skill\ndenied_tool_categories: shell, browser, integration\n---\nStay scoped.\n";
+
+    let config = SkillConfig::parse(content);
+
+    assert_eq!(
+        config.denied_tool_categories,
+        Some(vec![
+            "shell".to_string(),
+            "browser".to_string(),
+            "integration".to_string()
+        ])
+    );
+}
+
+#[test]
+fn parse_denied_tool_sources_from_comma_separated_frontmatter() {
+    let content =
+        "---\nname: deny-sources\ndenied_tool_sources: plugin, alias, runtime\n---\nPrompt";
+    let config = SkillConfig::parse(content);
+
+    assert_eq!(
+        config.denied_tool_sources,
+        Some(vec!["plugin".into(), "alias".into(), "runtime".into()])
+    );
+}
+
+#[test]
+fn parse_allowed_tool_categories_from_comma_separated_frontmatter() {
+    let content =
+        "---\nname: allow-categories\nallowed_tool_categories: file, browser, search\n---\nPrompt";
+    let config = SkillConfig::parse(content);
+
+    assert_eq!(
+        config.allowed_tool_categories,
+        Some(vec!["file".into(), "browser".into(), "search".into()])
+    );
+}
+
+#[test]
+fn parse_allowed_tool_sources_from_comma_separated_frontmatter() {
+    let content =
+        "---\nname: allow-source-skill\nallowed_tool_sources: native, runtime, mcp\n---\nStay scoped.\n";
+
+    let config = SkillConfig::parse(content);
+
+    assert_eq!(
+        config.allowed_tool_sources,
+        Some(vec![
+            "native".to_string(),
+            "runtime".to_string(),
+            "mcp".to_string()
+        ])
     );
 }

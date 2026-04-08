@@ -4,16 +4,22 @@ use super::intent::RouteFallbackReason;
 use super::observability::{build_implicit_route_observation, PlannedImplicitRoute};
 use super::recall::recall_skill_candidates;
 use crate::agent::context::build_tool_context;
+use crate::agent::permissions::PermissionMode;
 use crate::agent::run_guard::{RunBudgetPolicy, RunBudgetScope};
-use crate::agent::runtime::tool_profiles::{resolve_tool_profile, ToolProfileName};
 use crate::agent::runtime::attempt_runner::{
     execute_route_candidates, RouteExecutionOutcome, RouteExecutionParams,
+};
+use crate::agent::runtime::effective_tool_set::{
+    resolve_effective_tool_set, session_tool_policy_input, skill_tool_policy_input,
+    EffectiveToolPolicyInput,
 };
 use crate::agent::runtime::runtime_io::{
     WorkspaceSkillCommandSpec, WorkspaceSkillContent, WorkspaceSkillRuntimeEntry,
 };
 use crate::agent::runtime::tool_dispatch::{dispatch_skill_command, ToolDispatchContext};
+use crate::agent::runtime::tool_profiles::ToolProfileName;
 use crate::agent::runtime::tool_setup::{prepare_runtime_tools, ToolSetupParams};
+use crate::agent::tool_manifest::{ToolCategory, ToolSource};
 use crate::agent::AgentExecutor;
 use runtime_chat_app::ChatExecutionPreparationService;
 use std::sync::atomic::AtomicBool;
@@ -25,6 +31,12 @@ pub(crate) struct RoutedSkillToolSetup {
     pub skill_id: String,
     pub skill_system_prompt: String,
     pub skill_allowed_tools: Option<Vec<String>>,
+    pub skill_denied_tools: Option<Vec<String>>,
+    pub skill_allowed_tool_sources: Option<Vec<ToolSource>>,
+    pub skill_denied_tool_sources: Option<Vec<ToolSource>>,
+    pub skill_allowed_tool_categories: Option<Vec<ToolCategory>>,
+    pub skill_denied_tool_categories: Option<Vec<ToolCategory>>,
+    pub skill_allowed_mcp_servers: Option<Vec<String>>,
     pub tool_profile: Option<ToolProfileName>,
     pub max_iterations: Option<usize>,
     pub source_type: String,
@@ -69,6 +81,12 @@ pub(crate) fn build_routed_skill_tool_setup(
         skill_id: entry.skill_id.clone(),
         skill_system_prompt: entry.config.system_prompt.clone(),
         skill_allowed_tools: entry.config.allowed_tools.clone(),
+        skill_denied_tools: entry.config.denied_tools.clone(),
+        skill_allowed_tool_sources: parse_skill_allowed_tool_sources(&entry.config),
+        skill_denied_tool_sources: parse_skill_denied_tool_sources(&entry.config),
+        skill_allowed_tool_categories: parse_skill_allowed_tool_categories(&entry.config),
+        skill_denied_tool_categories: parse_skill_denied_tool_categories(&entry.config),
+        skill_allowed_mcp_servers: skill_allowed_mcp_servers(entry),
         tool_profile: infer_skill_tool_profile(entry),
         max_iterations: entry.config.max_iterations,
         source_type: entry.source_type.clone(),
@@ -77,6 +95,19 @@ pub(crate) fn build_routed_skill_tool_setup(
             WorkspaceSkillContent::FileTree(_) => String::new(),
         },
     }
+}
+
+fn skill_allowed_mcp_servers(entry: &WorkspaceSkillRuntimeEntry) -> Option<Vec<String>> {
+    let servers = entry
+        .config
+        .mcp_servers
+        .iter()
+        .map(|server| server.name.trim())
+        .filter(|name| !name.is_empty())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+
+    (!servers.is_empty()).then_some(servers)
 }
 
 fn infer_skill_tool_profile(entry: &WorkspaceSkillRuntimeEntry) -> Option<ToolProfileName> {
@@ -97,24 +128,125 @@ fn infer_skill_tool_profile(entry: &WorkspaceSkillRuntimeEntry) -> Option<ToolPr
     if haystack.contains("employee") || haystack.contains("team") {
         return Some(ToolProfileName::Employee);
     }
-    if haystack.contains("coding")
-        || haystack.contains("code")
-        || haystack.contains("developer")
-    {
+    if haystack.contains("coding") || haystack.contains("code") || haystack.contains("developer") {
         return Some(ToolProfileName::Coding);
     }
 
     None
 }
 
+fn parse_skill_denied_tool_categories(
+    config: &runtime_skill_core::SkillConfig,
+) -> Option<Vec<ToolCategory>> {
+    let categories = config
+        .denied_tool_categories
+        .as_ref()
+        .into_iter()
+        .flatten()
+        .filter_map(|name| parse_tool_category_name(name))
+        .collect::<Vec<_>>();
+
+    (!categories.is_empty()).then_some(categories)
+}
+
+fn parse_skill_allowed_tool_categories(
+    config: &runtime_skill_core::SkillConfig,
+) -> Option<Vec<ToolCategory>> {
+    let categories = config
+        .allowed_tool_categories
+        .as_ref()
+        .into_iter()
+        .flatten()
+        .filter_map(|name| parse_tool_category_name(name))
+        .collect::<Vec<_>>();
+
+    (!categories.is_empty()).then_some(categories)
+}
+
+fn parse_skill_allowed_tool_sources(
+    config: &runtime_skill_core::SkillConfig,
+) -> Option<Vec<ToolSource>> {
+    let sources = config
+        .allowed_tool_sources
+        .as_ref()
+        .into_iter()
+        .flatten()
+        .filter_map(|name| parse_tool_source_name(name))
+        .collect::<Vec<_>>();
+
+    (!sources.is_empty()).then_some(sources)
+}
+
+fn parse_skill_denied_tool_sources(
+    config: &runtime_skill_core::SkillConfig,
+) -> Option<Vec<ToolSource>> {
+    let sources = config
+        .denied_tool_sources
+        .as_ref()
+        .into_iter()
+        .flatten()
+        .filter_map(|name| parse_tool_source_name(name))
+        .collect::<Vec<_>>();
+
+    (!sources.is_empty()).then_some(sources)
+}
+
+fn parse_tool_category_name(raw: &str) -> Option<ToolCategory> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "file" => Some(ToolCategory::File),
+        "shell" => Some(ToolCategory::Shell),
+        "web" => Some(ToolCategory::Web),
+        "browser" => Some(ToolCategory::Browser),
+        "system" => Some(ToolCategory::System),
+        "planning" => Some(ToolCategory::Planning),
+        "agent" => Some(ToolCategory::Agent),
+        "memory" => Some(ToolCategory::Memory),
+        "search" => Some(ToolCategory::Search),
+        "integration" => Some(ToolCategory::Integration),
+        "other" => Some(ToolCategory::Other),
+        _ => None,
+    }
+}
+
+fn parse_tool_source_name(raw: &str) -> Option<ToolSource> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "native" => Some(ToolSource::Native),
+        "runtime" => Some(ToolSource::Runtime),
+        "sidecar" => Some(ToolSource::Sidecar),
+        "mcp" => Some(ToolSource::Mcp),
+        "plugin" => Some(ToolSource::Plugin),
+        "alias" => Some(ToolSource::Alias),
+        _ => None,
+    }
+}
+
 fn resolve_skill_allowed_tools(
     registry: &crate::agent::ToolRegistry,
     setup: &RoutedSkillToolSetup,
+    runtime_default_tool_policy: &EffectiveToolPolicyInput,
+    permission_mode: PermissionMode,
 ) -> Option<Vec<String>> {
-    setup
-        .skill_allowed_tools
-        .clone()
-        .or_else(|| setup.tool_profile.map(|profile| resolve_tool_profile(registry, profile)))
+    resolve_effective_tool_set(
+        registry,
+        setup.skill_allowed_tools.clone(),
+        setup.tool_profile,
+        &[
+            runtime_default_tool_policy.clone(),
+            session_tool_policy_input(permission_mode),
+            skill_tool_policy_input(
+                setup.skill_denied_tools.clone().unwrap_or_default(),
+                setup
+                    .skill_denied_tool_categories
+                    .clone()
+                    .unwrap_or_default(),
+                setup.skill_allowed_tool_categories.clone(),
+                setup.skill_allowed_tool_sources.clone(),
+                setup.skill_denied_tool_sources.clone().unwrap_or_default(),
+                setup.skill_allowed_mcp_servers.clone(),
+            ),
+        ],
+    )
+    .allowed_tools
 }
 
 pub(crate) fn resolve_direct_dispatch_raw_args(
@@ -264,7 +396,12 @@ pub(crate) async fn execute_implicit_route_plan(
             command_spec,
             raw_args,
         } => {
-            let resolved_allowed_tools = resolve_skill_allowed_tools(agent_executor.registry(), &setup);
+            let resolved_allowed_tools = resolve_skill_allowed_tools(
+                agent_executor.registry(),
+                &setup,
+                &prepared_context.runtime_default_tool_policy,
+                prepared_context.permission_mode,
+            );
             let tool_ctx = build_tool_context(
                 Some(session_id),
                 prepared_context
@@ -280,6 +417,7 @@ pub(crate) async fn execute_implicit_route_plan(
                 session_id: Some(session_id),
                 persisted_run_id: Some(run_id),
                 allowed_tools: resolved_allowed_tools.as_deref(),
+                effective_tool_plan: None,
                 permission_mode: prepared_context.permission_mode,
                 tool_ctx: &tool_ctx,
                 tool_confirm_tx: Some(&tool_confirm_responder),
@@ -298,7 +436,12 @@ pub(crate) async fn execute_implicit_route_plan(
         }
         RouteRunPlan::PromptSkillInline { skill_id, setup } => {
             let execution_preparation_service = ChatExecutionPreparationService::new();
-            let resolved_allowed_tools = resolve_skill_allowed_tools(agent_executor.registry(), &setup);
+            let resolved_allowed_tools = resolve_skill_allowed_tools(
+                agent_executor.registry(),
+                &setup,
+                &prepared_context.runtime_default_tool_policy,
+                prepared_context.permission_mode,
+            );
             let max_iter = RunBudgetPolicy::resolve(
                 if skill_id.eq_ignore_ascii_case("builtin-general") {
                     RunBudgetScope::GeneralChat
@@ -322,8 +465,17 @@ pub(crate) async fn execute_implicit_route_plan(
                 skill_id: &skill_id,
                 source_type: &setup.source_type,
                 pack_path: &setup.pack_path,
+                permission_mode: prepared_context.permission_mode,
+                runtime_default_tool_policy: prepared_context.runtime_default_tool_policy.clone(),
                 skill_system_prompt: &setup.skill_system_prompt,
                 skill_allowed_tools: resolved_allowed_tools.clone(),
+                skill_denied_tools: setup.skill_denied_tools.clone(),
+                skill_allowed_tool_sources: setup.skill_allowed_tool_sources.clone(),
+                skill_denied_tool_sources: setup.skill_denied_tool_sources.clone(),
+                skill_allowed_tool_categories: setup.skill_allowed_tool_categories.clone(),
+                skill_denied_tool_categories: setup.skill_denied_tool_categories.clone(),
+                skill_allowed_mcp_servers: setup.skill_allowed_mcp_servers.clone(),
+                tool_discovery_query: Some(&prepared_context.user_message),
                 max_iter,
                 max_call_depth: prepared_context.max_call_depth,
                 suppress_workspace_skills_prompt: false,
@@ -347,6 +499,10 @@ pub(crate) async fn execute_implicit_route_plan(
                 system_prompt: &prepared_runtime_tools.system_prompt,
                 messages: &prepared_context.messages,
                 allowed_tools: prepared_runtime_tools.allowed_tools.as_deref(),
+                full_allowed_tools: Some(&prepared_runtime_tools.full_allowed_tools),
+                has_deferred_tools: prepared_runtime_tools
+                    .effective_tool_plan
+                    .has_deferred_tools(),
                 permission_mode: prepared_context.permission_mode,
                 tool_confirm_responder,
                 executor_work_dir: prepared_context.executor_work_dir.clone(),
@@ -364,7 +520,12 @@ pub(crate) async fn execute_implicit_route_plan(
         }
         RouteRunPlan::PromptSkillFork { skill_id, setup } => {
             let execution_preparation_service = ChatExecutionPreparationService::new();
-            let resolved_allowed_tools = resolve_skill_allowed_tools(agent_executor.registry(), &setup);
+            let resolved_allowed_tools = resolve_skill_allowed_tools(
+                agent_executor.registry(),
+                &setup,
+                &prepared_context.runtime_default_tool_policy,
+                prepared_context.permission_mode,
+            );
             let max_iter = RunBudgetPolicy::resolve(
                 if skill_id.eq_ignore_ascii_case("builtin-general") {
                     RunBudgetScope::GeneralChat
@@ -388,8 +549,17 @@ pub(crate) async fn execute_implicit_route_plan(
                 skill_id: &skill_id,
                 source_type: &setup.source_type,
                 pack_path: &setup.pack_path,
+                permission_mode: prepared_context.permission_mode,
+                runtime_default_tool_policy: prepared_context.runtime_default_tool_policy.clone(),
                 skill_system_prompt: &setup.skill_system_prompt,
                 skill_allowed_tools: resolved_allowed_tools.clone(),
+                skill_denied_tools: setup.skill_denied_tools.clone(),
+                skill_allowed_tool_sources: setup.skill_allowed_tool_sources.clone(),
+                skill_denied_tool_sources: setup.skill_denied_tool_sources.clone(),
+                skill_allowed_tool_categories: setup.skill_allowed_tool_categories.clone(),
+                skill_denied_tool_categories: setup.skill_denied_tool_categories.clone(),
+                skill_allowed_mcp_servers: setup.skill_allowed_mcp_servers.clone(),
+                tool_discovery_query: Some(&prepared_context.user_message),
                 max_iter,
                 max_call_depth: prepared_context.max_call_depth,
                 suppress_workspace_skills_prompt: false,
@@ -414,6 +584,10 @@ pub(crate) async fn execute_implicit_route_plan(
                 system_prompt: &prepared_runtime_tools.system_prompt,
                 messages: &fork_messages,
                 allowed_tools: prepared_runtime_tools.allowed_tools.as_deref(),
+                full_allowed_tools: Some(&prepared_runtime_tools.full_allowed_tools),
+                has_deferred_tools: prepared_runtime_tools
+                    .effective_tool_plan
+                    .has_deferred_tools(),
                 permission_mode: prepared_context.permission_mode,
                 tool_confirm_responder,
                 executor_work_dir: prepared_context.executor_work_dir.clone(),
@@ -497,18 +671,19 @@ fn build_fork_messages(messages: &[serde_json::Value]) -> Vec<serde_json::Value>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::permissions::PermissionMode;
     use crate::agent::runtime::runtime_io::{
         WorkspaceSkillCommandSpec, WorkspaceSkillContent, WorkspaceSkillRuntimeEntry,
     };
+    use crate::agent::runtime::skill_routing::index::SkillRouteIndex;
+    use crate::agent::runtime::skill_routing::intent::RouteFallbackReason;
     use crate::agent::runtime::tool_registry_builder::{
         RuntimeToolRegistryBuilder, DEFAULT_BROWSER_SIDECAR_URL,
     };
-    use crate::agent::runtime::skill_routing::index::SkillRouteIndex;
-    use crate::agent::runtime::skill_routing::intent::RouteFallbackReason;
     use crate::agent::tools::{ProcessManager, TaskTool};
     use crate::agent::ToolRegistry;
     use runtime_skill_core::{
-        OpenClawSkillMetadata, SkillCommandArgMode, SkillCommandDispatchKind,
+        McpServerDep, OpenClawSkillMetadata, SkillCommandArgMode, SkillCommandDispatchKind,
         SkillCommandDispatchSpec, SkillConfig, SkillInvocationPolicy,
     };
     use sqlx::sqlite::SqlitePoolOptions;
@@ -541,6 +716,11 @@ mod tests {
                 name: Some(name.to_string()),
                 description: Some(description.to_string()),
                 allowed_tools: allowed_tools_for_config,
+                denied_tools: None,
+                allowed_tool_sources: None,
+                denied_tool_sources: None,
+                allowed_tool_categories: None,
+                denied_tool_categories: None,
                 model: None,
                 max_iterations,
                 argument_hint: None,
@@ -926,7 +1106,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resolve_skill_allowed_tools_uses_inferred_browser_profile_when_explicit_list_missing() {
+    async fn resolve_skill_allowed_tools_uses_inferred_browser_profile_when_explicit_list_missing()
+    {
         let entry = build_entry(
             "browser-research-skill",
             "Browser Research Skill",
@@ -964,8 +1145,19 @@ mod tests {
         );
         builder.register_runtime_support_tools(task_tool, db, memory_dir.path().to_path_buf());
 
-        let allowed_tools =
-            resolve_skill_allowed_tools(registry.as_ref(), &setup).expect("profile allowed tools");
+        let allowed_tools = resolve_skill_allowed_tools(
+            registry.as_ref(),
+            &setup,
+            &crate::agent::runtime::effective_tool_set::runtime_default_tool_policy_input(
+                "runtime_preferences:standard".to_string(),
+                Vec::new(),
+                Vec::new(),
+                None,
+                None,
+            ),
+            PermissionMode::AcceptEdits,
+        )
+        .expect("profile allowed tools");
 
         assert_eq!(setup.tool_profile, Some(ToolProfileName::Browser));
         assert!(allowed_tools.contains(&"browser_launch".to_string()));
@@ -993,13 +1185,352 @@ mod tests {
         let setup = build_routed_skill_tool_setup(&entry);
         let registry = ToolRegistry::with_standard_tools();
 
-        let allowed_tools =
-            resolve_skill_allowed_tools(&registry, &setup).expect("explicit allowed tools");
+        let allowed_tools = resolve_skill_allowed_tools(
+            &registry,
+            &setup,
+            &crate::agent::runtime::effective_tool_set::runtime_default_tool_policy_input(
+                "runtime_preferences:standard".to_string(),
+                Vec::new(),
+                Vec::new(),
+                None,
+                None,
+            ),
+            PermissionMode::AcceptEdits,
+        )
+        .expect("explicit allowed tools");
 
         assert_eq!(setup.tool_profile, None);
         assert_eq!(
             allowed_tools,
             vec!["read_file".to_string(), "web_fetch".to_string()]
         );
+    }
+
+    #[test]
+    fn resolve_skill_allowed_tools_applies_declared_denied_tools() {
+        let entry = WorkspaceSkillRuntimeEntry {
+            skill_id: "deny-bash-skill".to_string(),
+            name: "Deny Bash Skill".to_string(),
+            description: "Prevent bash usage".to_string(),
+            source_type: "local".to_string(),
+            projected_dir_name: "deny-bash-skill".to_string(),
+            config: SkillConfig {
+                name: Some("Deny Bash Skill".to_string()),
+                description: Some("Prevent bash usage".to_string()),
+                allowed_tools: Some(vec!["read_file".to_string(), "bash".to_string()]),
+                denied_tools: Some(vec!["bash".to_string()]),
+                allowed_tool_sources: None,
+                denied_tool_sources: None,
+                allowed_tool_categories: None,
+                denied_tool_categories: Some(vec!["shell".to_string()]),
+                model: None,
+                max_iterations: Some(3),
+                argument_hint: None,
+                disable_model_invocation: false,
+                user_invocable: true,
+                invocation: SkillInvocationPolicy::default(),
+                metadata: None,
+                command_dispatch: None,
+                context: None,
+                agent: None,
+                mcp_servers: vec![],
+                system_prompt: "Use safe tools".to_string(),
+            },
+            invocation: SkillInvocationPolicy::default(),
+            metadata: None,
+            command_dispatch: None,
+            content: WorkspaceSkillContent::FileTree(std::collections::HashMap::new()),
+        };
+        let setup = build_routed_skill_tool_setup(&entry);
+        let registry = ToolRegistry::with_standard_tools();
+
+        let allowed_tools = resolve_skill_allowed_tools(
+            &registry,
+            &setup,
+            &crate::agent::runtime::effective_tool_set::runtime_default_tool_policy_input(
+                "runtime_preferences:standard".to_string(),
+                Vec::new(),
+                Vec::new(),
+                None,
+                None,
+            ),
+            PermissionMode::AcceptEdits,
+        )
+        .expect("resolved allowed tools");
+
+        assert_eq!(setup.skill_denied_tools, Some(vec!["bash".to_string()]));
+        assert_eq!(allowed_tools, vec!["read_file".to_string()]);
+    }
+
+    #[test]
+    fn resolve_skill_allowed_tools_applies_declared_allowed_tool_sources() {
+        let entry = WorkspaceSkillRuntimeEntry {
+            skill_id: "mcp-only-skill".to_string(),
+            name: "MCP Only Skill".to_string(),
+            description: "Allow only MCP-backed tools".to_string(),
+            source_type: "local".to_string(),
+            projected_dir_name: "mcp-only-skill".to_string(),
+            config: SkillConfig {
+                name: Some("MCP Only Skill".to_string()),
+                description: Some("Allow only MCP-backed tools".to_string()),
+                allowed_tools: Some(vec![
+                    "read_file".to_string(),
+                    "mcp_repo_files_read".to_string(),
+                ]),
+                denied_tools: None,
+                allowed_tool_sources: Some(vec!["mcp".to_string()]),
+                denied_tool_sources: None,
+                allowed_tool_categories: None,
+                denied_tool_categories: None,
+                model: None,
+                max_iterations: Some(3),
+                argument_hint: None,
+                disable_model_invocation: false,
+                user_invocable: true,
+                invocation: SkillInvocationPolicy::default(),
+                metadata: None,
+                command_dispatch: None,
+                context: None,
+                agent: None,
+                mcp_servers: vec![],
+                system_prompt: "Use MCP tools only".to_string(),
+            },
+            invocation: SkillInvocationPolicy::default(),
+            metadata: None,
+            command_dispatch: None,
+            content: WorkspaceSkillContent::FileTree(std::collections::HashMap::new()),
+        };
+        let setup = build_routed_skill_tool_setup(&entry);
+        let registry = ToolRegistry::new();
+        registry.register(Arc::new(FakeTool {
+            name: "read_file".to_string(),
+            description: "Read a file".to_string(),
+            schema: serde_json::json!({ "type": "object" }),
+            source: ToolSource::Native,
+            category: ToolCategory::File,
+        }));
+        registry.register(Arc::new(FakeTool {
+            name: "mcp_repo_files_read".to_string(),
+            description: "Read from repo MCP".to_string(),
+            schema: serde_json::json!({ "type": "object" }),
+            source: ToolSource::Mcp,
+            category: ToolCategory::Integration,
+        }));
+
+        let allowed_tools = resolve_skill_allowed_tools(
+            &registry,
+            &setup,
+            &crate::agent::runtime::effective_tool_set::runtime_default_tool_policy_input(
+                "runtime_preferences:standard".to_string(),
+                Vec::new(),
+                Vec::new(),
+                None,
+                None,
+            ),
+            PermissionMode::AcceptEdits,
+        )
+        .expect("resolved allowed tools");
+
+        assert_eq!(
+            setup.skill_allowed_tool_sources,
+            Some(vec![ToolSource::Mcp])
+        );
+        assert_eq!(allowed_tools, vec!["mcp_repo_files_read".to_string()]);
+    }
+
+    #[test]
+    fn resolve_skill_allowed_tools_applies_declared_denied_tool_sources() {
+        let entry = WorkspaceSkillRuntimeEntry {
+            skill_id: "deny-runtime-sources".to_string(),
+            name: "Deny Runtime Sources".to_string(),
+            description: "Filter out runtime-backed tools".to_string(),
+            source_type: "local".to_string(),
+            projected_dir_name: "deny-runtime-sources".to_string(),
+            config: SkillConfig {
+                name: Some("Deny Runtime Sources".to_string()),
+                description: Some("Filter out runtime-backed tools".to_string()),
+                allowed_tools: Some(vec!["read_file".to_string(), "bash".to_string()]),
+                denied_tools: None,
+                allowed_tool_sources: None,
+                denied_tool_sources: Some(vec!["runtime".to_string()]),
+                allowed_tool_categories: None,
+                denied_tool_categories: None,
+                model: None,
+                max_iterations: Some(3),
+                argument_hint: None,
+                disable_model_invocation: false,
+                user_invocable: true,
+                invocation: SkillInvocationPolicy::default(),
+                metadata: None,
+                command_dispatch: None,
+                context: None,
+                agent: None,
+                mcp_servers: vec![],
+                system_prompt: "Avoid runtime tools".to_string(),
+            },
+            invocation: SkillInvocationPolicy::default(),
+            metadata: None,
+            command_dispatch: None,
+            content: WorkspaceSkillContent::FileTree(std::collections::HashMap::new()),
+        };
+        let setup = build_routed_skill_tool_setup(&entry);
+        let registry = ToolRegistry::with_standard_tools();
+
+        let allowed_tools = resolve_skill_allowed_tools(
+            &registry,
+            &setup,
+            &crate::agent::runtime::effective_tool_set::runtime_default_tool_policy_input(
+                "runtime_preferences:standard".to_string(),
+                Vec::new(),
+                Vec::new(),
+                None,
+                None,
+            ),
+            PermissionMode::AcceptEdits,
+        )
+        .expect("resolved allowed tools");
+
+        assert_eq!(
+            setup.skill_denied_tool_sources,
+            Some(vec![ToolSource::Runtime])
+        );
+        assert_eq!(allowed_tools, vec!["read_file".to_string()]);
+    }
+
+    #[test]
+    fn resolve_skill_allowed_tools_applies_declared_allowed_tool_categories() {
+        let entry = WorkspaceSkillRuntimeEntry {
+            skill_id: "file-only-skill".to_string(),
+            name: "File Only Skill".to_string(),
+            description: "Allow only file-category tools".to_string(),
+            source_type: "local".to_string(),
+            projected_dir_name: "file-only-skill".to_string(),
+            config: SkillConfig {
+                name: Some("File Only Skill".to_string()),
+                description: Some("Allow only file-category tools".to_string()),
+                allowed_tools: Some(vec!["read_file".to_string(), "web_fetch".to_string()]),
+                denied_tools: None,
+                allowed_tool_sources: None,
+                denied_tool_sources: None,
+                allowed_tool_categories: Some(vec!["file".to_string()]),
+                denied_tool_categories: None,
+                model: None,
+                max_iterations: Some(3),
+                argument_hint: None,
+                disable_model_invocation: false,
+                user_invocable: true,
+                invocation: SkillInvocationPolicy::default(),
+                metadata: None,
+                command_dispatch: None,
+                context: None,
+                agent: None,
+                mcp_servers: vec![],
+                system_prompt: "Use file tools only".to_string(),
+            },
+            invocation: SkillInvocationPolicy::default(),
+            metadata: None,
+            command_dispatch: None,
+            content: WorkspaceSkillContent::FileTree(std::collections::HashMap::new()),
+        };
+        let setup = build_routed_skill_tool_setup(&entry);
+        let registry = ToolRegistry::with_standard_tools();
+
+        let allowed_tools = resolve_skill_allowed_tools(
+            &registry,
+            &setup,
+            &crate::agent::runtime::effective_tool_set::runtime_default_tool_policy_input(
+                "runtime_preferences:standard".to_string(),
+                Vec::new(),
+                Vec::new(),
+                None,
+                None,
+            ),
+            PermissionMode::AcceptEdits,
+        )
+        .expect("resolved allowed tools");
+
+        assert_eq!(
+            setup.skill_allowed_tool_categories,
+            Some(vec![ToolCategory::File])
+        );
+        assert_eq!(allowed_tools, vec!["read_file".to_string()]);
+    }
+
+    #[test]
+    fn build_routed_skill_tool_setup_carries_declared_mcp_server_names() {
+        let mut entry = build_entry(
+            "repo-research-skill",
+            "Repo Research Skill",
+            "Research with repo MCP tools",
+            "## When to Use\n- Use MCP tools for repo research.\n",
+            None,
+            None,
+            Some(5),
+            SkillInvocationPolicy {
+                user_invocable: true,
+                disable_model_invocation: false,
+            },
+            None,
+            None,
+        );
+        entry.config.mcp_servers = vec![
+            McpServerDep {
+                name: "repo-files".to_string(),
+                command: None,
+                args: None,
+                env: None,
+            },
+            McpServerDep {
+                name: "brave search".to_string(),
+                command: None,
+                args: None,
+                env: None,
+            },
+        ];
+
+        let setup = build_routed_skill_tool_setup(&entry);
+
+        assert_eq!(
+            setup.skill_allowed_mcp_servers,
+            Some(vec!["repo-files".to_string(), "brave search".to_string()])
+        );
+    }
+
+    struct FakeTool {
+        name: String,
+        description: String,
+        schema: serde_json::Value,
+        source: ToolSource,
+        category: ToolCategory,
+    }
+
+    impl crate::agent::Tool for FakeTool {
+        fn name(&self) -> &str {
+            &self.name
+        }
+
+        fn description(&self) -> &str {
+            &self.description
+        }
+
+        fn input_schema(&self) -> serde_json::Value {
+            self.schema.clone()
+        }
+
+        fn execute(
+            &self,
+            _input: serde_json::Value,
+            _ctx: &crate::agent::ToolContext,
+        ) -> anyhow::Result<String> {
+            Ok("ok".to_string())
+        }
+
+        fn metadata(&self) -> crate::agent::tool_manifest::ToolMetadata {
+            crate::agent::tool_manifest::ToolMetadata {
+                source: self.source,
+                category: self.category,
+                ..Default::default()
+            }
+        }
     }
 }

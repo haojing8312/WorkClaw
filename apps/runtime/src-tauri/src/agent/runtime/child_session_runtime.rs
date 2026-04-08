@@ -416,7 +416,6 @@ mod tests {
         assert!(journal_dir.join("state.json").exists());
     }
 
-
     #[tokio::test]
     async fn prepare_hidden_child_session_run_updates_observability_child_session_total() {
         let pool = setup_hidden_child_session_pool().await;

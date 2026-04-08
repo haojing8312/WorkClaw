@@ -1,15 +1,21 @@
+use super::effective_tool_set::{
+    resolve_effective_tool_set, session_tool_policy_input, skill_tool_policy_input,
+    EffectiveToolPolicyInput, EffectiveToolSet,
+};
 use super::events::SearchCacheState;
 use super::runtime_io as chat_io;
-use super::tool_registry_builder::{
-    RuntimeToolRegistryBuilder, DEFAULT_BROWSER_SIDECAR_URL,
+use super::tool_catalog::{
+    build_tool_candidate_records, format_tool_candidate_hints, format_tool_discovery_index,
+    ToolDiscoveryCandidateRecord,
 };
-use crate::agent::ToolManifestEntry;
+use super::tool_registry_builder::{RuntimeToolRegistryBuilder, DEFAULT_BROWSER_SIDECAR_URL};
+use crate::agent::permissions::PermissionMode;
 use crate::agent::runtime::runtime_io::WorkspaceSkillRuntimeEntry;
+use crate::agent::tool_manifest::{ToolCategory, ToolSource};
 use crate::agent::tools::search_providers::create_provider;
-use crate::agent::tools::{
-    ExecTool, ProcessManager, TaskTool, WebSearchTool,
-};
+use crate::agent::tools::{ExecTool, ProcessManager, TaskTool, WebSearchTool};
 use crate::agent::AgentExecutor;
+use crate::agent::ToolManifestEntry;
 use crate::runtime_environment::runtime_paths_from_app;
 use crate::session_journal::SessionJournalStateHandle;
 use runtime_chat_app::{
@@ -21,9 +27,21 @@ use tauri::{AppHandle, Manager};
 #[derive(Clone)]
 pub(crate) struct PreparedRuntimeTools {
     pub allowed_tools: Option<Vec<String>>,
+    pub full_allowed_tools: Vec<String>,
     pub tool_manifest: Vec<ToolManifestEntry>,
+    pub effective_tool_plan: EffectiveToolSet,
+    pub discovery_candidates: Vec<ToolDiscoveryCandidateRecord>,
     pub system_prompt: String,
     pub skill_command_specs: Vec<chat_io::WorkspaceSkillCommandSpec>,
+}
+
+impl PreparedRuntimeTools {
+    pub(crate) fn tool_plan_record(
+        &self,
+    ) -> crate::agent::runtime::effective_tool_set::EffectiveToolDecisionRecord {
+        self.effective_tool_plan
+            .decision_record_with_candidates(self.discovery_candidates.clone())
+    }
 }
 
 #[derive(Clone)]
@@ -40,8 +58,17 @@ pub(crate) struct ToolSetupParams<'a> {
     pub skill_id: &'a str,
     pub source_type: &'a str,
     pub pack_path: &'a str,
+    pub permission_mode: PermissionMode,
+    pub runtime_default_tool_policy: EffectiveToolPolicyInput,
     pub skill_system_prompt: &'a str,
     pub skill_allowed_tools: Option<Vec<String>>,
+    pub skill_denied_tools: Option<Vec<String>>,
+    pub skill_allowed_tool_sources: Option<Vec<ToolSource>>,
+    pub skill_denied_tool_sources: Option<Vec<ToolSource>>,
+    pub skill_allowed_tool_categories: Option<Vec<ToolCategory>>,
+    pub skill_denied_tool_categories: Option<Vec<ToolCategory>>,
+    pub skill_allowed_mcp_servers: Option<Vec<String>>,
+    pub tool_discovery_query: Option<&'a str>,
     pub max_iter: usize,
     pub max_call_depth: usize,
     pub suppress_workspace_skills_prompt: bool,
@@ -86,7 +113,11 @@ pub(crate) async fn prepare_runtime_tools(
         params.skill_id,
         params.memory_bucket_employee_id,
     );
-    registry_builder.register_runtime_support_tools(task_tool, params.db.clone(), memory_dir.clone());
+    registry_builder.register_runtime_support_tools(
+        task_tool,
+        params.db.clone(),
+        memory_dir.clone(),
+    );
 
     let search_cache = params.app.state::<SearchCacheState>().0.clone();
     let mut runtime_search_note: Option<String> = None;
@@ -161,14 +192,51 @@ pub(crate) async fn prepare_runtime_tools(
     );
     registry_builder.register_ask_user_tool(params.app, params.session_id);
 
-    let tool_names =
-        chat_io::resolve_tool_names(&params.skill_allowed_tools, params.agent_executor);
-    let tool_manifest =
-        chat_io::resolve_tool_manifest(&params.skill_allowed_tools, params.agent_executor);
+    let effective_tool_set = resolve_effective_tool_set(
+        params.agent_executor.registry(),
+        params.skill_allowed_tools.clone(),
+        None,
+        &[
+            params.runtime_default_tool_policy.clone(),
+            session_tool_policy_input(params.permission_mode),
+            skill_tool_policy_input(
+                params.skill_denied_tools.clone().unwrap_or_default(),
+                params
+                    .skill_denied_tool_categories
+                    .clone()
+                    .unwrap_or_default(),
+                params.skill_allowed_tool_categories.clone(),
+                params.skill_allowed_tool_sources.clone(),
+                params.skill_denied_tool_sources.clone().unwrap_or_default(),
+                params.skill_allowed_mcp_servers.clone(),
+            ),
+        ],
+    );
+    if !effective_tool_set.missing_tools.is_empty() {
+        eprintln!(
+            "[tooling] 忽略不存在的工具白名单项: {}",
+            effective_tool_set.missing_tools.join(", ")
+        );
+    }
+    if !effective_tool_set.filtered_out_tools.is_empty() {
+        eprintln!(
+            "[tooling] 因 MCP server 过滤规则跳过工具: {}",
+            effective_tool_set.filtered_out_tools.join(", ")
+        );
+    }
+    if !effective_tool_set.source_counts.is_empty() {
+        let source_summary = effective_tool_set
+            .source_counts
+            .iter()
+            .map(|entry| format!("{:?}={}", entry.source, entry.count))
+            .collect::<Vec<_>>()
+            .join(", ");
+        eprintln!("[tooling] 生效工具来源统计: {source_summary}");
+    }
     let memory_content = chat_io::load_memory_content(&memory_dir);
     let system_prompt = compose_system_prompt(
         params.skill_system_prompt,
-        &tool_names,
+        &effective_tool_set.tool_names_csv(),
         params.model_name,
         params.max_iter,
         params.execution_guidance,
@@ -181,10 +249,40 @@ pub(crate) async fn prepare_runtime_tools(
     } else {
         system_prompt
     };
+    let system_prompt = if let Some(discovery_index) =
+        format_tool_discovery_index(&effective_tool_set.tool_manifest)
+    {
+        format!("{system_prompt}\n\n{discovery_index}")
+    } else {
+        system_prompt
+    };
+    let discovery_candidates = if let Some(discovery_query) = params.tool_discovery_query {
+        build_tool_candidate_records(&effective_tool_set.tool_manifest, discovery_query, 4)
+    } else {
+        Vec::new()
+    };
+    let mut effective_tool_set = effective_tool_set;
+    effective_tool_set.apply_recommended_tools(&discovery_candidates);
+    let system_prompt = if let Some(discovery_query) = params.tool_discovery_query {
+        if let Some(candidate_hints) = format_tool_candidate_hints(
+            &effective_tool_set.active_tool_manifest,
+            discovery_query,
+            4,
+        ) {
+            format!("{system_prompt}\n\n{candidate_hints}")
+        } else {
+            system_prompt
+        }
+    } else {
+        system_prompt
+    };
 
     Ok(PreparedRuntimeTools {
-        allowed_tools: params.skill_allowed_tools,
-        tool_manifest,
+        allowed_tools: effective_tool_set.allowed_tools.clone(),
+        full_allowed_tools: effective_tool_set.full_allowed_tools(),
+        tool_manifest: effective_tool_set.active_tool_manifest.clone(),
+        effective_tool_plan: effective_tool_set,
+        discovery_candidates,
         system_prompt,
         skill_command_specs,
     })
@@ -193,12 +291,48 @@ pub(crate) async fn prepare_runtime_tools(
 #[cfg(test)]
 mod tests {
     use super::PreparedRuntimeTools;
+    use crate::agent::runtime::effective_tool_set::{
+        EffectiveToolPolicySummary, EffectiveToolSet, EffectiveToolSetSource,
+    };
+    use crate::agent::runtime::tool_catalog::{
+        format_tool_candidate_hints, format_tool_discovery_index, ToolDiscoveryCandidateRecord,
+    };
+    use crate::agent::tool_manifest::{ToolCategory, ToolMetadata, ToolSource};
+    use crate::agent::ToolManifestEntry;
 
     #[test]
     fn prepared_runtime_tools_keeps_allowed_tool_list() {
         let prepared = PreparedRuntimeTools {
             allowed_tools: Some(vec!["read_file".to_string(), "bash".to_string()]),
+            full_allowed_tools: vec!["read_file".to_string(), "bash".to_string()],
             tool_manifest: Vec::new(),
+            effective_tool_plan: EffectiveToolSet {
+                source: EffectiveToolSetSource::ExplicitAllowList,
+                allowed_tools: Some(vec!["read_file".to_string(), "bash".to_string()]),
+                tool_names: vec!["read_file".to_string(), "bash".to_string()],
+                tool_manifest: Vec::new(),
+                active_tools: vec!["read_file".to_string(), "bash".to_string()],
+                active_tool_manifest: Vec::new(),
+                recommended_tools: Vec::new(),
+                deferred_tools: Vec::new(),
+                loading_policy: crate::agent::runtime::effective_tool_set::ToolLoadingPolicy::Full,
+                expanded_to_full: false,
+                expansion_reason: None,
+                missing_tools: Vec::new(),
+                filtered_out_tools: Vec::new(),
+                excluded_tools: Vec::new(),
+                source_counts: Vec::new(),
+                policy: EffectiveToolPolicySummary {
+                    denied_tool_names: Vec::new(),
+                    denied_categories: Vec::new(),
+                    allowed_categories: None,
+                    allowed_sources: None,
+                    denied_sources: Vec::new(),
+                    allowed_mcp_servers: None,
+                    inputs: Vec::new(),
+                },
+            },
+            discovery_candidates: Vec::new(),
             system_prompt: "system prompt".to_string(),
             skill_command_specs: Vec::new(),
         };
@@ -207,8 +341,224 @@ mod tests {
             prepared.allowed_tools,
             Some(vec!["read_file".to_string(), "bash".to_string()])
         );
+        assert_eq!(prepared.full_allowed_tools.len(), 2);
         assert!(prepared.tool_manifest.is_empty());
+        assert_eq!(prepared.effective_tool_plan.tool_names.len(), 2);
         assert_eq!(prepared.system_prompt, "system prompt");
         assert!(prepared.skill_command_specs.is_empty());
+    }
+
+    #[test]
+    fn tool_plan_record_includes_discovery_candidates() {
+        let prepared = PreparedRuntimeTools {
+            allowed_tools: Some(vec!["web_search".to_string()]),
+            full_allowed_tools: vec!["web_search".to_string()],
+            tool_manifest: Vec::new(),
+            effective_tool_plan: EffectiveToolSet {
+                source: EffectiveToolSetSource::ExplicitAllowList,
+                allowed_tools: Some(vec!["web_search".to_string()]),
+                tool_names: vec!["web_search".to_string()],
+                tool_manifest: Vec::new(),
+                active_tools: vec!["web_search".to_string()],
+                active_tool_manifest: Vec::new(),
+                recommended_tools: Vec::new(),
+                deferred_tools: Vec::new(),
+                loading_policy: crate::agent::runtime::effective_tool_set::ToolLoadingPolicy::Full,
+                expanded_to_full: false,
+                expansion_reason: None,
+                missing_tools: Vec::new(),
+                filtered_out_tools: Vec::new(),
+                excluded_tools: Vec::new(),
+                source_counts: Vec::new(),
+                policy: EffectiveToolPolicySummary {
+                    denied_tool_names: Vec::new(),
+                    denied_categories: Vec::new(),
+                    allowed_categories: None,
+                    allowed_sources: None,
+                    denied_sources: Vec::new(),
+                    allowed_mcp_servers: None,
+                    inputs: Vec::new(),
+                },
+            },
+            discovery_candidates: vec![ToolDiscoveryCandidateRecord {
+                name: "web_search".to_string(),
+                category: ToolCategory::Search,
+                source: ToolSource::Runtime,
+                score: 10,
+                matched_terms: vec!["search".to_string()],
+                matched_fields: vec!["name".to_string()],
+            }],
+            system_prompt: "system prompt".to_string(),
+            skill_command_specs: Vec::new(),
+        };
+
+        let record = prepared.tool_plan_record();
+        assert_eq!(record.discovery_candidates.len(), 1);
+        assert_eq!(record.discovery_candidates[0].name, "web_search");
+    }
+
+    #[test]
+    fn tool_discovery_index_is_emitted_for_large_tool_sets() {
+        let entries = vec![
+            ToolManifestEntry::from_parts(
+                "read_file",
+                "Read file",
+                ToolMetadata {
+                    category: ToolCategory::File,
+                    source: ToolSource::Native,
+                    ..ToolMetadata::default()
+                },
+            ),
+            ToolManifestEntry::from_parts(
+                "write_file",
+                "Write file",
+                ToolMetadata {
+                    category: ToolCategory::File,
+                    source: ToolSource::Native,
+                    ..ToolMetadata::default()
+                },
+            ),
+            ToolManifestEntry::from_parts(
+                "edit",
+                "Edit file",
+                ToolMetadata {
+                    category: ToolCategory::File,
+                    source: ToolSource::Native,
+                    ..ToolMetadata::default()
+                },
+            ),
+            ToolManifestEntry::from_parts(
+                "list_dir",
+                "List dir",
+                ToolMetadata {
+                    category: ToolCategory::File,
+                    source: ToolSource::Native,
+                    ..ToolMetadata::default()
+                },
+            ),
+            ToolManifestEntry::from_parts(
+                "browser_launch",
+                "Launch browser",
+                ToolMetadata {
+                    category: ToolCategory::Browser,
+                    source: ToolSource::Sidecar,
+                    ..ToolMetadata::default()
+                },
+            ),
+            ToolManifestEntry::from_parts(
+                "browser_snapshot",
+                "Snapshot browser",
+                ToolMetadata {
+                    category: ToolCategory::Browser,
+                    source: ToolSource::Sidecar,
+                    ..ToolMetadata::default()
+                },
+            ),
+            ToolManifestEntry::from_parts(
+                "web_search",
+                "Search web",
+                ToolMetadata {
+                    category: ToolCategory::Search,
+                    source: ToolSource::Runtime,
+                    ..ToolMetadata::default()
+                },
+            ),
+            ToolManifestEntry::from_parts(
+                "web_fetch",
+                "Fetch web",
+                ToolMetadata {
+                    category: ToolCategory::Web,
+                    source: ToolSource::Native,
+                    ..ToolMetadata::default()
+                },
+            ),
+        ];
+
+        let index = format_tool_discovery_index(&entries).expect("discovery index");
+        assert!(index.contains("[工具发现索引]"));
+        assert!(index.contains("文件类"));
+    }
+
+    #[test]
+    fn tool_candidate_hints_are_emitted_for_matching_queries() {
+        let entries = vec![
+            ToolManifestEntry::from_parts(
+                "read_file",
+                "Read file",
+                ToolMetadata {
+                    category: ToolCategory::File,
+                    source: ToolSource::Native,
+                    ..ToolMetadata::default()
+                },
+            ),
+            ToolManifestEntry::from_parts(
+                "write_file",
+                "Write file",
+                ToolMetadata {
+                    category: ToolCategory::File,
+                    source: ToolSource::Native,
+                    ..ToolMetadata::default()
+                },
+            ),
+            ToolManifestEntry::from_parts(
+                "edit",
+                "Edit file",
+                ToolMetadata {
+                    category: ToolCategory::File,
+                    source: ToolSource::Native,
+                    ..ToolMetadata::default()
+                },
+            ),
+            ToolManifestEntry::from_parts(
+                "list_dir",
+                "List dir",
+                ToolMetadata {
+                    category: ToolCategory::File,
+                    source: ToolSource::Native,
+                    ..ToolMetadata::default()
+                },
+            ),
+            ToolManifestEntry::from_parts(
+                "browser_launch",
+                "Launch browser",
+                ToolMetadata {
+                    category: ToolCategory::Browser,
+                    source: ToolSource::Sidecar,
+                    ..ToolMetadata::default()
+                },
+            ),
+            ToolManifestEntry::from_parts(
+                "browser_snapshot",
+                "Snapshot browser",
+                ToolMetadata {
+                    category: ToolCategory::Browser,
+                    source: ToolSource::Sidecar,
+                    ..ToolMetadata::default()
+                },
+            ),
+            ToolManifestEntry::from_parts(
+                "web_search",
+                "Search web",
+                ToolMetadata {
+                    category: ToolCategory::Search,
+                    source: ToolSource::Runtime,
+                    ..ToolMetadata::default()
+                },
+            ),
+            ToolManifestEntry::from_parts(
+                "web_fetch",
+                "Fetch web",
+                ToolMetadata {
+                    category: ToolCategory::Web,
+                    source: ToolSource::Native,
+                    ..ToolMetadata::default()
+                },
+            ),
+        ];
+
+        let hints = format_tool_candidate_hints(&entries, "search latest web news", 4)
+            .expect("candidate hints");
+        assert!(hints.contains("[当前任务候选工具]"));
+        assert!(hints.contains("web_search"));
     }
 }

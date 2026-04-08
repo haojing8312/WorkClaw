@@ -1,6 +1,7 @@
 use crate::agent::run_guard::RunStopReason;
 use crate::agent::runtime::{
-    RunRegistry, RuntimeObservability, RuntimeObservedEvent, RuntimeObservedRunEvent,
+    effective_tool_set::EffectiveToolDecisionRecord, RunRegistry, RuntimeObservability,
+    RuntimeObservedEvent, RuntimeObservedRunEvent,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -213,6 +214,9 @@ pub enum SessionRunEvent {
         selected_runner: String,
         selected_skill: Option<String>,
         fallback_reason: Option<String>,
+        tool_recommendation_summary: Option<String>,
+        tool_recommendation_aligned: Option<bool>,
+        tool_plan_summary: Option<EffectiveToolDecisionRecord>,
     },
     AssistantChunkAppended {
         run_id: String,
@@ -418,6 +422,13 @@ fn build_observed_session_run_event(
             warning_kind: None,
             error_kind: None,
             child_session_id: None,
+            route_latency_ms: None,
+            candidate_count: None,
+            selected_skill: None,
+            fallback_reason: None,
+            tool_recommendation_summary: None,
+            tool_recommendation_aligned: None,
+            tool_plan_summary: None,
             message: Some(format!("user_message_id={user_message_id}")),
         },
         SessionRunEvent::SkillRouteRecorded {
@@ -427,6 +438,9 @@ fn build_observed_session_run_event(
             selected_runner,
             selected_skill,
             fallback_reason,
+            tool_recommendation_summary,
+            tool_recommendation_aligned,
+            tool_plan_summary,
         } => RuntimeObservedRunEvent {
             session_id: session_id.to_string(),
             run_id: run_id.clone(),
@@ -438,6 +452,13 @@ fn build_observed_session_run_event(
             warning_kind: fallback_reason.clone(),
             error_kind: None,
             child_session_id: None,
+            route_latency_ms: Some(*route_latency_ms),
+            candidate_count: Some(*candidate_count),
+            selected_skill: selected_skill.clone(),
+            fallback_reason: fallback_reason.clone(),
+            tool_recommendation_summary: tool_recommendation_summary.clone(),
+            tool_recommendation_aligned: *tool_recommendation_aligned,
+            tool_plan_summary: tool_plan_summary.clone(),
             message: Some(truncate_observed_message(
                 &json!({
                     "route_latency_ms": route_latency_ms,
@@ -445,6 +466,9 @@ fn build_observed_session_run_event(
                     "selected_runner": selected_runner,
                     "selected_skill": selected_skill,
                     "fallback_reason": fallback_reason,
+                    "tool_recommendation_summary": tool_recommendation_summary,
+                    "tool_recommendation_aligned": tool_recommendation_aligned,
+                    "tool_plan_summary": tool_plan_summary,
                 })
                 .to_string(),
             )),
@@ -460,6 +484,13 @@ fn build_observed_session_run_event(
             warning_kind: None,
             error_kind: None,
             child_session_id: None,
+            route_latency_ms: None,
+            candidate_count: None,
+            selected_skill: None,
+            fallback_reason: None,
+            tool_recommendation_summary: None,
+            tool_recommendation_aligned: None,
+            tool_plan_summary: None,
             message: Some(truncate_observed_message(chunk)),
         },
         SessionRunEvent::ToolStarted {
@@ -478,6 +509,13 @@ fn build_observed_session_run_event(
             warning_kind: None,
             error_kind: None,
             child_session_id: observed_child_session_id(input),
+            route_latency_ms: None,
+            candidate_count: None,
+            selected_skill: None,
+            fallback_reason: None,
+            tool_recommendation_summary: None,
+            tool_recommendation_aligned: None,
+            tool_plan_summary: None,
             message: Some(truncate_observed_message(&input.to_string())),
         },
         SessionRunEvent::ToolCompleted {
@@ -502,6 +540,13 @@ fn build_observed_session_run_event(
             warning_kind: None,
             error_kind: (*is_error).then_some("tool_error".to_string()),
             child_session_id: observed_child_session_id(input),
+            route_latency_ms: None,
+            candidate_count: None,
+            selected_skill: None,
+            fallback_reason: None,
+            tool_recommendation_summary: None,
+            tool_recommendation_aligned: None,
+            tool_plan_summary: None,
             message: Some(truncate_observed_message(output)),
         },
         SessionRunEvent::ApprovalRequested {
@@ -522,6 +567,13 @@ fn build_observed_session_run_event(
             warning_kind: None,
             error_kind: None,
             child_session_id: observed_child_session_id(input),
+            route_latency_ms: None,
+            candidate_count: None,
+            selected_skill: None,
+            fallback_reason: None,
+            tool_recommendation_summary: None,
+            tool_recommendation_aligned: None,
+            tool_plan_summary: None,
             message: Some(truncate_observed_message(summary)),
         },
         SessionRunEvent::RunCompleted { run_id } => RuntimeObservedRunEvent {
@@ -535,6 +587,13 @@ fn build_observed_session_run_event(
             warning_kind: None,
             error_kind: None,
             child_session_id: None,
+            route_latency_ms: None,
+            candidate_count: None,
+            selected_skill: None,
+            fallback_reason: None,
+            tool_recommendation_summary: None,
+            tool_recommendation_aligned: None,
+            tool_plan_summary: None,
             message: Some("run completed".to_string()),
         },
         SessionRunEvent::RunGuardWarning {
@@ -554,6 +613,13 @@ fn build_observed_session_run_event(
             warning_kind: Some(warning_kind.clone()),
             error_kind: None,
             child_session_id: None,
+            route_latency_ms: None,
+            candidate_count: None,
+            selected_skill: None,
+            fallback_reason: None,
+            tool_recommendation_summary: None,
+            tool_recommendation_aligned: None,
+            tool_plan_summary: None,
             message: Some(detail.clone().unwrap_or_else(|| title.clone())),
         },
         SessionRunEvent::RunStopped {
@@ -570,6 +636,13 @@ fn build_observed_session_run_event(
             warning_kind: None,
             error_kind: Some(stop_reason.kind.as_key().to_string()),
             child_session_id: None,
+            route_latency_ms: None,
+            candidate_count: None,
+            selected_skill: None,
+            fallback_reason: None,
+            tool_recommendation_summary: None,
+            tool_recommendation_aligned: None,
+            tool_plan_summary: None,
             message: Some(truncate_observed_message(&stop_reason.message)),
         },
         SessionRunEvent::RunFailed {
@@ -587,6 +660,13 @@ fn build_observed_session_run_event(
             warning_kind: None,
             error_kind: Some(error_kind.clone()),
             child_session_id: None,
+            route_latency_ms: None,
+            candidate_count: None,
+            selected_skill: None,
+            fallback_reason: None,
+            tool_recommendation_summary: None,
+            tool_recommendation_aligned: None,
+            tool_plan_summary: None,
             message: Some(truncate_observed_message(error_message)),
         },
         SessionRunEvent::RunCancelled { run_id, reason } => RuntimeObservedRunEvent {
@@ -600,6 +680,13 @@ fn build_observed_session_run_event(
             warning_kind: None,
             error_kind: Some("cancelled".to_string()),
             child_session_id: None,
+            route_latency_ms: None,
+            candidate_count: None,
+            selected_skill: None,
+            fallback_reason: None,
+            tool_recommendation_summary: None,
+            tool_recommendation_aligned: None,
+            tool_plan_summary: None,
             message: reason.clone(),
         },
     };
@@ -676,7 +763,13 @@ mod tests {
         format_run_stop_message, SessionJournalState, SessionJournalStore, SessionRunEvent,
     };
     use crate::agent::run_guard::RunStopReason;
-    use crate::agent::runtime::{RunRegistry, RuntimeObservability};
+    use crate::agent::runtime::effective_tool_set::{
+        EffectiveToolDecisionRecord, EffectiveToolExclusion, EffectiveToolPolicySummary,
+        EffectiveToolReasonCount, EffectiveToolSetSource, EffectiveToolSourceCount,
+        ToolFilterReason,
+    };
+    use crate::agent::runtime::{RunRegistry, RuntimeObservability, RuntimeObservedEvent};
+    use crate::agent::tool_manifest::ToolSource;
     use std::sync::Arc;
     use tempfile::tempdir;
 
@@ -821,5 +914,123 @@ mod tests {
             Some(&1)
         );
         assert_eq!(snapshot.recent_events.buffered, 3);
+    }
+
+    #[tokio::test]
+    async fn skill_route_recorded_keeps_tool_plan_summary_in_observed_message() {
+        let journal_root = tempdir().expect("journal tempdir");
+        let registry = Arc::new(RunRegistry::default());
+        let observability = Arc::new(RuntimeObservability::new(8));
+        let journal = SessionJournalStore::with_registry_and_observability(
+            journal_root.path().to_path_buf(),
+            registry,
+            observability.clone(),
+        );
+
+        journal
+            .append_event(
+                "session-route-plan",
+                SessionRunEvent::SkillRouteRecorded {
+                    run_id: "run-1".to_string(),
+                    route_latency_ms: 11,
+                    candidate_count: 2,
+                    selected_runner: "prompt_skill_inline".to_string(),
+                    selected_skill: Some("repo-skill".to_string()),
+                    fallback_reason: None,
+                    tool_recommendation_summary: Some(
+                        "tool_recommendation=read_file active=3 deferred=0 loading_policy=full"
+                            .to_string(),
+                    ),
+                    tool_recommendation_aligned: Some(true),
+                    tool_plan_summary: Some(EffectiveToolDecisionRecord {
+                        source: EffectiveToolSetSource::ExplicitAllowList,
+                        allowed_tool_count: 3,
+                        active_tool_count: 3,
+                        recommended_tool_count: 0,
+                        deferred_tool_count: 0,
+                        excluded_tool_count: 2,
+                        active_tools: vec![
+                            "read_file".to_string(),
+                            "glob".to_string(),
+                            "mcp_repo_files_read".to_string(),
+                        ],
+                        recommended_tools: Vec::new(),
+                        deferred_tools: Vec::new(),
+                        missing_tools: vec!["missing_tool".to_string()],
+                        filtered_out_tools: vec!["bash".to_string()],
+                        excluded_tools: vec![EffectiveToolExclusion {
+                            name: "bash".to_string(),
+                            source: Some(ToolSource::Runtime),
+                            category: None,
+                            reason: ToolFilterReason::ExplicitDenyList,
+                        }],
+                        source_counts: vec![
+                            EffectiveToolSourceCount {
+                                source: ToolSource::Native,
+                                count: 2,
+                            },
+                            EffectiveToolSourceCount {
+                                source: ToolSource::Mcp,
+                                count: 1,
+                            },
+                        ],
+                        exclusion_counts: vec![EffectiveToolReasonCount {
+                            reason: ToolFilterReason::ExplicitDenyList,
+                            count: 2,
+                        }],
+                        policy: EffectiveToolPolicySummary {
+                            denied_tool_names: vec!["bash".to_string()],
+                            denied_categories: vec![],
+                            allowed_categories: None,
+                            allowed_sources: None,
+                            denied_sources: Vec::new(),
+                            allowed_mcp_servers: Some(vec!["repo-files".to_string()]),
+                            inputs: Vec::new(),
+                        },
+                        loading_policy:
+                            crate::agent::runtime::effective_tool_set::ToolLoadingPolicy::Full,
+                        expanded_to_full: false,
+                        expansion_reason: None,
+                        discovery_candidates: Vec::new(),
+                    }),
+                },
+            )
+            .await
+            .expect("append skill route recorded");
+
+        let recent = observability.recent_events();
+        let observed = match &recent[0] {
+            RuntimeObservedEvent::SessionRun(event) => event,
+            other => panic!("unexpected event: {other:?}"),
+        };
+
+        assert_eq!(observed.event_type, "skill_route_recorded");
+        assert_eq!(observed.route_latency_ms, Some(11));
+        assert_eq!(observed.candidate_count, Some(2));
+        assert_eq!(observed.selected_skill.as_deref(), Some("repo-skill"));
+        assert_eq!(
+            observed
+                .tool_plan_summary
+                .as_ref()
+                .map(|summary| summary.excluded_tool_count),
+            Some(2)
+        );
+        assert_eq!(
+            observed
+                .tool_plan_summary
+                .as_ref()
+                .map(|summary| summary.filtered_out_tools.clone()),
+            Some(vec!["bash".to_string()])
+        );
+        assert!(observed
+            .message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("\"allowed_tool_count\":3"));
+        assert!(observed
+            .message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("\"explicit_deny_list\""));
     }
 }

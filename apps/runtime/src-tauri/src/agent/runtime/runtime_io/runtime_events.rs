@@ -1,4 +1,5 @@
 use crate::agent::run_guard::RunStopReason;
+use crate::agent::runtime::effective_tool_set::EffectiveToolDecisionRecord;
 use crate::agent::runtime::session_runs::{
     append_session_run_event_with_pool, attach_assistant_message_to_run_with_pool,
 };
@@ -91,6 +92,7 @@ pub(crate) async fn append_skill_route_recorded_with_pool(
     session_id: &str,
     run_id: &str,
     observation: &ImplicitRouteObservation,
+    tool_plan_summary: Option<EffectiveToolDecisionRecord>,
 ) -> Result<(), String> {
     append_session_run_event_with_pool(
         pool,
@@ -105,6 +107,9 @@ pub(crate) async fn append_skill_route_recorded_with_pool(
             fallback_reason: observation
                 .fallback_reason
                 .map(|reason| route_fallback_reason_key(reason).to_string()),
+            tool_recommendation_summary: observation.tool_recommendation_summary.clone(),
+            tool_recommendation_aligned: observation.tool_recommendation_aligned,
+            tool_plan_summary,
         },
     )
     .await

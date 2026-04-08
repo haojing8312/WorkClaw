@@ -65,6 +65,11 @@ pub struct SkillConfig {
     pub name: Option<String>,
     pub description: Option<String>,
     pub allowed_tools: Option<Vec<String>>,
+    pub denied_tools: Option<Vec<String>>,
+    pub allowed_tool_sources: Option<Vec<String>>,
+    pub denied_tool_sources: Option<Vec<String>>,
+    pub allowed_tool_categories: Option<Vec<String>>,
+    pub denied_tool_categories: Option<Vec<String>>,
     pub model: Option<String>,
     pub max_iterations: Option<usize>,
     pub argument_hint: Option<String>,
@@ -204,6 +209,11 @@ impl Default for SkillConfig {
             name: None,
             description: None,
             allowed_tools: None,
+            denied_tools: None,
+            allowed_tool_sources: None,
+            denied_tool_sources: None,
+            allowed_tool_categories: None,
+            denied_tool_categories: None,
             model: None,
             max_iterations: None,
             argument_hint: None,
@@ -225,6 +235,11 @@ struct FrontMatter {
     name: Option<String>,
     description: Option<String>,
     allowed_tools: Option<AllowedToolsValue>,
+    denied_tools: Option<AllowedToolsValue>,
+    allowed_tool_sources: Option<AllowedToolsValue>,
+    denied_tool_sources: Option<AllowedToolsValue>,
+    allowed_tool_categories: Option<AllowedToolsValue>,
+    denied_tool_categories: Option<AllowedToolsValue>,
     model: Option<String>,
     max_iterations: Option<usize>,
     #[serde(alias = "argument-hint")]
@@ -290,8 +305,7 @@ impl SkillConfig {
 
         let fm: FrontMatter = serde_yaml::from_str(yaml_str).unwrap_or_default();
         let user_invocable = resolve_frontmatter_bool(fm.user_invocable, true);
-        let disable_model_invocation =
-            resolve_frontmatter_bool(fm.disable_model_invocation, false);
+        let disable_model_invocation = resolve_frontmatter_bool(fm.disable_model_invocation, false);
         let invocation = SkillInvocationPolicy {
             user_invocable,
             disable_model_invocation,
@@ -307,6 +321,11 @@ impl SkillConfig {
             name: fm.name,
             description: fm.description,
             allowed_tools: fm.allowed_tools.map(|v| v.into_vec()),
+            denied_tools: fm.denied_tools.map(|v| v.into_vec()),
+            allowed_tool_sources: fm.allowed_tool_sources.map(|v| v.into_vec()),
+            denied_tool_sources: fm.denied_tool_sources.map(|v| v.into_vec()),
+            allowed_tool_categories: fm.allowed_tool_categories.map(|v| v.into_vec()),
+            denied_tool_categories: fm.denied_tool_categories.map(|v| v.into_vec()),
             model: fm.model,
             max_iterations: fm.max_iterations,
             argument_hint: fm.argument_hint,
@@ -381,7 +400,9 @@ fn yaml_bool(value: Option<&JsonValue>) -> Option<bool> {
 
 fn yaml_usize(value: Option<&JsonValue>) -> Option<usize> {
     match value {
-        Some(JsonValue::Number(number)) => number.as_u64().and_then(|value| usize::try_from(value).ok()),
+        Some(JsonValue::Number(number)) => number
+            .as_u64()
+            .and_then(|value| usize::try_from(value).ok()),
         _ => None,
     }
 }

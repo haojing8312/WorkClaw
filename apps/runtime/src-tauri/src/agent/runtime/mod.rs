@@ -4,6 +4,7 @@ pub(crate) mod attempt_runner;
 pub(crate) mod before_tool_call_guard;
 pub(crate) mod child_session_runtime;
 pub(crate) mod compaction_pipeline;
+pub(crate) mod effective_tool_set;
 pub mod events;
 pub(crate) mod failover;
 pub(crate) mod observability;
@@ -14,6 +15,7 @@ pub mod runtime_io;
 pub(crate) mod session_runs;
 pub mod session_runtime;
 pub(crate) mod skill_routing;
+pub(crate) mod tool_catalog;
 pub(crate) mod tool_dispatch;
 pub(crate) mod tool_profiles;
 pub(crate) mod tool_registry_builder;
@@ -32,7 +34,8 @@ pub use events::{
     ToolConfirmResponder,
 };
 pub use observability::{
-    RuntimeObservability, RuntimeObservabilityState, RuntimeObservedEvent, RuntimeObservedRunEvent,
+    RuntimeLatestSkillRouteSnapshot, RuntimeObservability, RuntimeObservabilitySnapshot,
+    RuntimeObservabilityState, RuntimeObservedEvent, RuntimeObservedRunEvent,
 };
 pub use run_registry::{RunRegistry, RunRegistryState};
 pub use runtime_io::{

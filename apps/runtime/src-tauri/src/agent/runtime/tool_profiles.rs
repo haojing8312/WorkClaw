@@ -1,7 +1,8 @@
 use crate::agent::{ToolCategory, ToolRegistry, ToolSource};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ToolProfileName {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolProfileName {
     SafeDefault,
     Coding,
     Browser,
@@ -23,10 +24,7 @@ pub(crate) fn resolve_tool_profile(
     names
 }
 
-fn matches_profile(
-    profile: ToolProfileName,
-    entry: &crate::agent::ToolManifestEntry,
-) -> bool {
+fn matches_profile(profile: ToolProfileName, entry: &crate::agent::ToolManifestEntry) -> bool {
     match profile {
         ToolProfileName::SafeDefault => matches_safe_default(entry),
         ToolProfileName::Coding => matches_coding(entry),

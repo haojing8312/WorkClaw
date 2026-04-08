@@ -10,6 +10,9 @@ mod database_snapshot;
 #[path = "desktop_lifecycle/diagnostics_service.rs"]
 mod diagnostics_service;
 
+use crate::agent::runtime::{
+    RuntimeObservabilitySnapshot, RuntimeObservabilityState, RuntimeObservedEvent,
+};
 use crate::commands::skills::DbState;
 use crate::diagnostics::ManagedDiagnosticsState;
 use crate::runtime_environment::runtime_paths_from_app;
@@ -102,6 +105,28 @@ pub async fn get_desktop_diagnostics_status(
     diagnostics_state: State<'_, ManagedDiagnosticsState>,
 ) -> Result<DesktopDiagnosticsStatus, String> {
     build_diagnostics_status(diagnostics_state.0.as_ref())
+}
+
+#[tauri::command]
+pub async fn get_runtime_observability_snapshot(
+    observability: State<'_, RuntimeObservabilityState>,
+) -> Result<RuntimeObservabilitySnapshot, String> {
+    Ok(observability.0.snapshot())
+}
+
+#[tauri::command]
+pub async fn get_runtime_recent_events(
+    observability: State<'_, RuntimeObservabilityState>,
+    limit: Option<usize>,
+) -> Result<Vec<RuntimeObservedEvent>, String> {
+    let mut events = observability.0.recent_events();
+    if let Some(limit) = limit {
+        if events.len() > limit {
+            let start = events.len().saturating_sub(limit);
+            events = events.split_off(start);
+        }
+    }
+    Ok(events)
 }
 
 #[tauri::command]

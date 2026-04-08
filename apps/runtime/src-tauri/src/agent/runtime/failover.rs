@@ -11,6 +11,7 @@ pub(crate) enum RuntimeFailoverErrorKind {
     RateLimit,
     Timeout,
     Network,
+    DeferredTools,
     PolicyBlocked,
     MaxTurns,
     LoopDetected,
@@ -28,6 +29,8 @@ pub(crate) struct CandidateAttemptOutcome {
     pub partial_text: String,
     pub reasoning_text: String,
     pub reasoning_duration_ms: Option<u64>,
+    pub tool_exposure_expanded: bool,
+    pub tool_exposure_expansion_reason: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -39,6 +42,8 @@ pub(crate) struct RuntimeFailoverOutcome {
     pub partial_text: String,
     pub reasoning_text: String,
     pub reasoning_duration_ms: Option<u64>,
+    pub tool_exposure_expanded: bool,
+    pub tool_exposure_expansion_reason: Option<String>,
 }
 
 pub(crate) struct RuntimeFailoverParams<'a> {
@@ -73,6 +78,8 @@ impl RuntimeFailover {
         let mut last_stop_reason: Option<RunStopReason> = None;
         let mut streamed_text = String::new();
         let mut streamed_reasoning = String::new();
+        let mut tool_exposure_expanded = false;
+        let mut tool_exposure_expansion_reason: Option<String> = None;
 
         for (
             candidate_provider_key,
@@ -80,8 +87,7 @@ impl RuntimeFailover {
             candidate_base_url,
             candidate_model_name,
             candidate_api_key,
-        ) in
-            params.route_candidates
+        ) in params.route_candidates
         {
             let mut attempt_idx = 0usize;
             loop {
@@ -110,6 +116,11 @@ impl RuntimeFailover {
                         partial_text: streamed_text,
                         reasoning_text: streamed_reasoning,
                         reasoning_duration_ms: attempt.reasoning_duration_ms,
+                        tool_exposure_expanded: attempt.tool_exposure_expanded
+                            || tool_exposure_expanded,
+                        tool_exposure_expansion_reason: attempt
+                            .tool_exposure_expansion_reason
+                            .or(tool_exposure_expansion_reason),
                     };
                 }
 
@@ -118,6 +129,10 @@ impl RuntimeFailover {
                 last_error = attempt.last_error.or(last_error);
                 last_error_kind = attempt.last_error_kind.or(last_error_kind);
                 last_stop_reason = attempt.last_stop_reason.or(last_stop_reason);
+                tool_exposure_expanded |= attempt.tool_exposure_expanded;
+                tool_exposure_expansion_reason = attempt
+                    .tool_exposure_expansion_reason
+                    .or(tool_exposure_expansion_reason);
 
                 let current_kind = attempt
                     .error_kind
@@ -161,6 +176,8 @@ impl RuntimeFailover {
             partial_text: streamed_text,
             reasoning_text: streamed_reasoning,
             reasoning_duration_ms: None,
+            tool_exposure_expanded,
+            tool_exposure_expansion_reason,
         }
     }
 }
@@ -172,6 +189,7 @@ fn runtime_failover_kind_from_key(key: &str) -> Option<RuntimeFailoverErrorKind>
         "rate_limit" => RuntimeFailoverErrorKind::RateLimit,
         "timeout" => RuntimeFailoverErrorKind::Timeout,
         "network" => RuntimeFailoverErrorKind::Network,
+        "deferred_tools" => RuntimeFailoverErrorKind::DeferredTools,
         "policy_blocked" => RuntimeFailoverErrorKind::PolicyBlocked,
         "max_turns" => RuntimeFailoverErrorKind::MaxTurns,
         "loop_detected" => RuntimeFailoverErrorKind::LoopDetected,
@@ -276,6 +294,7 @@ pub(crate) fn runtime_failover_error_kind_key(kind: RuntimeFailoverErrorKind) ->
         RuntimeFailoverErrorKind::RateLimit => "rate_limit",
         RuntimeFailoverErrorKind::Timeout => "timeout",
         RuntimeFailoverErrorKind::Network => "network",
+        RuntimeFailoverErrorKind::DeferredTools => "deferred_tools",
         RuntimeFailoverErrorKind::PolicyBlocked => "policy_blocked",
         RuntimeFailoverErrorKind::MaxTurns => "max_turns",
         RuntimeFailoverErrorKind::LoopDetected => "loop_detected",
@@ -290,6 +309,7 @@ fn runtime_should_retry_same_candidate(kind: RuntimeFailoverErrorKind) -> bool {
         RuntimeFailoverErrorKind::RateLimit
             | RuntimeFailoverErrorKind::Timeout
             | RuntimeFailoverErrorKind::Network
+            | RuntimeFailoverErrorKind::DeferredTools
     )
 }
 
@@ -299,6 +319,8 @@ fn runtime_retry_budget_for_error(
 ) -> usize {
     if kind == RuntimeFailoverErrorKind::Network {
         configured_retry_count.max(5)
+    } else if kind == RuntimeFailoverErrorKind::DeferredTools {
+        configured_retry_count.max(1)
     } else {
         configured_retry_count
     }
@@ -309,6 +331,7 @@ fn runtime_retry_backoff_ms(kind: RuntimeFailoverErrorKind, attempt_idx: usize) 
         RuntimeFailoverErrorKind::RateLimit => 1200u64,
         RuntimeFailoverErrorKind::Timeout => 700u64,
         RuntimeFailoverErrorKind::Network => 400u64,
+        RuntimeFailoverErrorKind::DeferredTools => 0u64,
         _ => 0u64,
     };
     if base_ms == 0 {
@@ -372,6 +395,8 @@ mod tests {
                                 partial_text: "done".to_string(),
                                 reasoning_text: String::new(),
                                 reasoning_duration_ms: Some(12),
+                                tool_exposure_expanded: false,
+                                tool_exposure_expansion_reason: None,
                             };
                         }
 
@@ -384,6 +409,8 @@ mod tests {
                             partial_text: "partial".to_string(),
                             reasoning_text: "thinking".to_string(),
                             reasoning_duration_ms: None,
+                            tool_exposure_expanded: false,
+                            tool_exposure_expansion_reason: None,
                         }
                     })
                 },
@@ -440,6 +467,8 @@ mod tests {
                             partial_text: String::new(),
                             reasoning_text: String::new(),
                             reasoning_duration_ms: None,
+                            tool_exposure_expanded: false,
+                            tool_exposure_expansion_reason: None,
                         }
                     })
                 },
@@ -461,7 +490,6 @@ mod tests {
         );
     }
 
-
     #[tokio::test]
     async fn execute_candidates_reports_error_kinds_to_observer() {
         let observed = Arc::new(Mutex::new(Vec::new()));
@@ -482,7 +510,12 @@ mod tests {
                 observed_clone.lock().expect("observed lock").push(kind);
             })),
             attempt_once: Box::new(
-                move |_provider_key, _api_format, _base_url, _model_name, _api_key, _attempt_idx| {
+                move |_provider_key,
+                      _api_format,
+                      _base_url,
+                      _model_name,
+                      _api_key,
+                      _attempt_idx| {
                     Box::pin(async move {
                         CandidateAttemptOutcome {
                             final_messages: None,
@@ -493,6 +526,8 @@ mod tests {
                             partial_text: String::new(),
                             reasoning_text: String::new(),
                             reasoning_duration_ms: None,
+                            tool_exposure_expanded: false,
+                            tool_exposure_expansion_reason: None,
                         }
                     })
                 },
@@ -529,7 +564,12 @@ mod tests {
             })),
             on_error_kind: None,
             attempt_once: Box::new(
-                move |_provider_key, _api_format, _base_url, _model_name, _api_key, _attempt_idx| {
+                move |_provider_key,
+                      _api_format,
+                      _base_url,
+                      _model_name,
+                      _api_key,
+                      _attempt_idx| {
                     Box::pin(async move {
                         CandidateAttemptOutcome {
                             final_messages: None,
@@ -540,6 +580,8 @@ mod tests {
                             partial_text: String::new(),
                             reasoning_text: String::new(),
                             reasoning_duration_ms: None,
+                            tool_exposure_expanded: false,
+                            tool_exposure_expansion_reason: None,
                         }
                     })
                 },

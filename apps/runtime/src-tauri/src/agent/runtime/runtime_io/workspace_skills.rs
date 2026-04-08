@@ -444,10 +444,7 @@ pub fn build_workspace_skill_prompt_entries(
             invoke_name: entry.skill_id.clone(),
             name: entry.name.clone(),
             description: entry.description.clone(),
-            skill_md_path: build_workspace_skill_markdown_path(
-                work_dir,
-                &entry.projected_dir_name,
-            )
+            skill_md_path: build_workspace_skill_markdown_path(work_dir, &entry.projected_dir_name)
                 .to_string_lossy()
                 .to_string(),
         })
@@ -580,12 +577,13 @@ pub fn build_skill_roots(
 #[cfg(test)]
 mod workspace_skill_projection_tests {
     use super::{
-        build_skill_roots, build_workspace_skill_command_specs, build_workspace_skill_markdown_path,
-        build_workspace_skill_prompt_entries, build_workspace_skill_prompt_entry,
-        build_workspace_skills_prompt, extract_assistant_text_content,
-        normalize_workspace_skill_dir_name, prepare_workspace_skills_prompt,
-        resolve_workspace_skill_runtime_entry, sync_workspace_skills_to_directory,
-        WorkspaceSkillContent, WorkspaceSkillPromptEntry, WorkspaceSkillRuntimeEntry,
+        build_skill_roots, build_workspace_skill_command_specs,
+        build_workspace_skill_markdown_path, build_workspace_skill_prompt_entries,
+        build_workspace_skill_prompt_entry, build_workspace_skills_prompt,
+        extract_assistant_text_content, normalize_workspace_skill_dir_name,
+        prepare_workspace_skills_prompt, resolve_workspace_skill_runtime_entry,
+        sync_workspace_skills_to_directory, WorkspaceSkillContent, WorkspaceSkillPromptEntry,
+        WorkspaceSkillRuntimeEntry,
     };
     use chrono::Utc;
     use runtime_skill_core::SkillConfig;
@@ -636,7 +634,10 @@ mod workspace_skill_projection_tests {
         let work_dir = Path::new("E:\\workspace\\session-a");
         let roots = build_skill_roots(&work_dir.to_string_lossy(), "builtin", "");
 
-        assert_eq!(roots.first(), Some(&work_dir.join(".claude").join("skills")));
+        assert_eq!(
+            roots.first(),
+            Some(&work_dir.join(".claude").join("skills"))
+        );
         assert_eq!(roots.get(1), Some(&work_dir.join("skills")));
     }
 
@@ -815,7 +816,8 @@ mod workspace_skill_projection_tests {
     }
 
     #[test]
-    fn sync_workspace_skills_to_directory_keeps_sibling_local_skills_addressable_after_projection() {
+    fn sync_workspace_skills_to_directory_keeps_sibling_local_skills_addressable_after_projection()
+    {
         let tmp = tempdir().unwrap();
         let source_root = tmp.path().join("source");
         let runtime_dir = source_root.join("feishu-pm-runtime");
@@ -872,7 +874,9 @@ mod workspace_skill_projection_tests {
         sync_workspace_skills_to_directory(&work_dir, &[runtime_entry, summary_entry]).unwrap();
 
         let projected_runtime = work_dir.join("skills").join("feishu-pm-runtime");
-        let projected_summary = work_dir.join("skills").join("feishu-pm-weekly-work-summary");
+        let projected_summary = work_dir
+            .join("skills")
+            .join("feishu-pm-weekly-work-summary");
         assert!(projected_runtime.join("SKILL.md").exists());
         assert!(projected_summary.join("SKILL.md").exists());
         assert!(projected_summary
@@ -939,7 +943,11 @@ Use vendored assets.
 "#,
         )
         .unwrap();
-        std::fs::write(skill_dir.join("scripts").join("setup.ps1"), "Write-Host 'ok'").unwrap();
+        std::fs::write(
+            skill_dir.join("scripts").join("setup.ps1"),
+            "Write-Host 'ok'",
+        )
+        .unwrap();
 
         let manifest = SkillManifest {
             id: "builtin-docx".to_string(),
@@ -986,7 +994,11 @@ Prefer directory content.
 "#,
         )
         .unwrap();
-        std::fs::write(skill_dir.join("scripts").join("setup.ps1"), "Write-Host 'legacy'").unwrap();
+        std::fs::write(
+            skill_dir.join("scripts").join("setup.ps1"),
+            "Write-Host 'legacy'",
+        )
+        .unwrap();
 
         let manifest = SkillManifest {
             id: "builtin-docx".to_string(),
@@ -1076,11 +1088,15 @@ Run exec directly.
         assert!(entry.invocation.user_invocable);
         assert!(entry.invocation.disable_model_invocation);
         assert_eq!(
-            entry.command_dispatch.as_ref().map(|dispatch| dispatch.tool_name.as_str()),
+            entry
+                .command_dispatch
+                .as_ref()
+                .map(|dispatch| dispatch.tool_name.as_str()),
             Some("exec")
         );
         assert_eq!(
-            entry.metadata
+            entry
+                .metadata
                 .as_ref()
                 .and_then(|metadata| metadata.primary_env.as_deref()),
             Some("OPENAI_API_KEY")

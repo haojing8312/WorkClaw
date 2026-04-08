@@ -32,7 +32,11 @@ async fn maybe_self_heal_builtin_skill_source_with_pool(
     .await
     .map_err(|e| format!("自愈 legacy builtin skill 失败 (skill_id={skill_id}): {e}"))?;
 
-    Ok(("".to_string(), pack_path.to_string(), "vendored".to_string()))
+    Ok((
+        "".to_string(),
+        pack_path.to_string(),
+        "vendored".to_string(),
+    ))
 }
 
 pub(crate) async fn load_session_runtime_inputs_with_pool(
@@ -48,14 +52,15 @@ pub(crate) async fn load_session_runtime_inputs_with_pool(
     .await
     .map_err(|e| format!("会话不存在 (session_id={session_id}): {e}"))?;
 
-    let current_model_exists = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(1) FROM model_configs WHERE id = ?",
-    )
-    .bind(&model_id)
-    .fetch_one(pool)
-    .await
-    .map_err(|e| format!("校验会话模型失败 (session_id={session_id}, model_id={model_id}): {e}"))?
-        > 0;
+    let current_model_exists =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(1) FROM model_configs WHERE id = ?")
+            .bind(&model_id)
+            .fetch_one(pool)
+            .await
+            .map_err(|e| {
+                format!("校验会话模型失败 (session_id={session_id}, model_id={model_id}): {e}")
+            })?
+            > 0;
 
     if current_model_exists {
         return Ok((skill_id, model_id, permission_mode, work_dir, employee_id));
@@ -83,7 +88,7 @@ pub(crate) async fn load_session_runtime_inputs_with_pool(
         .await
         .map_err(|e| format!("读取兜底模型失败 (session_id={session_id}): {e}"))?
         .ok_or_else(|| {
-        format!(
+            format!(
             "会话模型不存在且没有可回退的默认模型 (session_id={session_id}, model_id={model_id})"
         )
         })?,
