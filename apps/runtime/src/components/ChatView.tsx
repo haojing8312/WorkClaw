@@ -348,6 +348,7 @@ export function ChatView({
   const {
     streaming,
     streamItems,
+    toolManifest,
     streamReasoning,
     askUserQuestion,
     askUserOptions,
@@ -393,6 +394,7 @@ export function ChatView({
     () => ({
       streaming,
       streamItems: [...streamItems],
+      toolManifest: toolManifest.map((item) => ({ ...item })),
       streamReasoning: streamReasoning ? { ...streamReasoning } : null,
       agentState: agentState ? { ...agentState } : null,
       subAgentBuffer,
@@ -407,6 +409,7 @@ export function ChatView({
       mainRoleName,
       mainSummaryDelivered,
       streamItems,
+      toolManifest,
       streamReasoning,
       streaming,
       subAgentBuffer,

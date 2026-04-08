@@ -16,6 +16,7 @@ pub mod runtime;
 pub mod safety;
 pub mod skill_config;
 pub mod system_prompts;
+pub mod tool_manifest;
 pub mod tools;
 
 pub mod turn_executor;
@@ -23,6 +24,7 @@ pub mod types;
 
 pub use executor::AgentExecutor;
 pub use registry::ToolRegistry;
+pub use tool_manifest::{ToolCategory, ToolManifestEntry, ToolMetadata, ToolSource};
 pub use tools::*;
 pub use types::{
     AgentState, AgentStateEvent, LLMResponse, Tool, ToolCall, ToolCallEvent, ToolContext,

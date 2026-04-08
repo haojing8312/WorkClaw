@@ -210,6 +210,19 @@ export interface ToolCallInfo {
   status: "running" | "completed" | "error";
 }
 
+export interface SessionToolManifestEntry {
+  name: string;
+  description: string;
+  display_name: string;
+  category: string;
+  read_only: boolean;
+  destructive: boolean;
+  concurrency_safe: boolean;
+  open_world: boolean;
+  requires_approval: boolean;
+  source: string;
+}
+
 export interface ChatRuntimeAgentState {
   state: string;
   detail?: string;
@@ -231,6 +244,7 @@ export interface ChatDelegationCardState {
 export interface PersistedChatRuntimeState {
   streaming: boolean;
   streamItems: StreamItem[];
+  toolManifest: SessionToolManifestEntry[];
   streamReasoning: {
     status: "thinking" | "completed" | "interrupted";
     content: string;

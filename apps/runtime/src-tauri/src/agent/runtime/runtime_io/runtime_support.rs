@@ -1,4 +1,4 @@
-use crate::agent::AgentExecutor;
+use crate::agent::{AgentExecutor, ToolManifestEntry};
 
 pub(crate) fn load_memory_content(memory_dir: &std::path::Path) -> String {
     let memory_file = memory_dir.join("MEMORY.md");
@@ -22,6 +22,23 @@ pub(crate) fn resolve_tool_names(
             .filter_map(|t| t["name"].as_str().map(String::from))
             .collect::<Vec<_>>()
             .join(", "),
+    }
+}
+
+pub(crate) fn resolve_tool_manifest(
+    allowed_tools: &Option<Vec<String>>,
+    agent_executor: &AgentExecutor,
+) -> Vec<ToolManifestEntry> {
+    match allowed_tools {
+        Some(whitelist) => whitelist
+            .iter()
+            .filter_map(|tool_name| {
+                agent_executor.registry().get(tool_name).map(|tool| {
+                    ToolManifestEntry::from_parts(tool_name, tool.description(), tool.metadata())
+                })
+            })
+            .collect(),
+        None => agent_executor.registry().tool_manifest_entries(),
     }
 }
 

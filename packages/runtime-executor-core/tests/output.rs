@@ -20,6 +20,11 @@ fn truncate_structured_output_preserves_summary_and_shape() {
         "ok": true,
         "tool": "write_file",
         "summary": "成功写入 12 字节到 report.html",
+        "data": {
+            "path": "report.html",
+            "content": huge_details.clone(),
+        },
+        "artifacts": [],
         "details": {
             "path": "report.html",
             "content": huge_details,
@@ -46,6 +51,12 @@ fn split_error_code_parses_structured_errors() {
         "ok": false,
         "tool": "write_file",
         "summary": "写入失败",
+        "data": {},
+        "error": {
+            "code": "MISSING_PATH",
+            "message": "缺少 path 参数"
+        },
+        "artifacts": [],
         "error_code": "MISSING_PATH",
         "error_message": "缺少 path 参数",
         "details": {}
@@ -76,6 +87,12 @@ fn repeated_failure_streak_normalizes_structured_errors() {
         "ok": false,
         "tool": "write_file",
         "summary": "写入失败",
+        "data": {},
+        "error": {
+            "code": "MISSING_PATH",
+            "message": "缺少 path 参数"
+        },
+        "artifacts": [],
         "error_code": "MISSING_PATH",
         "error_message": "缺少 path 参数",
         "details": {}
@@ -91,4 +108,43 @@ fn repeated_failure_streak_normalizes_structured_errors() {
     let summary = update_tool_failure_streak(&mut streak, "write_file", &input, &structured_error);
     assert!(summary.is_some());
     assert!(summary.unwrap().contains("缺少 path 参数"));
+}
+
+#[test]
+fn structured_envelope_shape_exposes_data_error_and_artifacts() {
+    let output = json!({
+        "ok": false,
+        "tool": "read_file",
+        "summary": "读取失败",
+        "data": {
+            "path": "README.md"
+        },
+        "error": {
+            "code": "NOT_FOUND",
+            "message": "文件不存在"
+        },
+        "artifacts": [
+            {
+                "kind": "log",
+                "path": "logs/read.txt"
+            }
+        ],
+        "details": {
+            "path": "README.md"
+        },
+        "error_code": "NOT_FOUND",
+        "error_message": "文件不存在"
+    })
+    .to_string();
+
+    let parsed: serde_json::Value = serde_json::from_str(&output).expect("structured json");
+    assert_eq!(parsed["tool"], "read_file");
+    assert_eq!(parsed["summary"], "读取失败");
+    assert_eq!(parsed["data"]["path"], "README.md");
+    assert_eq!(parsed["error"]["code"], "NOT_FOUND");
+    assert_eq!(parsed["error"]["message"], "文件不存在");
+    assert_eq!(parsed["artifacts"][0]["kind"], "log");
+    assert_eq!(parsed["details"]["path"], "README.md");
+    assert_eq!(parsed["error_code"], "NOT_FOUND");
+    assert_eq!(parsed["error_message"], "文件不存在");
 }

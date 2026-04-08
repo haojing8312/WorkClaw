@@ -15,6 +15,8 @@ pub(crate) mod session_runs;
 pub mod session_runtime;
 pub(crate) mod skill_routing;
 pub(crate) mod tool_dispatch;
+pub(crate) mod tool_profiles;
+pub(crate) mod tool_registry_builder;
 pub(crate) mod tool_setup;
 pub(crate) mod trace_builder;
 pub mod transcript;

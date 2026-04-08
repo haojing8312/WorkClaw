@@ -2,7 +2,9 @@ use crate::agent::browser_progress::BrowserProgressSnapshot;
 use crate::agent::event_bridge::{
     append_run_guard_warning_event, append_tool_run_event, build_skill_route_event,
 };
-use crate::agent::permissions::{normalize_tool_name, PermissionMode};
+use crate::agent::permissions::{
+    normalize_tool_name, PermissionMode, ToolPermissionAction, ToolPermissionDecision,
+};
 use crate::agent::progress::{json_progress_signature, text_progress_signature};
 use crate::agent::registry::ToolRegistry;
 use crate::agent::run_guard::{encode_run_stop_reason, ProgressFingerprint, RunBudgetPolicy};
@@ -207,6 +209,28 @@ enum BlockingToolOutcome {
     Completed((String, bool)),
     Cancelled,
     TimedOut,
+}
+
+fn resolve_dispatch_permission_decision(
+    ctx: &ToolDispatchContext<'_>,
+    call: &ToolCall,
+) -> ToolPermissionDecision {
+    let normalized_call_name = normalize_tool_name(&call.name);
+    if let Some(allowed_tools) = ctx.allowed_tools {
+        let tool_allowed = allowed_tools
+            .iter()
+            .map(|tool| normalize_tool_name(tool))
+            .any(|tool| tool == normalized_call_name);
+        if !tool_allowed {
+            return ToolPermissionDecision::deny(format!(
+                "此 Skill 不允许使用工具: {}",
+                call.name
+            ));
+        }
+    }
+
+    ctx.permission_mode
+        .decision(&call.name, &call.input, ctx.tool_ctx.work_dir.as_deref())
 }
 
 async fn resolve_approval_outcome(
@@ -512,12 +536,22 @@ pub(crate) async fn dispatch_tool_call(
         }
     }
 
-    if ctx.permission_mode.needs_confirmation(
-        &call.name,
-        &call.input,
-        ctx.tool_ctx.work_dir.as_deref(),
-    ) {
-        match resolve_approval_outcome(ctx, call).await? {
+    let permission_decision = resolve_dispatch_permission_decision(ctx, call);
+    match permission_decision.action {
+        ToolPermissionAction::Allow => {}
+        ToolPermissionAction::Deny => {
+            emit_failed_completion(
+                ctx,
+                call,
+                state,
+                permission_decision
+                    .reason
+                    .unwrap_or_else(|| format!("此 Skill 不允许使用工具: {}", call.name)),
+            )
+            .await;
+            return Ok(ToolDispatchOutcome::Continue);
+        }
+        ToolPermissionAction::Ask => match resolve_approval_outcome(ctx, call).await? {
             ApprovalOutcome::TimedOut => {
                 state.tool_results.push(ToolResult {
                     tool_use_id: call.id.clone(),
@@ -535,7 +569,7 @@ pub(crate) async fn dispatch_tool_call(
                     return Ok(ToolDispatchOutcome::Continue);
                 }
             }
-        }
+        },
     }
 
     let max_attempts = if is_skill_call {
@@ -558,30 +592,17 @@ pub(crate) async fn dispatch_tool_call(
             } else {
                 match ctx.registry.get(&call.name) {
                     Some(tool) => {
-                        if let Some(whitelist) = ctx.allowed_tools {
-                            if !whitelist.iter().any(|w| w == &call.name) {
-                                (format!("此 Skill 不允许使用工具: {}", call.name), true)
-                            } else {
-                                if is_skill_call {
-                                    match resolve_skill_dispatch_bridge(&tool, call, ctx.tool_ctx) {
-                                        Ok(Some((spec, raw_args))) => match dispatch_skill_command_with_mode(ctx, &spec, &raw_args, true).await {
-                                            Ok(output) => (output, false),
-                                            Err(err) => (format!("工具执行错误: {}", err), true),
-                                        },
-                                        Ok(None) => {
-                                            run_tool(
-                                                tool,
-                                                call,
-                                                ctx.tool_ctx,
-                                                ctx.cancel_flag.clone(),
-                                                ctx.route_node_timeout_secs,
-                                                is_skill_call,
-                                            )
-                                            .await
-                                        }
+                        if is_skill_call {
+                            match resolve_skill_dispatch_bridge(&tool, call, ctx.tool_ctx) {
+                                Ok(Some((spec, raw_args))) => {
+                                    match dispatch_skill_command_with_mode(ctx, &spec, &raw_args, true)
+                                        .await
+                                    {
+                                        Ok(output) => (output, false),
                                         Err(err) => (format!("工具执行错误: {}", err), true),
                                     }
-                                } else {
+                                }
+                                Ok(None) => {
                                     run_tool(
                                         tool,
                                         call,
@@ -592,38 +613,18 @@ pub(crate) async fn dispatch_tool_call(
                                     )
                                     .await
                                 }
+                                Err(err) => (format!("工具执行错误: {}", err), true),
                             }
                         } else {
-                            if is_skill_call {
-                                match resolve_skill_dispatch_bridge(&tool, call, ctx.tool_ctx) {
-                                    Ok(Some((spec, raw_args))) => match dispatch_skill_command_with_mode(ctx, &spec, &raw_args, true).await {
-                                        Ok(output) => (output, false),
-                                        Err(err) => (format!("工具执行错误: {}", err), true),
-                                    },
-                                    Ok(None) => {
-                                        run_tool(
-                                            tool,
-                                            call,
-                                            ctx.tool_ctx,
-                                            ctx.cancel_flag.clone(),
-                                            ctx.route_node_timeout_secs,
-                                            is_skill_call,
-                                        )
-                                        .await
-                                    }
-                                    Err(err) => (format!("工具执行错误: {}", err), true),
-                                }
-                            } else {
-                                run_tool(
-                                    tool,
-                                    call,
-                                    ctx.tool_ctx,
-                                    ctx.cancel_flag.clone(),
-                                    ctx.route_node_timeout_secs,
-                                    is_skill_call,
-                                )
-                                .await
-                            }
+                            run_tool(
+                                tool,
+                                call,
+                                ctx.tool_ctx,
+                                ctx.cancel_flag.clone(),
+                                ctx.route_node_timeout_secs,
+                                is_skill_call,
+                            )
+                            .await
                         }
                     }
                     None => {
@@ -756,10 +757,10 @@ async fn wait_for_cancel(cancel_flag: &Option<Arc<AtomicBool>>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        dispatch_skill_command, dispatch_tool_call, run_tool, ToolDispatchContext,
-        ToolDispatchOutcome, ToolDispatchState,
+        dispatch_skill_command, dispatch_tool_call, resolve_dispatch_permission_decision,
+        run_tool, ToolDispatchContext, ToolDispatchOutcome, ToolDispatchState,
     };
-    use crate::agent::permissions::PermissionMode;
+    use crate::agent::permissions::{PermissionMode, ToolPermissionAction};
     use crate::agent::registry::ToolRegistry;
     use crate::agent::runtime::runtime_io::WorkspaceSkillCommandSpec;
     use crate::agent::run_guard::{parse_run_stop_reason, RunStopReasonKind};
@@ -771,7 +772,8 @@ mod tests {
     use serde_json::{json, Value};
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
+    use std::sync::mpsc::Sender;
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
     use tempfile::TempDir;
 
@@ -864,6 +866,26 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         panic!("blocking tool never started");
+    }
+
+    fn drive_manual_confirmation(
+        confirm_state: Arc<Mutex<Option<Sender<bool>>>>,
+        decision: bool,
+    ) -> std::thread::JoinHandle<()> {
+        std::thread::spawn(move || {
+            for _ in 0..50 {
+                let sender = {
+                    let guard = confirm_state.lock().expect("lock confirm state");
+                    guard.as_ref().cloned()
+                };
+                if let Some(sender) = sender {
+                    sender.send(decision).expect("send decision");
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            panic!("manual confirmation sender was not installed");
+        })
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -1021,6 +1043,115 @@ mod tests {
 
         assert_eq!(stop_reason.kind, RunStopReasonKind::LoopDetected);
         assert_eq!(count.load(Ordering::SeqCst), 5);
+    }
+
+    #[test]
+    fn resolve_dispatch_permission_decision_denies_disallowed_tool_before_execution() {
+        let registry = ToolRegistry::new();
+        let tool_ctx = ToolContext::default();
+        let ctx = ToolDispatchContext {
+            registry: &registry,
+            app_handle: None,
+            session_id: None,
+            persisted_run_id: None,
+            allowed_tools: Some(&["read_file".to_string()]),
+            permission_mode: PermissionMode::Unrestricted,
+            tool_ctx: &tool_ctx,
+            tool_confirm_tx: None,
+            cancel_flag: None,
+            route_run_id: "route-deny",
+            route_node_timeout_secs: 5,
+            route_retry_count: 0,
+            iteration: 1,
+            run_budget_policy: crate::agent::run_guard::RunBudgetPolicy::for_scope(
+                crate::agent::run_guard::RunBudgetScope::GeneralChat,
+            ),
+        };
+        let call = ToolCall {
+            id: "call-deny".to_string(),
+            name: "write_file".to_string(),
+            input: json!({
+                "path": "blocked.txt",
+                "content": "hello"
+            }),
+        };
+
+        let decision = resolve_dispatch_permission_decision(&ctx, &call);
+
+        assert_eq!(decision.action, ToolPermissionAction::Deny);
+        assert!(
+            decision
+                .reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("不允许使用工具")
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_tool_call_rejected_approval_does_not_execute_file_delete() {
+        let registry = ToolRegistry::with_standard_tools();
+        let workspace = TempDir::new().expect("workspace temp dir");
+        let target_dir = workspace.path().join("keep-me");
+        std::fs::create_dir_all(&target_dir).expect("create target dir");
+        std::fs::write(target_dir.join("note.txt"), "keep").expect("write nested file");
+
+        let tool_ctx = ToolContext {
+            work_dir: Some(workspace.path().to_path_buf()),
+            ..ToolContext::default()
+        };
+        let confirm_state = Arc::new(Mutex::new(None));
+        let driver = drive_manual_confirmation(Arc::clone(&confirm_state), false);
+        let call = ToolCall {
+            id: "call-file-delete".to_string(),
+            name: "file_delete".to_string(),
+            input: json!({
+                "path": "keep-me",
+                "recursive": true
+            }),
+        };
+        let mut tool_results = Vec::new();
+        let mut repeated_failure_summary = None;
+        let mut tool_failure_streak = None;
+        let mut tool_call_history = Vec::new();
+        let mut tool_result_history = Vec::new();
+        let mut latest_browser_progress = None;
+        let dispatch_context = ToolDispatchContext {
+            registry: &registry,
+            app_handle: None,
+            session_id: None,
+            persisted_run_id: None,
+            allowed_tools: None,
+            permission_mode: PermissionMode::AcceptEdits,
+            tool_ctx: &tool_ctx,
+            tool_confirm_tx: Some(&confirm_state),
+            cancel_flag: None,
+            route_run_id: "route-approval-deny",
+            route_node_timeout_secs: 5,
+            route_retry_count: 0,
+            iteration: 1,
+            run_budget_policy: crate::agent::run_guard::RunBudgetPolicy::for_scope(
+                crate::agent::run_guard::RunBudgetScope::GeneralChat,
+            ),
+        };
+        let mut dispatch_state = ToolDispatchState {
+            tool_results: &mut tool_results,
+            repeated_failure_summary: &mut repeated_failure_summary,
+            tool_failure_streak: &mut tool_failure_streak,
+            tool_call_history: &mut tool_call_history,
+            tool_result_history: &mut tool_result_history,
+            latest_browser_progress: &mut latest_browser_progress,
+        };
+
+        let outcome = dispatch_tool_call(&dispatch_context, &mut dispatch_state, 0, &call)
+            .await
+            .expect("dispatch should complete after rejection");
+
+        driver.join().expect("manual confirmation driver");
+        assert!(matches!(outcome, ToolDispatchOutcome::Continue));
+        assert!(target_dir.exists(), "target dir should remain after rejection");
+        assert_eq!(tool_results.len(), 1);
+        assert_eq!(tool_results[0].content, "用户拒绝了此操作");
     }
 
     #[tokio::test(flavor = "current_thread")]

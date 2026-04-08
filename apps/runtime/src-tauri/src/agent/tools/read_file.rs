@@ -1,4 +1,5 @@
 use crate::agent::file_task_preflight::preflight_file_task;
+use crate::agent::tool_manifest::{ToolCategory, ToolMetadata};
 use crate::agent::tools::tool_result;
 use crate::agent::types::{Tool, ToolContext};
 use anyhow::{anyhow, Result};
@@ -26,6 +27,14 @@ impl Tool for ReadFileTool {
             },
             "required": ["path"]
         })
+    }
+
+    fn metadata(&self) -> ToolMetadata {
+        ToolMetadata {
+            category: ToolCategory::File,
+            read_only: true,
+            ..ToolMetadata::default()
+        }
     }
 
     fn execute(&self, input: Value, ctx: &ToolContext) -> Result<String> {

@@ -1,5 +1,7 @@
+use super::tool_manifest::ToolMetadata;
 use crate::agent::run_guard::RunStopReason;
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::{Component, Path, PathBuf};
 
@@ -96,6 +98,9 @@ pub trait Tool: Send + Sync {
     fn description(&self) -> &str;
     fn input_schema(&self) -> Value;
     fn execute(&self, input: Value, ctx: &ToolContext) -> Result<String>;
+    fn metadata(&self) -> ToolMetadata {
+        ToolMetadata::default()
+    }
     fn structured_output(&self, _input: &Value, _ctx: &ToolContext) -> Result<Option<Value>> {
         Ok(None)
     }
@@ -112,6 +117,31 @@ pub struct ToolCall {
 pub struct ToolResult {
     pub tool_use_id: String,
     pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ToolResultError {
+    pub code: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ToolResultEnvelope {
+    pub ok: bool,
+    pub tool: String,
+    pub summary: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<ToolResultError>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifacts: Vec<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<String>,
 }
 
 #[derive(Debug)]

@@ -1,3 +1,4 @@
+use crate::{ToolPermissionAction, ToolPermissionDecision};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashSet;
@@ -17,18 +18,25 @@ pub enum PermissionMode {
 }
 
 impl PermissionMode {
+    pub fn decision(
+        &self,
+        tool_name: &str,
+        input: &Value,
+        work_dir: Option<&Path>,
+    ) -> ToolPermissionDecision {
+        tool_permission_decision(*self, tool_name, input, work_dir)
+    }
+
     pub fn needs_confirmation(
         &self,
         tool_name: &str,
         input: &Value,
         work_dir: Option<&Path>,
     ) -> bool {
-        match self {
-            Self::Unrestricted => false,
-            Self::AcceptEdits | Self::Default => {
-                classify_action_risk(tool_name, input, work_dir) == ActionRisk::Critical
-            }
-        }
+        matches!(
+            self.decision(tool_name, input, work_dir).action,
+            ToolPermissionAction::Ask
+        )
     }
 }
 
@@ -55,6 +63,31 @@ pub fn classify_action_risk(tool_name: &str, input: &Value, work_dir: Option<&Pa
         | "read_file" | "glob" | "grep" | "list_dir" | "file_stat" | "todo_write"
         | "web_search" | "web_fetch" => ActionRisk::Normal,
         _ => ActionRisk::Normal,
+    }
+}
+
+pub fn tool_permission_decision(
+    permission_mode: PermissionMode,
+    tool_name: &str,
+    input: &Value,
+    work_dir: Option<&Path>,
+) -> ToolPermissionDecision {
+    match permission_mode {
+        PermissionMode::Unrestricted => ToolPermissionDecision::allow(),
+        PermissionMode::AcceptEdits | PermissionMode::Default => {
+            if classify_action_risk(tool_name, input, work_dir) == ActionRisk::Critical {
+                ToolPermissionDecision::ask(
+                    format!(
+                        "tool `{}` requires approval in {:?} mode",
+                        normalize_tool_name(tool_name),
+                        permission_mode
+                    ),
+                    approval_rule_fingerprint(tool_name, input),
+                )
+            } else {
+                ToolPermissionDecision::allow()
+            }
+        }
     }
 }
 

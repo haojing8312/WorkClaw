@@ -1,5 +1,6 @@
 use runtime_policy::{
-    classify_action_risk, narrow_allowed_tools, normalize_tool_name, ActionRisk, PermissionMode,
+    classify_action_risk, narrow_allowed_tools, normalize_tool_name, tool_permission_decision,
+    ActionRisk, PermissionMode, ToolPermissionAction, ToolPermissionDecision,
 };
 use serde_json::json;
 use std::fs;
@@ -101,4 +102,60 @@ fn nested_absolute_write_inside_canonicalized_workspace_is_not_critical() {
     );
 
     fs::remove_dir_all(&work_dir).unwrap();
+}
+
+#[test]
+fn decision_allows_read_only_file_access() {
+    let decision = tool_permission_decision(
+        PermissionMode::AcceptEdits,
+        "read_file",
+        &json!({
+            "path": "README.md"
+        }),
+        None,
+    );
+
+    assert_eq!(decision.action, ToolPermissionAction::Allow);
+    assert!(decision.reason.is_none());
+    assert!(decision.fingerprint.is_none());
+}
+
+#[test]
+fn decision_asks_for_destructive_bash() {
+    let decision = tool_permission_decision(
+        PermissionMode::AcceptEdits,
+        "bash",
+        &json!({
+            "command": "rm -rf ./dist"
+        }),
+        None,
+    );
+
+    assert_eq!(decision.action, ToolPermissionAction::Ask);
+    assert!(decision.reason.as_deref().unwrap_or_default().contains("bash"));
+    assert!(decision.fingerprint.is_some());
+}
+
+#[test]
+fn decision_asks_for_file_delete() {
+    let decision = tool_permission_decision(
+        PermissionMode::AcceptEdits,
+        "file_delete",
+        &json!({
+            "path": "dist",
+            "recursive": true
+        }),
+        None,
+    );
+
+    assert_eq!(decision.action, ToolPermissionAction::Ask);
+}
+
+#[test]
+fn deny_decision_constructor_preserves_reason() {
+    let decision = ToolPermissionDecision::deny("policy blocked");
+
+    assert_eq!(decision.action, ToolPermissionAction::Deny);
+    assert_eq!(decision.reason.as_deref(), Some("policy blocked"));
+    assert!(decision.fingerprint.is_none());
 }

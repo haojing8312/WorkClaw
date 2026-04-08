@@ -43,6 +43,7 @@ export function clonePersistedChatRuntimeState(
   return {
     streaming: state?.streaming ?? false,
     streamItems: state?.streamItems ? [...state.streamItems] : [],
+    toolManifest: state?.toolManifest ? state.toolManifest.map((item) => ({ ...item })) : [],
     streamReasoning: state?.streamReasoning ? { ...state.streamReasoning } : null,
     agentState: state?.agentState ? { ...state.agentState } : null,
     subAgentBuffer: state?.subAgentBuffer ?? "",
@@ -93,6 +94,7 @@ export function arePersistedChatRuntimeStatesEqual(
   return (
     left.streaming === right.streaming &&
     areComparableValuesEqual(left.streamItems, right.streamItems) &&
+    areComparableValuesEqual(left.toolManifest, right.toolManifest) &&
     areComparableValuesEqual(left.streamReasoning, right.streamReasoning) &&
     areComparableValuesEqual(left.agentState, right.agentState) &&
     left.subAgentBuffer === right.subAgentBuffer &&

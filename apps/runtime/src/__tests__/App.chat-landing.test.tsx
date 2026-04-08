@@ -181,6 +181,7 @@ vi.mock("../components/ChatView", () => ({
             props.onPersistRuntimeState?.({
               streaming: true,
               streamItems: [{ type: "text", content: "已缓存的运行中输出" }],
+              toolManifest: [],
               streamReasoning: {
                 status: "thinking",
                 content: "恢复中",

@@ -5,6 +5,7 @@ use super::observability::{build_implicit_route_observation, PlannedImplicitRout
 use super::recall::recall_skill_candidates;
 use crate::agent::context::build_tool_context;
 use crate::agent::run_guard::{RunBudgetPolicy, RunBudgetScope};
+use crate::agent::runtime::tool_profiles::{resolve_tool_profile, ToolProfileName};
 use crate::agent::runtime::attempt_runner::{
     execute_route_candidates, RouteExecutionOutcome, RouteExecutionParams,
 };
@@ -24,6 +25,7 @@ pub(crate) struct RoutedSkillToolSetup {
     pub skill_id: String,
     pub skill_system_prompt: String,
     pub skill_allowed_tools: Option<Vec<String>>,
+    pub tool_profile: Option<ToolProfileName>,
     pub max_iterations: Option<usize>,
     pub source_type: String,
     pub pack_path: String,
@@ -67,6 +69,7 @@ pub(crate) fn build_routed_skill_tool_setup(
         skill_id: entry.skill_id.clone(),
         skill_system_prompt: entry.config.system_prompt.clone(),
         skill_allowed_tools: entry.config.allowed_tools.clone(),
+        tool_profile: infer_skill_tool_profile(entry),
         max_iterations: entry.config.max_iterations,
         source_type: entry.source_type.clone(),
         pack_path: match &entry.content {
@@ -74,6 +77,44 @@ pub(crate) fn build_routed_skill_tool_setup(
             WorkspaceSkillContent::FileTree(_) => String::new(),
         },
     }
+}
+
+fn infer_skill_tool_profile(entry: &WorkspaceSkillRuntimeEntry) -> Option<ToolProfileName> {
+    if entry.config.allowed_tools.is_some() {
+        return None;
+    }
+
+    let haystack = format!(
+        "{} {} {}",
+        entry.skill_id.to_ascii_lowercase(),
+        entry.name.to_ascii_lowercase(),
+        entry.description.to_ascii_lowercase()
+    );
+
+    if haystack.contains("browser") {
+        return Some(ToolProfileName::Browser);
+    }
+    if haystack.contains("employee") || haystack.contains("team") {
+        return Some(ToolProfileName::Employee);
+    }
+    if haystack.contains("coding")
+        || haystack.contains("code")
+        || haystack.contains("developer")
+    {
+        return Some(ToolProfileName::Coding);
+    }
+
+    None
+}
+
+fn resolve_skill_allowed_tools(
+    registry: &crate::agent::ToolRegistry,
+    setup: &RoutedSkillToolSetup,
+) -> Option<Vec<String>> {
+    setup
+        .skill_allowed_tools
+        .clone()
+        .or_else(|| setup.tool_profile.map(|profile| resolve_tool_profile(registry, profile)))
 }
 
 pub(crate) fn resolve_direct_dispatch_raw_args(
@@ -223,13 +264,14 @@ pub(crate) async fn execute_implicit_route_plan(
             command_spec,
             raw_args,
         } => {
+            let resolved_allowed_tools = resolve_skill_allowed_tools(agent_executor.registry(), &setup);
             let tool_ctx = build_tool_context(
                 Some(session_id),
                 prepared_context
                     .executor_work_dir
                     .as_ref()
                     .map(std::path::PathBuf::from),
-                setup.skill_allowed_tools.as_deref(),
+                resolved_allowed_tools.as_deref(),
             )
             .map_err(|err| err.to_string())?;
             let dispatch_context = ToolDispatchContext {
@@ -237,7 +279,7 @@ pub(crate) async fn execute_implicit_route_plan(
                 app_handle: Some(app),
                 session_id: Some(session_id),
                 persisted_run_id: Some(run_id),
-                allowed_tools: setup.skill_allowed_tools.as_deref(),
+                allowed_tools: resolved_allowed_tools.as_deref(),
                 permission_mode: prepared_context.permission_mode,
                 tool_ctx: &tool_ctx,
                 tool_confirm_tx: Some(&tool_confirm_responder),
@@ -256,6 +298,7 @@ pub(crate) async fn execute_implicit_route_plan(
         }
         RouteRunPlan::PromptSkillInline { skill_id, setup } => {
             let execution_preparation_service = ChatExecutionPreparationService::new();
+            let resolved_allowed_tools = resolve_skill_allowed_tools(agent_executor.registry(), &setup);
             let max_iter = RunBudgetPolicy::resolve(
                 if skill_id.eq_ignore_ascii_case("builtin-general") {
                     RunBudgetScope::GeneralChat
@@ -280,7 +323,7 @@ pub(crate) async fn execute_implicit_route_plan(
                 source_type: &setup.source_type,
                 pack_path: &setup.pack_path,
                 skill_system_prompt: &setup.skill_system_prompt,
-                skill_allowed_tools: setup.skill_allowed_tools.clone(),
+                skill_allowed_tools: resolved_allowed_tools.clone(),
                 max_iter,
                 max_call_depth: prepared_context.max_call_depth,
                 suppress_workspace_skills_prompt: false,
@@ -321,6 +364,7 @@ pub(crate) async fn execute_implicit_route_plan(
         }
         RouteRunPlan::PromptSkillFork { skill_id, setup } => {
             let execution_preparation_service = ChatExecutionPreparationService::new();
+            let resolved_allowed_tools = resolve_skill_allowed_tools(agent_executor.registry(), &setup);
             let max_iter = RunBudgetPolicy::resolve(
                 if skill_id.eq_ignore_ascii_case("builtin-general") {
                     RunBudgetScope::GeneralChat
@@ -345,7 +389,7 @@ pub(crate) async fn execute_implicit_route_plan(
                 source_type: &setup.source_type,
                 pack_path: &setup.pack_path,
                 skill_system_prompt: &setup.skill_system_prompt,
-                skill_allowed_tools: setup.skill_allowed_tools.clone(),
+                skill_allowed_tools: resolved_allowed_tools.clone(),
                 max_iter,
                 max_call_depth: prepared_context.max_call_depth,
                 suppress_workspace_skills_prompt: false,
@@ -456,12 +500,20 @@ mod tests {
     use crate::agent::runtime::runtime_io::{
         WorkspaceSkillCommandSpec, WorkspaceSkillContent, WorkspaceSkillRuntimeEntry,
     };
+    use crate::agent::runtime::tool_registry_builder::{
+        RuntimeToolRegistryBuilder, DEFAULT_BROWSER_SIDECAR_URL,
+    };
     use crate::agent::runtime::skill_routing::index::SkillRouteIndex;
     use crate::agent::runtime::skill_routing::intent::RouteFallbackReason;
+    use crate::agent::tools::{ProcessManager, TaskTool};
+    use crate::agent::ToolRegistry;
     use runtime_skill_core::{
         OpenClawSkillMetadata, SkillCommandArgMode, SkillCommandDispatchKind,
         SkillCommandDispatchSpec, SkillConfig, SkillInvocationPolicy,
     };
+    use sqlx::sqlite::SqlitePoolOptions;
+    use std::sync::Arc;
+    use tempfile::tempdir;
 
     fn build_entry(
         skill_id: &str,
@@ -871,5 +923,83 @@ mod tests {
             } => {}
             other => panic!("expected open-task plan, got {:?}", other),
         }
+    }
+
+    #[tokio::test]
+    async fn resolve_skill_allowed_tools_uses_inferred_browser_profile_when_explicit_list_missing() {
+        let entry = build_entry(
+            "browser-research-skill",
+            "Browser Research Skill",
+            "Research with browser automation",
+            "## When to Use\n- Use browser automation for research.\n",
+            None,
+            None,
+            Some(5),
+            SkillInvocationPolicy {
+                user_invocable: true,
+                disable_model_invocation: false,
+            },
+            None,
+            None,
+        );
+        let setup = build_routed_skill_tool_setup(&entry);
+        let registry = Arc::new(ToolRegistry::with_standard_tools());
+        let builder = RuntimeToolRegistryBuilder::new(registry.as_ref());
+        builder.register_process_shell_tools(Arc::new(ProcessManager::new()));
+        builder.register_browser_and_alias_tools(DEFAULT_BROWSER_SIDECAR_URL);
+        builder.register_skill_and_compaction_tools("sess-profile", Vec::new(), 2);
+
+        let db = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite");
+        let memory_dir = tempdir().expect("temp dir");
+        let task_tool = TaskTool::new(
+            Arc::clone(&registry),
+            "openai".to_string(),
+            "https://example.com".to_string(),
+            "test-key".to_string(),
+            "gpt-4o-mini".to_string(),
+        );
+        builder.register_runtime_support_tools(task_tool, db, memory_dir.path().to_path_buf());
+
+        let allowed_tools =
+            resolve_skill_allowed_tools(registry.as_ref(), &setup).expect("profile allowed tools");
+
+        assert_eq!(setup.tool_profile, Some(ToolProfileName::Browser));
+        assert!(allowed_tools.contains(&"browser_launch".to_string()));
+        assert!(allowed_tools.contains(&"browser_snapshot".to_string()));
+        assert!(!allowed_tools.contains(&"bash".to_string()));
+    }
+
+    #[test]
+    fn resolve_skill_allowed_tools_prefers_explicit_list_over_profile() {
+        let entry = build_entry(
+            "browser-research-skill",
+            "Browser Research Skill",
+            "Research with browser automation",
+            "## When to Use\n- Use browser automation for research.\n",
+            None,
+            Some(vec!["read_file", "web_fetch"]),
+            Some(5),
+            SkillInvocationPolicy {
+                user_invocable: true,
+                disable_model_invocation: false,
+            },
+            None,
+            None,
+        );
+        let setup = build_routed_skill_tool_setup(&entry);
+        let registry = ToolRegistry::with_standard_tools();
+
+        let allowed_tools =
+            resolve_skill_allowed_tools(&registry, &setup).expect("explicit allowed tools");
+
+        assert_eq!(setup.tool_profile, None);
+        assert_eq!(
+            allowed_tools,
+            vec!["read_file".to_string(), "web_fetch".to_string()]
+        );
     }
 }

@@ -24,7 +24,7 @@ pub(crate) use runtime_inputs::{
     load_session_history_with_pool, load_session_runtime_inputs_with_pool,
 };
 pub(crate) use runtime_support::{
-    build_memory_dir_for_session, load_memory_content, resolve_tool_names,
+    build_memory_dir_for_session, load_memory_content, resolve_tool_manifest, resolve_tool_names,
 };
 pub(crate) use session_titles::{
     derive_meaningful_session_title_from_messages, is_generic_session_title,

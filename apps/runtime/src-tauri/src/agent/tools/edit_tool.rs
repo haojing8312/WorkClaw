@@ -1,3 +1,4 @@
+use crate::agent::tool_manifest::{ToolCategory, ToolMetadata};
 use crate::agent::tools::tool_result;
 use crate::agent::types::{Tool, ToolContext};
 use anyhow::{anyhow, Result};
@@ -26,6 +27,15 @@ impl Tool for EditTool {
             },
             "required": ["path", "old_string", "new_string"]
         })
+    }
+
+    fn metadata(&self) -> ToolMetadata {
+        ToolMetadata {
+            category: ToolCategory::File,
+            destructive: true,
+            requires_approval: true,
+            ..ToolMetadata::default()
+        }
     }
 
     fn execute(&self, input: Value, ctx: &ToolContext) -> Result<String> {

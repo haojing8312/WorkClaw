@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ChatView } from "../ChatView";
-import type { ChatMessagePart, PendingAttachment } from "../../types";
+import type { ChatMessagePart, PendingAttachment, PersistedChatRuntimeState, SessionToolManifestEntry } from "../../types";
 import { resetChatStreamEventSubscriptionsForTest } from "../../lib/chat-stream-events";
 
 const invokeMock = vi.fn<(command: string, payload?: unknown) => Promise<unknown>>();
@@ -16,7 +16,7 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: (eventName: string, callback: unknown) => listenMock(eventName, callback),
 }));
 
-it("defines structured attachment and message-part frontend types", () => {
+it("defines structured attachment, message-part, and tool manifest frontend types", () => {
   const attachment: PendingAttachment = {
     id: "att-1",
     kind: "text-file",
@@ -32,8 +32,33 @@ it("defines structured attachment and message-part frontend types", () => {
     size: attachment.size,
     text: attachment.text,
   };
+  const manifestEntry: SessionToolManifestEntry = {
+    name: "read_file",
+    description: "Read a file",
+    display_name: "read_file",
+    category: "file",
+    read_only: true,
+    destructive: false,
+    concurrency_safe: false,
+    open_world: false,
+    requires_approval: false,
+    source: "native",
+  };
+  const runtimeState: PersistedChatRuntimeState = {
+    streaming: false,
+    streamItems: [],
+    toolManifest: [manifestEntry],
+    streamReasoning: null,
+    agentState: null,
+    subAgentBuffer: "",
+    subAgentRoleName: "",
+    mainRoleName: "",
+    mainSummaryDelivered: false,
+    delegationCards: [],
+  };
 
   expect(part.type).toBe("file_text");
+  expect(runtimeState.toolManifest[0]?.name).toBe("read_file");
 });
 
 beforeEach(() => {
@@ -476,6 +501,7 @@ describe("ChatView side panel redesign", () => {
 
     const registeredEvents = listenMock.mock.calls.map((call) => String(call[0]));
     expect(registeredEvents).toContain("stream-token");
+    expect(registeredEvents).toContain("session-tool-manifest");
     expect(registeredEvents).not.toContain("skill-route-node-updated");
     expect(registeredEvents).not.toContain("im-route-decision");
   });

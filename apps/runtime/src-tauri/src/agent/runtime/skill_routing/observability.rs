@@ -75,6 +75,7 @@ mod tests {
             skill_id: skill_id.to_string(),
             skill_system_prompt: "prompt".to_string(),
             skill_allowed_tools: Some(vec!["read_file".to_string()]),
+            tool_profile: None,
             max_iterations: Some(4),
             source_type: "local".to_string(),
             pack_path: String::new(),

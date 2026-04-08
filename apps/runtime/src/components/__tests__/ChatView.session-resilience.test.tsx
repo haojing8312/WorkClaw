@@ -434,6 +434,7 @@ describe("ChatView session resilience", () => {
         persistedRuntimeState={{
           streaming: true,
           streamItems: [{ type: "text", content: "这是重新打开后应立即显示的流式输出" }],
+          toolManifest: [],
           streamReasoning: {
             status: "thinking",
             content: "先恢复本地运行态",

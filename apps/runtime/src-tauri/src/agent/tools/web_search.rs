@@ -1,6 +1,7 @@
 use crate::agent::tools::search_providers::{
     cache::SearchCache, SearchItem, SearchParams, SearchProvider,
 };
+use crate::agent::tool_manifest::{ToolCategory, ToolMetadata};
 use crate::agent::types::{Tool, ToolContext};
 use anyhow::{anyhow, Result};
 use chrono::{Datelike, Duration, Local, NaiveDate, Weekday};
@@ -122,6 +123,16 @@ impl Tool for WebSearchTool {
             },
             "required": ["query"]
         })
+    }
+
+    fn metadata(&self) -> ToolMetadata {
+        ToolMetadata {
+            category: ToolCategory::Search,
+            read_only: true,
+            concurrency_safe: true,
+            open_world: true,
+            ..ToolMetadata::default()
+        }
     }
 
     fn execute(&self, input: Value, _ctx: &ToolContext) -> Result<String> {

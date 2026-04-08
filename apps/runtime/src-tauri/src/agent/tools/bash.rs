@@ -1,5 +1,6 @@
 use crate::agent::tools::process_manager::ProcessManager;
 use crate::agent::tools::tool_result;
+use crate::agent::tool_manifest::{ToolCategory, ToolMetadata, ToolSource};
 use crate::agent::types::{Tool, ToolContext};
 use crate::windows_process::hide_console_window;
 use anyhow::{anyhow, Result};
@@ -130,6 +131,17 @@ impl Tool for BashTool {
             },
             "required": ["command"]
         })
+    }
+
+    fn metadata(&self) -> ToolMetadata {
+        ToolMetadata {
+            display_name: Some("Shell".to_string()),
+            category: ToolCategory::Shell,
+            destructive: true,
+            requires_approval: true,
+            source: ToolSource::Runtime,
+            ..ToolMetadata::default()
+        }
     }
 
     fn execute(&self, input: Value, ctx: &ToolContext) -> Result<String> {

@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 
+use crate::agent::tool_manifest::{ToolCategory, ToolMetadata};
 use crate::agent::types::{Tool, ToolContext};
 use runtime_executor_core::truncate_tool_output;
 
@@ -27,6 +28,15 @@ impl Tool for WebFetchTool {
             },
             "required": ["url"]
         })
+    }
+
+    fn metadata(&self) -> ToolMetadata {
+        ToolMetadata {
+            category: ToolCategory::Web,
+            read_only: true,
+            open_world: true,
+            ..ToolMetadata::default()
+        }
     }
 
     fn execute(&self, input: Value, _ctx: &ToolContext) -> Result<String> {

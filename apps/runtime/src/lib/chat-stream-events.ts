@@ -35,6 +35,22 @@ export type ToolCallEvent = {
   status: string;
 };
 
+export type SessionToolManifestEvent = {
+  session_id: string;
+  manifest: Array<{
+    name: string;
+    description: string;
+    display_name: string;
+    category: string;
+    read_only: boolean;
+    destructive: boolean;
+    concurrency_safe: boolean;
+    open_world: boolean;
+    requires_approval: boolean;
+    source: string;
+  }>;
+};
+
 type EventMap = {
   "stream-token": StreamTokenEvent;
   "assistant-reasoning-started": AssistantReasoningStartedEvent;
@@ -42,6 +58,7 @@ type EventMap = {
   "assistant-reasoning-completed": AssistantReasoningCompletedEvent;
   "assistant-reasoning-interrupted": AssistantReasoningInterruptedEvent;
   "tool-call-event": ToolCallEvent;
+  "session-tool-manifest": SessionToolManifestEvent;
 };
 
 type EventName = keyof EventMap;
@@ -70,6 +87,7 @@ const registry: { [K in EventName]: RegistryEntry<EventMap[K]> } = {
   "assistant-reasoning-completed": createEntry<AssistantReasoningCompletedEvent>(),
   "assistant-reasoning-interrupted": createEntry<AssistantReasoningInterruptedEvent>(),
   "tool-call-event": createEntry<ToolCallEvent>(),
+  "session-tool-manifest": createEntry<SessionToolManifestEvent>(),
 };
 
 function ensureRawListener<K extends EventName>(eventName: K) {

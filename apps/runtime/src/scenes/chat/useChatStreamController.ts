@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import type {
   ChatRuntimeAgentState,
   PersistedChatRuntimeState,
+  SessionToolManifestEntry,
   StreamItem,
 } from "../../types";
 import { confirmLegacyToolExecution, resolveApproval } from "../../services/chat/chatApprovalService";
@@ -13,6 +14,7 @@ import {
   type AssistantReasoningDeltaEvent,
   type AssistantReasoningInterruptedEvent,
   type AssistantReasoningStartedEvent,
+  type SessionToolManifestEvent,
   type StreamTokenEvent,
   type ToolCallEvent,
 } from "../../lib/chat-stream-events";
@@ -94,6 +96,7 @@ export function useChatStreamController({
   const [streaming, setStreaming] = useState(initialRuntimeState.streaming);
   const [streamItems, setStreamItems] = useState<StreamItem[]>(initialRuntimeState.streamItems);
   const streamItemsRef = useRef<StreamItem[]>(initialRuntimeState.streamItems);
+  const [toolManifest, setToolManifest] = useState<SessionToolManifestEntry[]>(initialRuntimeState.toolManifest);
   const [streamReasoning, setStreamReasoning] = useState<ChatStreamReasoningState>(
     initialRuntimeState.streamReasoning ?? null,
   );
@@ -130,6 +133,7 @@ export function useChatStreamController({
     const next: PersistedChatRuntimeState = {
       streaming: state?.streaming ?? false,
       streamItems: state?.streamItems ? [...state.streamItems] : [],
+      toolManifest: state?.toolManifest ? state.toolManifest.map((item) => ({ ...item })) : [],
       streamReasoning: state?.streamReasoning ? { ...state.streamReasoning } : null,
       agentState: state?.agentState ? { ...state.agentState } : null,
       subAgentBuffer: state?.subAgentBuffer ?? "",
@@ -141,6 +145,7 @@ export function useChatStreamController({
     setStreaming(next.streaming);
     setStreamItems(next.streamItems);
     streamItemsRef.current = next.streamItems;
+    setToolManifest(next.toolManifest);
     setStreamReasoning(next.streamReasoning ?? null);
     streamReasoningRef.current = next.streamReasoning ?? null;
     setAgentState(next.agentState ?? null);
@@ -369,6 +374,16 @@ export function useChatStreamController({
   }, [sessionId]);
 
   useEffect(() => {
+    const unsubscribe = subscribeChatStreamEvent("session-tool-manifest", (payload: SessionToolManifestEvent) => {
+      if (payload.session_id !== sessionId) return;
+      setToolManifest(payload.manifest.map((item) => ({ ...item })));
+    });
+    return () => {
+      unsubscribe();
+    };
+  }, [sessionId]);
+
+  useEffect(() => {
     const unsubscribe = subscribeChatStreamEvent("tool-call-event", (payload: ToolCallEvent) => {
       if (payload.session_id !== sessionId) return;
       if (payload.status === "started") {
@@ -410,6 +425,7 @@ export function useChatStreamController({
   return {
     streaming,
     streamItems,
+    toolManifest,
     streamReasoning,
     askUserQuestion,
     askUserOptions,

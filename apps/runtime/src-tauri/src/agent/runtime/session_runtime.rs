@@ -244,6 +244,14 @@ impl SessionRuntime {
         })
         .await?;
 
+        let _ = app.emit(
+            "session-tool-manifest",
+            serde_json::json!({
+                "session_id": session_id,
+                "manifest": prepared_context.prepared_runtime_tools.tool_manifest,
+            }),
+        );
+
         let run_id = Uuid::new_v4().to_string();
         chat_io::append_run_started_with_pool(db, journal, session_id, &run_id, user_message_id)
             .await?;

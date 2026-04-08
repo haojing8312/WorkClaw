@@ -7,6 +7,7 @@ function createRuntimeState(overrides: Partial<PersistedChatRuntimeState> = {}):
   return {
     streaming: false,
     streamItems: [],
+    toolManifest: [],
     streamReasoning: null,
     agentState: null,
     subAgentBuffer: "",
