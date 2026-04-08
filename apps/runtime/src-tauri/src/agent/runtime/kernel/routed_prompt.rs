@@ -100,6 +100,7 @@ pub(crate) async fn prepare_routed_prompt(
             .execution_context
             .employee_collaboration_guidance
             .as_deref(),
+        supplemental_runtime_notes: &params.execution_context.continuation_runtime_notes,
     })
     .await?;
 

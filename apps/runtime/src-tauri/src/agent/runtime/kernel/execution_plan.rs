@@ -43,6 +43,7 @@ impl ExecutionPlan {
 pub(crate) struct ExecutionContext {
     pub capability_snapshot: CapabilitySnapshot,
     pub system_prompt: String,
+    pub continuation_runtime_notes: Vec<String>,
     pub permission_mode: PermissionMode,
     pub executor_work_dir: Option<String>,
     pub max_iterations: Option<usize>,
@@ -61,6 +62,7 @@ impl Default for ExecutionContext {
         Self {
             capability_snapshot: CapabilitySnapshot::default(),
             system_prompt: String::new(),
+            continuation_runtime_notes: Vec::new(),
             permission_mode: PermissionMode::AcceptEdits,
             executor_work_dir: None,
             max_iterations: None,
@@ -186,6 +188,7 @@ mod tests {
                 runtime_notes: vec!["offline only".to_string()],
             },
             system_prompt: "Prompt".to_string(),
+            continuation_runtime_notes: vec!["resume from compacted context".to_string()],
             permission_mode: PermissionMode::AcceptEdits,
             executor_work_dir: Some("E:/workspace/demo".to_string()),
             max_iterations: Some(12),
@@ -211,6 +214,10 @@ mod tests {
         );
         assert!(execution_context.skill_command_specs().is_empty());
         assert_eq!(execution_context.system_prompt, "Prompt");
+        assert_eq!(
+            execution_context.continuation_runtime_notes,
+            vec!["resume from compacted context".to_string()]
+        );
         assert_eq!(
             execution_context.employee_collaboration_guidance.as_deref(),
             Some("Work with employee-1")

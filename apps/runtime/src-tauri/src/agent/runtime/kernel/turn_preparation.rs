@@ -9,10 +9,11 @@ use crate::agent::runtime::tool_setup::{prepare_runtime_tools, ToolSetupParams};
 use crate::agent::runtime::RuntimeTranscript;
 use crate::agent::AgentExecutor;
 use crate::model_transport::{resolve_model_transport, ModelTransportKind};
+use crate::session_journal::{SessionJournalState, SessionJournalStateHandle, SessionRunStatus};
 use runtime_chat_app::{ChatExecutionPreparationRequest, ChatExecutionPreparationService};
 use serde_json::Value;
 use std::sync::Arc;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 #[derive(Clone)]
 pub(crate) struct PrepareLocalTurnParams<'a> {
@@ -167,6 +168,8 @@ pub(crate) async fn prepare_local_turn(
         .max_iterations_override
         .map(|override_value| override_value.max(1))
         .unwrap_or(default_max_iter);
+    let continuation_runtime_notes =
+        load_recent_compaction_runtime_notes(params.app, params.session_id).await;
 
     let prepared_runtime_tools = prepare_runtime_tools(ToolSetupParams {
         app: params.app,
@@ -191,6 +194,7 @@ pub(crate) async fn prepare_local_turn(
         memory_bucket_employee_id: execution_preparation_service
             .resolve_memory_bucket_employee_id(&prepared_execution_context),
         employee_collaboration_guidance: employee_collaboration_guidance.as_deref(),
+        supplemental_runtime_notes: &continuation_runtime_notes,
     })
     .await?;
 
@@ -215,6 +219,7 @@ pub(crate) async fn prepare_local_turn(
     let execution_context = ExecutionContext {
         capability_snapshot: prepared_runtime_tools.capability_snapshot,
         system_prompt: prepared_runtime_tools.system_prompt,
+        continuation_runtime_notes,
         permission_mode,
         executor_work_dir: execution_preparation_service
             .resolve_executor_work_dir(&execution_guidance),
@@ -240,6 +245,51 @@ pub(crate) async fn prepare_local_turn(
         },
         execution_context,
     ))
+}
+
+async fn load_recent_compaction_runtime_notes(app: &AppHandle, session_id: &str) -> Vec<String> {
+    let Some(journal) = app.try_state::<SessionJournalStateHandle>() else {
+        return Vec::new();
+    };
+
+    journal
+        .0
+        .read_state(session_id)
+        .await
+        .map(|state| resolve_recent_compaction_runtime_notes(&state))
+        .unwrap_or_default()
+}
+
+fn resolve_recent_compaction_runtime_notes(state: &SessionJournalState) -> Vec<String> {
+    state
+        .runs
+        .iter()
+        .rev()
+        .find_map(|run| {
+            let turn_state = run.turn_state.as_ref()?;
+            let boundary = turn_state.compaction_boundary.as_ref()?;
+            let mut lines = vec![format!(
+                "当前会话最近一次上下文压缩已生效：{} -> {} tokens。当前提供给你的历史消息已经是压缩后的恢复上下文，不要要求用户重复提供压缩前的完整历史。",
+                boundary.original_tokens, boundary.compacted_tokens
+            )];
+            if !boundary.summary.trim().is_empty() {
+                lines.push(format!("压缩摘要：{}", boundary.summary.trim()));
+            }
+            if let Some(reconstructed_history_len) = turn_state.reconstructed_history_len {
+                lines.push(format!("重建历史消息数：{}", reconstructed_history_len));
+            }
+            if matches!(run.status, SessionRunStatus::Failed | SessionRunStatus::Cancelled)
+                || run.last_error_kind.as_deref() == Some("max_turns")
+            {
+                lines.push(
+                    "若用户要求“继续”或“继续执行”，应基于当前压缩后的恢复上下文直接继续完成剩余任务。"
+                        .to_string(),
+                );
+            }
+            Some(lines.join("\n"))
+        })
+        .into_iter()
+        .collect()
 }
 
 pub(crate) fn parse_user_skill_command(user_message: &str) -> Option<(String, String)> {
@@ -345,9 +395,14 @@ mod tests {
     use super::{
         append_current_turn_message, parse_user_skill_command,
         resolve_explicit_prompt_following_skill, rewrite_user_skill_command_for_model,
+        resolve_recent_compaction_runtime_notes,
     };
     use crate::agent::runtime::runtime_io as chat_io;
     use crate::agent::runtime::runtime_io::{WorkspaceSkillContent, WorkspaceSkillRuntimeEntry};
+    use crate::session_journal::{
+        SessionJournalState, SessionRunSnapshot, SessionRunStatus,
+        SessionRunTurnStateCompactionBoundary, SessionRunTurnStateSnapshot,
+    };
     use runtime_skill_core::{SkillConfig, SkillInvocationPolicy};
     use serde_json::json;
 
@@ -505,5 +560,76 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn resolve_recent_compaction_runtime_notes_describes_latest_boundary() {
+        let state = SessionJournalState {
+            session_id: "session-1".to_string(),
+            current_run_id: None,
+            runs: vec![SessionRunSnapshot {
+                run_id: "run-1".to_string(),
+                user_message_id: "user-1".to_string(),
+                status: SessionRunStatus::Failed,
+                buffered_text: "已保留当前执行上下文".to_string(),
+                last_error_kind: Some("max_turns".to_string()),
+                last_error_message: Some("已达到执行步数上限".to_string()),
+                turn_state: Some(SessionRunTurnStateSnapshot {
+                    execution_lane: Some("open_task".to_string()),
+                    selected_runner: Some("OpenTaskRunner".to_string()),
+                    selected_skill: Some("builtin-general".to_string()),
+                    fallback_reason: None,
+                    allowed_tools: vec!["read".to_string(), "exec".to_string()],
+                    invoked_skills: vec!["builtin-general".to_string()],
+                    partial_assistant_text: "已保留当前执行上下文".to_string(),
+                    tool_failure_streak: 0,
+                    reconstructed_history_len: Some(7),
+                    compaction_boundary: Some(SessionRunTurnStateCompactionBoundary {
+                        transcript_path: "temp/transcripts/run-1.json".to_string(),
+                        original_tokens: 4096,
+                        compacted_tokens: 1024,
+                        summary: "保留最近的文件修改计划和工具结果".to_string(),
+                    }),
+                }),
+            }],
+        };
+
+        let notes = resolve_recent_compaction_runtime_notes(&state);
+
+        assert_eq!(notes.len(), 1);
+        assert!(notes[0].contains("4096 -> 1024"));
+        assert!(notes[0].contains("压缩后的恢复上下文"));
+        assert!(notes[0].contains("保留最近的文件修改计划和工具结果"));
+        assert!(notes[0].contains("重建历史消息数：7"));
+    }
+
+    #[test]
+    fn resolve_recent_compaction_runtime_notes_ignores_runs_without_boundary() {
+        let state = SessionJournalState {
+            session_id: "session-1".to_string(),
+            current_run_id: None,
+            runs: vec![SessionRunSnapshot {
+                run_id: "run-1".to_string(),
+                user_message_id: "user-1".to_string(),
+                status: SessionRunStatus::Failed,
+                buffered_text: String::new(),
+                last_error_kind: Some("max_turns".to_string()),
+                last_error_message: Some("已达到执行步数上限".to_string()),
+                turn_state: Some(SessionRunTurnStateSnapshot {
+                    execution_lane: None,
+                    selected_runner: None,
+                    selected_skill: None,
+                    fallback_reason: None,
+                    allowed_tools: Vec::new(),
+                    invoked_skills: Vec::new(),
+                    partial_assistant_text: String::new(),
+                    tool_failure_streak: 0,
+                    reconstructed_history_len: Some(3),
+                    compaction_boundary: None,
+                }),
+            }],
+        };
+
+        assert!(resolve_recent_compaction_runtime_notes(&state).is_empty());
     }
 }

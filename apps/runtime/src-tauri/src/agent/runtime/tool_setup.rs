@@ -41,6 +41,7 @@ pub(crate) struct ToolSetupParams<'a> {
     pub execution_guidance: &'a ChatExecutionGuidance,
     pub memory_bucket_employee_id: &'a str,
     pub employee_collaboration_guidance: Option<&'a str>,
+    pub supplemental_runtime_notes: &'a [String],
 }
 
 pub(crate) async fn prepare_runtime_tools(
@@ -80,7 +81,10 @@ pub(crate) async fn prepare_runtime_tools(
         params.skill_allowed_tools.clone(),
         resolved_tool_names,
         workspace_skill_context.skill_command_specs.clone(),
-        registry_setup.runtime_notes,
+        merge_runtime_notes(
+            registry_setup.runtime_notes,
+            params.supplemental_runtime_notes,
+        ),
     );
     let memory_content = chat_io::load_memory_content(&registry_setup.memory_dir);
     let context_bundle = ContextBundle::build(
@@ -101,8 +105,26 @@ pub(crate) async fn prepare_runtime_tools(
     })
 }
 
+fn merge_runtime_notes(
+    mut runtime_notes: Vec<String>,
+    supplemental_runtime_notes: &[String],
+) -> Vec<String> {
+    for note in supplemental_runtime_notes {
+        let trimmed = note.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if runtime_notes.iter().any(|existing| existing.trim() == trimmed) {
+            continue;
+        }
+        runtime_notes.push(trimmed.to_string());
+    }
+    runtime_notes
+}
+
 #[cfg(test)]
 mod tests {
+    use super::merge_runtime_notes;
     use crate::agent::registry::ToolRegistry;
     use crate::agent::runtime::kernel::tool_registry_setup::{
         offline_only_search_note, resolve_mcp_search_fallback, search_fallback_runtime_note,
@@ -225,5 +247,25 @@ mod tests {
         assert!(note.contains("`web_search`"));
         assert!(note.contains("MCP"));
         assert!(note.contains("brave-search_web_search"));
+    }
+
+    #[test]
+    fn merge_runtime_notes_appends_continuation_notes_after_registry_notes() {
+        let merged = merge_runtime_notes(
+            vec!["当前未配置搜索引擎".to_string()],
+            &[
+                "当前会话最近一次上下文压缩已生效：4096 -> 1024 tokens".to_string(),
+                "若用户要求继续，应基于当前压缩后上下文直接继续执行".to_string(),
+            ],
+        );
+
+        assert_eq!(
+            merged,
+            vec![
+                "当前未配置搜索引擎".to_string(),
+                "当前会话最近一次上下文压缩已生效：4096 -> 1024 tokens".to_string(),
+                "若用户要求继续，应基于当前压缩后上下文直接继续执行".to_string(),
+            ]
+        );
     }
 }
