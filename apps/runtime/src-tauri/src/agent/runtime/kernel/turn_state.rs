@@ -51,6 +51,10 @@ impl TurnStateSnapshot {
         self
     }
 
+    pub(crate) fn resolved_session_surface(&self) -> SessionSurfaceKind {
+        self.session_surface.unwrap_or_default()
+    }
+
     pub(crate) fn with_allowed_tools(mut self, allowed_tools: Option<Vec<String>>) -> Self {
         self.allowed_tools = allowed_tools.unwrap_or_default();
         self
@@ -248,5 +252,15 @@ mod tests {
             Some(SessionSurfaceKind::EmployeeStepSession)
         );
         assert_eq!(snapshot.execution_lane, Some(ExecutionLane::PromptFork));
+    }
+
+    #[test]
+    fn turn_state_snapshot_defaults_missing_surface_to_local_chat() {
+        let snapshot = TurnStateSnapshot::default();
+
+        assert_eq!(
+            snapshot.resolved_session_surface(),
+            SessionSurfaceKind::LocalChat
+        );
     }
 }

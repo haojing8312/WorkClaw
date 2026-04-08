@@ -102,19 +102,20 @@ fn resolve_continuation_route_plan(
     continuation_preference: Option<&ContinuationPreference>,
 ) -> Option<RouteRunPlan> {
     let preference = continuation_preference?;
-    let projection = route_index.get(&preference.selected_skill)?;
+    let selected_skill = preference.selected_skill.as_deref()?;
+    let projection = route_index.get(selected_skill)?;
     let entry = workspace_skill_entries
         .iter()
-        .find(|entry| entry.skill_id == preference.selected_skill)?;
+        .find(|entry| entry.skill_id == selected_skill)?;
     let setup = build_routed_skill_tool_setup(entry);
 
     match projection.execution_mode {
         WorkspaceSkillRouteExecutionMode::Inline => Some(RouteRunPlan::PromptSkillInline {
-            skill_id: preference.selected_skill.clone(),
+            skill_id: selected_skill.to_string(),
             setup,
         }),
         WorkspaceSkillRouteExecutionMode::Fork => Some(RouteRunPlan::PromptSkillFork {
-            skill_id: preference.selected_skill.clone(),
+            skill_id: selected_skill.to_string(),
             setup,
         }),
         WorkspaceSkillRouteExecutionMode::DirectDispatch => None,
@@ -422,7 +423,7 @@ fn build_fork_messages(messages: &[serde_json::Value]) -> Vec<serde_json::Value>
 mod tests {
     use super::*;
     use crate::agent::runtime::kernel::execution_plan::{
-        ContinuationPreference, ContinuationTurnPolicy,
+        ContinuationKind, ContinuationPreference, ContinuationTurnPolicy,
     };
     use crate::agent::runtime::runtime_io::{
         WorkspaceSkillCommandSpec, WorkspaceSkillContent, WorkspaceSkillRuntimeEntry,
@@ -932,7 +933,8 @@ mod tests {
         let index = build_index(entries.clone());
         let command_specs = build_command_specs(&entries);
         let continuation_preference = ContinuationPreference {
-            selected_skill: "feishu-pm-fork-sync".to_string(),
+            kind: ContinuationKind::CompactionRecovery,
+            selected_skill: Some("feishu-pm-fork-sync".to_string()),
             selected_runner: Some("prompt_skill_fork".to_string()),
             reconstructed_history_len: Some(6),
             turn_policy: ContinuationTurnPolicy {

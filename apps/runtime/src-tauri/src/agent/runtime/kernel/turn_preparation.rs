@@ -1,7 +1,7 @@
 use super::execution_plan::{
-    ContinuationPreference, ContinuationTurnPolicy, ExecutionContext, TurnContext,
+    ContinuationKind, ContinuationPreference, ContinuationTurnPolicy, ExecutionContext, TurnContext,
 };
-use super::session_profile::SessionExecutionProfile;
+use super::session_profile::{SessionExecutionProfile, SessionSurfaceKind};
 use crate::agent::permissions::PermissionMode;
 use crate::agent::run_guard::{RunBudgetPolicy, RunBudgetScope};
 use crate::agent::runtime::kernel::capability_snapshot::CapabilitySnapshot;
@@ -173,10 +173,16 @@ pub(crate) async fn prepare_local_turn(
         .max_iterations_override
         .map(|override_value| override_value.max(1))
         .unwrap_or(default_max_iter);
-    let recent_compaction_context =
-        load_recent_compaction_context(params.app, params.session_id, params.user_message).await;
-    let continuation_runtime_notes = recent_compaction_context.runtime_notes;
-    let continuation_preference = recent_compaction_context.continuation_preference;
+    let session_profile = build_local_chat_session_profile();
+    let recent_continuation_context = load_recent_continuation_context(
+        params.app,
+        params.session_id,
+        params.user_message,
+        &session_profile,
+    )
+    .await;
+    let continuation_runtime_notes = recent_continuation_context.runtime_notes;
+    let continuation_preference = recent_continuation_context.continuation_preference;
     let (per_candidate_retry_count, route_retry_count) = apply_continuation_turn_policy(
         per_candidate_retry_count,
         chat_preparation.retry_count,
@@ -229,7 +235,7 @@ pub(crate) async fn prepare_local_turn(
     }
 
     let execution_context = ExecutionContext {
-        session_profile: build_local_chat_session_profile(),
+        session_profile,
         capability_snapshot: prepared_runtime_tools.capability_snapshot,
         system_prompt: prepared_runtime_tools.system_prompt,
         continuation_runtime_notes,
@@ -425,41 +431,58 @@ fn build_minimal_execution_guidance(
 }
 
 #[derive(Debug, Default)]
-struct RecentCompactionContext {
+struct RecentContinuationContext {
     runtime_notes: Vec<String>,
     continuation_preference: Option<ContinuationPreference>,
 }
 
-async fn load_recent_compaction_context(
+async fn load_recent_continuation_context(
     app: &AppHandle,
     session_id: &str,
     user_message: &str,
-) -> RecentCompactionContext {
+    session_profile: &SessionExecutionProfile,
+) -> RecentContinuationContext {
     let Some(journal) = app.try_state::<SessionJournalStateHandle>() else {
-        return RecentCompactionContext::default();
+        return RecentContinuationContext::default();
     };
 
     journal
         .0
         .read_state(session_id)
         .await
-        .map(|state| RecentCompactionContext {
-            runtime_notes: resolve_recent_compaction_runtime_notes(&state),
-            continuation_preference: resolve_compaction_continuation_preference(
+        .map(|state| RecentContinuationContext {
+            runtime_notes: resolve_recent_compaction_runtime_notes(session_profile, &state),
+            continuation_preference: resolve_session_continuation_preference(
                 user_message,
                 &state,
+                session_profile,
             ),
         })
         .unwrap_or_default()
 }
 
-fn resolve_recent_compaction_runtime_notes(state: &SessionJournalState) -> Vec<String> {
+fn resolve_recent_compaction_runtime_notes(
+    session_profile: &SessionExecutionProfile,
+    state: &SessionJournalState,
+) -> Vec<String> {
+    if !session_profile
+        .continuation_mode
+        .allows_compaction_runtime_notes()
+    {
+        return Vec::new();
+    }
+
     state
         .runs
         .iter()
         .rev()
         .find_map(|run| {
             let turn_state = run.turn_state.as_ref()?;
+            if resolve_session_run_surface(turn_state.session_surface.as_deref())
+                != session_profile.surface
+            {
+                return None;
+            }
             let boundary = turn_state.compaction_boundary.as_ref()?;
             let mut lines = vec![format!(
                 "当前会话最近一次上下文压缩已生效：{} -> {} tokens。当前提供给你的历史消息已经是压缩后的恢复上下文，不要要求用户重复提供压缩前的完整历史。",
@@ -489,30 +512,86 @@ fn resolve_compaction_continuation_preference(
     user_message: &str,
     state: &SessionJournalState,
 ) -> Option<ContinuationPreference> {
+    resolve_session_continuation_preference(
+        user_message,
+        state,
+        &build_local_chat_session_profile(),
+    )
+}
+
+fn resolve_session_continuation_preference(
+    user_message: &str,
+    state: &SessionJournalState,
+    session_profile: &SessionExecutionProfile,
+) -> Option<ContinuationPreference> {
     if !is_compaction_continuation_request(user_message) {
         return None;
     }
 
     state.runs.iter().rev().find_map(|run| {
         let turn_state = run.turn_state.as_ref()?;
-        turn_state.compaction_boundary.as_ref()?;
-        let selected_skill = turn_state.selected_skill.as_ref()?.trim();
-        if selected_skill.is_empty() {
-            return None;
-        }
-        if !matches!(run.status, SessionRunStatus::Failed)
-            && run.last_error_kind.as_deref() != Some("max_turns")
+        if resolve_session_run_surface(turn_state.session_surface.as_deref())
+            != session_profile.surface
         {
             return None;
         }
 
+        let kind = resolve_continuation_kind(run, turn_state, session_profile)?;
+        let selected_skill = turn_state
+            .selected_skill
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        if matches!(kind, ContinuationKind::CompactionRecovery) && selected_skill.is_none() {
+            return None;
+        }
+
         Some(ContinuationPreference {
-            selected_skill: selected_skill.to_string(),
+            kind,
+            selected_skill,
             selected_runner: turn_state.selected_runner.clone(),
             reconstructed_history_len: turn_state.reconstructed_history_len,
             turn_policy: resolve_continuation_turn_policy(run),
         })
     })
+}
+
+fn resolve_continuation_kind(
+    run: &crate::session_journal::SessionRunSnapshot,
+    turn_state: &crate::session_journal::SessionRunTurnStateSnapshot,
+    session_profile: &SessionExecutionProfile,
+) -> Option<ContinuationKind> {
+    if !is_recoverable_continuation_run(run) {
+        return None;
+    }
+
+    match session_profile.continuation_mode {
+        super::session_profile::SessionContinuationProfile::LocalChat => turn_state
+            .compaction_boundary
+            .as_ref()
+            .map(|_| ContinuationKind::CompactionRecovery),
+        super::session_profile::SessionContinuationProfile::HiddenChildSession => {
+            Some(ContinuationKind::HiddenChildSession)
+        }
+        super::session_profile::SessionContinuationProfile::EmployeeStepSession => {
+            Some(ContinuationKind::EmployeeStepSession)
+        }
+    }
+}
+
+fn is_recoverable_continuation_run(run: &crate::session_journal::SessionRunSnapshot) -> bool {
+    matches!(
+        run.status,
+        SessionRunStatus::Failed | SessionRunStatus::Cancelled
+    ) || matches!(
+        run.last_error_kind.as_deref(),
+        Some("max_turns" | "loop_detected" | "no_progress" | "tool_failure_circuit_breaker")
+    )
+}
+
+fn resolve_session_run_surface(session_surface: Option<&str>) -> SessionSurfaceKind {
+    SessionSurfaceKind::from_journal_key(session_surface)
 }
 
 fn resolve_continuation_turn_policy(
@@ -691,14 +770,15 @@ struct ExplicitPromptSkillSelection {
 mod tests {
     use super::{
         append_current_turn_message, apply_continuation_turn_policy,
-        build_local_chat_session_profile, parse_user_skill_command, prepare_employee_step_turn,
-        prepare_hidden_child_turn, resolve_compaction_continuation_preference,
-        resolve_explicit_prompt_following_skill, resolve_recent_compaction_runtime_notes,
+        build_employee_step_session_profile, build_local_chat_session_profile,
+        parse_user_skill_command, prepare_employee_step_turn, prepare_hidden_child_turn,
+        resolve_compaction_continuation_preference, resolve_explicit_prompt_following_skill,
+        resolve_recent_compaction_runtime_notes, resolve_session_continuation_preference,
         rewrite_user_skill_command_for_model,
     };
     use crate::agent::registry::ToolRegistry;
     use crate::agent::runtime::kernel::execution_plan::{
-        ContinuationPreference, ContinuationTurnPolicy,
+        ContinuationKind, ContinuationPreference, ContinuationTurnPolicy,
     };
     use crate::agent::runtime::kernel::session_profile::SessionSurfaceKind;
     use crate::agent::runtime::runtime_io as chat_io;
@@ -977,7 +1057,8 @@ mod tests {
             }],
         };
 
-        let notes = resolve_recent_compaction_runtime_notes(&state);
+        let notes =
+            resolve_recent_compaction_runtime_notes(&build_local_chat_session_profile(), &state);
 
         assert_eq!(notes.len(), 1);
         assert!(notes[0].contains("4096 -> 1024"));
@@ -1014,7 +1095,11 @@ mod tests {
             }],
         };
 
-        assert!(resolve_recent_compaction_runtime_notes(&state).is_empty());
+        assert!(resolve_recent_compaction_runtime_notes(
+            &build_local_chat_session_profile(),
+            &state
+        )
+        .is_empty());
     }
 
     #[test]
@@ -1053,9 +1138,10 @@ mod tests {
         let preference =
             resolve_compaction_continuation_preference("继续执行", &state).expect("preference");
 
+        assert_eq!(preference.kind, ContinuationKind::CompactionRecovery);
         assert_eq!(
             preference.selected_skill,
-            "feishu-pm-weekly-work-summary".to_string()
+            Some("feishu-pm-weekly-work-summary".to_string())
         );
         assert_eq!(
             preference.selected_runner.as_deref(),
@@ -1067,9 +1153,56 @@ mod tests {
     }
 
     #[test]
+    fn resolve_session_continuation_preference_respects_session_surface_profile() {
+        let state = SessionJournalState {
+            session_id: "employee-step-session".to_string(),
+            current_run_id: None,
+            runs: vec![SessionRunSnapshot {
+                run_id: "run-1".to_string(),
+                user_message_id: "user-1".to_string(),
+                status: SessionRunStatus::Failed,
+                buffered_text: "继续整理剩余执行项".to_string(),
+                last_error_kind: Some("max_turns".to_string()),
+                last_error_message: Some("已达到执行步数上限".to_string()),
+                turn_state: Some(SessionRunTurnStateSnapshot {
+                    session_surface: Some("employee_step_session".to_string()),
+                    execution_lane: Some("open_task".to_string()),
+                    selected_runner: Some("OpenTaskRunner".to_string()),
+                    selected_skill: None,
+                    fallback_reason: None,
+                    allowed_tools: vec!["read".to_string()],
+                    invoked_skills: Vec::new(),
+                    partial_assistant_text: "还差最后一段执行说明".to_string(),
+                    tool_failure_streak: 0,
+                    reconstructed_history_len: Some(3),
+                    compaction_boundary: None,
+                }),
+            }],
+        };
+
+        assert!(resolve_session_continuation_preference(
+            "继续",
+            &state,
+            &build_local_chat_session_profile()
+        )
+        .is_none());
+
+        let preference = resolve_session_continuation_preference(
+            "继续",
+            &state,
+            &build_employee_step_session_profile(),
+        )
+        .expect("employee step continuation preference");
+
+        assert_eq!(preference.kind, ContinuationKind::EmployeeStepSession);
+        assert_eq!(preference.selected_skill, None);
+    }
+
+    #[test]
     fn apply_continuation_turn_policy_clamps_retry_budgets_for_recovery_turns() {
         let preference = ContinuationPreference {
-            selected_skill: "feishu-pm-weekly-work-summary".to_string(),
+            kind: ContinuationKind::CompactionRecovery,
+            selected_skill: Some("feishu-pm-weekly-work-summary".to_string()),
             selected_runner: Some("prompt_skill_fork".to_string()),
             reconstructed_history_len: Some(6),
             turn_policy: ContinuationTurnPolicy {

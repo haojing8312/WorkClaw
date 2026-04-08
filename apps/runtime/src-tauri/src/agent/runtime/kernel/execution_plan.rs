@@ -99,6 +99,15 @@ impl ExecutionContext {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum ContinuationKind {
+    #[default]
+    Standard,
+    CompactionRecovery,
+    HiddenChildSession,
+    EmployeeStepSession,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct ContinuationTurnPolicy {
     pub per_candidate_retry_count: Option<usize>,
@@ -107,7 +116,8 @@ pub(crate) struct ContinuationTurnPolicy {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct ContinuationPreference {
-    pub selected_skill: String,
+    pub kind: ContinuationKind,
+    pub selected_skill: Option<String>,
     pub selected_runner: Option<String>,
     pub reconstructed_history_len: Option<usize>,
     pub turn_policy: ContinuationTurnPolicy,
@@ -160,8 +170,8 @@ pub(crate) enum SessionEngineError {
 #[cfg(test)]
 mod tests {
     use super::{
-        ContinuationPreference, ContinuationTurnPolicy, ExecutionContext, ExecutionLane,
-        ExecutionPlan, TurnContext,
+        ContinuationKind, ContinuationPreference, ContinuationTurnPolicy, ExecutionContext,
+        ExecutionLane, ExecutionPlan, TurnContext,
     };
     use crate::agent::permissions::PermissionMode;
     use crate::agent::runtime::kernel::capability_snapshot::CapabilitySnapshot;
@@ -258,6 +268,10 @@ mod tests {
         let profile = SessionExecutionProfile::default();
 
         assert_eq!(profile.surface, SessionSurfaceKind::LocalChat);
+        assert_eq!(
+            profile.continuation_mode,
+            crate::agent::runtime::kernel::session_profile::SessionContinuationProfile::LocalChat
+        );
     }
 
     #[test]
@@ -277,7 +291,8 @@ mod tests {
                 "content": "请总结今天的变更"
             })],
             continuation_preference: Some(ContinuationPreference {
-                selected_skill: "feishu-pm-weekly-work-summary".to_string(),
+                kind: ContinuationKind::CompactionRecovery,
+                selected_skill: Some("feishu-pm-weekly-work-summary".to_string()),
                 selected_runner: Some("prompt_skill_inline".to_string()),
                 reconstructed_history_len: Some(4),
                 turn_policy: ContinuationTurnPolicy {
@@ -295,7 +310,7 @@ mod tests {
             turn_context
                 .continuation_preference
                 .as_ref()
-                .map(|preference| preference.selected_skill.as_str()),
+                .and_then(|preference| preference.selected_skill.as_deref()),
             Some("feishu-pm-weekly-work-summary")
         );
         assert_eq!(
