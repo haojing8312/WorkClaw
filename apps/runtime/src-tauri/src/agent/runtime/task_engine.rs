@@ -5,6 +5,7 @@ use crate::agent::runtime::session_runs::append_session_run_event_with_pool;
 use crate::agent::runtime::task_record::{TaskLifecycleStatus, TaskRecord};
 use crate::agent::runtime::task_repo::TaskRepo;
 use crate::agent::runtime::task_state::{TaskIdentity, TaskState};
+use crate::agent::runtime::task_transition::TaskTransition;
 use crate::agent::AgentExecutor;
 use crate::session_journal::{
     SessionJournalStore, SessionRunEvent, SessionRunTaskIdentitySnapshot,
@@ -225,6 +226,39 @@ impl TaskEngine {
         Ok(transitioned)
     }
 
+    pub(crate) async fn apply_transition(
+        db: &sqlx::SqlitePool,
+        journal: &SessionJournalStore,
+        session_id: &str,
+        active_task_record: &TaskRecord,
+        transition: &TaskTransition,
+    ) -> Result<TaskRecord, String> {
+        match transition {
+            TaskTransition::Continue => Ok(active_task_record.clone()),
+            TaskTransition::StopCompleted { terminal_reason } => {
+                Self::transition_task_record(db, journal, session_id, active_task_record, {
+                    let terminal_reason = terminal_reason.clone();
+                    move |record| record.mark_completed(Utc::now().to_rfc3339(), terminal_reason)
+                })
+                .await
+            }
+            TaskTransition::StopFailed { terminal_reason } => {
+                Self::transition_task_record(db, journal, session_id, active_task_record, {
+                    let terminal_reason = terminal_reason.clone();
+                    move |record| record.mark_failed(Utc::now().to_rfc3339(), terminal_reason)
+                })
+                .await
+            }
+            TaskTransition::StopCancelled { terminal_reason } => {
+                Self::transition_task_record(db, journal, session_id, active_task_record, {
+                    let terminal_reason = terminal_reason.clone();
+                    move |record| record.mark_cancelled(Utc::now().to_rfc3339(), terminal_reason)
+                })
+                .await
+            }
+        }
+    }
+
     pub(crate) async fn mark_task_completed(
         db: &sqlx::SqlitePool,
         journal: &SessionJournalStore,
@@ -232,10 +266,13 @@ impl TaskEngine {
         active_task_record: &TaskRecord,
         terminal_reason: impl Into<String>,
     ) -> Result<TaskRecord, String> {
-        let terminal_reason = terminal_reason.into();
-        Self::transition_task_record(db, journal, session_id, active_task_record, move |record| {
-            record.mark_completed(Utc::now().to_rfc3339(), terminal_reason)
-        })
+        Self::apply_transition(
+            db,
+            journal,
+            session_id,
+            active_task_record,
+            &TaskTransition::completed(terminal_reason),
+        )
         .await
     }
 
@@ -246,10 +283,13 @@ impl TaskEngine {
         active_task_record: &TaskRecord,
         terminal_reason: impl Into<String>,
     ) -> Result<TaskRecord, String> {
-        let terminal_reason = terminal_reason.into();
-        Self::transition_task_record(db, journal, session_id, active_task_record, move |record| {
-            record.mark_failed(Utc::now().to_rfc3339(), terminal_reason)
-        })
+        Self::apply_transition(
+            db,
+            journal,
+            session_id,
+            active_task_record,
+            &TaskTransition::failed(terminal_reason),
+        )
         .await
     }
 
@@ -260,10 +300,13 @@ impl TaskEngine {
         active_task_record: &TaskRecord,
         terminal_reason: impl Into<String>,
     ) -> Result<TaskRecord, String> {
-        let terminal_reason = terminal_reason.into();
-        Self::transition_task_record(db, journal, session_id, active_task_record, move |record| {
-            record.mark_cancelled(Utc::now().to_rfc3339(), terminal_reason)
-        })
+        Self::apply_transition(
+            db,
+            journal,
+            session_id,
+            active_task_record,
+            &TaskTransition::cancelled(terminal_reason),
+        )
         .await
     }
 
@@ -370,6 +413,7 @@ mod tests {
     use crate::agent::runtime::kernel::turn_state::TurnStateSnapshot;
     use crate::agent::runtime::task_record::TaskRecord;
     use crate::agent::runtime::task_state::{TaskIdentity, TaskKind, TaskSurfaceKind};
+    use crate::agent::runtime::task_transition::{resolve_commit_transition, TaskTransition};
 
     #[test]
     fn task_engine_builds_primary_local_chat_task_state() {
@@ -429,5 +473,44 @@ mod tests {
             Some("task-parent")
         );
         assert_eq!(task_state.task_identity.root_task_id, "task-root");
+    }
+
+    #[test]
+    fn resolve_commit_transition_marks_success_as_completed() {
+        let transition = resolve_commit_transition(&Ok(()), None);
+
+        assert_eq!(
+            transition,
+            TaskTransition::StopCompleted {
+                terminal_reason: "completed".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn resolve_commit_transition_prefers_explicit_failure_reason() {
+        let transition = resolve_commit_transition(
+            &Err("commit failed".to_string()),
+            Some("skill_command_dispatch"),
+        );
+
+        assert_eq!(
+            transition,
+            TaskTransition::StopFailed {
+                terminal_reason: "skill_command_dispatch".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn resolve_commit_transition_falls_back_to_commit_error() {
+        let transition = resolve_commit_transition(&Err("commit failed".to_string()), None);
+
+        assert_eq!(
+            transition,
+            TaskTransition::StopFailed {
+                terminal_reason: "commit failed".to_string(),
+            }
+        );
     }
 }

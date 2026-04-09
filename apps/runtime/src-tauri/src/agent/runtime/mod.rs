@@ -21,6 +21,7 @@ pub(crate) mod task_lineage;
 pub(crate) mod task_record;
 pub(crate) mod task_repo;
 pub(crate) mod task_state;
+pub(crate) mod task_transition;
 pub(crate) mod tool_catalog;
 pub(crate) mod tool_dispatch;
 pub(crate) mod tool_profiles;
