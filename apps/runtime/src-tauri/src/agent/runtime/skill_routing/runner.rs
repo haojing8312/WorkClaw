@@ -394,7 +394,8 @@ fn strip_command_prefix<'a>(value: &'a str, prefix: &str) -> Option<&'a str> {
     if trimmed.len() < prefix.len() {
         return None;
     }
-    let (head, tail) = trimmed.split_at(prefix.len());
+    let head = trimmed.get(..prefix.len())?;
+    let tail = trimmed.get(prefix.len()..)?;
     if !head.eq_ignore_ascii_case(prefix) {
         return None;
     }
@@ -723,6 +724,16 @@ mod tests {
             resolved.as_deref(),
             Some("--employee 郝敬 --title 测试任务")
         );
+    }
+
+    #[test]
+    fn strip_command_prefix_returns_none_for_unicode_sentence_without_panicking() {
+        let resolved = strip_command_prefix(
+            "获取谢涛2026年3月30日到4月4日的工作日报并汇总成简报",
+            "PM Task Dispatch",
+        );
+
+        assert!(resolved.is_none());
     }
 
     #[test]

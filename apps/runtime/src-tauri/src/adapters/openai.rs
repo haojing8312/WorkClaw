@@ -233,12 +233,87 @@ fn parse_last_user_tool_input(messages: &[Value]) -> Result<Value> {
         .map_err(|e| anyhow!("mock write_file 用户输入 JSON 解析失败: {}", e))
 }
 
+fn decode_nested_tool_call_arguments(value: Value) -> Value {
+    match value {
+        Value::String(text) => {
+            let trimmed = text.trim();
+            if (trimmed.starts_with('{') && trimmed.ends_with('}'))
+                || (trimmed.starts_with('[') && trimmed.ends_with(']'))
+            {
+                if let Ok(parsed) = serde_json::from_str::<Value>(trimmed) {
+                    return parsed;
+                }
+            }
+            Value::String(text)
+        }
+        other => other,
+    }
+}
+
+fn strip_trailing_json_commas(input: &str) -> Option<String> {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    let mut in_string = false;
+    let mut escape = false;
+    let mut changed = false;
+
+    'outer: while let Some(ch) = chars.next() {
+        if in_string {
+            out.push(ch);
+            if escape {
+                escape = false;
+            } else if ch == '\\' {
+                escape = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        if ch == '"' {
+            in_string = true;
+            out.push(ch);
+            continue;
+        }
+
+        if ch == ',' {
+            let mut lookahead = chars.clone();
+            while let Some(next) = lookahead.next() {
+                if next.is_whitespace() {
+                    continue;
+                }
+                if next == '}' || next == ']' {
+                    changed = true;
+                    continue 'outer;
+                }
+                break;
+            }
+        }
+
+        out.push(ch);
+    }
+
+    changed.then_some(out)
+}
+
 fn parse_tool_call_arguments(args_str: &str) -> Result<Value> {
     let trimmed = args_str.trim();
     if trimmed.is_empty() {
         return Ok(json!({}));
     }
-    serde_json::from_str(trimmed)
+
+    if let Ok(parsed) = serde_json::from_str::<Value>(trimmed) {
+        return Ok(decode_nested_tool_call_arguments(parsed));
+    }
+
+    if let Some(repaired) = strip_trailing_json_commas(trimmed) {
+        if let Ok(parsed) = serde_json::from_str::<Value>(&repaired) {
+            return Ok(decode_nested_tool_call_arguments(parsed));
+        }
+    }
+
+    serde_json::from_str::<Value>(trimmed)
+        .map(decode_nested_tool_call_arguments)
         .map_err(|e| anyhow!("工具参数 JSON 解析失败: {}; raw={}", e, trimmed))
 }
 
@@ -284,6 +359,30 @@ fn openai_chat_completions_url(base_url: &str) -> String {
     format!("{}/chat/completions", base_url.trim().trim_end_matches('/'))
 }
 
+fn normalize_openai_tool_schema(schema: &Value) -> Value {
+    match schema {
+        Value::Object(map) => {
+            let mut normalized = serde_json::Map::with_capacity(map.len());
+            for (key, value) in map {
+                if key == "const" {
+                    continue;
+                }
+                normalized.insert(key.clone(), normalize_openai_tool_schema(value));
+            }
+            if let Some(const_value) = map.get("const") {
+                normalized.entry("enum".to_string()).or_insert_with(|| {
+                    Value::Array(vec![normalize_openai_tool_schema(const_value)])
+                });
+            }
+            Value::Object(normalized)
+        }
+        Value::Array(items) => {
+            Value::Array(items.iter().map(normalize_openai_tool_schema).collect())
+        }
+        _ => schema.clone(),
+    }
+}
+
 fn openai_tools_from_anthropic_defs(tools: &[Value]) -> Vec<Value> {
     tools
         .iter()
@@ -293,8 +392,22 @@ fn openai_tools_from_anthropic_defs(tools: &[Value]) -> Vec<Value> {
                 "function": {
                     "name": t["name"],
                     "description": t["description"],
-                    "parameters": t["input_schema"],
+                    "parameters": normalize_openai_tool_schema(&t["input_schema"]),
                 }
+            })
+        })
+        .collect()
+}
+
+fn openai_responses_tools_from_anthropic_defs(tools: &[Value]) -> Vec<Value> {
+    tools
+        .iter()
+        .map(|t| {
+            json!({
+                "type": "function",
+                "name": t["name"],
+                "description": t["description"],
+                "parameters": normalize_openai_tool_schema(&t["input_schema"]),
             })
         })
         .collect()
@@ -310,6 +423,51 @@ fn build_openai_chat_completion_messages(system_prompt: &str, messages: Vec<Valu
     }
     request_messages.extend(messages);
     request_messages
+}
+
+fn build_openai_responses_request_body(
+    model: &str,
+    system_prompt: &str,
+    messages: &[Value],
+    tools: &[Value],
+) -> Value {
+    json!({
+        "model": model,
+        "instructions": system_prompt,
+        "input": convert_messages_to_responses_input(messages),
+        "tools": openai_responses_tools_from_anthropic_defs(tools),
+        "stream": true,
+    })
+}
+
+fn build_openai_chat_completions_request_body(
+    transport: &ResolvedModelTransport,
+    model: &str,
+    system_prompt: &str,
+    messages: Vec<Value>,
+    tools: &[Value],
+) -> Value {
+    let mut body = json!({
+        "model": model,
+        "messages": build_openai_chat_completion_messages(system_prompt, messages),
+        "tools": openai_tools_from_anthropic_defs(tools),
+        "stream": true,
+    });
+
+    if transport
+        .openai_compat
+        .map(|features| features.supports_usage_in_streaming)
+        .unwrap_or(false)
+    {
+        if let Some(object) = body.as_object_mut() {
+            object.insert(
+                "stream_options".to_string(),
+                json!({ "include_usage": true }),
+            );
+        }
+    }
+
+    body
 }
 
 fn last_tool_message_content(messages: &[Value]) -> Option<String> {
@@ -842,39 +1000,19 @@ pub async fn chat_stream_with_tools(
 
     let client = build_http_client()?;
     let (url, body) = match transport.kind {
-        ModelTransportKind::OpenAiResponses => {
-            let responses_input = convert_messages_to_responses_input(&messages);
-            let openai_tools: Vec<Value> = tools
-                .iter()
-                .map(|t| {
-                    json!({
-                        "type": "function",
-                        "name": t["name"],
-                        "description": t["description"],
-                        "parameters": t["input_schema"],
-                    })
-                })
-                .collect();
-
-            (
-                openai_responses_url(base_url),
-                json!({
-                    "model": model,
-                    "instructions": system_prompt,
-                    "input": responses_input,
-                    "tools": openai_tools,
-                    "stream": true,
-                }),
-            )
-        }
+        ModelTransportKind::OpenAiResponses => (
+            openai_responses_url(base_url),
+            build_openai_responses_request_body(model, system_prompt, &messages, &tools),
+        ),
         ModelTransportKind::OpenAiCompletions => (
             openai_chat_completions_url(base_url),
-            json!({
-                "model": model,
-                "messages": build_openai_chat_completion_messages(system_prompt, messages),
-                "tools": openai_tools_from_anthropic_defs(&tools),
-                "stream": true,
-            }),
+            build_openai_chat_completions_request_body(
+                transport,
+                model,
+                system_prompt,
+                messages,
+                &tools,
+            ),
         ),
         ModelTransportKind::AnthropicMessages => {
             return Err(anyhow!("OpenAI adapter 不支持 Anthropic transport"));
@@ -968,6 +1106,22 @@ mod tests {
     fn invalid_tool_arguments_should_not_silently_become_empty_object() {
         let parsed = parse_tool_call_arguments(r#"{"path":"brief.html""#);
         assert!(parsed.is_err(), "损坏的 tool arguments 应返回错误");
+    }
+
+    #[test]
+    fn parse_tool_arguments_repairs_trailing_commas() {
+        let parsed =
+            parse_tool_call_arguments(r#"{"path":"README.md","recursive":true,}"#).expect("parsed");
+
+        assert_eq!(parsed["path"].as_str(), Some("README.md"));
+        assert_eq!(parsed["recursive"].as_bool(), Some(true));
+    }
+
+    #[test]
+    fn parse_tool_arguments_decodes_double_encoded_json() {
+        let parsed = parse_tool_call_arguments(r#""{\"path\":\"README.md\"}""#).expect("parsed");
+
+        assert_eq!(parsed["path"].as_str(), Some("README.md"));
     }
 
     fn parse_openai_chunks_for_test(chunks: &[&str]) -> Result<LLMResponse> {
@@ -1064,6 +1218,58 @@ mod tests {
             openai_responses_url("https://api.openai.com/v1"),
             "https://api.openai.com/v1/responses"
         );
+    }
+
+    #[test]
+    fn completions_request_body_includes_stream_options_for_native_streaming_compat() {
+        let body = build_openai_chat_completions_request_body(
+            &ResolvedModelTransport {
+                kind: ModelTransportKind::OpenAiCompletions,
+                openai_compat: Some(crate::model_transport::OpenAiCompatFeatures {
+                    supports_developer_role: false,
+                    supports_usage_in_streaming: true,
+                    supports_strict_mode: false,
+                }),
+            },
+            "qwen3.6-plus",
+            "system prompt",
+            vec![json!({ "role": "user", "content": "hello" })],
+            &[json!({
+                "name": "read_file",
+                "description": "Read a file",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string" }
+                    }
+                }
+            })],
+        );
+
+        assert_eq!(
+            body["stream_options"]["include_usage"].as_bool(),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn completions_request_body_omits_stream_options_for_generic_proxy_compat() {
+        let body = build_openai_chat_completions_request_body(
+            &ResolvedModelTransport {
+                kind: ModelTransportKind::OpenAiCompletions,
+                openai_compat: Some(crate::model_transport::OpenAiCompatFeatures {
+                    supports_developer_role: false,
+                    supports_usage_in_streaming: false,
+                    supports_strict_mode: false,
+                }),
+            },
+            "qwen3.6-plus",
+            "system prompt",
+            vec![json!({ "role": "user", "content": "hello" })],
+            &[],
+        );
+
+        assert!(body.get("stream_options").is_none());
     }
 
     #[test]
@@ -1266,10 +1472,7 @@ mod tests {
         )
         .expect("parse chunk");
 
-        assert_eq!(
-            deltas,
-            vec![StreamDelta::Reasoning("继续推理".to_string())]
-        );
+        assert_eq!(deltas, vec![StreamDelta::Reasoning("继续推理".to_string())]);
     }
 
     #[test]
@@ -1362,5 +1565,51 @@ mod tests {
             }
             other => panic!("expected tool calls response, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn openai_tools_from_anthropic_defs_normalizes_const_to_enum_recursively() {
+        let tools = openai_tools_from_anthropic_defs(&[json!({
+            "name": "write_file",
+            "description": "write a file",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "mode": { "type": "string", "const": "overwrite" },
+                    "nested": {
+                        "type": "object",
+                        "properties": {
+                            "kind": { "const": "text" }
+                        }
+                    },
+                    "items": {
+                        "type": "array",
+                        "items": { "const": "line" }
+                    }
+                }
+            }
+        })]);
+
+        let parameters = &tools[0]["function"]["parameters"];
+        assert!(parameters.get("const").is_none());
+        assert_eq!(
+            parameters["properties"]["mode"]["enum"],
+            json!(["overwrite"])
+        );
+        assert!(parameters["properties"]["mode"].get("const").is_none());
+        assert_eq!(
+            parameters["properties"]["nested"]["properties"]["kind"]["enum"],
+            json!(["text"])
+        );
+        assert!(parameters["properties"]["nested"]["properties"]["kind"]
+            .get("const")
+            .is_none());
+        assert_eq!(
+            parameters["properties"]["items"]["items"]["enum"],
+            json!(["line"])
+        );
+        assert!(parameters["properties"]["items"]["items"]
+            .get("const")
+            .is_none());
     }
 }

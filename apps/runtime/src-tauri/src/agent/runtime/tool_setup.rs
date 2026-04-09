@@ -18,6 +18,7 @@ use crate::agent::runtime::runtime_io::WorkspaceSkillRuntimeEntry;
 use crate::agent::tool_manifest::{ToolCategory, ToolSource};
 use crate::agent::AgentExecutor;
 use crate::agent::ToolManifestEntry;
+use reqwest::Url;
 use runtime_chat_app::{ChatExecutionGuidance, ChatExecutionPreparationService};
 use std::sync::Arc;
 use tauri::AppHandle;
@@ -178,14 +179,22 @@ pub(crate) async fn prepare_runtime_tools(
         Some(memory_content),
     );
 
-    let system_prompt = if let Some(discovery_index) =
-        format_tool_discovery_index(&effective_tool_set.tool_manifest)
-    {
-        format!("{}\n\n{discovery_index}", context_bundle.system_prompt)
+    let should_embed_discovery_scaffold =
+        should_embed_tool_discovery_scaffold(params.api_format, params.base_url, params.model_name);
+
+    let system_prompt = if should_embed_discovery_scaffold {
+        if let Some(discovery_index) =
+            format_tool_discovery_index(&effective_tool_set.tool_manifest)
+        {
+            format!("{}\n\n{discovery_index}", context_bundle.system_prompt)
+        } else {
+            context_bundle.system_prompt
+        }
     } else {
         context_bundle.system_prompt
     };
-    let system_prompt = if params.tool_discovery_query.is_some() {
+    let system_prompt = if should_embed_discovery_scaffold && params.tool_discovery_query.is_some()
+    {
         if let Some(candidate_hints) = format_tool_candidate_record_hints(
             &discovery_candidates,
             &effective_tool_set.active_tools,
@@ -233,9 +242,32 @@ fn merge_runtime_notes(
     runtime_notes
 }
 
+fn should_embed_tool_discovery_scaffold(
+    api_format: &str,
+    base_url: &str,
+    model_name: &str,
+) -> bool {
+    if !api_format.trim().eq_ignore_ascii_case("openai") {
+        return true;
+    }
+
+    let normalized_model = model_name.trim().to_ascii_lowercase();
+    if !normalized_model.contains("qwen") {
+        return true;
+    }
+
+    let Ok(url) = Url::parse(base_url.trim()) else {
+        return true;
+    };
+    let host = url.host_str().unwrap_or_default();
+    !(host.eq_ignore_ascii_case("dashscope.aliyuncs.com")
+        || host.eq_ignore_ascii_case("dashscope-intl.aliyuncs.com")
+        || host.eq_ignore_ascii_case("openrouter.ai"))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{merge_runtime_notes, PreparedRuntimeTools};
+    use super::{merge_runtime_notes, should_embed_tool_discovery_scaffold, PreparedRuntimeTools};
     use crate::agent::runtime::effective_tool_set::{
         EffectiveToolPolicySummary, EffectiveToolSet, EffectiveToolSetSource,
     };
@@ -538,5 +570,32 @@ mod tests {
                 "若用户要求继续，应基于当前压缩后上下文直接继续执行".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn qwen_dashscope_skips_tool_discovery_scaffold() {
+        assert!(!should_embed_tool_discovery_scaffold(
+            "openai",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "qwen3.6-plus",
+        ));
+    }
+
+    #[test]
+    fn qwen_openrouter_skips_tool_discovery_scaffold() {
+        assert!(!should_embed_tool_discovery_scaffold(
+            "openai",
+            "https://openrouter.ai/api/v1",
+            "qwen/qwen3-coder:free",
+        ));
+    }
+
+    #[test]
+    fn non_qwen_models_keep_tool_discovery_scaffold() {
+        assert!(should_embed_tool_discovery_scaffold(
+            "openai",
+            "https://api.openai.com/v1",
+            "gpt-5.4",
+        ));
     }
 }

@@ -20,6 +20,15 @@ pub struct ResolvedModelTransport {
     pub openai_compat: Option<OpenAiCompatFeatures>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OpenAiCompatEndpointFamily {
+    NativeOpenAi,
+    OpenRouter,
+    ModelStudioNative,
+    MoonshotNative,
+    Generic,
+}
+
 fn is_anthropic_base_url(base_url: &str) -> bool {
     let trimmed = base_url.trim();
     if trimmed.is_empty() {
@@ -50,11 +59,7 @@ fn is_openai_api_base_url(base_url: &str) -> bool {
         return false;
     };
 
-    if !url
-        .host_str()
-        .unwrap_or_default()
-        .eq_ignore_ascii_case("api.openai.com")
-    {
+    if detect_openai_compat_endpoint_family(base_url) != OpenAiCompatEndpointFamily::NativeOpenAi {
         return false;
     }
 
@@ -62,27 +67,52 @@ fn is_openai_api_base_url(base_url: &str) -> bool {
     path.is_empty() || path.eq_ignore_ascii_case("/v1")
 }
 
-fn is_native_openai_endpoint(base_url: &str) -> bool {
+fn detect_openai_compat_endpoint_family(base_url: &str) -> OpenAiCompatEndpointFamily {
     let trimmed = base_url.trim();
     if trimmed.is_empty() {
-        return false;
+        return OpenAiCompatEndpointFamily::Generic;
     }
 
     let Ok(url) = Url::parse(trimmed) else {
-        return false;
+        return OpenAiCompatEndpointFamily::Generic;
     };
 
-    url.host_str()
-        .unwrap_or_default()
-        .eq_ignore_ascii_case("api.openai.com")
+    let host = url.host_str().unwrap_or_default();
+    if host.eq_ignore_ascii_case("api.openai.com") {
+        OpenAiCompatEndpointFamily::NativeOpenAi
+    } else if host.eq_ignore_ascii_case("openrouter.ai") {
+        OpenAiCompatEndpointFamily::OpenRouter
+    } else if host.eq_ignore_ascii_case("dashscope.aliyuncs.com")
+        || host.eq_ignore_ascii_case("dashscope-intl.aliyuncs.com")
+    {
+        OpenAiCompatEndpointFamily::ModelStudioNative
+    } else if host.eq_ignore_ascii_case("api.moonshot.ai") {
+        OpenAiCompatEndpointFamily::MoonshotNative
+    } else {
+        OpenAiCompatEndpointFamily::Generic
+    }
 }
 
 fn build_openai_compat_features(base_url: &str) -> OpenAiCompatFeatures {
-    let is_native = is_native_openai_endpoint(base_url);
-    OpenAiCompatFeatures {
-        supports_developer_role: is_native,
-        supports_usage_in_streaming: is_native,
-        supports_strict_mode: is_native,
+    match detect_openai_compat_endpoint_family(base_url) {
+        OpenAiCompatEndpointFamily::NativeOpenAi => OpenAiCompatFeatures {
+            supports_developer_role: true,
+            supports_usage_in_streaming: true,
+            supports_strict_mode: true,
+        },
+        OpenAiCompatEndpointFamily::ModelStudioNative
+        | OpenAiCompatEndpointFamily::MoonshotNative => OpenAiCompatFeatures {
+            supports_developer_role: false,
+            supports_usage_in_streaming: true,
+            supports_strict_mode: false,
+        },
+        OpenAiCompatEndpointFamily::OpenRouter | OpenAiCompatEndpointFamily::Generic => {
+            OpenAiCompatFeatures {
+                supports_developer_role: false,
+                supports_usage_in_streaming: false,
+                supports_strict_mode: false,
+            }
+        }
     }
 }
 
@@ -163,6 +193,41 @@ mod tests {
             resolved.openai_compat,
             Some(OpenAiCompatFeatures {
                 supports_developer_role: false,
+                supports_usage_in_streaming: true,
+                supports_strict_mode: false,
+            })
+        );
+    }
+
+    #[test]
+    fn native_dashscope_host_enables_streaming_usage_even_without_qwen_provider_key() {
+        let resolved = resolve_model_transport(
+            "openai",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            None,
+        );
+
+        assert_eq!(resolved.kind, ModelTransportKind::OpenAiCompletions);
+        assert_eq!(
+            resolved.openai_compat,
+            Some(OpenAiCompatFeatures {
+                supports_developer_role: false,
+                supports_usage_in_streaming: true,
+                supports_strict_mode: false,
+            })
+        );
+    }
+
+    #[test]
+    fn openrouter_host_keeps_proxy_compat_defaults() {
+        let resolved =
+            resolve_model_transport("openai", "https://openrouter.ai/api/v1", Some("openrouter"));
+
+        assert_eq!(resolved.kind, ModelTransportKind::OpenAiCompletions);
+        assert_eq!(
+            resolved.openai_compat,
+            Some(OpenAiCompatFeatures {
+                supports_developer_role: false,
                 supports_usage_in_streaming: false,
                 supports_strict_mode: false,
             })
@@ -206,8 +271,7 @@ mod tests {
 
     #[test]
     fn non_openai_provider_key_prevents_responses_upgrade_even_on_openai_host() {
-        let resolved =
-            resolve_model_transport("openai", "https://api.openai.com/v1", Some("qwen"));
+        let resolved = resolve_model_transport("openai", "https://api.openai.com/v1", Some("qwen"));
 
         assert_eq!(resolved.kind, ModelTransportKind::OpenAiCompletions);
     }
