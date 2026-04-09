@@ -112,11 +112,15 @@ pub(crate) fn resolve_delegation_transition(task_state: &TaskState) -> Option<Ta
     }
 }
 
+pub(crate) fn resolve_initial_transition(task_state: &TaskState) -> TaskTransition {
+    resolve_delegation_transition(task_state).unwrap_or(TaskTransition::Continue)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        resolve_commit_transition, resolve_delegation_transition, resolve_stop_transition,
-        resolve_terminal_transition, TaskTransition,
+        resolve_commit_transition, resolve_delegation_transition, resolve_initial_transition,
+        resolve_stop_transition, resolve_terminal_transition, TaskTransition,
     };
     use crate::agent::run_guard::RunStopReasonKind;
     use crate::agent::runtime::task_state::{TaskIdentity, TaskKind, TaskState, TaskSurfaceKind};
@@ -238,5 +242,15 @@ mod tests {
                 delegated_surface_kind: TaskSurfaceKind::EmployeeStepSurface,
             }) if delegated_task_identity.parent_task_id.as_deref() == Some("task-parent")
         ));
+    }
+
+    #[test]
+    fn resolve_initial_transition_keeps_primary_local_chat_on_continue() {
+        let task_state = TaskState::new_primary_local_chat("session-1", "user-1", "run-1");
+
+        assert_eq!(
+            resolve_initial_transition(&task_state),
+            TaskTransition::Continue
+        );
     }
 }

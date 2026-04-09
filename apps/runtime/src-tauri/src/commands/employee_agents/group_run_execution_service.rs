@@ -16,11 +16,11 @@ use crate::agent::runtime::runtime_io::{
     append_run_started_with_pool, append_run_stopped_with_pool, finalize_run_success_with_pool,
     insert_session_message_with_pool,
 };
-use crate::agent::runtime::task_engine::TaskEngine;
+use crate::agent::runtime::task_engine::{TaskBeginParentContext, TaskEngine};
 use crate::agent::runtime::task_record::TaskRecord;
 use crate::agent::runtime::task_state::TaskState;
 use crate::agent::runtime::task_transition::{
-    resolve_delegation_transition, resolve_stop_transition, resolve_terminal_transition,
+    resolve_stop_transition, resolve_terminal_transition,
 };
 use crate::agent::tools::{EmployeeManageTool, MemoryTool};
 use crate::agent::{runtime::RuntimeTranscript, AgentExecutor, ToolRegistry};
@@ -74,21 +74,18 @@ async fn prepare_employee_step_session_run(
             .as_ref()
             .map(|record| &record.task_identity),
     );
-    let task_record = TaskEngine::start_task(pool, journal, session_id, &task_state).await?;
-    TaskEngine::project_task_state(pool, journal, session_id, &task_state).await?;
-    if let (Some(parent_task_record), Some(transition)) = (
-        parent_task_record.as_ref(),
-        resolve_delegation_transition(&task_state),
-    ) {
-        let _ = TaskEngine::apply_transition(
-            pool,
-            journal,
-            session_id,
-            parent_task_record,
-            &transition,
-        )
-        .await;
-    }
+    let task_record = TaskEngine::begin_task_run(
+        pool,
+        journal,
+        &task_state,
+        parent_task_record
+            .as_ref()
+            .map(|record| TaskBeginParentContext {
+                session_id,
+                active_task_record: record,
+            }),
+    )
+    .await?;
     append_run_started_with_pool(pool, journal, session_id, &run_id, &user_message_id).await?;
 
     Ok(PreparedEmployeeStepSessionRun {

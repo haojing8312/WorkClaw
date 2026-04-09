@@ -7,11 +7,11 @@ use super::RuntimeTranscript;
 use crate::agent::runtime::kernel::execution_plan::{ExecutionOutcome, SessionEngineError};
 use crate::agent::runtime::kernel::session_engine::SessionEngine;
 use crate::agent::runtime::kernel::turn_preparation::prepare_hidden_child_turn;
-use crate::agent::runtime::task_engine::TaskEngine;
+use crate::agent::runtime::task_engine::{TaskBeginParentContext, TaskEngine};
 use crate::agent::runtime::task_record::TaskRecord;
 use crate::agent::runtime::task_state::TaskState;
 use crate::agent::runtime::task_transition::{
-    resolve_delegation_transition, resolve_stop_transition, resolve_terminal_transition,
+    resolve_stop_transition, resolve_terminal_transition,
 };
 use crate::agent::types::StreamDelta;
 use crate::agent::{AgentExecutor, ToolRegistry};
@@ -78,25 +78,19 @@ pub(crate) async fn prepare_hidden_child_session_run(
             .as_ref()
             .map(|record| &record.task_identity),
     );
-    let task_record = TaskEngine::start_task(db, journal, &child_session_id, &task_state)
-        .await
-        .map_err(anyhow::Error::msg)?;
-    TaskEngine::project_task_state(db, journal, &child_session_id, &task_state)
-        .await
-        .map_err(anyhow::Error::msg)?;
-    if let (Some(parent_task_record), Some(transition)) = (
-        parent_task_record.as_ref(),
-        resolve_delegation_transition(&task_state),
-    ) {
-        let _ = TaskEngine::apply_transition(
-            db,
-            journal,
-            parent_session_id,
-            parent_task_record,
-            &transition,
-        )
-        .await;
-    }
+    let task_record = TaskEngine::begin_task_run(
+        db,
+        journal,
+        &task_state,
+        parent_task_record
+            .as_ref()
+            .map(|record| TaskBeginParentContext {
+                session_id: parent_session_id,
+                active_task_record: record,
+            }),
+    )
+    .await
+    .map_err(anyhow::Error::msg)?;
     append_run_started_with_pool(db, journal, &child_session_id, &run_id, &user_message_id)
         .await
         .map_err(anyhow::Error::msg)?;
