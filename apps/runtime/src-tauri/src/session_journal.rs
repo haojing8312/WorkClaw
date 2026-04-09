@@ -365,6 +365,13 @@ pub enum SessionRunEvent {
         run_id: String,
         task_identity: SessionRunTaskIdentitySnapshot,
     },
+    TaskDelegated {
+        run_id: String,
+        from_task_id: String,
+        from_task_kind: String,
+        from_surface_kind: String,
+        delegated_task: SessionRunTaskIdentitySnapshot,
+    },
     TaskRecordUpserted {
         run_id: String,
         task: TaskRecordUpsertPayload,
@@ -459,6 +466,7 @@ pub struct SessionJournalRecord {
 fn apply_event(state: &mut SessionJournalState, event: &SessionRunEvent) {
     let run_id = match event {
         SessionRunEvent::TaskStateProjected { run_id, .. }
+        | SessionRunEvent::TaskDelegated { run_id, .. }
         | SessionRunEvent::TaskRecordUpserted { run_id, .. }
         | SessionRunEvent::TaskStatusChanged { run_id, .. }
         | SessionRunEvent::RunStarted { run_id, .. }
@@ -479,6 +487,7 @@ fn apply_event(state: &mut SessionJournalState, event: &SessionRunEvent) {
         SessionRunEvent::TaskStateProjected { task_identity, .. } => {
             state.runs[run_index].task_identity = Some(task_identity.clone());
         }
+        SessionRunEvent::TaskDelegated { .. } => {}
         SessionRunEvent::TaskRecordUpserted { task, .. } => {
             project_task_record_upsert(state, task);
         }
@@ -698,6 +707,44 @@ fn build_observed_session_run_event(
                     "root_task_id": task_identity.root_task_id,
                     "task_kind": task_identity.task_kind,
                     "surface_kind": task_identity.surface_kind,
+                })
+                .to_string(),
+            ),
+        },
+        SessionRunEvent::TaskDelegated {
+            run_id,
+            from_task_id,
+            from_task_kind,
+            from_surface_kind,
+            delegated_task,
+        } => RuntimeObservedRunEvent {
+            session_id: session_id.to_string(),
+            run_id: run_id.clone(),
+            event_type: "task_delegated".to_string(),
+            created_at: recorded_at.to_string(),
+            status: Some("delegated".to_string()),
+            tool_name: None,
+            approval_id: None,
+            warning_kind: None,
+            error_kind: None,
+            child_session_id: None,
+            route_latency_ms: None,
+            candidate_count: None,
+            selected_skill: Some(delegated_task.task_kind.clone()),
+            fallback_reason: None,
+            tool_recommendation_summary: None,
+            tool_recommendation_aligned: None,
+            tool_plan_summary: None,
+            message: Some(
+                json!({
+                    "from_task_id": from_task_id,
+                    "from_task_kind": from_task_kind,
+                    "from_surface_kind": from_surface_kind,
+                    "delegated_task_id": delegated_task.task_id,
+                    "delegated_parent_task_id": delegated_task.parent_task_id,
+                    "delegated_root_task_id": delegated_task.root_task_id,
+                    "delegated_task_kind": delegated_task.task_kind,
+                    "delegated_surface_kind": delegated_task.surface_kind,
                 })
                 .to_string(),
             ),

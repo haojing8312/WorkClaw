@@ -34,6 +34,7 @@ pub(crate) async fn append_session_run_event_with_pool(
 
     match event {
         SessionRunEvent::TaskStateProjected { .. }
+        | SessionRunEvent::TaskDelegated { .. }
         | SessionRunEvent::TaskRecordUpserted { .. }
         | SessionRunEvent::TaskStatusChanged { .. } => {}
         SessionRunEvent::RunStarted {
@@ -266,6 +267,7 @@ async fn upsert_run_status(
 fn event_type(event: &SessionRunEvent) -> &'static str {
     match event {
         SessionRunEvent::TaskStateProjected { .. } => "task_state_projected",
+        SessionRunEvent::TaskDelegated { .. } => "task_delegated",
         SessionRunEvent::TaskRecordUpserted { .. } => "task_record_upserted",
         SessionRunEvent::TaskStatusChanged { .. } => "task_status_changed",
         SessionRunEvent::RunStarted { .. } => "run_started",
@@ -285,6 +287,7 @@ fn event_type(event: &SessionRunEvent) -> &'static str {
 fn event_run_id(event: &SessionRunEvent) -> &str {
     match event {
         SessionRunEvent::TaskStateProjected { run_id, .. }
+        | SessionRunEvent::TaskDelegated { run_id, .. }
         | SessionRunEvent::TaskRecordUpserted { run_id, .. }
         | SessionRunEvent::TaskStatusChanged { run_id, .. }
         | SessionRunEvent::RunStarted { run_id, .. }

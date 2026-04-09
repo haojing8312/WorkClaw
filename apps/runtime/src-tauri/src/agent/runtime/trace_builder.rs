@@ -151,6 +151,39 @@ fn summarize_event(
             is_error: Some(false),
             parse_warning: None,
         },
+        SessionRunEvent::TaskDelegated {
+            from_task_id,
+            from_task_kind,
+            from_surface_kind,
+            delegated_task,
+            ..
+        } => SessionRunEventSummary {
+            session_id: record.session_id.clone(),
+            run_id: record.run_id.clone(),
+            event_type: record.event_type.clone(),
+            created_at: record.created_at.clone(),
+            status: Some("delegated".to_string()),
+            tool_name: None,
+            call_id: None,
+            approval_id: None,
+            warning_kind: None,
+            error_kind: None,
+            message: Some(format!(
+                "task={} surface={} delegated {}",
+                from_task_kind, from_surface_kind, delegated_task.task_kind
+            )),
+            detail: Some(format!(
+                "from_task_id={}, delegated_task_id={}, delegated_task_path={}",
+                from_task_id,
+                delegated_task.task_id,
+                build_task_path(&delegated_task).unwrap_or_else(|| delegated_task.task_id.clone())
+            )),
+            irreversible: None,
+            last_completed_step: None,
+            child_session_id: None,
+            is_error: Some(false),
+            parse_warning: None,
+        },
         SessionRunEvent::TaskRecordUpserted { task, .. } => SessionRunEventSummary {
             session_id: record.session_id.clone(),
             run_id: record.run_id.clone(),
@@ -660,6 +693,7 @@ fn extract_task_identity(
 ) -> Option<&crate::session_journal::SessionRunTaskIdentitySnapshot> {
     match event {
         SessionRunEvent::TaskStateProjected { task_identity, .. } => Some(task_identity),
+        SessionRunEvent::TaskDelegated { delegated_task, .. } => Some(delegated_task),
         SessionRunEvent::RunCompleted { turn_state, .. }
         | SessionRunEvent::RunFailed { turn_state, .. }
         | SessionRunEvent::RunStopped { turn_state, .. } => turn_state
@@ -1151,6 +1185,39 @@ mod tests {
         assert!(summary.detail.as_deref().is_some_and(
             |detail| detail.contains("task_path=task-root -> task-parent -> task-child")
         ));
+    }
+
+    #[test]
+    fn task_delegated_events_project_delegated_tasks_into_task_graph() {
+        let trace = build_session_run_trace(
+            "session-1",
+            "run-1",
+            &[stored_event(
+                "session-1",
+                "run-1",
+                "task_delegated",
+                "2026-04-09T00:00:00Z",
+                SessionRunEvent::TaskDelegated {
+                    run_id: "run-1".to_string(),
+                    from_task_id: "task-parent".to_string(),
+                    from_task_kind: "primary_user_task".to_string(),
+                    from_surface_kind: "local_chat_surface".to_string(),
+                    delegated_task: crate::session_journal::SessionRunTaskIdentitySnapshot {
+                        task_id: "task-child".to_string(),
+                        parent_task_id: Some("task-parent".to_string()),
+                        root_task_id: "task-root".to_string(),
+                        task_kind: "sub_agent_task".to_string(),
+                        surface_kind: "hidden_child_surface".to_string(),
+                    },
+                },
+            )],
+        );
+
+        assert!(trace
+            .task_graph
+            .iter()
+            .any(|node| node.task_id == "task-child"
+                && node.parent_task_id.as_deref() == Some("task-parent")));
     }
 
     #[test]

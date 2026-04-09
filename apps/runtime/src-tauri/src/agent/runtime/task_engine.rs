@@ -4,11 +4,11 @@ use crate::agent::runtime::kernel::session_engine::SessionEngine;
 use crate::agent::runtime::session_runs::append_session_run_event_with_pool;
 use crate::agent::runtime::task_record::{TaskLifecycleStatus, TaskRecord};
 use crate::agent::runtime::task_repo::TaskRepo;
-use crate::agent::runtime::task_state::{TaskIdentity, TaskState};
+use crate::agent::runtime::task_state::{TaskIdentity, TaskKind, TaskState, TaskSurfaceKind};
 use crate::agent::runtime::task_transition::TaskTransition;
 use crate::agent::AgentExecutor;
 use crate::session_journal::{
-    SessionJournalStore, SessionRunEvent, SessionRunTaskIdentitySnapshot,
+    SessionJournalStore, SessionRunEvent, SessionRunTaskIdentitySnapshot, SessionTaskRecordSnapshot,
 };
 use chrono::Utc;
 use serde_json::Value;
@@ -41,14 +41,26 @@ impl TaskExecutionOutcome {
 pub(crate) struct TaskEngine;
 
 impl TaskEngine {
-    fn build_task_identity_snapshot(task_state: &TaskState) -> SessionRunTaskIdentitySnapshot {
+    fn build_task_identity_snapshot_from_parts(
+        task_identity: &TaskIdentity,
+        task_kind: TaskKind,
+        surface_kind: TaskSurfaceKind,
+    ) -> SessionRunTaskIdentitySnapshot {
         SessionRunTaskIdentitySnapshot {
-            task_id: task_state.task_identity.task_id.clone(),
-            parent_task_id: task_state.task_identity.parent_task_id.clone(),
-            root_task_id: task_state.task_identity.root_task_id.clone(),
-            task_kind: task_state.task_kind.journal_key().to_string(),
-            surface_kind: task_state.surface_kind.journal_key().to_string(),
+            task_id: task_identity.task_id.clone(),
+            parent_task_id: task_identity.parent_task_id.clone(),
+            root_task_id: task_identity.root_task_id.clone(),
+            task_kind: task_kind.journal_key().to_string(),
+            surface_kind: surface_kind.journal_key().to_string(),
         }
+    }
+
+    fn build_task_identity_snapshot(task_state: &TaskState) -> SessionRunTaskIdentitySnapshot {
+        Self::build_task_identity_snapshot_from_parts(
+            &task_state.task_identity,
+            task_state.task_kind,
+            task_state.surface_kind,
+        )
     }
 
     fn build_pending_task_record(task_state: &TaskState, now: impl Into<String>) -> TaskRecord {
@@ -115,6 +127,50 @@ impl TaskEngine {
         })
     }
 
+    fn rebuild_task_record(snapshot: &SessionTaskRecordSnapshot) -> TaskRecord {
+        TaskRecord {
+            task_identity: TaskIdentity::new(
+                snapshot.task_identity.task_id.clone(),
+                snapshot.task_identity.parent_task_id.clone(),
+                Some(snapshot.task_identity.root_task_id.clone()),
+            ),
+            task_kind: match snapshot.task_identity.task_kind.as_str() {
+                "delegated_skill_task" => TaskKind::DelegatedSkillTask,
+                "sub_agent_task" => TaskKind::SubAgentTask,
+                "employee_step_task" => TaskKind::EmployeeStepTask,
+                "recovery_task" => TaskKind::RecoveryTask,
+                _ => TaskKind::PrimaryUserTask,
+            },
+            surface_kind: match snapshot.task_identity.surface_kind.as_str() {
+                "hidden_child_surface" => TaskSurfaceKind::HiddenChildSurface,
+                "employee_step_surface" => TaskSurfaceKind::EmployeeStepSurface,
+                _ => TaskSurfaceKind::LocalChatSurface,
+            },
+            session_id: snapshot.session_id.clone(),
+            user_message_id: snapshot.user_message_id.clone(),
+            run_id: snapshot.run_id.clone(),
+            status: snapshot.status,
+            created_at: snapshot.created_at.clone(),
+            updated_at: snapshot.updated_at.clone(),
+            started_at: snapshot.started_at.clone(),
+            completed_at: snapshot.completed_at.clone(),
+            terminal_reason: snapshot.terminal_reason.clone(),
+        }
+    }
+
+    pub(crate) async fn resolve_latest_task_record_for_session(
+        journal: &SessionJournalStore,
+        session_id: &str,
+    ) -> Option<TaskRecord> {
+        let state = journal.read_state(session_id).await.ok()?;
+        state
+            .tasks
+            .iter()
+            .rev()
+            .find(|task| task.session_id == session_id)
+            .map(Self::rebuild_task_record)
+    }
+
     pub(crate) async fn project_task_state(
         db: &sqlx::SqlitePool,
         journal: &SessionJournalStore,
@@ -169,6 +225,34 @@ impl TaskEngine {
                     record,
                     from_status,
                     to_status,
+                ),
+            },
+        )
+        .await
+    }
+
+    async fn project_task_delegation(
+        db: &sqlx::SqlitePool,
+        journal: &SessionJournalStore,
+        session_id: &str,
+        active_task_record: &TaskRecord,
+        delegated_task_identity: &TaskIdentity,
+        delegated_task_kind: TaskKind,
+        delegated_surface_kind: TaskSurfaceKind,
+    ) -> Result<(), String> {
+        append_session_run_event_with_pool(
+            db,
+            journal,
+            session_id,
+            SessionRunEvent::TaskDelegated {
+                run_id: active_task_record.run_id.clone(),
+                from_task_id: active_task_record.task_identity.task_id.clone(),
+                from_task_kind: active_task_record.task_kind.journal_key().to_string(),
+                from_surface_kind: active_task_record.surface_kind.journal_key().to_string(),
+                delegated_task: Self::build_task_identity_snapshot_from_parts(
+                    delegated_task_identity,
+                    delegated_task_kind,
+                    delegated_surface_kind,
                 ),
             },
         )
@@ -235,6 +319,28 @@ impl TaskEngine {
     ) -> Result<TaskRecord, String> {
         match transition {
             TaskTransition::Continue => Ok(active_task_record.clone()),
+            TaskTransition::DelegateToChild {
+                delegated_task_identity,
+                delegated_task_kind,
+                delegated_surface_kind,
+            }
+            | TaskTransition::DelegateToEmployee {
+                delegated_task_identity,
+                delegated_task_kind,
+                delegated_surface_kind,
+            } => {
+                Self::project_task_delegation(
+                    db,
+                    journal,
+                    session_id,
+                    active_task_record,
+                    delegated_task_identity,
+                    *delegated_task_kind,
+                    *delegated_surface_kind,
+                )
+                .await?;
+                Ok(active_task_record.clone())
+            }
             TaskTransition::StopCompleted { terminal_reason } => {
                 Self::transition_task_record(db, journal, session_id, active_task_record, {
                     let terminal_reason = terminal_reason.clone();

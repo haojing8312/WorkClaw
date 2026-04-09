@@ -11,7 +11,7 @@ use crate::agent::runtime::task_engine::TaskEngine;
 use crate::agent::runtime::task_record::TaskRecord;
 use crate::agent::runtime::task_state::TaskState;
 use crate::agent::runtime::task_transition::{
-    resolve_stop_transition, resolve_terminal_transition,
+    resolve_delegation_transition, resolve_stop_transition, resolve_terminal_transition,
 };
 use crate::agent::types::StreamDelta;
 use crate::agent::{AgentExecutor, ToolRegistry};
@@ -68,13 +68,15 @@ pub(crate) async fn prepare_hidden_child_session_run(
             .await
             .map_err(anyhow::Error::msg)?;
     let run_id = Uuid::new_v4().to_string();
-    let parent_task_identity =
-        TaskEngine::resolve_latest_task_identity_for_session(journal, parent_session_id).await;
+    let parent_task_record =
+        TaskEngine::resolve_latest_task_record_for_session(journal, parent_session_id).await;
     let task_state = TaskEngine::build_hidden_child_task_state(
         &child_session_id,
         &user_message_id,
         &run_id,
-        parent_task_identity.as_ref(),
+        parent_task_record
+            .as_ref()
+            .map(|record| &record.task_identity),
     );
     let task_record = TaskEngine::start_task(db, journal, &child_session_id, &task_state)
         .await
@@ -82,6 +84,19 @@ pub(crate) async fn prepare_hidden_child_session_run(
     TaskEngine::project_task_state(db, journal, &child_session_id, &task_state)
         .await
         .map_err(anyhow::Error::msg)?;
+    if let (Some(parent_task_record), Some(transition)) = (
+        parent_task_record.as_ref(),
+        resolve_delegation_transition(&task_state),
+    ) {
+        let _ = TaskEngine::apply_transition(
+            db,
+            journal,
+            parent_session_id,
+            parent_task_record,
+            &transition,
+        )
+        .await;
+    }
     append_run_started_with_pool(db, journal, &child_session_id, &run_id, &user_message_id)
         .await
         .map_err(anyhow::Error::msg)?;
