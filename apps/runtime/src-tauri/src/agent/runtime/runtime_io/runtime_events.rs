@@ -1,5 +1,6 @@
 use crate::agent::run_guard::RunStopReason;
 use crate::agent::runtime::effective_tool_set::EffectiveToolDecisionRecord;
+use crate::agent::runtime::kernel::turn_state::TurnStateSnapshot;
 use crate::agent::runtime::session_runs::{
     append_session_run_event_with_pool, attach_assistant_message_to_run_with_pool,
 };
@@ -7,7 +8,9 @@ use crate::agent::runtime::skill_routing::observability::{
     route_fallback_reason_key, ImplicitRouteObservation,
 };
 use crate::agent::runtime::tool_dispatch::INTERNAL_SKILL_DISPATCH_INPUT_KEY;
-use crate::session_journal::{SessionJournalStore, SessionRunEvent};
+use crate::session_journal::{
+    SessionJournalStore, SessionRunEvent, SessionRunTurnStateSnapshot,
+};
 use chrono::Utc;
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -122,6 +125,7 @@ pub(crate) async fn append_run_failed_with_pool(
     run_id: &str,
     error_kind: &str,
     error_message: &str,
+    turn_state: Option<&TurnStateSnapshot>,
 ) {
     let _ = append_session_run_event_with_pool(
         pool,
@@ -131,6 +135,7 @@ pub(crate) async fn append_run_failed_with_pool(
             run_id: run_id.to_string(),
             error_kind: error_kind.to_string(),
             error_message: error_message.to_string(),
+            turn_state: turn_state.map(SessionRunTurnStateSnapshot::from),
         },
     )
     .await;
@@ -170,6 +175,7 @@ pub(crate) async fn append_run_stopped_with_pool(
     session_id: &str,
     run_id: &str,
     stop_reason: &RunStopReason,
+    turn_state: Option<&TurnStateSnapshot>,
 ) -> Result<(), String> {
     append_session_run_event_with_pool(
         pool,
@@ -178,6 +184,7 @@ pub(crate) async fn append_run_stopped_with_pool(
         SessionRunEvent::RunStopped {
             run_id: run_id.to_string(),
             stop_reason: stop_reason.clone(),
+            turn_state: turn_state.map(SessionRunTurnStateSnapshot::from),
         },
     )
     .await
@@ -379,6 +386,7 @@ pub(crate) async fn finalize_run_success_with_pool(
     content: &str,
     reasoning_text: &str,
     reasoning_duration_ms: Option<u64>,
+    turn_state: Option<&TurnStateSnapshot>,
 ) -> Result<(), String> {
     if !final_text.is_empty() {
         append_session_run_event_with_pool(
@@ -418,6 +426,7 @@ pub(crate) async fn finalize_run_success_with_pool(
         session_id,
         SessionRunEvent::RunCompleted {
             run_id: run_id.to_string(),
+            turn_state: turn_state.map(SessionRunTurnStateSnapshot::from),
         },
     )
     .await?;
@@ -509,7 +518,7 @@ mod run_guard_persistence_tests {
         append_run_started_with_pool(&pool, &journal, "session-1", "run-1", "user-1")
             .await
             .expect("append run started");
-        append_run_stopped_with_pool(&pool, &journal, "session-1", "run-1", &stop_reason)
+        append_run_stopped_with_pool(&pool, &journal, "session-1", "run-1", &stop_reason, None)
             .await
             .expect("append run stopped");
 

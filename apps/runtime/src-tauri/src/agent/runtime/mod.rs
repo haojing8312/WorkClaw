@@ -7,6 +7,7 @@ pub(crate) mod compaction_pipeline;
 pub(crate) mod effective_tool_set;
 pub mod events;
 pub(crate) mod failover;
+pub(crate) mod kernel;
 pub(crate) mod observability;
 pub(crate) mod progress_guard;
 pub(crate) mod repo;

@@ -4,42 +4,26 @@ use serde_json::Value;
 use sqlx::{Row, SqlitePool};
 use tauri::State;
 
-#[path = "employee_agents/repo.rs"]
-mod repo;
-#[path = "employee_agents/service.rs"]
-mod service;
-#[path = "employee_agents/types.rs"]
-mod types;
-#[path = "employee_agents/team_rules.rs"]
-mod team_rules;
 #[path = "employee_agents/group_management.rs"]
 mod group_management;
 #[path = "employee_agents/group_run_entry.rs"]
 mod group_run_entry;
 #[path = "employee_agents/memory_commands.rs"]
 mod memory_commands;
+#[path = "employee_agents/repo.rs"]
+mod repo;
+#[path = "employee_agents/service.rs"]
+mod service;
 #[path = "employee_agents/tauri_commands.rs"]
 mod tauri_commands;
+#[path = "employee_agents/team_rules.rs"]
+mod team_rules;
 #[path = "employee_agents/test_support.rs"]
 #[doc(hidden)]
 pub mod test_support;
+#[path = "employee_agents/types.rs"]
+mod types;
 
-pub use types::{
-    AgentEmployee, CloneEmployeeGroupTemplateInput, CreateEmployeeGroupInput,
-    CreateEmployeeTeamInput, CreateEmployeeTeamRuleInput, EmployeeGroup,
-    EmployeeGroupRule, EmployeeGroupRunEvent, EmployeeGroupRunResult,
-    EmployeeGroupRunSnapshot, EmployeeGroupRunStep, EmployeeGroupRunSummary,
-    EmployeeInboundDispatchSession, EmployeeMemoryExport, EmployeeMemoryExportFile,
-    EmployeeMemorySkillStats, EmployeeMemoryStats, EnsuredEmployeeSession,
-    GroupStepExecutionResult, SaveFeishuEmployeeAssociationInput,
-    StartEmployeeGroupRunInput, UpsertAgentEmployeeInput,
-};
-use team_rules::{
-    group_rule_matches_relation_types, normalize_member_employee_ids,
-    resolve_group_planner_employee_id, resolve_group_reviewer_employee_id,
-    select_group_execute_dispatch_targets,
-};
-use types::{default_group_execution_window, default_group_max_retry};
 pub(crate) use group_management::{
     clone_employee_group_template_with_pool, create_employee_group_with_pool,
     create_employee_team_with_pool, delete_employee_group_with_pool,
@@ -48,9 +32,24 @@ pub(crate) use group_management::{
 };
 pub(crate) use group_run_entry::{
     build_group_step_iteration_fallback_output, build_group_step_system_prompt,
-    build_group_step_user_prompt, continue_employee_group_run_with_pool,
+    build_group_step_user_prompt, continue_employee_group_run_with_pool_and_journal,
     extract_assistant_text, maybe_handle_team_entry_session_message_with_pool,
-    run_group_step_with_pool, start_employee_group_run_with_pool,
+    run_group_step_with_pool_and_journal, start_employee_group_run_with_pool_and_journal,
+};
+use team_rules::{
+    group_rule_matches_relation_types, normalize_member_employee_ids,
+    resolve_group_planner_employee_id, resolve_group_reviewer_employee_id,
+    select_group_execute_dispatch_targets,
+};
+use types::{default_group_execution_window, default_group_max_retry};
+pub use types::{
+    AgentEmployee, CloneEmployeeGroupTemplateInput, CreateEmployeeGroupInput,
+    CreateEmployeeTeamInput, CreateEmployeeTeamRuleInput, EmployeeGroup, EmployeeGroupRule,
+    EmployeeGroupRunEvent, EmployeeGroupRunResult, EmployeeGroupRunSnapshot, EmployeeGroupRunStep,
+    EmployeeGroupRunSummary, EmployeeInboundDispatchSession, EmployeeMemoryExport,
+    EmployeeMemoryExportFile, EmployeeMemorySkillStats, EmployeeMemoryStats,
+    EnsuredEmployeeSession, GroupStepExecutionResult, SaveFeishuEmployeeAssociationInput,
+    StartEmployeeGroupRunInput, UpsertAgentEmployeeInput,
 };
 
 async fn load_execute_reassignment_targets_with_pool(
@@ -345,7 +344,9 @@ pub(crate) fn clear_employee_memory_from_root(
     Ok(())
 }
 
-pub async fn list_agent_employees_with_pool(pool: &SqlitePool) -> Result<Vec<AgentEmployee>, String> {
+pub async fn list_agent_employees_with_pool(
+    pool: &SqlitePool,
+) -> Result<Vec<AgentEmployee>, String> {
     service::list_agent_employees_with_pool(pool).await
 }
 
@@ -614,24 +615,27 @@ pub async fn delete_employee_group(group_id: String, db: State<'_, DbState>) -> 
 pub async fn start_employee_group_run(
     input: StartEmployeeGroupRunInput,
     db: State<'_, DbState>,
+    journal: State<'_, crate::session_journal::SessionJournalStateHandle>,
 ) -> Result<EmployeeGroupRunResult, String> {
-    tauri_commands::start_employee_group_run(input, db).await
+    tauri_commands::start_employee_group_run(input, db, journal).await
 }
 
 #[tauri::command]
 pub async fn continue_employee_group_run(
     run_id: String,
     db: State<'_, DbState>,
+    journal: State<'_, crate::session_journal::SessionJournalStateHandle>,
 ) -> Result<EmployeeGroupRunSnapshot, String> {
-    tauri_commands::continue_employee_group_run(run_id, db).await
+    tauri_commands::continue_employee_group_run(run_id, db, journal).await
 }
 
 #[tauri::command]
 pub async fn run_group_step(
     step_id: String,
     db: State<'_, DbState>,
+    journal: State<'_, crate::session_journal::SessionJournalStateHandle>,
 ) -> Result<GroupStepExecutionResult, String> {
-    tauri_commands::run_group_step(step_id, db).await
+    tauri_commands::run_group_step(step_id, db, journal).await
 }
 
 #[tauri::command]

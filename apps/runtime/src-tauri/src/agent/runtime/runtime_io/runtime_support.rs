@@ -1,3 +1,5 @@
+use crate::agent::AgentExecutor;
+
 pub(crate) fn load_memory_content(memory_dir: &std::path::Path) -> String {
     let memory_file = memory_dir.join("MEMORY.md");
     if memory_file.exists() {
@@ -7,6 +9,27 @@ pub(crate) fn load_memory_content(memory_dir: &std::path::Path) -> String {
     }
 }
 
+pub(crate) fn resolve_tool_name_list(
+    allowed_tools: &Option<Vec<String>>,
+    agent_executor: &AgentExecutor,
+) -> Vec<String> {
+    match allowed_tools {
+        Some(whitelist) => whitelist.clone(),
+        None => agent_executor
+            .registry()
+            .get_tool_definitions()
+            .iter()
+            .filter_map(|t| t["name"].as_str().map(String::from))
+            .collect(),
+    }
+}
+
+pub(crate) fn resolve_tool_names(
+    allowed_tools: &Option<Vec<String>>,
+    agent_executor: &AgentExecutor,
+) -> String {
+    resolve_tool_name_list(allowed_tools, agent_executor).join(", ")
+}
 pub(crate) fn sanitize_memory_bucket_component(raw: &str, fallback: &str) -> String {
     let mut out = String::new();
     let mut prev_sep = false;

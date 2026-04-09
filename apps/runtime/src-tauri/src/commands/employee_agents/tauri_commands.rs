@@ -1,5 +1,6 @@
 use super::*;
 use crate::commands::skills::DbState;
+use crate::session_journal::SessionJournalStateHandle;
 use tauri::State;
 
 pub async fn create_employee_group(
@@ -48,22 +49,30 @@ pub async fn delete_employee_group(group_id: String, db: State<'_, DbState>) -> 
 pub async fn start_employee_group_run(
     input: StartEmployeeGroupRunInput,
     db: State<'_, DbState>,
+    journal: State<'_, SessionJournalStateHandle>,
 ) -> Result<EmployeeGroupRunResult, String> {
-    start_employee_group_run_with_pool(&db.0, input).await
+    start_employee_group_run_with_pool_and_journal(&db.0, journal.0.as_ref(), input).await
 }
 
 pub async fn continue_employee_group_run(
     run_id: String,
     db: State<'_, DbState>,
+    journal: State<'_, SessionJournalStateHandle>,
 ) -> Result<EmployeeGroupRunSnapshot, String> {
-    continue_employee_group_run_with_pool(&db.0, run_id.trim()).await
+    continue_employee_group_run_with_pool_and_journal(
+        &db.0,
+        Some(journal.0.as_ref()),
+        run_id.trim(),
+    )
+    .await
 }
 
 pub async fn run_group_step(
     step_id: String,
     db: State<'_, DbState>,
+    journal: State<'_, SessionJournalStateHandle>,
 ) -> Result<GroupStepExecutionResult, String> {
-    run_group_step_with_pool(&db.0, step_id.trim()).await
+    run_group_step_with_pool_and_journal(&db.0, Some(journal.0.as_ref()), step_id.trim()).await
 }
 
 pub async fn get_employee_group_run_snapshot(

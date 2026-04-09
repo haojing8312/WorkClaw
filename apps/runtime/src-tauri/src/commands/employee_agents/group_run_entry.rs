@@ -3,18 +3,30 @@ use super::{
     AgentEmployee, EmployeeGroupRunResult, EmployeeGroupRunSnapshot, GroupStepExecutionResult,
     StartEmployeeGroupRunInput,
 };
-use crate::agent::run_guard::{RunBudgetPolicy, RunBudgetScope};
-use crate::agent::skill_config::SkillConfig;
+use crate::agent::runtime::kernel::employee_step_profile::{
+    build_employee_step_execution_profile,
+    build_employee_step_iteration_fallback_output as kernel_build_group_step_iteration_fallback_output,
+    build_employee_step_user_prompt as kernel_build_group_step_user_prompt, EmployeeStepPersona,
+};
+use crate::session_journal::SessionJournalStore;
 use serde_json::Value;
 use sqlx::{Row, SqlitePool};
-use std::path::PathBuf;
 use uuid::Uuid;
 
 pub(crate) async fn start_employee_group_run_with_pool(
     pool: &SqlitePool,
     input: StartEmployeeGroupRunInput,
 ) -> Result<EmployeeGroupRunResult, String> {
-    start_employee_group_run_internal_with_pool(pool, input, None, true).await
+    start_employee_group_run_internal_with_pool_and_journal(pool, None, input, None, true).await
+}
+
+pub(crate) async fn start_employee_group_run_with_pool_and_journal(
+    pool: &SqlitePool,
+    journal: &SessionJournalStore,
+    input: StartEmployeeGroupRunInput,
+) -> Result<EmployeeGroupRunResult, String> {
+    start_employee_group_run_internal_with_pool_and_journal(pool, Some(journal), input, None, true)
+        .await
 }
 
 pub(crate) async fn start_employee_group_run_internal_with_pool(
@@ -23,8 +35,26 @@ pub(crate) async fn start_employee_group_run_internal_with_pool(
     preferred_session_id: Option<&str>,
     persist_user_message: bool,
 ) -> Result<EmployeeGroupRunResult, String> {
+    start_employee_group_run_internal_with_pool_and_journal(
+        pool,
+        None,
+        input,
+        preferred_session_id,
+        persist_user_message,
+    )
+    .await
+}
+
+pub(crate) async fn start_employee_group_run_internal_with_pool_and_journal(
+    pool: &SqlitePool,
+    journal: Option<&SessionJournalStore>,
+    input: StartEmployeeGroupRunInput,
+    preferred_session_id: Option<&str>,
+    persist_user_message: bool,
+) -> Result<EmployeeGroupRunResult, String> {
     super::service::start_employee_group_run_internal_with_pool(
         pool,
+        journal,
         input,
         preferred_session_id,
         persist_user_message,
@@ -42,40 +72,14 @@ pub(crate) async fn ensure_group_step_session_with_pool(
         .await
 }
 
-fn load_group_step_profile_markdown(employee: &AgentEmployee) -> String {
-    if employee.default_work_dir.trim().is_empty() {
-        return String::new();
+fn employee_step_persona(employee: &AgentEmployee) -> EmployeeStepPersona<'_> {
+    EmployeeStepPersona {
+        name: employee.name.as_str(),
+        employee_id: employee.employee_id.as_str(),
+        role_id: employee.role_id.as_str(),
+        persona: employee.persona.as_str(),
+        default_work_dir: employee.default_work_dir.as_str(),
     }
-
-    let profile_dir = PathBuf::from(employee.default_work_dir.trim())
-        .join("openclaw")
-        .join(employee.employee_id.trim());
-    let mut sections = Vec::new();
-    for name in ["AGENTS.md", "SOUL.md", "USER.md"] {
-        let path = profile_dir.join(name);
-        if let Ok(content) = std::fs::read_to_string(path) {
-            let trimmed = content.trim();
-            if !trimmed.is_empty() {
-                sections.push(format!("## {name}\n{trimmed}"));
-            }
-        }
-    }
-    sections.join("\n\n")
-}
-
-fn default_group_step_allowed_tools() -> Vec<String> {
-    vec![
-        "read_file".to_string(),
-        "write_file".to_string(),
-        "glob".to_string(),
-        "grep".to_string(),
-        "edit".to_string(),
-        "list_dir".to_string(),
-        "file_stat".to_string(),
-        "file_copy".to_string(),
-        "bash".to_string(),
-        "web_fetch".to_string(),
-    ]
 }
 
 pub(crate) fn build_group_step_iteration_fallback_output(
@@ -84,24 +88,11 @@ pub(crate) fn build_group_step_iteration_fallback_output(
     step_input: &str,
     error: &str,
 ) -> String {
-    let focus = if step_input.trim().is_empty() {
-        user_goal.trim()
-    } else {
-        step_input.trim()
-    };
-    let responsibility = if employee.persona.trim().is_empty() {
-        format!("负责围绕“{}”完成分配到本岗位的执行项", focus)
-    } else {
-        employee.persona.trim().to_string()
-    };
-    format!(
-        "{} ({}) 在执行步骤时触发了迭代上限，现切换为保守交付模式。\n- 当前步骤: {}\n- 岗位职责: {}\n- 对用户目标“{}”可立即提供: 基于本岗位职责给出能力范围说明、所需补充信息以及下一步执行建议。\n- 备注: {}",
-        employee.name,
-        employee.employee_id,
-        focus,
-        responsibility,
-        user_goal.trim(),
-        error.trim(),
+    kernel_build_group_step_iteration_fallback_output(
+        employee_step_persona(employee),
+        user_goal,
+        step_input,
+        error,
     )
 }
 
@@ -109,45 +100,12 @@ pub(crate) fn build_group_step_system_prompt(
     employee: &AgentEmployee,
     session_skill_id: &str,
 ) -> (String, Option<Vec<String>>, usize) {
-    let skill_config = SkillConfig::parse(crate::builtin_skills::builtin_general_skill_markdown());
-    let base_prompt = if skill_config.system_prompt.trim().is_empty() {
-        "你是一名专业、可靠、注重交付结果的 AI 员工。".to_string()
-    } else {
-        skill_config.system_prompt.clone()
-    };
-    let profile_markdown = load_group_step_profile_markdown(employee);
-    let mut sections = vec![
-        base_prompt,
-        "---".to_string(),
-        "你当前正在复杂任务团队中，以真实员工身份执行内部步骤。".to_string(),
-        format!("- 员工名称: {}", employee.name),
-        format!("- employee_id: {}", employee.employee_id),
-        format!("- role_id: {}", employee.role_id),
-        format!(
-            "- primary_skill_id: {}",
-            if session_skill_id.trim().is_empty() {
-                "builtin-general"
-            } else {
-                session_skill_id.trim()
-            }
-        ),
-    ];
-    if !employee.default_work_dir.trim().is_empty() {
-        sections.push(format!("- 工作目录: {}", employee.default_work_dir.trim()));
-    }
-    if !employee.persona.trim().is_empty() {
-        sections.push(format!("- 员工人设: {}", employee.persona.trim()));
-    }
-    sections.push(
-        "执行要求:\n- 聚焦当前分配步骤\n- 优先直接用自然语言给出结论，只有在当前步骤明确需要读取文件、编辑文件、执行命令或抓取网页时才使用工具\n- 先给结论，再给关键依据或产出\n- 不要输出“模拟结果”或“占位结果”措辞".to_string(),
-    );
-    if !profile_markdown.is_empty() {
-        sections.push(format!("员工资料:\n{profile_markdown}"));
-    }
+    let profile =
+        build_employee_step_execution_profile(employee_step_persona(employee), session_skill_id);
     (
-        sections.join("\n"),
-        Some(default_group_step_allowed_tools()),
-        RunBudgetPolicy::resolve(RunBudgetScope::Employee, skill_config.max_iterations).max_turns,
+        profile.base_prompt,
+        profile.allowed_tools,
+        profile.max_iterations,
     )
 }
 
@@ -158,17 +116,12 @@ pub(crate) fn build_group_step_user_prompt(
     step_input: &str,
     employee: &AgentEmployee,
 ) -> String {
-    let effective_input = if step_input.trim().is_empty() {
-        user_goal.trim()
-    } else {
-        step_input.trim()
-    };
-    format!(
-        "你正在执行多员工团队中的 execute 步骤。\n- run_id: {run_id}\n- step_id: {step_id}\n- 当前负责人: {} ({})\n- 用户总目标: {}\n- 当前步骤要求: {}\n\n请直接给出你的执行结果。如果信息不足，先指出缺口，再给最合理的下一步。",
-        employee.name,
-        employee.employee_id,
-        user_goal.trim(),
-        effective_input,
+    kernel_build_group_step_user_prompt(
+        run_id,
+        step_id,
+        user_goal,
+        step_input,
+        employee_step_persona(employee),
     )
 }
 
@@ -206,6 +159,7 @@ pub(crate) fn extract_assistant_text(messages: &[Value]) -> String {
 
 async fn execute_group_step_in_employee_context_with_pool(
     pool: &SqlitePool,
+    journal: Option<&SessionJournalStore>,
     run_id: &str,
     step_id: &str,
     session_id: &str,
@@ -215,6 +169,7 @@ async fn execute_group_step_in_employee_context_with_pool(
 ) -> Result<String, String> {
     super::service::execute_group_step_in_employee_context_with_pool(
         pool,
+        journal,
         run_id,
         step_id,
         session_id,
@@ -225,10 +180,7 @@ async fn execute_group_step_in_employee_context_with_pool(
     .await
 }
 
-async fn maybe_finalize_group_run_with_pool(
-    pool: &SqlitePool,
-    run_id: &str,
-) -> Result<(), String> {
+async fn maybe_finalize_group_run_with_pool(pool: &SqlitePool, run_id: &str) -> Result<(), String> {
     super::service::maybe_finalize_group_run_with_pool(pool, run_id).await
 }
 
@@ -420,6 +372,14 @@ pub(crate) async fn continue_employee_group_run_with_pool(
     pool: &SqlitePool,
     run_id: &str,
 ) -> Result<EmployeeGroupRunSnapshot, String> {
+    continue_employee_group_run_with_pool_and_journal(pool, None, run_id).await
+}
+
+pub(crate) async fn continue_employee_group_run_with_pool_and_journal(
+    pool: &SqlitePool,
+    journal: Option<&SessionJournalStore>,
+    run_id: &str,
+) -> Result<EmployeeGroupRunSnapshot, String> {
     let normalized_run_id = run_id.trim();
     let (state, current_phase) =
         super::service::load_group_run_continue_state(pool, normalized_run_id).await?;
@@ -448,7 +408,7 @@ pub(crate) async fn continue_employee_group_run_with_pool(
     }
 
     for step_id in pending_execute_steps {
-        run_group_step_with_pool(pool, &step_id).await?;
+        run_group_step_with_pool_and_journal(pool, journal, &step_id).await?;
     }
     maybe_finalize_group_run_with_pool(pool, normalized_run_id).await?;
     get_employee_group_run_snapshot_by_run_id_with_pool(pool, normalized_run_id).await
@@ -456,6 +416,14 @@ pub(crate) async fn continue_employee_group_run_with_pool(
 
 pub(crate) async fn run_group_step_with_pool(
     pool: &SqlitePool,
+    step_id: &str,
+) -> Result<GroupStepExecutionResult, String> {
+    run_group_step_with_pool_and_journal(pool, None, step_id).await
+}
+
+pub(crate) async fn run_group_step_with_pool_and_journal(
+    pool: &SqlitePool,
+    journal: Option<&SessionJournalStore>,
     step_id: &str,
 ) -> Result<GroupStepExecutionResult, String> {
     let (
@@ -489,6 +457,7 @@ pub(crate) async fn run_group_step_with_pool(
 
     let execution = execute_group_step_in_employee_context_with_pool(
         pool,
+        journal,
         &run_id,
         &step_id,
         &session_id,

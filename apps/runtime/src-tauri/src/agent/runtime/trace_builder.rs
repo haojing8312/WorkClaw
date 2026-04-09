@@ -825,6 +825,7 @@ mod tests {
                     "2026-03-27T01:00:03Z",
                     SessionRunEvent::RunCompleted {
                         run_id: "run-success".to_string(),
+                        turn_state: None,
                     },
                 ),
             ],
@@ -887,6 +888,7 @@ mod tests {
                             "browser_snapshot 连续 6 次返回相同结果。",
                         )
                         .with_last_completed_step("已填写封面标题"),
+                        turn_state: None,
                     },
                 ),
             ],
@@ -980,6 +982,7 @@ mod tests {
                     "2026-03-27T04:00:01Z",
                     SessionRunEvent::RunCompleted {
                         run_id: "run-child".to_string(),
+                        turn_state: None,
                     },
                 ),
             ],

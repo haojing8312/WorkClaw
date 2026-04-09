@@ -1,4 +1,5 @@
 use crate::agent::run_guard::{parse_run_stop_reason, RunStopReason, RunStopReasonKind};
+use crate::agent::runtime::kernel::turn_state::TurnCompactionBoundary;
 use crate::model_errors::normalize_model_error;
 use serde_json::Value;
 use std::future::Future;
@@ -31,6 +32,7 @@ pub(crate) struct CandidateAttemptOutcome {
     pub reasoning_duration_ms: Option<u64>,
     pub tool_exposure_expanded: bool,
     pub tool_exposure_expansion_reason: Option<String>,
+    pub compaction_boundary: Option<TurnCompactionBoundary>,
 }
 
 #[derive(Debug, Clone)]
@@ -44,6 +46,7 @@ pub(crate) struct RuntimeFailoverOutcome {
     pub reasoning_duration_ms: Option<u64>,
     pub tool_exposure_expanded: bool,
     pub tool_exposure_expansion_reason: Option<String>,
+    pub compaction_boundary: Option<TurnCompactionBoundary>,
 }
 
 pub(crate) struct RuntimeFailoverParams<'a> {
@@ -80,6 +83,7 @@ impl RuntimeFailover {
         let mut streamed_reasoning = String::new();
         let mut tool_exposure_expanded = false;
         let mut tool_exposure_expansion_reason: Option<String> = None;
+        let mut compaction_boundary: Option<TurnCompactionBoundary> = None;
 
         for (
             candidate_provider_key,
@@ -108,6 +112,7 @@ impl RuntimeFailover {
                     last_error = attempt.last_error;
                     last_error_kind = attempt.last_error_kind;
                     last_stop_reason = attempt.last_stop_reason;
+                    compaction_boundary = attempt.compaction_boundary;
                     return RuntimeFailoverOutcome {
                         final_messages: final_messages_opt,
                         last_error,
@@ -121,6 +126,7 @@ impl RuntimeFailover {
                         tool_exposure_expansion_reason: attempt
                             .tool_exposure_expansion_reason
                             .or(tool_exposure_expansion_reason),
+                        compaction_boundary,
                     };
                 }
 
@@ -133,6 +139,9 @@ impl RuntimeFailover {
                 tool_exposure_expansion_reason = attempt
                     .tool_exposure_expansion_reason
                     .or(tool_exposure_expansion_reason);
+                if let Some(boundary) = attempt.compaction_boundary {
+                    compaction_boundary = Some(boundary);
+                }
 
                 let current_kind = attempt
                     .error_kind
@@ -178,6 +187,7 @@ impl RuntimeFailover {
             reasoning_duration_ms: None,
             tool_exposure_expanded,
             tool_exposure_expansion_reason,
+            compaction_boundary,
         }
     }
 }
@@ -344,6 +354,7 @@ fn runtime_retry_backoff_ms(kind: RuntimeFailoverErrorKind, attempt_idx: usize) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::runtime::kernel::turn_state::TurnCompactionBoundary;
     use serde_json::json;
     use std::sync::{Arc, Mutex};
 
@@ -397,6 +408,13 @@ mod tests {
                                 reasoning_duration_ms: Some(12),
                                 tool_exposure_expanded: false,
                                 tool_exposure_expansion_reason: None,
+                                compaction_boundary: Some(TurnCompactionBoundary {
+                                    transcript_path: "temp/transcripts/retry-success.json"
+                                        .to_string(),
+                                    original_tokens: 6400,
+                                    compacted_tokens: 1600,
+                                    summary: "summary".to_string(),
+                                }),
                             };
                         }
 
@@ -411,6 +429,7 @@ mod tests {
                             reasoning_duration_ms: None,
                             tool_exposure_expanded: false,
                             tool_exposure_expansion_reason: None,
+                            compaction_boundary: None,
                         }
                     })
                 },
@@ -430,6 +449,15 @@ mod tests {
         assert_eq!(result.partial_text, "done");
         assert_eq!(result.reasoning_text, "");
         assert_eq!(result.reasoning_duration_ms, Some(12));
+        assert_eq!(
+            result.compaction_boundary,
+            Some(TurnCompactionBoundary {
+                transcript_path: "temp/transcripts/retry-success.json".to_string(),
+                original_tokens: 6400,
+                compacted_tokens: 1600,
+                summary: "summary".to_string(),
+            })
+        );
     }
 
     #[tokio::test]
@@ -469,6 +497,7 @@ mod tests {
                             reasoning_duration_ms: None,
                             tool_exposure_expanded: false,
                             tool_exposure_expansion_reason: None,
+                            compaction_boundary: None,
                         }
                     })
                 },
@@ -528,6 +557,7 @@ mod tests {
                             reasoning_duration_ms: None,
                             tool_exposure_expanded: false,
                             tool_exposure_expansion_reason: None,
+                            compaction_boundary: None,
                         }
                     })
                 },
@@ -582,6 +612,7 @@ mod tests {
                             reasoning_duration_ms: None,
                             tool_exposure_expanded: false,
                             tool_exposure_expansion_reason: None,
+                            compaction_boundary: None,
                         }
                     })
                 },

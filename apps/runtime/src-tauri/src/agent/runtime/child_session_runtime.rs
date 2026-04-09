@@ -4,14 +4,15 @@ use super::runtime_io::{
     insert_session_message_with_pool,
 };
 use super::RuntimeTranscript;
-use crate::agent::permissions::PermissionMode;
-use crate::agent::run_guard::parse_run_stop_reason;
+use crate::agent::runtime::kernel::execution_plan::{ExecutionOutcome, SessionEngineError};
+use crate::agent::runtime::kernel::session_engine::SessionEngine;
+use crate::agent::runtime::kernel::turn_preparation::prepare_hidden_child_turn;
 use crate::agent::types::StreamDelta;
 use crate::agent::{AgentExecutor, ToolRegistry};
 use crate::session_journal::SessionJournalStore;
 use anyhow::Result;
 use serde_json::{json, Value};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
@@ -88,6 +89,7 @@ pub(crate) async fn finalize_hidden_child_session_success_with_messages(
         &content,
         "",
         None,
+        None,
     )
     .await
     .map_err(anyhow::Error::msg)?;
@@ -95,48 +97,143 @@ pub(crate) async fn finalize_hidden_child_session_success_with_messages(
     Ok(final_text)
 }
 
-async fn finalize_hidden_child_session_failure(
+async fn finalize_hidden_child_session_execution_outcome(
     db: &sqlx::SqlitePool,
     journal: &SessionJournalStore,
     prepared: &PreparedChildSessionRun,
-    partial_text: &str,
-    error: &anyhow::Error,
-) -> Result<()> {
-    let error_text = error.to_string();
-    if !partial_text.is_empty() {
-        append_partial_assistant_chunk_with_pool(
-            db,
-            journal,
-            &prepared.child_session_id,
-            &prepared.run_id,
-            partial_text,
-        )
-        .await;
-    }
+    outcome: ExecutionOutcome,
+) -> Result<ChildSessionRunOutcome> {
+    match outcome {
+        ExecutionOutcome::RouteExecution {
+            route_execution,
+            reconstructed_history_len,
+            turn_state,
+        } => {
+            let final_messages = route_execution.final_messages.clone();
+            if let Some(final_messages) = final_messages {
+                let (final_text, has_tool_calls, content) =
+                    RuntimeTranscript::build_assistant_content_from_final_messages(
+                        &final_messages,
+                        reconstructed_history_len,
+                    );
+                finalize_run_success_with_pool(
+                    db,
+                    journal,
+                    &prepared.child_session_id,
+                    &prepared.run_id,
+                    &final_text,
+                    has_tool_calls,
+                    &content,
+                    &route_execution.reasoning_text,
+                    route_execution.reasoning_duration_ms,
+                    Some(&turn_state),
+                )
+                .await
+                .map_err(anyhow::Error::msg)?;
 
-    if let Some(stop_reason) = parse_run_stop_reason(&error_text) {
-        append_run_stopped_with_pool(
-            db,
-            journal,
-            &prepared.child_session_id,
-            &prepared.run_id,
-            &stop_reason,
-        )
-        .await
-        .map_err(anyhow::Error::msg)?;
-    } else {
-        append_run_failed_with_pool(
-            db,
-            journal,
-            &prepared.child_session_id,
-            &prepared.run_id,
-            "child_session",
-            &error_text,
-        )
-        .await;
-    }
+                Ok(ChildSessionRunOutcome { final_text })
+            } else {
+                let partial_text = if route_execution.partial_text.is_empty() {
+                    turn_state.partial_assistant_text.clone()
+                } else {
+                    route_execution.partial_text.clone()
+                };
+                if !partial_text.is_empty() {
+                    append_partial_assistant_chunk_with_pool(
+                        db,
+                        journal,
+                        &prepared.child_session_id,
+                        &prepared.run_id,
+                        &partial_text,
+                    )
+                    .await;
+                }
 
-    Ok(())
+                let error_text = route_execution
+                    .last_error
+                    .clone()
+                    .unwrap_or_else(|| "子会话执行失败".to_string());
+                if let Some(stop_reason) = route_execution
+                    .last_stop_reason
+                    .as_ref()
+                    .or(turn_state.stop_reason.as_ref())
+                {
+                    append_run_stopped_with_pool(
+                        db,
+                        journal,
+                        &prepared.child_session_id,
+                        &prepared.run_id,
+                        stop_reason,
+                        Some(&turn_state),
+                    )
+                    .await
+                    .map_err(anyhow::Error::msg)?;
+                } else {
+                    append_run_failed_with_pool(
+                        db,
+                        journal,
+                        &prepared.child_session_id,
+                        &prepared.run_id,
+                        route_execution
+                            .last_error_kind
+                            .as_deref()
+                            .unwrap_or("child_session"),
+                        &error_text,
+                        Some(&turn_state),
+                    )
+                    .await;
+                }
+                Err(anyhow::Error::msg(error_text))
+            }
+        }
+        ExecutionOutcome::DirectDispatch { output, turn_state } => {
+            finalize_run_success_with_pool(
+                db,
+                journal,
+                &prepared.child_session_id,
+                &prepared.run_id,
+                &output,
+                false,
+                &output,
+                "",
+                None,
+                Some(&turn_state),
+            )
+            .await
+            .map_err(anyhow::Error::msg)?;
+            Ok(ChildSessionRunOutcome { final_text: output })
+        }
+        ExecutionOutcome::SkillCommandFailed { error, turn_state } => {
+            append_run_failed_with_pool(
+                db,
+                journal,
+                &prepared.child_session_id,
+                &prepared.run_id,
+                "skill_command_dispatch",
+                &error,
+                Some(&turn_state),
+            )
+            .await;
+            Err(anyhow::Error::msg(error))
+        }
+        ExecutionOutcome::SkillCommandStopped {
+            turn_state,
+            stop_reason,
+            error,
+        } => {
+            append_run_stopped_with_pool(
+                db,
+                journal,
+                &prepared.child_session_id,
+                &prepared.run_id,
+                &stop_reason,
+                Some(&turn_state),
+            )
+            .await
+            .map_err(anyhow::Error::msg)?;
+            Err(anyhow::Error::msg(error))
+        }
+    }
 }
 
 pub(crate) async fn run_hidden_child_session(
@@ -150,115 +247,90 @@ pub(crate) async fn run_hidden_child_session(
     )
     .await?;
 
-    let executor =
-        AgentExecutor::with_max_iterations(Arc::clone(&params.registry), params.max_iterations);
-    let partial_text = Arc::new(Mutex::new(String::new()));
-    let partial_text_for_stream = Arc::clone(&partial_text);
+    let executor = Arc::new(AgentExecutor::with_max_iterations(
+        Arc::clone(&params.registry),
+        params.max_iterations,
+    ));
     let stream_app = params.app_handle.cloned();
     let parent_stream_session_id = params.parent_stream_session_id.map(str::to_string);
     let child_session_for_stream = prepared.child_session_id.clone();
     let child_run_for_stream = prepared.run_id.clone();
     let role_id = params.delegate_role_id.unwrap_or_default().to_string();
     let role_name = params.delegate_role_name.unwrap_or_default().to_string();
-    let system_prompt = format!(
-        "你是一个专注的子 Agent (类型: {})，当前承接角色: {}。完成以下任务后返回结果。简洁地报告你的发现。",
-        params.agent_type, params.delegate_display_name
+    let (turn_context, execution_context) = prepare_hidden_child_turn(
+        &executor,
+        params.prompt,
+        params.agent_type,
+        params.delegate_display_name,
+        params.api_format,
+        params.base_url,
+        params.api_key,
+        params.model,
+        params.allowed_tools.clone(),
+        params.max_iterations,
+        params.work_dir.clone(),
     );
-    let messages = vec![json!({
-        "role": "user",
-        "content": params.prompt,
-    })];
 
-    let attempt = executor
-        .execute_turn(
-            params.api_format,
-            params.base_url,
-            params.api_key,
-            params.model,
-            &system_prompt,
-            messages,
-            move |delta: StreamDelta| {
-                if let StreamDelta::Text(token) = delta {
-                    if let Ok(mut buffer) = partial_text_for_stream.lock() {
-                        buffer.push_str(&token);
-                    }
-                    if let (Some(app), Some(parent_session_id)) =
-                        (&stream_app, &parent_stream_session_id)
-                    {
-                        let _ = app.emit(
-                            "stream-token",
-                            json!({
-                                "session_id": parent_session_id,
-                                "token": token,
-                                "done": false,
-                                "sub_agent": true,
-                                "child_session_id": child_session_for_stream,
-                                "child_run_id": child_run_for_stream,
-                                "role_id": role_id,
-                                "role_name": role_name,
-                            }),
-                        );
-                    }
+    let outcome = SessionEngine::run_hidden_child_turn(
+        params.app_handle,
+        &executor,
+        &prepared.child_session_id,
+        &turn_context,
+        &execution_context,
+        move |delta: StreamDelta| {
+            if let StreamDelta::Text(token) = delta {
+                if let (Some(app), Some(parent_session_id)) =
+                    (&stream_app, &parent_stream_session_id)
+                {
+                    let _ = app.emit(
+                        "stream-token",
+                        json!({
+                            "session_id": parent_session_id,
+                            "token": token,
+                            "done": false,
+                            "sub_agent": true,
+                            "child_session_id": child_session_for_stream,
+                            "child_run_id": child_run_for_stream,
+                            "role_id": role_id,
+                            "role_name": role_name,
+                        }),
+                    );
                 }
-            },
-            params.app_handle,
-            Some(&prepared.child_session_id),
-            params.allowed_tools.as_deref(),
-            PermissionMode::Unrestricted,
-            None,
-            params.work_dir.clone(),
-            Some(params.max_iterations),
-            None,
-            None,
-            None,
-        )
-        .await;
-
-    match attempt {
-        Ok(final_messages) => {
-            let final_text = finalize_hidden_child_session_success_with_messages(
-                params.db,
-                params.journal,
-                &prepared,
-                &final_messages,
-            )
-            .await?;
-            if let (Some(app), Some(parent_session_id)) =
-                (params.app_handle, params.parent_stream_session_id)
-            {
-                let _ = app.emit(
-                    "stream-token",
-                    json!({
-                        "session_id": parent_session_id,
-                        "token": String::new(),
-                        "done": true,
-                        "sub_agent": true,
-                        "child_session_id": &prepared.child_session_id,
-                        "child_run_id": &prepared.run_id,
-                        "role_id": params.delegate_role_id.unwrap_or_default(),
-                        "role_name": params.delegate_role_name.unwrap_or_default(),
-                    }),
-                );
             }
-            Ok(ChildSessionRunOutcome { final_text })
-        }
-        Err(error) => {
-            let partial_text = partial_text
-                .lock()
-                .map(|buffer| buffer.clone())
-                .unwrap_or_default();
-            finalize_hidden_child_session_failure(
-                params.db,
-                params.journal,
-                &prepared,
-                &partial_text,
-                &error,
-            )
-            .await?;
+        },
+    )
+    .await
+    .map_err(|error| match error {
+        SessionEngineError::Generic(message) => anyhow::Error::msg(message),
+    })?;
 
-            Err(error)
-        }
+    let finalized = finalize_hidden_child_session_execution_outcome(
+        params.db,
+        params.journal,
+        &prepared,
+        outcome,
+    )
+    .await;
+
+    if let (Some(app), Some(parent_session_id)) =
+        (params.app_handle, params.parent_stream_session_id)
+    {
+        let _ = app.emit(
+            "stream-token",
+            json!({
+                "session_id": parent_session_id,
+                "token": String::new(),
+                "done": true,
+                "sub_agent": true,
+                "child_session_id": &prepared.child_session_id,
+                "child_run_id": &prepared.run_id,
+                "role_id": params.delegate_role_id.unwrap_or_default(),
+                "role_name": params.delegate_role_name.unwrap_or_default(),
+            }),
+        );
     }
+
+    finalized
 }
 
 fn build_hidden_child_session_id(parent_session_id: &str) -> String {
@@ -288,8 +360,13 @@ fn sanitize_session_component(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
+        finalize_hidden_child_session_execution_outcome,
         finalize_hidden_child_session_success_with_messages, prepare_hidden_child_session_run,
     };
+    use crate::agent::runtime::attempt_runner::RouteExecutionOutcome;
+    use crate::agent::runtime::kernel::execution_plan::{ExecutionLane, ExecutionOutcome};
+    use crate::agent::runtime::kernel::session_profile::SessionSurfaceKind;
+    use crate::agent::runtime::kernel::turn_state::TurnStateSnapshot;
     use crate::agent::runtime::{RunRegistry, RuntimeObservability};
     use crate::session_journal::SessionJournalStore;
     use serde_json::json;
@@ -483,5 +560,68 @@ mod tests {
                 .expect("load session run");
         assert_eq!(status, "completed");
         assert!(!assistant_message_id.is_empty());
+    }
+
+    #[tokio::test]
+    async fn finalize_hidden_child_session_execution_outcome_persists_hidden_surface_turn_state() {
+        let pool = setup_hidden_child_session_pool().await;
+        let journal_root = tempdir().expect("journal tempdir");
+        let journal = SessionJournalStore::new(journal_root.path().to_path_buf());
+        let prepared = prepare_hidden_child_session_run(
+            &pool,
+            &journal,
+            "parent-session",
+            "请总结当前目录情况",
+        )
+        .await
+        .expect("prepare hidden child session");
+
+        let outcome = ExecutionOutcome::RouteExecution {
+            route_execution: RouteExecutionOutcome {
+                final_messages: Some(vec![
+                    json!({
+                        "role": "user",
+                        "content": "请总结当前目录情况",
+                    }),
+                    json!({
+                        "role": "assistant",
+                        "content": "子会话完成总结",
+                    }),
+                ]),
+                last_error: None,
+                last_error_kind: None,
+                last_stop_reason: None,
+                partial_text: String::new(),
+                reasoning_text: String::new(),
+                reasoning_duration_ms: None,
+                tool_exposure_expanded: false,
+                tool_exposure_expansion_reason: None,
+                compaction_boundary: None,
+            },
+            reconstructed_history_len: 1,
+            turn_state: TurnStateSnapshot::default()
+                .with_session_surface(SessionSurfaceKind::HiddenChildSession)
+                .with_execution_lane(ExecutionLane::OpenTask),
+        };
+
+        let final_text =
+            finalize_hidden_child_session_execution_outcome(&pool, &journal, &prepared, outcome)
+                .await
+                .expect("finalize hidden child execution outcome")
+                .final_text;
+
+        assert_eq!(final_text, "子会话完成总结");
+
+        let state = journal
+            .read_state(&prepared.child_session_id)
+            .await
+            .expect("read journal state");
+        let run = state.runs.first().expect("run snapshot");
+        assert_eq!(
+            run.turn_state
+                .as_ref()
+                .and_then(|turn_state| turn_state.session_surface.as_deref()),
+            Some("hidden_child_session")
+        );
     }
 }

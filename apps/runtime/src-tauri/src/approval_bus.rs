@@ -456,6 +456,7 @@ pub async fn recover_approved_pending_work_with_pool(
                     error_message:
                         "审批已在应用重启后恢复并补执行工具，请重新发送消息继续后续推理。"
                             .to_string(),
+                    turn_state: None,
                 },
             )
             .await?;

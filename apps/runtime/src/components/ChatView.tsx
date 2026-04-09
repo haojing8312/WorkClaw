@@ -1734,6 +1734,23 @@ export function ChatView({
     setSidePanelTab("files");
   }
 
+  function formatCompactionBoundaryGuidance(run: SessionRunProjection) {
+    const boundary = run.turn_state?.compaction_boundary;
+    if (!boundary) return "";
+
+    const lines = [
+      `最近一次上下文压缩：${boundary.original_tokens} -> ${boundary.compacted_tokens}`,
+    ];
+    if ((boundary.summary || "").trim()) {
+      lines.push(`压缩摘要：${boundary.summary.trim()}`);
+    }
+    if (typeof run.turn_state?.reconstructed_history_len === "number") {
+      lines.push(`重建历史消息数：${run.turn_state.reconstructed_history_len}`);
+    }
+    lines.push("继续执行会从压缩后的上下文继续。");
+    return lines.join("\n");
+  }
+
   function getRunFailureDisplay(run: SessionRunProjection) {
     const networkRecoverySuffix =
       "\n已经保留当前任务的历史消息和部分输出。网络恢复后可直接输入“继续”，从当前上下文继续完成任务。";
@@ -1747,10 +1764,12 @@ export function ChatView({
     }
 
     if (run.error_kind === "max_turns") {
+      const compactionGuidance = formatCompactionBoundaryGuidance(run);
+      const baseMessage =
+        run.error_message || "已达到执行步数上限，系统已自动停止。\n你可以点击下方“继续执行”，或直接发送“继续”来再追加 100 步预算。";
       return {
         title: "任务达到执行步数上限",
-        message:
-          run.error_message || "已达到执行步数上限，系统已自动停止。\n你可以点击下方“继续执行”，或直接发送“继续”来再追加 100 步预算。",
+        message: compactionGuidance ? `${baseMessage}\n${compactionGuidance}` : baseMessage,
         rawMessage: null as string | null,
       };
     }

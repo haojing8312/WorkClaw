@@ -8,7 +8,7 @@ use super::context::build_tool_context;
 use super::event_bridge::{append_run_guard_warning_event, resolve_current_session_run_id};
 #[cfg(test)]
 use super::execution_caps::detect_execution_caps;
-use super::executor::AgentExecutor;
+use super::executor::{AgentExecutor, AgentTurnExecutionError, AgentTurnExecutionOutcome};
 use super::permissions::PermissionMode;
 use super::run_guard::{
     encode_run_stop_reason, ProgressFingerprint, RunBudgetPolicy, RunBudgetScope, RunStopReason,
@@ -54,11 +54,17 @@ impl AgentExecutor {
         cancel_flag: Option<Arc<AtomicBool>>,
         route_node_timeout_secs: Option<u64>,
         route_retry_count: Option<usize>,
-    ) -> Result<Vec<Value>> {
+    ) -> std::result::Result<AgentTurnExecutionOutcome, AgentTurnExecutionError> {
         // 组合系统级 prompt 和 Skill prompt
         let system_prompt = self.system_prompt_builder.build(skill_system_prompt);
+        let mut compaction_outcome: Option<
+            super::runtime::compaction_pipeline::RuntimeCompactionOutcome,
+        > = None;
 
-        let tool_ctx = build_tool_context(session_id, work_dir.map(PathBuf::from), allowed_tools)?;
+        let tool_ctx = build_tool_context(session_id, work_dir.map(PathBuf::from), allowed_tools)
+            .map_err(|error| {
+            AgentTurnExecutionError::from_error(error, compaction_outcome.clone())
+        })?;
         let max_iterations = max_iterations_override.unwrap_or(self.max_iterations);
         let mut run_budget_policy = RunBudgetPolicy::for_scope(RunBudgetScope::GeneralChat);
         run_budget_policy.max_turns = max_iterations;
@@ -96,7 +102,10 @@ impl AgentExecutor {
                         "role": "assistant",
                         "content": "任务已被取消。"
                     }));
-                    return Ok(messages);
+                    return Ok(AgentTurnExecutionOutcome {
+                        messages,
+                        compaction_outcome,
+                    });
                 }
             }
 
@@ -108,7 +117,10 @@ impl AgentExecutor {
                         AgentStateEvent::stopped(sid, iteration, &stop_reason),
                     );
                 }
-                return Err(anyhow!(encode_run_stop_reason(&stop_reason)));
+                return Err(AgentTurnExecutionError::from_error(
+                    anyhow!(encode_run_stop_reason(&stop_reason)),
+                    compaction_outcome.clone(),
+                ));
             }
             iteration += 1;
 
@@ -159,6 +171,7 @@ impl AgentExecutor {
                                     messages.len(),
                                     outcome.compacted_messages.len()
                                 );
+                                compaction_outcome = Some(outcome.clone());
                                 messages = outcome.compacted_messages;
                             }
                             Ok(None) => {}
@@ -216,7 +229,10 @@ impl AgentExecutor {
                             AgentStateEvent::basic(sid, "error", Some(err.to_string()), iteration),
                         );
                     }
-                    return Err(err);
+                    return Err(AgentTurnExecutionError::from_error(
+                        err,
+                        compaction_outcome.clone(),
+                    ));
                 }
             };
 
@@ -238,7 +254,10 @@ impl AgentExecutor {
                         );
                     }
 
-                    return Ok(messages);
+                    return Ok(AgentTurnExecutionOutcome {
+                        messages,
+                        compaction_outcome,
+                    });
                 }
                 tc_response
                 @ (LLMResponse::ToolCalls(_) | LLMResponse::TextWithToolCalls(_, _)) => {
@@ -304,8 +323,10 @@ impl AgentExecutor {
                             call_index,
                             call,
                         )
-                        .await?
-                        {
+                        .await
+                        .map_err(|error| {
+                            AgentTurnExecutionError::from_error(error, compaction_outcome.clone())
+                        })? {
                             super::runtime::tool_dispatch::ToolDispatchOutcome::Cancelled => {
                                 if let (Some(app), Some(sid)) = (app_handle, session_id) {
                                     let _ = app.emit(
@@ -322,7 +343,10 @@ impl AgentExecutor {
                                     "role": "assistant",
                                     "content": "任务已被取消。"
                                 }));
-                                return Ok(messages);
+                                return Ok(AgentTurnExecutionOutcome {
+                                    messages,
+                                    compaction_outcome,
+                                });
                             }
                             super::runtime::tool_dispatch::ToolDispatchOutcome::Continue => {}
                         }
@@ -406,7 +430,10 @@ impl AgentExecutor {
                                 ),
                             );
                         }
-                        return Ok(messages);
+                        return Ok(AgentTurnExecutionOutcome {
+                            messages,
+                            compaction_outcome,
+                        });
                     }
 
                     let progress_evaluation =
@@ -427,7 +454,10 @@ impl AgentExecutor {
                                 AgentStateEvent::stopped(sid, iteration, &stop_reason),
                             );
                         }
-                        return Err(anyhow!(encode_run_stop_reason(&stop_reason)));
+                        return Err(AgentTurnExecutionError::from_error(
+                            anyhow!(encode_run_stop_reason(&stop_reason)),
+                            compaction_outcome.clone(),
+                        ));
                     }
 
                     // 继续下一轮迭代

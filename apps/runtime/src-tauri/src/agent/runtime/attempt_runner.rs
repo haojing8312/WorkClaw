@@ -7,6 +7,7 @@ use super::failover::{
 use super::observability::RuntimeObservabilityState;
 use crate::agent::permissions::PermissionMode;
 use crate::agent::run_guard::parse_run_stop_reason;
+use crate::agent::runtime::kernel::turn_state::TurnCompactionBoundary;
 use crate::agent::types::{AgentStateEvent, StreamDelta};
 use crate::agent::AgentExecutor;
 use crate::diagnostics::{self, LogLevel, ManagedDiagnosticsState};
@@ -220,7 +221,7 @@ async fn execute_candidate_attempt(
 
     let attempt = params
         .agent_executor
-        .execute_turn_with_transport(
+        .execute_turn_with_transport_outcome(
             transport,
             effective_api_format,
             candidate_base_url,
@@ -296,7 +297,7 @@ async fn execute_candidate_attempt(
         .await;
 
     match attempt {
-        Ok(messages_out) => {
+        Ok(turn_outcome) => {
             chat_io::record_route_attempt_log_with_pool(
                 params.db,
                 params.session_id,
@@ -318,7 +319,7 @@ async fn execute_candidate_attempt(
                 &reasoning_completion_emitted,
             );
             CandidateAttemptOutcome {
-                final_messages: Some(messages_out),
+                final_messages: Some(turn_outcome.messages),
                 last_error: None,
                 last_error_kind: None,
                 error_kind: None,
@@ -335,10 +336,18 @@ async fn execute_candidate_attempt(
                 tool_exposure_expanded: using_full_tool_exposure,
                 tool_exposure_expansion_reason: using_full_tool_exposure
                     .then(|| "deferred_tools_retry".to_string()),
+                compaction_boundary: turn_outcome
+                    .compaction_outcome
+                    .as_ref()
+                    .map(TurnCompactionBoundary::from),
             }
         }
-        Err(err) => {
-            let err_text = err.to_string();
+        Err(turn_error) => {
+            let compaction_boundary = turn_error
+                .compaction_outcome
+                .as_ref()
+                .map(TurnCompactionBoundary::from);
+            let err_text = turn_error.error.to_string();
             let parsed_stop_reason = parse_run_stop_reason(&err_text);
             let kind = parsed_stop_reason
                 .as_ref()
@@ -407,6 +416,7 @@ async fn execute_candidate_attempt(
                 tool_exposure_expanded: using_full_tool_exposure,
                 tool_exposure_expansion_reason: using_full_tool_exposure
                     .then(|| "deferred_tools_retry".to_string()),
+                compaction_boundary,
             }
         }
     }

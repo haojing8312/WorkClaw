@@ -1,6 +1,7 @@
 use super::session_view::render_user_content_parts;
 use crate::session_journal::{
     SessionJournalState, SessionJournalStore, SessionRunEvent, SessionRunStatus,
+    SessionRunTurnStateSnapshot,
 };
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -572,6 +573,9 @@ fn render_recovered_run_sections(
         if !error_message.is_empty() && !error_already_exported {
             sections.push(format!("- error_message: {}", error_message));
         }
+        if let Some(turn_state) = run.turn_state.as_ref() {
+            sections.extend(render_recovered_turn_state_lines(turn_state));
+        }
         if missing_assistant_message_for_run {
             for tool_section in tool_sections {
                 sections.push(String::new());
@@ -582,6 +586,32 @@ fn render_recovered_run_sections(
     }
 
     sections.join("\n")
+}
+
+fn render_recovered_turn_state_lines(turn_state: &SessionRunTurnStateSnapshot) -> Vec<String> {
+    let mut lines = Vec::new();
+    if let Some(compaction_boundary) = turn_state.compaction_boundary.as_ref() {
+        lines.push(format!(
+            "- 压缩边界：{} -> {}",
+            compaction_boundary.original_tokens, compaction_boundary.compacted_tokens
+        ));
+        if !compaction_boundary.transcript_path.trim().is_empty() {
+            lines.push(format!(
+                "- 压缩转录：{}",
+                compaction_boundary.transcript_path.trim()
+            ));
+        }
+        if !compaction_boundary.summary.trim().is_empty() {
+            lines.push(format!(
+                "- 压缩摘要：{}",
+                compaction_boundary.summary.trim()
+            ));
+        }
+    }
+    if let Some(reconstructed_history_len) = turn_state.reconstructed_history_len {
+        lines.push(format!("- 重建历史消息数：{}", reconstructed_history_len));
+    }
+    lines
 }
 
 fn export_status_label(status: &SessionRunStatus) -> &'static str {
