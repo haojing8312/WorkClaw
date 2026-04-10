@@ -75,6 +75,11 @@ impl SessionRuntime {
             active_task_kind: execution_context.active_task_kind,
             active_task_surface: execution_context.active_task_surface,
             active_task_backend: execution_context.active_task_backend,
+            active_task_continuation_mode: execution_context.active_task_continuation_mode,
+            active_task_continuation_source: execution_context.active_task_continuation_source,
+            active_task_continuation_reason: execution_context
+                .active_task_continuation_reason
+                .as_deref(),
             allowed_tools: execution_context.allowed_tools(),
             effective_tool_plan: execution_context.effective_tool_plan(),
             permission_mode: execution_context.permission_mode,

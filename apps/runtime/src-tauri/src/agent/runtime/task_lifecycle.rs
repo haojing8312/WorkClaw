@@ -9,10 +9,11 @@ use crate::agent::runtime::task_state::{
 use crate::agent::runtime::task_transition::{
     resolve_commit_transition, resolve_delegated_return_transition, resolve_initial_transition,
     resolve_parent_rejoin_transition, resolve_stop_transition, resolve_terminal_transition,
-    TaskContinuationMode, TaskTransition,
+    TaskContinuationMode, TaskContinuationSource, TaskTransition,
 };
 use crate::session_journal::{
-    SessionJournalStore, SessionRunEvent, SessionRunTaskIdentitySnapshot, SessionTaskRecordSnapshot,
+    SessionJournalState, SessionJournalStore, SessionRunEvent, SessionRunTaskIdentitySnapshot,
+    SessionTaskRecordSnapshot,
 };
 use chrono::Utc;
 
@@ -127,6 +128,13 @@ pub(crate) async fn resolve_latest_task_record_for_session(
     session_id: &str,
 ) -> Option<TaskRecord> {
     let state = journal.read_state(session_id).await.ok()?;
+    resolve_latest_task_record_in_state(&state, session_id)
+}
+
+pub(crate) fn resolve_latest_task_record_in_state(
+    state: &SessionJournalState,
+    session_id: &str,
+) -> Option<TaskRecord> {
     state
         .tasks
         .iter()
@@ -173,6 +181,7 @@ async fn project_task_continued(
     session_id: &str,
     record: &TaskRecord,
     continuation_mode: TaskContinuationMode,
+    continuation_source: TaskContinuationSource,
     continuation_reason: &str,
 ) -> Result<(), String> {
     append_session_run_event_with_pool(
@@ -183,6 +192,7 @@ async fn project_task_continued(
             run_id: record.run_id.clone(),
             task_identity: build_task_identity_snapshot_from_record(record),
             continuation_mode: continuation_mode.as_key().to_string(),
+            continuation_source: continuation_source.as_key().to_string(),
             continuation_reason: continuation_reason.to_string(),
         },
     )
@@ -392,9 +402,21 @@ pub(crate) async fn apply_transition(
     transition: &TaskTransition,
 ) -> Result<TaskRecord, String> {
     match transition {
-        TaskTransition::Continue { mode, reason } => {
-            project_task_continued(db, journal, session_id, active_task_record, *mode, reason)
-                .await?;
+        TaskTransition::Continue {
+            mode,
+            source,
+            reason,
+        } => {
+            project_task_continued(
+                db,
+                journal,
+                session_id,
+                active_task_record,
+                *mode,
+                *source,
+                reason,
+            )
+            .await?;
             Ok(active_task_record.clone())
         }
         TaskTransition::DelegateToChild {

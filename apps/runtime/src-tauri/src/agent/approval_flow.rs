@@ -4,7 +4,8 @@ use crate::commands::chat::{ApprovalManagerState, PendingApprovalBridgeState};
 use crate::commands::feishu_gateway::notify_feishu_approval_requested_with_pool;
 use crate::commands::skills::DbState;
 use crate::session_journal::{
-    SessionJournalStateHandle, SessionJournalStore, SessionRunTaskIdentitySnapshot,
+    SessionJournalStateHandle, SessionJournalStore, SessionRunTaskContinuationSnapshot,
+    SessionRunTaskIdentitySnapshot,
 };
 use anyhow::{anyhow, Result};
 use serde_json::Value;
@@ -70,6 +71,7 @@ pub(super) async fn request_tool_approval_and_wait(
     session_id: &str,
     run_id: Option<&str>,
     task_identity: Option<SessionRunTaskIdentitySnapshot>,
+    task_continuation: Option<SessionRunTaskContinuationSnapshot>,
     tool_name: &str,
     call_id: &str,
     input: &Value,
@@ -93,6 +95,7 @@ pub(super) async fn request_tool_approval_and_wait(
                 session_id: session_id.to_string(),
                 run_id: run_id.map(str::to_string),
                 task_identity,
+                task_continuation: task_continuation.clone(),
                 call_id: call_id.to_string(),
                 tool_name: tool_name.to_string(),
                 input: input.clone(),
@@ -119,6 +122,7 @@ pub(super) async fn request_tool_approval_and_wait(
                 "call_id": record.call_id,
                 "tool_name": record.tool_name,
                 "tool_input": record.input,
+                "task_continuation": task_continuation,
                 "title": title,
                 "summary": record.summary,
                 "impact": record.impact,
@@ -133,6 +137,7 @@ pub(super) async fn request_tool_approval_and_wait(
                 "session_id": session_id,
                 "tool_name": tool_name,
                 "tool_input": input,
+                "task_continuation": task_continuation,
                 "title": title,
                 "summary": summary,
                 "impact": impact,

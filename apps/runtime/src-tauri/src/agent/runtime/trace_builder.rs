@@ -132,6 +132,7 @@ fn summarize_event(
         SessionRunEvent::TaskContinued {
             task_identity,
             continuation_mode,
+            continuation_source,
             continuation_reason,
             ..
         } => SessionRunEventSummary {
@@ -146,8 +147,11 @@ fn summarize_event(
             warning_kind: None,
             error_kind: None,
             message: Some(format!(
-                "task={} surface={} continued mode={}",
-                task_identity.task_kind, task_identity.surface_kind, continuation_mode
+                "task={} surface={} continued mode={} source={}",
+                task_identity.task_kind,
+                task_identity.surface_kind,
+                continuation_mode,
+                continuation_source
             )),
             detail: Some(format!(
                 "{} continuation_reason={}",
@@ -383,6 +387,7 @@ fn summarize_event(
             tool_name,
             call_id,
             input,
+            task_continuation,
             ..
         } => SessionRunEventSummary {
             session_id: record.session_id.clone(),
@@ -396,7 +401,7 @@ fn summarize_event(
             warning_kind: None,
             error_kind: None,
             message: compact_json(&input),
-            detail: None,
+            detail: summarize_task_continuation_detail(task_continuation.as_ref()),
             irreversible: None,
             last_completed_step: None,
             child_session_id: extract_child_session_id(&input, None),
@@ -409,6 +414,7 @@ fn summarize_event(
             input,
             output,
             is_error,
+            task_continuation,
             ..
         } => SessionRunEventSummary {
             session_id: record.session_id.clone(),
@@ -426,7 +432,7 @@ fn summarize_event(
             warning_kind: None,
             error_kind: None,
             message: render_tool_output_preview(&output),
-            detail: compact_json(&input),
+            detail: summarize_tool_event_detail(compact_json(&input), task_continuation.as_ref()),
             irreversible: None,
             last_completed_step: None,
             child_session_id: extract_child_session_id(&input, Some(output.as_str())),
@@ -441,6 +447,7 @@ fn summarize_event(
             summary,
             impact,
             irreversible,
+            task_continuation,
             ..
         } => SessionRunEventSummary {
             session_id: record.session_id.clone(),
@@ -454,7 +461,10 @@ fn summarize_event(
             warning_kind: None,
             error_kind: None,
             message: Some(summary),
-            detail: impact.or_else(|| compact_json(&input)),
+            detail: summarize_tool_event_detail(
+                impact.or_else(|| compact_json(&input)),
+                task_continuation.as_ref(),
+            ),
             irreversible: Some(irreversible),
             last_completed_step: None,
             child_session_id: extract_child_session_id(&input, None),
@@ -765,6 +775,31 @@ fn summarize_task_identity_detail(
     detail_parts.join(", ")
 }
 
+fn summarize_task_continuation_detail(
+    task_continuation: Option<&crate::session_journal::SessionRunTaskContinuationSnapshot>,
+) -> Option<String> {
+    let task_continuation = task_continuation?;
+    Some(format!(
+        "continuation_mode={} continuation_source={} continuation_reason={}",
+        task_continuation.mode, task_continuation.source, task_continuation.reason
+    ))
+}
+
+fn summarize_tool_event_detail(
+    base_detail: Option<String>,
+    task_continuation: Option<&crate::session_journal::SessionRunTaskContinuationSnapshot>,
+) -> Option<String> {
+    match (
+        base_detail,
+        summarize_task_continuation_detail(task_continuation),
+    ) {
+        (Some(base), Some(continuation)) => Some(format!("{base} {continuation}")),
+        (Some(base), None) => Some(base),
+        (None, Some(continuation)) => Some(continuation),
+        (None, None) => None,
+    }
+}
+
 fn extract_task_identity(
     event: &SessionRunEvent,
 ) -> Option<&crate::session_journal::SessionRunTaskIdentitySnapshot> {
@@ -1044,6 +1079,7 @@ mod tests {
                         tool_name: "read_file".to_string(),
                         call_id: "call-1".to_string(),
                         task_identity: None,
+                        task_continuation: None,
                         input: json!({ "path": "README.md" }),
                     },
                 ),
@@ -1057,6 +1093,7 @@ mod tests {
                         tool_name: "read_file".to_string(),
                         call_id: "call-1".to_string(),
                         task_identity: None,
+                        task_continuation: None,
                         input: json!({ "path": "README.md" }),
                         output: "README loaded".to_string(),
                         is_error: false,
@@ -1175,6 +1212,7 @@ mod tests {
                         run_id: "run-approval".to_string(),
                         approval_id: "approval-1".to_string(),
                         task_identity: None,
+                        task_continuation: None,
                         tool_name: "shell_command".to_string(),
                         call_id: "call-1".to_string(),
                         input: json!({ "command": "git status" }),
@@ -1202,6 +1240,38 @@ mod tests {
         assert_eq!(trace.approvals.len(), 1);
         assert_eq!(trace.approvals[0].approval_id, "approval-1");
         assert_eq!(trace.approvals[0].tool_name, "shell_command");
+    }
+
+    #[test]
+    fn summarize_stored_event_includes_tool_continuation_detail() {
+        let summary = summarize_stored_event(&stored_event(
+            "session-tool",
+            "run-tool",
+            "tool_started",
+            "2026-03-27T03:10:00Z",
+            SessionRunEvent::ToolStarted {
+                run_id: "run-tool".to_string(),
+                tool_name: "shell_command".to_string(),
+                call_id: "call-1".to_string(),
+                task_identity: None,
+                task_continuation: Some(
+                    crate::session_journal::SessionRunTaskContinuationSnapshot {
+                        mode: "approval_resume".to_string(),
+                        source: "parent_rejoin".to_string(),
+                        reason: "approval_recovery".to_string(),
+                    },
+                ),
+                input: json!({ "command": "git status" }),
+            },
+        ));
+
+        assert_eq!(summary.tool_name.as_deref(), Some("shell_command"));
+        assert_eq!(
+            summary.detail.as_deref(),
+            Some(
+                "continuation_mode=approval_resume continuation_source=parent_rejoin continuation_reason=approval_recovery"
+            )
+        );
     }
 
     #[test]

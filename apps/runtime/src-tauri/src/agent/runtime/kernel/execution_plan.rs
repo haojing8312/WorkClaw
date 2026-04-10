@@ -11,6 +11,7 @@ use crate::agent::runtime::kernel::turn_state::TurnStateSnapshot;
 use crate::agent::runtime::runtime_io::WorkspaceSkillRuntimeEntry;
 use crate::agent::runtime::skill_routing::index::SkillRouteIndex;
 use crate::agent::runtime::task_state::{TaskBackendKind, TaskIdentity, TaskKind, TaskSurfaceKind};
+use crate::agent::runtime::task_transition::{TaskContinuationMode, TaskContinuationSource};
 use runtime_chat_app::ChatExecutionGuidance;
 use serde_json::Value;
 
@@ -54,6 +55,9 @@ pub(crate) struct ExecutionContext {
     pub active_task_kind: Option<TaskKind>,
     pub active_task_surface: Option<TaskSurfaceKind>,
     pub active_task_backend: Option<TaskBackendKind>,
+    pub active_task_continuation_mode: Option<TaskContinuationMode>,
+    pub active_task_continuation_source: Option<TaskContinuationSource>,
+    pub active_task_continuation_reason: Option<String>,
     pub permission_mode: PermissionMode,
     pub runtime_default_tool_policy: EffectiveToolPolicyInput,
     pub executor_work_dir: Option<String>,
@@ -79,6 +83,9 @@ impl Default for ExecutionContext {
             active_task_kind: None,
             active_task_surface: None,
             active_task_backend: None,
+            active_task_continuation_mode: None,
+            active_task_continuation_source: None,
+            active_task_continuation_reason: None,
             permission_mode: PermissionMode::AcceptEdits,
             runtime_default_tool_policy: EffectiveToolPolicyInput {
                 source:
@@ -150,6 +157,7 @@ pub(crate) enum ContinuationKind {
     #[default]
     Standard,
     CompactionRecovery,
+    ParentTaskRejoin,
     HiddenChildSession,
     EmployeeStepSession,
 }
@@ -163,6 +171,9 @@ pub(crate) struct ContinuationTurnPolicy {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct ContinuationPreference {
     pub kind: ContinuationKind,
+    pub mode: Option<TaskContinuationMode>,
+    pub source: Option<TaskContinuationSource>,
+    pub reason: Option<String>,
     pub selected_skill: Option<String>,
     pub selected_runner: Option<String>,
     pub reconstructed_history_len: Option<usize>,
@@ -223,6 +234,7 @@ mod tests {
     };
     use crate::agent::runtime::skill_routing::index::SkillRouteIndex;
     use crate::agent::runtime::skill_routing::intent::RouteFallbackReason;
+    use crate::agent::runtime::task_transition::{TaskContinuationMode, TaskContinuationSource};
     use runtime_chat_app::ChatExecutionGuidance;
 
     #[test]
@@ -274,6 +286,9 @@ mod tests {
             active_task_kind: None,
             active_task_surface: None,
             active_task_backend: None,
+            active_task_continuation_mode: None,
+            active_task_continuation_source: None,
+            active_task_continuation_reason: None,
             permission_mode: PermissionMode::AcceptEdits,
             runtime_default_tool_policy: EffectiveToolPolicyInput {
                 source:
@@ -361,6 +376,9 @@ mod tests {
             })],
             continuation_preference: Some(ContinuationPreference {
                 kind: ContinuationKind::CompactionRecovery,
+                mode: Some(TaskContinuationMode::RecoveryResume),
+                source: Some(TaskContinuationSource::TaskEntry),
+                reason: Some("compaction_recovery".to_string()),
                 selected_skill: Some("feishu-pm-weekly-work-summary".to_string()),
                 selected_runner: Some("prompt_skill_inline".to_string()),
                 reconstructed_history_len: Some(4),

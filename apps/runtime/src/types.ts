@@ -275,6 +275,7 @@ export interface SessionRunProjection {
   task_status?: string | null;
   task_record?: SessionRunTaskRecordProjection | null;
   task_continuation_mode?: string | null;
+  task_continuation_source?: string | null;
   task_continuation_reason?: string | null;
 }
 

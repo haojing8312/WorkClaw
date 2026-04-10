@@ -14,7 +14,7 @@ use crate::agent::safety::classify_policy_blocked_tool_error;
 use crate::agent::types::{
     AgentStateEvent, Tool, ToolCall, ToolCallEvent, ToolContext, ToolResult,
 };
-use crate::session_journal::SessionRunEvent;
+use crate::session_journal::{SessionRunEvent, SessionRunTaskContinuationSnapshot};
 use anyhow::{anyhow, Result};
 use runtime_executor_core::{
     extract_tool_call_parse_error, split_error_code_and_message, truncate_tool_output,
@@ -30,6 +30,7 @@ use super::effective_tool_set::{
 };
 use super::task_lifecycle::build_task_identity_snapshot_from_parts;
 use super::task_state::{TaskBackendKind, TaskIdentity, TaskKind, TaskSurfaceKind};
+use super::task_transition::{TaskContinuationMode, TaskContinuationSource};
 
 pub(crate) const INTERNAL_SKILL_DISPATCH_INPUT_KEY: &str = "__workclaw_internal_skill_dispatch";
 
@@ -42,6 +43,9 @@ pub(crate) struct ToolDispatchContext<'a> {
     pub active_task_kind: Option<TaskKind>,
     pub active_task_surface: Option<TaskSurfaceKind>,
     pub active_task_backend: Option<TaskBackendKind>,
+    pub active_task_continuation_mode: Option<TaskContinuationMode>,
+    pub active_task_continuation_source: Option<TaskContinuationSource>,
+    pub active_task_continuation_reason: Option<&'a str>,
     pub allowed_tools: Option<&'a [String]>,
     pub effective_tool_plan: Option<&'a EffectiveToolSet>,
     pub permission_mode: PermissionMode,
@@ -84,6 +88,23 @@ fn active_task_identity_snapshot(
         task_surface,
         task_backend,
     ))
+}
+
+fn active_task_continuation_snapshot(
+    ctx: &ToolDispatchContext<'_>,
+) -> Option<SessionRunTaskContinuationSnapshot> {
+    let mode = ctx.active_task_continuation_mode?;
+    let source = ctx.active_task_continuation_source?;
+    let reason = ctx
+        .active_task_continuation_reason
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| mode.as_key());
+    Some(SessionRunTaskContinuationSnapshot {
+        mode: mode.as_key().to_string(),
+        source: source.as_key().to_string(),
+        reason: reason.to_string(),
+    })
 }
 
 pub(crate) async fn dispatch_skill_command(
@@ -407,6 +428,7 @@ async fn resolve_approval_outcome(
         ctx.session_id,
         ctx.persisted_run_id,
         active_task_identity_snapshot(ctx),
+        active_task_continuation_snapshot(ctx),
         call,
         ctx.tool_ctx.work_dir.as_deref(),
         ctx.tool_confirm_tx,
@@ -446,6 +468,7 @@ async fn emit_failed_completion(
                     tool_name: call.name.clone(),
                     call_id: call.id.clone(),
                     task_identity: active_task_identity_snapshot(ctx),
+                    task_continuation: active_task_continuation_snapshot(ctx),
                     input: call.input.clone(),
                     output: message.clone(),
                     is_error: true,
@@ -495,6 +518,7 @@ async fn emit_tool_completion(
                     tool_name: call.name.clone(),
                     call_id: call.id.clone(),
                     task_identity: active_task_identity_snapshot(ctx),
+                    task_continuation: active_task_continuation_snapshot(ctx),
                     input: call.input.clone(),
                     output: result.to_string(),
                     is_error,
@@ -698,6 +722,7 @@ pub(crate) async fn dispatch_tool_call(
                     tool_name: call.name.clone(),
                     call_id: call.id.clone(),
                     task_identity: active_task_identity_snapshot(ctx),
+                    task_continuation: active_task_continuation_snapshot(ctx),
                     input: call.input.clone(),
                 },
             )
@@ -1174,6 +1199,9 @@ mod tests {
             active_task_kind: None,
             active_task_surface: None,
             active_task_backend: None,
+            active_task_continuation_mode: None,
+            active_task_continuation_source: None,
+            active_task_continuation_reason: None,
             allowed_tools: None,
             effective_tool_plan: None,
             permission_mode: PermissionMode::Unrestricted,
@@ -1238,6 +1266,9 @@ mod tests {
             active_task_kind: None,
             active_task_surface: None,
             active_task_backend: None,
+            active_task_continuation_mode: None,
+            active_task_continuation_source: None,
+            active_task_continuation_reason: None,
             allowed_tools: Some(&["read_file".to_string()]),
             effective_tool_plan: None,
             permission_mode: PermissionMode::Unrestricted,
@@ -1325,6 +1356,9 @@ mod tests {
             active_task_kind: None,
             active_task_surface: None,
             active_task_backend: None,
+            active_task_continuation_mode: None,
+            active_task_continuation_source: None,
+            active_task_continuation_reason: None,
             allowed_tools: Some(&["read_file".to_string()]),
             effective_tool_plan: Some(&effective_tool_plan),
             permission_mode: PermissionMode::Unrestricted,
@@ -1397,6 +1431,9 @@ mod tests {
             active_task_kind: None,
             active_task_surface: None,
             active_task_backend: None,
+            active_task_continuation_mode: None,
+            active_task_continuation_source: None,
+            active_task_continuation_reason: None,
             allowed_tools: None,
             effective_tool_plan: None,
             permission_mode: PermissionMode::AcceptEdits,
@@ -1448,6 +1485,9 @@ mod tests {
             active_task_kind: None,
             active_task_surface: None,
             active_task_backend: None,
+            active_task_continuation_mode: None,
+            active_task_continuation_source: None,
+            active_task_continuation_reason: None,
             allowed_tools: Some(&["exec".to_string()]),
             effective_tool_plan: None,
             permission_mode: PermissionMode::Unrestricted,
@@ -1498,6 +1538,9 @@ mod tests {
             active_task_kind: None,
             active_task_surface: None,
             active_task_backend: None,
+            active_task_continuation_mode: None,
+            active_task_continuation_source: None,
+            active_task_continuation_reason: None,
             allowed_tools: Some(allowed.as_slice()),
             effective_tool_plan: None,
             permission_mode: PermissionMode::Unrestricted,
@@ -1571,6 +1614,9 @@ mod tests {
             active_task_kind: None,
             active_task_surface: None,
             active_task_backend: None,
+            active_task_continuation_mode: None,
+            active_task_continuation_source: None,
+            active_task_continuation_reason: None,
             allowed_tools: Some(&["skill".to_string(), "exec".to_string()]),
             effective_tool_plan: None,
             permission_mode: PermissionMode::Unrestricted,

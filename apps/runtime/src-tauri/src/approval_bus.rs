@@ -2,7 +2,8 @@ use crate::agent::{ToolContext, ToolRegistry};
 use crate::approval_rules::persist_allow_always_rule_with_tx;
 use crate::commands::session_runs::append_session_run_event_with_pool;
 use crate::session_journal::{
-    SessionJournalStore, SessionRunEvent, SessionRunTaskIdentitySnapshot,
+    SessionJournalStore, SessionRunEvent, SessionRunTaskContinuationSnapshot,
+    SessionRunTaskIdentitySnapshot,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -95,6 +96,7 @@ pub struct CreateApprovalRequest {
     pub session_id: String,
     pub run_id: Option<String>,
     pub task_identity: Option<SessionRunTaskIdentitySnapshot>,
+    pub task_continuation: Option<SessionRunTaskContinuationSnapshot>,
     pub call_id: String,
     pub tool_name: String,
     pub input: Value,
@@ -112,6 +114,8 @@ pub struct ApprovalResumePayload {
     pub tool_name: String,
     pub input: Value,
     pub work_dir: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_continuation: Option<SessionRunTaskContinuationSnapshot>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -266,6 +270,7 @@ impl ApprovalManager {
             tool_name: request.tool_name.clone(),
             input: request.input.clone(),
             work_dir: request.work_dir.clone(),
+            task_continuation: request.task_continuation.clone(),
         };
         let resume_payload_json = serde_json::to_string(&resume_payload)
             .map_err(|e| format!("序列化 approval 恢复载荷失败: {e}"))?;
@@ -278,6 +283,7 @@ impl ApprovalManager {
                     run_id: run_id_value,
                     approval_id: request.approval_id.clone(),
                     task_identity: request.task_identity.clone(),
+                    task_continuation: request.task_continuation.clone(),
                     tool_name: request.tool_name.clone(),
                     call_id: request.call_id.clone(),
                     input: request.input.clone(),
@@ -408,6 +414,7 @@ pub async fn recover_approved_pending_work_with_pool(
                 tool_name: row.tool_name.clone(),
                 input: serde_json::json!({}),
                 work_dir: None,
+                task_continuation: None,
             });
 
         if let Some(run_id) = payload
@@ -444,6 +451,7 @@ pub async fn recover_approved_pending_work_with_pool(
                     tool_name: payload.tool_name.clone(),
                     call_id: payload.call_id.clone(),
                     task_identity: None,
+                    task_continuation: payload.task_continuation.clone(),
                     input: payload.input.clone(),
                     output: tool_result.0.clone(),
                     is_error: tool_result.1,

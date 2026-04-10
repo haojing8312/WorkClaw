@@ -5,7 +5,7 @@ use crate::agent::approval_flow::{
 use crate::agent::types::ToolCall;
 use crate::approval_bus::{approval_bus_rollout_enabled_with_pool, ApprovalDecision};
 use crate::approval_rules::find_matching_approval_rule_with_pool;
-use crate::session_journal::SessionRunTaskIdentitySnapshot;
+use crate::session_journal::{SessionRunTaskContinuationSnapshot, SessionRunTaskIdentitySnapshot};
 use anyhow::Result;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
@@ -18,6 +18,7 @@ pub(crate) async fn gate_tool_approval(
     session_id: Option<&str>,
     persisted_run_id: Option<&str>,
     task_identity: Option<SessionRunTaskIdentitySnapshot>,
+    task_continuation: Option<SessionRunTaskContinuationSnapshot>,
     call: &ToolCall,
     work_dir: Option<&Path>,
     tool_confirm_tx: Option<&Arc<Mutex<Option<Sender<bool>>>>>,
@@ -40,6 +41,7 @@ pub(crate) async fn gate_tool_approval(
                     sid,
                     persisted_run_id,
                     task_identity,
+                    task_continuation,
                     &call.name,
                     &call.id,
                     &call.input,

@@ -169,6 +169,9 @@ pub(crate) fn attach_active_task_state_to_execution_context(
     execution_context.active_task_kind = Some(task_state.task_kind);
     execution_context.active_task_surface = Some(task_state.surface_kind);
     execution_context.active_task_backend = Some(task_state.backend_kind);
+    execution_context.active_task_continuation_mode = task_state.continuation_mode;
+    execution_context.active_task_continuation_source = task_state.continuation_source;
+    execution_context.active_task_continuation_reason = task_state.continuation_reason.clone();
 }
 
 impl TaskBackendRunRequest<'_> {

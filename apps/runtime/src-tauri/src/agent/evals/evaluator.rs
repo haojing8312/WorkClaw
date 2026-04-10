@@ -727,6 +727,7 @@ diagnostics:
                 task_status: None,
                 task_record: None,
                 task_continuation_mode: None,
+                task_continuation_source: None,
                 task_continuation_reason: None,
             }],
             route_attempt_logs: vec![RouteAttemptLog {
@@ -932,6 +933,7 @@ diagnostics:
                 task_status: None,
                 task_record: None,
                 task_continuation_mode: None,
+                task_continuation_source: None,
                 task_continuation_reason: None,
             }],
             route_attempt_logs: vec![RouteAttemptLog {

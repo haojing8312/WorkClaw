@@ -5,7 +5,7 @@ use super::observability::{build_implicit_route_observation, PlannedImplicitRout
 use super::recall::recall_skill_candidates;
 use crate::agent::runtime::kernel::direct_dispatch::execute_direct_dispatch_skill;
 use crate::agent::runtime::kernel::execution_plan::{
-    ContinuationPreference, ExecutionContext, ExecutionPlan, TurnContext,
+    ContinuationKind, ContinuationPreference, ExecutionContext, ExecutionPlan, TurnContext,
 };
 use crate::agent::runtime::kernel::route_lane::{
     build_routed_skill_tool_setup, resolve_skill_allowed_tools, RouteRunOutcome, RouteRunPlan,
@@ -102,6 +102,14 @@ fn resolve_continuation_route_plan(
     continuation_preference: Option<&ContinuationPreference>,
 ) -> Option<RouteRunPlan> {
     let preference = continuation_preference?;
+    if matches!(preference.kind, ContinuationKind::ParentTaskRejoin)
+        && preference.selected_skill.is_none()
+    {
+        return Some(RouteRunPlan::OpenTask {
+            fallback_reason: Some(RouteFallbackReason::ExplicitOpenTask),
+        });
+    }
+
     let selected_skill = preference.selected_skill.as_deref()?;
     let projection = route_index.get(selected_skill)?;
     let entry = workspace_skill_entries
@@ -982,6 +990,9 @@ mod tests {
         let command_specs = build_command_specs(&entries);
         let continuation_preference = ContinuationPreference {
             kind: ContinuationKind::CompactionRecovery,
+            mode: None,
+            source: None,
+            reason: None,
             selected_skill: Some("feishu-pm-fork-sync".to_string()),
             selected_runner: Some("prompt_skill_fork".to_string()),
             reconstructed_history_len: Some(6),
@@ -1011,6 +1022,57 @@ mod tests {
             planned_route.execution_plan.route_plan,
             RouteRunPlan::PromptSkillFork { ref skill_id, .. }
                 if skill_id == "feishu-pm-fork-sync"
+        ));
+    }
+
+    #[test]
+    fn plan_implicit_route_with_observation_keeps_parent_rejoin_on_open_task_without_skill() {
+        let entries = vec![build_entry(
+            "feishu-pm-fork-sync",
+            "PM Fork Sync",
+            "同步项管日报到看板",
+            "## When to Use\n- 同步项管日报到看板并更新状态。\n",
+            Some("fork"),
+            Some(vec!["read_file"]),
+            Some(4),
+            SkillInvocationPolicy {
+                user_invocable: true,
+                disable_model_invocation: false,
+            },
+            Some("fork-sync"),
+            None,
+        )];
+        let index = build_index(entries.clone());
+        let command_specs = build_command_specs(&entries);
+        let continuation_preference = ContinuationPreference {
+            kind: ContinuationKind::ParentTaskRejoin,
+            mode: None,
+            source: None,
+            reason: Some("permission_denied".to_string()),
+            selected_skill: None,
+            selected_runner: Some("OpenTaskRunner".to_string()),
+            reconstructed_history_len: Some(2),
+            turn_policy: ContinuationTurnPolicy {
+                per_candidate_retry_count: None,
+                route_retry_count: Some(0),
+            },
+        };
+
+        let planned_route = plan_implicit_route_with_observation(
+            &index,
+            &entries,
+            &command_specs,
+            "继续",
+            Some(&continuation_preference),
+        );
+
+        assert_eq!(planned_route.observation.selected_skill.as_deref(), None);
+        assert_eq!(planned_route.observation.selected_runner, "open_task");
+        assert!(matches!(
+            planned_route.execution_plan.route_plan,
+            RouteRunPlan::OpenTask {
+                fallback_reason: Some(RouteFallbackReason::ExplicitOpenTask)
+            }
         ));
     }
 }

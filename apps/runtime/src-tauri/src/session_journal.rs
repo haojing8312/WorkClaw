@@ -188,6 +188,8 @@ pub struct SessionRunSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_continuation_mode: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_continuation_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_continuation_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_state: Option<SessionRunTurnStateSnapshot>,
@@ -204,6 +206,7 @@ impl SessionRunSnapshot {
             last_error_message: None,
             task_identity: None,
             task_continuation_mode: None,
+            task_continuation_source: None,
             task_continuation_reason: None,
             turn_state: None,
         }
@@ -228,6 +231,13 @@ pub struct SessionRunTaskIdentitySnapshot {
     pub surface_kind: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub backend_kind: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionRunTaskContinuationSnapshot {
+    pub mode: String,
+    pub source: String,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -378,6 +388,7 @@ pub enum SessionRunEvent {
         run_id: String,
         task_identity: SessionRunTaskIdentitySnapshot,
         continuation_mode: String,
+        continuation_source: String,
         continuation_reason: String,
     },
     TaskStateProjected {
@@ -434,6 +445,8 @@ pub enum SessionRunEvent {
         call_id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         task_identity: Option<SessionRunTaskIdentitySnapshot>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task_continuation: Option<SessionRunTaskContinuationSnapshot>,
         input: Value,
     },
     ToolCompleted {
@@ -442,6 +455,8 @@ pub enum SessionRunEvent {
         call_id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         task_identity: Option<SessionRunTaskIdentitySnapshot>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task_continuation: Option<SessionRunTaskContinuationSnapshot>,
         input: Value,
         output: String,
         is_error: bool,
@@ -451,6 +466,8 @@ pub enum SessionRunEvent {
         approval_id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         task_identity: Option<SessionRunTaskIdentitySnapshot>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task_continuation: Option<SessionRunTaskContinuationSnapshot>,
         tool_name: String,
         call_id: String,
         input: Value,
@@ -524,11 +541,13 @@ fn apply_event(state: &mut SessionJournalState, event: &SessionRunEvent) {
         SessionRunEvent::TaskContinued {
             task_identity,
             continuation_mode,
+            continuation_source,
             continuation_reason,
             ..
         } => {
             state.runs[run_index].task_identity = Some(task_identity.clone());
             state.runs[run_index].task_continuation_mode = Some(continuation_mode.clone());
+            state.runs[run_index].task_continuation_source = Some(continuation_source.clone());
             state.runs[run_index].task_continuation_reason = Some(continuation_reason.clone());
         }
         SessionRunEvent::TaskStateProjected { task_identity, .. } => {
@@ -552,6 +571,7 @@ fn apply_event(state: &mut SessionJournalState, event: &SessionRunEvent) {
             run.last_error_kind = None;
             run.last_error_message = None;
             run.task_continuation_mode = None;
+            run.task_continuation_source = None;
             run.task_continuation_reason = None;
             run.turn_state = None;
         }
@@ -563,26 +583,41 @@ fn apply_event(state: &mut SessionJournalState, event: &SessionRunEvent) {
                 run.status = SessionRunStatus::Thinking;
             }
         }
-        SessionRunEvent::ToolStarted { task_identity, .. } => {
+        SessionRunEvent::ToolStarted {
+            task_identity,
+            task_continuation,
+            ..
+        } => {
             let run = &mut state.runs[run_index];
             run.status = SessionRunStatus::ToolCalling;
             if let Some(task_identity) = task_identity {
                 run.task_identity = Some(task_identity.clone());
             }
+            project_task_continuation_into_run(run, task_continuation.as_ref());
         }
-        SessionRunEvent::ToolCompleted { task_identity, .. } => {
+        SessionRunEvent::ToolCompleted {
+            task_identity,
+            task_continuation,
+            ..
+        } => {
             let run = &mut state.runs[run_index];
             run.status = SessionRunStatus::Thinking;
             if let Some(task_identity) = task_identity {
                 run.task_identity = Some(task_identity.clone());
             }
+            project_task_continuation_into_run(run, task_continuation.as_ref());
         }
-        SessionRunEvent::ApprovalRequested { task_identity, .. } => {
+        SessionRunEvent::ApprovalRequested {
+            task_identity,
+            task_continuation,
+            ..
+        } => {
             let run = &mut state.runs[run_index];
             run.status = SessionRunStatus::WaitingApproval;
             if let Some(task_identity) = task_identity {
                 run.task_identity = Some(task_identity.clone());
             }
+            project_task_continuation_into_run(run, task_continuation.as_ref());
         }
         SessionRunEvent::RunCompleted { run_id, turn_state } => {
             state.runs[run_index].status = SessionRunStatus::Completed;
@@ -631,6 +666,18 @@ fn apply_event(state: &mut SessionJournalState, event: &SessionRunEvent) {
             run.last_error_message = reason.clone();
         }
     }
+}
+
+fn project_task_continuation_into_run(
+    run: &mut SessionRunSnapshot,
+    task_continuation: Option<&SessionRunTaskContinuationSnapshot>,
+) {
+    let Some(task_continuation) = task_continuation else {
+        return;
+    };
+    run.task_continuation_mode = Some(task_continuation.mode.clone());
+    run.task_continuation_source = Some(task_continuation.source.clone());
+    run.task_continuation_reason = Some(task_continuation.reason.clone());
 }
 
 fn execution_lane_key(lane: ExecutionLane) -> String {
@@ -742,6 +789,7 @@ fn build_observed_session_run_event(
             run_id,
             task_identity,
             continuation_mode,
+            continuation_source,
             continuation_reason,
         } => RuntimeObservedRunEvent {
             session_id: session_id.to_string(),
@@ -770,6 +818,7 @@ fn build_observed_session_run_event(
                     "surface_kind": task_identity.surface_kind,
                     "backend_kind": task_identity.backend_kind,
                     "continuation_mode": continuation_mode,
+                    "continuation_source": continuation_source,
                     "continuation_reason": continuation_reason,
                 })
                 .to_string(),
@@ -1308,8 +1357,8 @@ impl SessionRunStatus {
 mod tests {
     use super::{
         format_run_stop_message, SessionJournalState, SessionJournalStore, SessionRunEvent,
-        SessionRunTaskIdentitySnapshot, SessionRunTurnStateCompactionBoundary,
-        SessionRunTurnStateSnapshot,
+        SessionRunStatus, SessionRunTaskContinuationSnapshot, SessionRunTaskIdentitySnapshot,
+        SessionRunTurnStateCompactionBoundary, SessionRunTurnStateSnapshot,
     };
     use crate::agent::run_guard::RunStopReason;
     use crate::agent::runtime::effective_tool_set::{
@@ -1324,6 +1373,7 @@ mod tests {
     use crate::agent::runtime::task_repo::{TaskRecordUpsertPayload, TaskStatusChangedPayload};
     use crate::agent::runtime::{RunRegistry, RuntimeObservability, RuntimeObservedEvent};
     use crate::agent::tool_manifest::ToolSource;
+    use serde_json::json;
     use std::sync::Arc;
     use tempfile::tempdir;
 
@@ -1734,6 +1784,7 @@ mod tests {
                         backend_kind: "interactive_chat_backend".to_string(),
                     },
                     continuation_mode: "recovery_resume".to_string(),
+                    continuation_source: "task_entry".to_string(),
                     continuation_reason: "recovery_resume".to_string(),
                 },
             )
@@ -1768,9 +1819,62 @@ mod tests {
             run.task_continuation_mode.as_deref(),
             Some("recovery_resume")
         );
+        assert_eq!(run.task_continuation_source.as_deref(), Some("task_entry"));
         assert_eq!(
             run.task_continuation_reason.as_deref(),
             Some("recovery_resume")
+        );
+    }
+
+    #[tokio::test]
+    async fn append_tool_event_projects_task_continuation_into_session_state() {
+        let journal_root = tempdir().expect("journal tempdir");
+        let journal = SessionJournalStore::new(journal_root.path().to_path_buf());
+
+        journal
+            .append_event(
+                "session-tool-continuation",
+                SessionRunEvent::ToolStarted {
+                    run_id: "run-1".to_string(),
+                    tool_name: "shell_command".to_string(),
+                    call_id: "call-1".to_string(),
+                    task_identity: Some(SessionRunTaskIdentitySnapshot {
+                        task_id: "task-1".to_string(),
+                        parent_task_id: Some("task-parent".to_string()),
+                        root_task_id: "task-root".to_string(),
+                        task_kind: "recovery_task".to_string(),
+                        surface_kind: "local_chat_surface".to_string(),
+                        backend_kind: "interactive_chat_backend".to_string(),
+                    }),
+                    task_continuation: Some(SessionRunTaskContinuationSnapshot {
+                        mode: "permission_resume".to_string(),
+                        source: "parent_rejoin".to_string(),
+                        reason: "permission_denied".to_string(),
+                    }),
+                    input: json!({ "command": "git status" }),
+                },
+            )
+            .await
+            .expect("append tool started");
+
+        let state = journal
+            .read_state("session-tool-continuation")
+            .await
+            .expect("read projected state");
+        let run = state.runs.first().expect("run snapshot");
+
+        assert_eq!(run.status, SessionRunStatus::ToolCalling);
+        assert_eq!(
+            run.task_continuation_mode.as_deref(),
+            Some("permission_resume")
+        );
+        assert_eq!(
+            run.task_continuation_source.as_deref(),
+            Some("parent_rejoin")
+        );
+        assert_eq!(
+            run.task_continuation_reason.as_deref(),
+            Some("permission_denied")
         );
     }
 

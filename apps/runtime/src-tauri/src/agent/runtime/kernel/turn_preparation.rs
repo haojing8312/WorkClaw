@@ -18,6 +18,7 @@ use crate::agent::runtime::runtime_io as chat_io;
 use crate::agent::runtime::runtime_io::WorkspaceSkillRuntimeEntry;
 use crate::agent::runtime::skill_routing::index::SkillRouteIndex;
 use crate::agent::runtime::task_continuation::is_task_continuation_request;
+use crate::agent::runtime::task_transition::{TaskContinuationMode, TaskContinuationSource};
 use crate::agent::runtime::tool_setup::{prepare_runtime_tools, ToolSetupParams};
 use crate::agent::runtime::RuntimeTranscript;
 use crate::agent::AgentExecutor;
@@ -301,6 +302,9 @@ pub(crate) async fn prepare_local_turn(
         active_task_kind: None,
         active_task_surface: None,
         active_task_backend: None,
+        active_task_continuation_mode: None,
+        active_task_continuation_source: None,
+        active_task_continuation_reason: None,
         permission_mode,
         runtime_default_tool_policy,
         executor_work_dir: execution_preparation_service
@@ -380,6 +384,9 @@ pub(crate) fn prepare_hidden_child_turn(
             active_task_kind: None,
             active_task_surface: None,
             active_task_backend: None,
+            active_task_continuation_mode: None,
+            active_task_continuation_source: None,
+            active_task_continuation_reason: None,
             permission_mode: PermissionMode::Unrestricted,
             runtime_default_tool_policy: ExecutionContext::default().runtime_default_tool_policy,
             executor_work_dir: work_dir,
@@ -459,6 +466,9 @@ pub(crate) fn prepare_employee_step_turn(
             active_task_kind: None,
             active_task_surface: None,
             active_task_backend: None,
+            active_task_continuation_mode: None,
+            active_task_continuation_source: None,
+            active_task_continuation_reason: None,
             permission_mode: PermissionMode::Unrestricted,
             runtime_default_tool_policy: ExecutionContext::default().runtime_default_tool_policy,
             executor_work_dir: work_dir,
@@ -527,7 +537,7 @@ async fn load_recent_continuation_context(
         .read_state(session_id)
         .await
         .map(|state| RecentContinuationContext {
-            runtime_notes: resolve_recent_compaction_runtime_notes(session_profile, &state),
+            runtime_notes: resolve_recent_continuation_runtime_notes(session_profile, &state),
             continuation_preference: resolve_session_continuation_preference(
                 user_message,
                 &state,
@@ -535,6 +545,18 @@ async fn load_recent_continuation_context(
             ),
         })
         .unwrap_or_default()
+}
+
+fn resolve_recent_continuation_runtime_notes(
+    session_profile: &SessionExecutionProfile,
+    state: &SessionJournalState,
+) -> Vec<String> {
+    let mut runtime_notes = resolve_recent_compaction_runtime_notes(session_profile, state);
+    runtime_notes.extend(resolve_recent_parent_rejoin_runtime_notes(
+        session_profile,
+        state,
+    ));
+    runtime_notes
 }
 
 fn resolve_recent_compaction_runtime_notes(
@@ -584,6 +606,58 @@ fn resolve_recent_compaction_runtime_notes(
         .collect()
 }
 
+fn resolve_recent_parent_rejoin_runtime_notes(
+    session_profile: &SessionExecutionProfile,
+    state: &SessionJournalState,
+) -> Vec<String> {
+    if session_profile.surface != SessionSurfaceKind::LocalChat {
+        return Vec::new();
+    }
+
+    state
+        .runs
+        .iter()
+        .rev()
+        .find_map(|run| {
+            let turn_state = run.turn_state.as_ref()?;
+            if resolve_session_run_surface(turn_state.session_surface.as_deref())
+                != session_profile.surface
+            {
+                return None;
+            }
+            if resolve_task_continuation_source(run) != Some(TaskContinuationSource::ParentRejoin)
+            {
+                return None;
+            }
+
+            let mode =
+                resolve_task_continuation_mode(run).unwrap_or(TaskContinuationMode::RecoveryResume);
+            let reason = resolve_task_continuation_reason(run)
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| mode.as_key());
+
+            let mut lines = vec![
+                "最近一个委派子任务刚刚返回，当前需要在父任务上下文中继续收尾，不要把这次继续当成全新的请求。"
+                    .to_string(),
+            ];
+            match mode {
+                TaskContinuationMode::ApprovalResume => lines.push(
+                    "这次父任务回接来自审批恢复场景，应优先沿用已有结论和待办，而不是重新规划整条执行链。"
+                        .to_string(),
+                ),
+                TaskContinuationMode::PermissionResume => lines.push(
+                    "这次父任务回接来自权限恢复场景，应优先延续已有执行链，并避免重复触发同一组受限操作。"
+                        .to_string(),
+                ),
+                TaskContinuationMode::InitialStart | TaskContinuationMode::RecoveryResume => {}
+            }
+            lines.push(format!("父任务回接原因：{}", reason.trim()));
+            Some(lines.join("\n"))
+        })
+        .into_iter()
+        .collect()
+}
+
 fn resolve_compaction_continuation_preference(
     user_message: &str,
     state: &SessionJournalState,
@@ -612,7 +686,11 @@ fn resolve_session_continuation_preference(
             return None;
         }
 
-        let kind = resolve_continuation_kind(run, turn_state, session_profile)?;
+        let continuation_mode = resolve_task_continuation_mode(run);
+        let continuation_source = resolve_task_continuation_source(run);
+        let continuation_reason = resolve_task_continuation_reason(run).map(str::to_string);
+        let kind =
+            resolve_continuation_kind(run, turn_state, session_profile, continuation_source)?;
         let selected_skill = turn_state
             .selected_skill
             .as_deref()
@@ -625,10 +703,18 @@ fn resolve_session_continuation_preference(
 
         Some(ContinuationPreference {
             kind,
+            mode: continuation_mode,
+            source: continuation_source,
+            reason: continuation_reason,
             selected_skill,
             selected_runner: turn_state.selected_runner.clone(),
             reconstructed_history_len: turn_state.reconstructed_history_len,
-            turn_policy: resolve_continuation_turn_policy(run),
+            turn_policy: resolve_continuation_turn_policy(
+                run,
+                kind,
+                continuation_mode,
+                continuation_source,
+            ),
         })
     })
 }
@@ -637,16 +723,23 @@ fn resolve_continuation_kind(
     run: &crate::session_journal::SessionRunSnapshot,
     turn_state: &crate::session_journal::SessionRunTurnStateSnapshot,
     session_profile: &SessionExecutionProfile,
+    continuation_source: Option<TaskContinuationSource>,
 ) -> Option<ContinuationKind> {
     if !is_recoverable_continuation_run(run) {
         return None;
     }
 
     match session_profile.continuation_mode {
-        super::session_profile::SessionContinuationProfile::LocalChat => turn_state
-            .compaction_boundary
-            .as_ref()
-            .map(|_| ContinuationKind::CompactionRecovery),
+        super::session_profile::SessionContinuationProfile::LocalChat => {
+            if continuation_source == Some(TaskContinuationSource::ParentRejoin) {
+                Some(ContinuationKind::ParentTaskRejoin)
+            } else {
+                turn_state
+                    .compaction_boundary
+                    .as_ref()
+                    .map(|_| ContinuationKind::CompactionRecovery)
+            }
+        }
         super::session_profile::SessionContinuationProfile::HiddenChildSession => {
             Some(ContinuationKind::HiddenChildSession)
         }
@@ -672,7 +765,26 @@ fn resolve_session_run_surface(session_surface: Option<&str>) -> SessionSurfaceK
 
 fn resolve_continuation_turn_policy(
     run: &crate::session_journal::SessionRunSnapshot,
+    kind: ContinuationKind,
+    continuation_mode: Option<TaskContinuationMode>,
+    continuation_source: Option<TaskContinuationSource>,
 ) -> ContinuationTurnPolicy {
+    if matches!(kind, ContinuationKind::ParentTaskRejoin)
+        && matches!(
+            continuation_source,
+            Some(TaskContinuationSource::ParentRejoin)
+        )
+    {
+        return ContinuationTurnPolicy {
+            per_candidate_retry_count: matches!(
+                continuation_mode,
+                Some(TaskContinuationMode::ApprovalResume | TaskContinuationMode::PermissionResume)
+            )
+            .then_some(0),
+            route_retry_count: Some(0),
+        };
+    }
+
     let should_clamp_retries = matches!(
         run.last_error_kind.as_deref(),
         Some(
@@ -688,6 +800,43 @@ fn resolve_continuation_turn_policy(
     } else {
         ContinuationTurnPolicy::default()
     }
+}
+
+fn resolve_task_continuation_mode(
+    run: &crate::session_journal::SessionRunSnapshot,
+) -> Option<TaskContinuationMode> {
+    run.task_continuation_mode
+        .as_deref()
+        .and_then(TaskContinuationMode::from_key)
+}
+
+fn resolve_task_continuation_source(
+    run: &crate::session_journal::SessionRunSnapshot,
+) -> Option<TaskContinuationSource> {
+    run.task_continuation_source
+        .as_deref()
+        .and_then(TaskContinuationSource::from_key)
+        .or_else(|| {
+            let reason = run.task_continuation_reason.as_deref()?.trim();
+            if reason.is_empty() {
+                return None;
+            }
+
+            Some(if reason.starts_with("delegated_return:") {
+                TaskContinuationSource::ParentRejoin
+            } else {
+                TaskContinuationSource::TaskEntry
+            })
+        })
+}
+
+fn resolve_task_continuation_reason(
+    run: &crate::session_journal::SessionRunSnapshot,
+) -> Option<&str> {
+    run.task_continuation_reason
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
 }
 
 fn apply_continuation_turn_policy(
@@ -833,7 +982,8 @@ mod tests {
         build_local_chat_session_profile, parse_user_skill_command, prepare_employee_step_turn,
         prepare_hidden_child_turn, resolve_compaction_continuation_preference,
         resolve_explicit_prompt_following_skill, resolve_recent_compaction_runtime_notes,
-        resolve_session_continuation_preference, rewrite_user_skill_command_for_model,
+        resolve_recent_continuation_runtime_notes, resolve_session_continuation_preference,
+        rewrite_user_skill_command_for_model,
     };
     use crate::agent::registry::ToolRegistry;
     use crate::agent::runtime::kernel::execution_plan::{
@@ -842,6 +992,7 @@ mod tests {
     use crate::agent::runtime::kernel::session_profile::SessionSurfaceKind;
     use crate::agent::runtime::runtime_io as chat_io;
     use crate::agent::runtime::runtime_io::{WorkspaceSkillContent, WorkspaceSkillRuntimeEntry};
+    use crate::agent::runtime::task_transition::{TaskContinuationMode, TaskContinuationSource};
     use crate::agent::AgentExecutor;
     use crate::session_journal::{
         SessionJournalState, SessionRunSnapshot, SessionRunStatus,
@@ -1097,6 +1248,7 @@ mod tests {
                 last_error_message: Some("已达到执行步数上限".to_string()),
                 task_identity: None,
                 task_continuation_mode: None,
+                task_continuation_source: None,
                 task_continuation_reason: None,
                 turn_state: Some(SessionRunTurnStateSnapshot {
                     task_identity: None,
@@ -1145,6 +1297,7 @@ mod tests {
                 last_error_message: Some("已达到执行步数上限".to_string()),
                 task_identity: None,
                 task_continuation_mode: None,
+                task_continuation_source: None,
                 task_continuation_reason: None,
                 turn_state: Some(SessionRunTurnStateSnapshot {
                     task_identity: None,
@@ -1172,6 +1325,49 @@ mod tests {
     }
 
     #[test]
+    fn resolve_recent_continuation_runtime_notes_describes_parent_rejoin_context() {
+        let state = SessionJournalState {
+            session_id: "session-1".to_string(),
+            current_run_id: None,
+            runs: vec![SessionRunSnapshot {
+                run_id: "run-1".to_string(),
+                user_message_id: "user-1".to_string(),
+                status: SessionRunStatus::Failed,
+                buffered_text: "子任务已返回，继续父任务".to_string(),
+                last_error_kind: Some("auth".to_string()),
+                last_error_message: Some("permission denied".to_string()),
+                task_identity: None,
+                task_continuation_mode: Some("permission_resume".to_string()),
+                task_continuation_source: Some("parent_rejoin".to_string()),
+                task_continuation_reason: Some("permission_denied".to_string()),
+                turn_state: Some(SessionRunTurnStateSnapshot {
+                    task_identity: None,
+                    session_surface: Some("local_chat".to_string()),
+                    execution_lane: Some("open_task".to_string()),
+                    selected_runner: Some("OpenTaskRunner".to_string()),
+                    selected_skill: None,
+                    fallback_reason: None,
+                    allowed_tools: vec!["read".to_string()],
+                    invoked_skills: Vec::new(),
+                    partial_assistant_text: "继续处理父任务".to_string(),
+                    tool_failure_streak: 0,
+                    reconstructed_history_len: Some(5),
+                    compaction_boundary: None,
+                }),
+            }],
+            tasks: vec![],
+        };
+
+        let notes =
+            resolve_recent_continuation_runtime_notes(&build_local_chat_session_profile(), &state);
+
+        assert_eq!(notes.len(), 1);
+        assert!(notes[0].contains("委派子任务刚刚返回"));
+        assert!(notes[0].contains("权限恢复场景"));
+        assert!(notes[0].contains("permission_denied"));
+    }
+
+    #[test]
     fn resolve_compaction_continuation_preference_prefers_recent_prompt_skill() {
         let state = SessionJournalState {
             session_id: "session-1".to_string(),
@@ -1185,6 +1381,7 @@ mod tests {
                 last_error_message: Some("已达到执行步数上限".to_string()),
                 task_identity: None,
                 task_continuation_mode: None,
+                task_continuation_source: None,
                 task_continuation_reason: None,
                 turn_state: Some(SessionRunTurnStateSnapshot {
                     task_identity: None,
@@ -1213,6 +1410,9 @@ mod tests {
             resolve_compaction_continuation_preference("继续执行", &state).expect("preference");
 
         assert_eq!(preference.kind, ContinuationKind::CompactionRecovery);
+        assert_eq!(preference.mode, None);
+        assert_eq!(preference.source, None);
+        assert_eq!(preference.reason, None);
         assert_eq!(
             preference.selected_skill,
             Some("feishu-pm-weekly-work-summary".to_string())
@@ -1240,6 +1440,7 @@ mod tests {
                 last_error_message: Some("已达到执行步数上限".to_string()),
                 task_identity: None,
                 task_continuation_mode: None,
+                task_continuation_source: None,
                 task_continuation_reason: None,
                 turn_state: Some(SessionRunTurnStateSnapshot {
                     task_identity: None,
@@ -1291,6 +1492,7 @@ mod tests {
                 last_error_message: Some("user cancelled".to_string()),
                 task_identity: None,
                 task_continuation_mode: None,
+                task_continuation_source: None,
                 task_continuation_reason: None,
                 turn_state: Some(SessionRunTurnStateSnapshot {
                     task_identity: None,
@@ -1326,6 +1528,65 @@ mod tests {
     }
 
     #[test]
+    fn resolve_session_continuation_preference_marks_parent_rejoin_local_chat_runs() {
+        let state = SessionJournalState {
+            session_id: "parent-session".to_string(),
+            current_run_id: None,
+            runs: vec![SessionRunSnapshot {
+                run_id: "run-1".to_string(),
+                user_message_id: "user-1".to_string(),
+                status: SessionRunStatus::Failed,
+                buffered_text: "子任务返回后等待父任务继续".to_string(),
+                last_error_kind: Some("auth".to_string()),
+                last_error_message: Some("permission denied".to_string()),
+                task_identity: None,
+                task_continuation_mode: Some("permission_resume".to_string()),
+                task_continuation_source: Some("parent_rejoin".to_string()),
+                task_continuation_reason: Some("permission_denied".to_string()),
+                turn_state: Some(SessionRunTurnStateSnapshot {
+                    task_identity: None,
+                    session_surface: Some("local_chat".to_string()),
+                    execution_lane: Some("open_task".to_string()),
+                    selected_runner: Some("OpenTaskRunner".to_string()),
+                    selected_skill: None,
+                    fallback_reason: None,
+                    allowed_tools: vec!["read".to_string()],
+                    invoked_skills: Vec::new(),
+                    partial_assistant_text: "继续父任务".to_string(),
+                    tool_failure_streak: 0,
+                    reconstructed_history_len: Some(5),
+                    compaction_boundary: None,
+                }),
+            }],
+            tasks: vec![],
+        };
+
+        let preference = resolve_session_continuation_preference(
+            "继续",
+            &state,
+            &build_local_chat_session_profile(),
+        )
+        .expect("parent rejoin continuation preference");
+
+        assert_eq!(preference.kind, ContinuationKind::ParentTaskRejoin);
+        assert_eq!(
+            preference.mode,
+            Some(TaskContinuationMode::PermissionResume)
+        );
+        assert_eq!(
+            preference.source,
+            Some(TaskContinuationSource::ParentRejoin)
+        );
+        assert_eq!(preference.reason.as_deref(), Some("permission_denied"));
+        assert_eq!(preference.turn_policy.per_candidate_retry_count, Some(0));
+        assert_eq!(preference.turn_policy.route_retry_count, Some(0));
+        assert_eq!(
+            preference.selected_runner.as_deref(),
+            Some("OpenTaskRunner")
+        );
+    }
+
+    #[test]
     fn resolve_session_continuation_preference_clamps_retry_budgets_for_permission_errors() {
         let state = SessionJournalState {
             session_id: "employee-step-session".to_string(),
@@ -1339,6 +1600,7 @@ mod tests {
                 last_error_message: Some("permission denied".to_string()),
                 task_identity: None,
                 task_continuation_mode: None,
+                task_continuation_source: None,
                 task_continuation_reason: None,
                 turn_state: Some(SessionRunTurnStateSnapshot {
                     task_identity: None,
@@ -1374,6 +1636,9 @@ mod tests {
     fn apply_continuation_turn_policy_clamps_retry_budgets_for_recovery_turns() {
         let preference = ContinuationPreference {
             kind: ContinuationKind::CompactionRecovery,
+            mode: Some(TaskContinuationMode::RecoveryResume),
+            source: Some(TaskContinuationSource::TaskEntry),
+            reason: Some("compaction_recovery".to_string()),
             selected_skill: Some("feishu-pm-weekly-work-summary".to_string()),
             selected_runner: Some("prompt_skill_fork".to_string()),
             reconstructed_history_len: Some(6),

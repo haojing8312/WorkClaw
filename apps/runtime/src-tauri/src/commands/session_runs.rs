@@ -39,6 +39,8 @@ pub struct SessionRunProjection {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_continuation_mode: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_continuation_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_continuation_reason: Option<String>,
 }
 
@@ -146,6 +148,7 @@ pub async fn list_session_runs_with_pool(
                 task_status: None,
                 task_record: None,
                 task_continuation_mode: None,
+                task_continuation_source: None,
                 task_continuation_reason: None,
             },
         )
@@ -200,6 +203,7 @@ pub async fn list_session_runs_with_runtime_state(
                 .map(SessionRunTaskRecordProjection::from);
             run.task_status = run.task_record.as_ref().map(|task| task.status.clone());
             run.task_continuation_mode = snapshot.task_continuation_mode.clone();
+            run.task_continuation_source = snapshot.task_continuation_source.clone();
             run.task_continuation_reason = snapshot.task_continuation_reason.clone();
         }
     }
@@ -800,6 +804,7 @@ mod tests {
                 tool_name: "shell_command".to_string(),
                 call_id: "call-1".to_string(),
                 task_identity: None,
+                task_continuation: None,
                 input: json!({ "command": "pwd" }),
             })
             .expect("serialize tool_started"),
@@ -879,6 +884,7 @@ mod tests {
                     tool_name: "read_file".to_string(),
                     call_id: "call-1".to_string(),
                     task_identity: None,
+                    task_continuation: None,
                     input: json!({ "path": "README.md" }),
                 })
                 .expect("serialize run-a tool"),
@@ -960,6 +966,7 @@ mod tests {
                 tool_name: "read_file".to_string(),
                 call_id: "call-1".to_string(),
                 task_identity: None,
+                task_continuation: None,
                 input: json!({ "path": "README.md" }),
             })
             .expect("serialize tool_started"),
@@ -977,6 +984,7 @@ mod tests {
                 tool_name: "read_file".to_string(),
                 call_id: "call-1".to_string(),
                 task_identity: None,
+                task_continuation: None,
                 input: json!({ "path": "README.md" }),
                 output: "README loaded".to_string(),
                 is_error: false,
@@ -1356,7 +1364,8 @@ mod tests {
                         backend_kind: "interactive_chat_backend".to_string(),
                     },
                     continuation_mode: "approval_resume".to_string(),
-                    continuation_reason: "delegated_return:approval_recovery".to_string(),
+                    continuation_source: "parent_rejoin".to_string(),
+                    continuation_reason: "approval_recovery".to_string(),
                 },
             )
             .await
@@ -1372,8 +1381,12 @@ mod tests {
             Some("approval_resume")
         );
         assert_eq!(
+            runs[0].task_continuation_source.as_deref(),
+            Some("parent_rejoin")
+        );
+        assert_eq!(
             runs[0].task_continuation_reason.as_deref(),
-            Some("delegated_return:approval_recovery")
+            Some("approval_recovery")
         );
     }
 

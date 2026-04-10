@@ -1,4 +1,4 @@
-use crate::agent::runtime::task_transition::TaskContinuationMode;
+use crate::agent::runtime::task_transition::{TaskContinuationMode, TaskContinuationSource};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -122,6 +122,7 @@ pub(crate) struct TaskState {
     pub surface_kind: TaskSurfaceKind,
     pub backend_kind: TaskBackendKind,
     pub continuation_mode: Option<TaskContinuationMode>,
+    pub continuation_source: Option<TaskContinuationSource>,
     pub continuation_reason: Option<String>,
     pub session_id: String,
     pub user_message_id: String,
@@ -146,6 +147,7 @@ impl TaskState {
             surface_kind,
             backend_kind,
             continuation_mode: None,
+            continuation_source: None,
             continuation_reason: None,
             session_id: session_id.into(),
             user_message_id: user_message_id.into(),
@@ -181,6 +183,7 @@ impl TaskState {
             run_id,
             parent_task_identity,
             TaskContinuationMode::RecoveryResume,
+            TaskContinuationSource::TaskEntry,
             "recovery_resume",
         )
     }
@@ -191,6 +194,7 @@ impl TaskState {
         run_id: impl Into<String>,
         parent_task_identity: &TaskIdentity,
         continuation_mode: TaskContinuationMode,
+        continuation_source: TaskContinuationSource,
         continuation_reason: impl Into<String>,
     ) -> Self {
         let mut task_state = Self::new_for_task_kind(
@@ -203,6 +207,7 @@ impl TaskState {
             Some(parent_task_identity),
         );
         task_state.continuation_mode = Some(continuation_mode);
+        task_state.continuation_source = Some(continuation_source);
         task_state.continuation_reason = Some(continuation_reason.into());
         task_state
     }
@@ -244,7 +249,7 @@ impl TaskState {
 
 #[cfg(test)]
 mod tests {
-    use crate::agent::runtime::task_transition::TaskContinuationMode;
+    use crate::agent::runtime::task_transition::{TaskContinuationMode, TaskContinuationSource};
 
     use super::{TaskBackendKind, TaskIdentity, TaskKind, TaskState, TaskSurfaceKind};
 
@@ -259,6 +264,7 @@ mod tests {
             TaskBackendKind::InteractiveChatBackend
         );
         assert_eq!(task_state.continuation_mode, None);
+        assert_eq!(task_state.continuation_source, None);
         assert_eq!(task_state.continuation_reason, None);
         assert_eq!(task_state.session_id, "session-1");
         assert_eq!(task_state.user_message_id, "user-1");
@@ -339,6 +345,10 @@ mod tests {
         assert_eq!(
             task_state.continuation_mode,
             Some(TaskContinuationMode::RecoveryResume)
+        );
+        assert_eq!(
+            task_state.continuation_source,
+            Some(TaskContinuationSource::TaskEntry)
         );
         assert_eq!(
             task_state.continuation_reason.as_deref(),

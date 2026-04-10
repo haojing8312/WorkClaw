@@ -610,6 +610,7 @@ mod run_guard_persistence_tests {
                 tool_name: "bash".to_string(),
                 call_id: "call-1".to_string(),
                 task_identity: None,
+                task_continuation: None,
                 input: json!({"command": "echo hi"}),
             })
             .expect("serialize tool started"),
@@ -620,6 +621,7 @@ mod run_guard_persistence_tests {
                 tool_name: "bash".to_string(),
                 call_id: "call-1".to_string(),
                 task_identity: None,
+                task_continuation: None,
                 input: json!({"command": "echo hi"}),
                 output: "hi".to_string(),
                 is_error: false,
@@ -692,6 +694,7 @@ mod run_guard_persistence_tests {
                 tool_name: "skill".to_string(),
                 call_id: "call-skill-1".to_string(),
                 task_identity: None,
+                task_continuation: None,
                 input: json!({"skill_name": "dispatch-skill", "arguments": ["--employee", "xt"]}),
             })
             .expect("serialize skill tool started"),
@@ -702,6 +705,7 @@ mod run_guard_persistence_tests {
                 tool_name: "skill".to_string(),
                 call_id: "call-skill-1".to_string(),
                 task_identity: None,
+                task_continuation: None,
                 input: json!({"skill_name": "dispatch-skill", "arguments": ["--employee", "xt"]}),
                 output: "{\"ok\":true}".to_string(),
                 is_error: false,
@@ -714,6 +718,7 @@ mod run_guard_persistence_tests {
                 tool_name: "exec".to_string(),
                 call_id: "skill-command-bridge-1".to_string(),
                 task_identity: None,
+                task_continuation: None,
                 input: json!({
                     "command": "--employee xt",
                     "commandName": "dispatch-skill",
@@ -729,6 +734,7 @@ mod run_guard_persistence_tests {
                 tool_name: "exec".to_string(),
                 call_id: "skill-command-bridge-1".to_string(),
                 task_identity: None,
+                task_continuation: None,
                 input: json!({
                     "command": "--employee xt",
                     "commandName": "dispatch-skill",

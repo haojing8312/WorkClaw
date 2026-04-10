@@ -23,12 +23,46 @@ impl TaskContinuationMode {
             TaskContinuationMode::PermissionResume => "permission_resume",
         }
     }
+
+    pub(crate) fn from_key(value: &str) -> Option<Self> {
+        match value.trim() {
+            "initial_start" => Some(TaskContinuationMode::InitialStart),
+            "recovery_resume" => Some(TaskContinuationMode::RecoveryResume),
+            "approval_resume" => Some(TaskContinuationMode::ApprovalResume),
+            "permission_resume" => Some(TaskContinuationMode::PermissionResume),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum TaskContinuationSource {
+    TaskEntry,
+    ParentRejoin,
+}
+
+impl TaskContinuationSource {
+    pub(crate) fn as_key(self) -> &'static str {
+        match self {
+            TaskContinuationSource::TaskEntry => "task_entry",
+            TaskContinuationSource::ParentRejoin => "parent_rejoin",
+        }
+    }
+
+    pub(crate) fn from_key(value: &str) -> Option<Self> {
+        match value.trim() {
+            "task_entry" => Some(TaskContinuationSource::TaskEntry),
+            "parent_rejoin" => Some(TaskContinuationSource::ParentRejoin),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum TaskTransition {
     Continue {
         mode: TaskContinuationMode,
+        source: TaskContinuationSource,
         reason: String,
     },
     DelegateToChild {
@@ -64,8 +98,17 @@ pub(crate) enum TaskTransition {
 
 impl TaskTransition {
     pub(crate) fn continued(mode: TaskContinuationMode, reason: impl Into<String>) -> Self {
+        Self::continued_with_source(mode, TaskContinuationSource::TaskEntry, reason)
+    }
+
+    pub(crate) fn continued_with_source(
+        mode: TaskContinuationMode,
+        source: TaskContinuationSource,
+        reason: impl Into<String>,
+    ) -> Self {
         Self::Continue {
             mode,
+            source,
             reason: reason.into(),
         }
     }
@@ -161,8 +204,11 @@ pub(crate) fn resolve_delegation_transition(task_state: &TaskState) -> Option<Ta
 pub(crate) fn resolve_initial_transition(task_state: &TaskState) -> TaskTransition {
     resolve_delegation_transition(task_state).unwrap_or_else(|| {
         if let Some(mode) = task_state.continuation_mode {
-            return TaskTransition::continued(
+            return TaskTransition::continued_with_source(
                 mode,
+                task_state
+                    .continuation_source
+                    .unwrap_or(TaskContinuationSource::TaskEntry),
                 task_state
                     .continuation_reason
                     .clone()
@@ -190,8 +236,8 @@ pub(crate) fn resolve_delegated_return_transition(
 pub(crate) fn resolve_parent_rejoin_transition(
     returned_task_record: &TaskRecord,
 ) -> TaskTransition {
-    let (mode, reason) = resolve_parent_rejoin_continuation_contract(returned_task_record);
-    TaskTransition::continued(mode, reason)
+    let (mode, source, reason) = resolve_parent_rejoin_continuation_contract(returned_task_record);
+    TaskTransition::continued_with_source(mode, source, reason)
 }
 
 #[cfg(test)]
@@ -200,7 +246,7 @@ mod tests {
         resolve_commit_transition, resolve_delegated_return_transition,
         resolve_delegation_transition, resolve_initial_transition,
         resolve_parent_rejoin_transition, resolve_stop_transition, resolve_terminal_transition,
-        TaskContinuationMode, TaskTransition,
+        TaskContinuationMode, TaskContinuationSource, TaskTransition,
     };
     use crate::agent::run_guard::RunStopReasonKind;
     use crate::agent::runtime::task_record::{TaskLifecycleStatus, TaskRecord};
@@ -337,6 +383,7 @@ mod tests {
             resolve_initial_transition(&task_state),
             TaskTransition::Continue {
                 mode: TaskContinuationMode::InitialStart,
+                source: TaskContinuationSource::TaskEntry,
                 reason: "initial_start".to_string(),
             }
         );
@@ -352,7 +399,31 @@ mod tests {
             resolve_initial_transition(&task_state),
             TaskTransition::Continue {
                 mode: TaskContinuationMode::RecoveryResume,
+                source: TaskContinuationSource::TaskEntry,
                 reason: "recovery_resume".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn resolve_initial_transition_preserves_parent_rejoin_source_for_recovery_tasks() {
+        let parent = TaskIdentity::new("task-parent", Option::<String>::None, Some("task-root"));
+        let task_state = TaskState::new_recovery_local_chat_with_contract(
+            "session-1",
+            "user-2",
+            "run-2",
+            &parent,
+            TaskContinuationMode::PermissionResume,
+            TaskContinuationSource::ParentRejoin,
+            "permission_denied",
+        );
+
+        assert_eq!(
+            resolve_initial_transition(&task_state),
+            TaskTransition::Continue {
+                mode: TaskContinuationMode::PermissionResume,
+                source: TaskContinuationSource::ParentRejoin,
+                reason: "permission_denied".to_string(),
             }
         );
     }
@@ -389,6 +460,36 @@ mod tests {
     }
 
     #[test]
+    fn continuation_mode_round_trips_through_stable_keys() {
+        assert_eq!(
+            TaskContinuationMode::from_key(TaskContinuationMode::InitialStart.as_key()),
+            Some(TaskContinuationMode::InitialStart)
+        );
+        assert_eq!(
+            TaskContinuationMode::from_key(TaskContinuationMode::RecoveryResume.as_key()),
+            Some(TaskContinuationMode::RecoveryResume)
+        );
+        assert_eq!(
+            TaskContinuationMode::from_key(TaskContinuationMode::ApprovalResume.as_key()),
+            Some(TaskContinuationMode::ApprovalResume)
+        );
+        assert_eq!(
+            TaskContinuationMode::from_key(TaskContinuationMode::PermissionResume.as_key()),
+            Some(TaskContinuationMode::PermissionResume)
+        );
+        assert_eq!(
+            TaskContinuationSource::from_key(TaskContinuationSource::TaskEntry.as_key()),
+            Some(TaskContinuationSource::TaskEntry)
+        );
+        assert_eq!(
+            TaskContinuationSource::from_key(TaskContinuationSource::ParentRejoin.as_key()),
+            Some(TaskContinuationSource::ParentRejoin)
+        );
+        assert_eq!(TaskContinuationMode::from_key("unknown"), None);
+        assert_eq!(TaskContinuationSource::from_key("unknown"), None);
+    }
+
+    #[test]
     fn resolve_parent_rejoin_transition_preserves_permission_resume_contract() {
         let record = TaskRecord {
             task_identity: TaskIdentity::new("task-child", Some("task-parent"), Some("task-root")),
@@ -410,7 +511,8 @@ mod tests {
             resolve_parent_rejoin_transition(&record),
             TaskTransition::Continue {
                 mode: TaskContinuationMode::PermissionResume,
-                reason: "delegated_return:permission_denied".to_string(),
+                source: TaskContinuationSource::ParentRejoin,
+                reason: "permission_denied".to_string(),
             }
         );
     }
