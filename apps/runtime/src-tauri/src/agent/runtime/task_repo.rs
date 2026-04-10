@@ -6,31 +6,31 @@ use crate::agent::runtime::task_record::{TaskLifecycleStatus, TaskRecord};
 pub(crate) struct TaskRepo;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct TaskRecordUpsertPayload {
-    pub task_identity: crate::agent::runtime::task_state::TaskIdentity,
-    pub task_kind: crate::agent::runtime::task_state::TaskKind,
-    pub surface_kind: crate::agent::runtime::task_state::TaskSurfaceKind,
-    pub backend_kind: crate::agent::runtime::task_state::TaskBackendKind,
-    pub session_id: String,
-    pub user_message_id: String,
-    pub run_id: String,
-    pub status: TaskLifecycleStatus,
-    pub created_at: String,
-    pub updated_at: String,
-    pub started_at: Option<String>,
-    pub completed_at: Option<String>,
-    pub terminal_reason: Option<String>,
+pub struct TaskRecordUpsertPayload {
+    pub(crate) task_identity: crate::agent::runtime::task_state::TaskIdentity,
+    pub(crate) task_kind: crate::agent::runtime::task_state::TaskKind,
+    pub(crate) surface_kind: crate::agent::runtime::task_state::TaskSurfaceKind,
+    pub(crate) backend_kind: crate::agent::runtime::task_state::TaskBackendKind,
+    pub(crate) session_id: String,
+    pub(crate) user_message_id: String,
+    pub(crate) run_id: String,
+    pub(crate) status: TaskLifecycleStatus,
+    pub(crate) created_at: String,
+    pub(crate) updated_at: String,
+    pub(crate) started_at: Option<String>,
+    pub(crate) completed_at: Option<String>,
+    pub(crate) terminal_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct TaskStatusChangedPayload {
-    pub task_id: String,
-    pub parent_task_id: Option<String>,
-    pub root_task_id: String,
-    pub from_status: TaskLifecycleStatus,
-    pub to_status: TaskLifecycleStatus,
-    pub terminal_reason: Option<String>,
-    pub updated_at: String,
+pub struct TaskStatusChangedPayload {
+    pub(crate) task_id: String,
+    pub(crate) parent_task_id: Option<String>,
+    pub(crate) root_task_id: String,
+    pub(crate) from_status: TaskLifecycleStatus,
+    pub(crate) to_status: TaskLifecycleStatus,
+    pub(crate) terminal_reason: Option<String>,
+    pub(crate) updated_at: String,
 }
 
 impl TaskRecordUpsertPayload {

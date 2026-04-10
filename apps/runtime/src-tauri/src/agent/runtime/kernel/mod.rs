@@ -7,7 +7,6 @@ pub(crate) mod lane_executor;
 pub(crate) mod outcome_commit;
 pub(crate) mod route_lane;
 pub(crate) mod routed_prompt;
-pub(crate) mod session_engine;
 pub(crate) mod session_profile;
 pub(crate) mod tool_registry_setup;
 pub(crate) mod turn_preparation;

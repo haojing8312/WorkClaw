@@ -196,11 +196,6 @@ pub(crate) enum ExecutionOutcome {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum SessionEngineError {
-    Generic(String),
-}
-
 #[cfg(test)]
 mod tests {
     use super::{

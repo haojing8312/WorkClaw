@@ -1,15 +1,9 @@
 use super::events::ToolConfirmResponder;
 use crate::agent::context::build_tool_context;
 use crate::agent::run_guard::{RunBudgetPolicy, RunBudgetScope};
-use crate::agent::runtime::attempt_runner::RouteExecutionOutcome;
-use crate::agent::runtime::kernel::execution_plan::{
-    ExecutionContext, ExecutionOutcome, SessionEngineError,
-};
-use crate::agent::runtime::kernel::outcome_commit::{OutcomeCommitter, TerminalOutcome};
+use crate::agent::runtime::kernel::execution_plan::ExecutionContext;
 use crate::agent::runtime::kernel::turn_preparation::parse_user_skill_command;
-use crate::agent::runtime::kernel::turn_state::TurnStateSnapshot;
-use crate::agent::runtime::task_engine::{TaskEngine, TaskExecutionOutcome};
-use crate::agent::runtime::task_record::TaskRecord;
+use crate::agent::runtime::task_entry::{self, PrimaryLocalChatTaskRunAndFinalizeRequest};
 use crate::agent::AgentExecutor;
 use crate::session_journal::SessionJournalStore;
 use serde_json::Value;
@@ -32,33 +26,6 @@ pub(crate) struct SkillCommandDispatchOutcome {
 pub(crate) struct SkillCommandDispatchError {
     pub error: String,
     pub skill_id: String,
-}
-
-#[derive(Debug)]
-enum SessionTurnCompletion {
-    DirectDispatch {
-        output: String,
-        turn_state: TurnStateSnapshot,
-        task_record: TaskRecord,
-    },
-    RouteExecution {
-        route_execution: RouteExecutionOutcome,
-        reconstructed_history_len: usize,
-        turn_state: TurnStateSnapshot,
-        task_record: TaskRecord,
-    },
-    SkillCommandFailed {
-        error: String,
-        turn_state: TurnStateSnapshot,
-        task_record: TaskRecord,
-    },
-    SkillCommandStopped {
-        turn_state: TurnStateSnapshot,
-        stop_reason: crate::agent::run_guard::RunStopReason,
-        error: String,
-        task_record: TaskRecord,
-    },
-    GenericError(String),
 }
 
 impl SessionRuntime {
@@ -149,300 +116,22 @@ impl SessionRuntime {
         tool_confirm_responder: ToolConfirmResponder,
     ) -> Result<(), String> {
         let run_id = Uuid::new_v4().to_string();
-        let task_engine_result = TaskEngine::run_primary_local_chat_task(
-            app,
-            agent_executor,
-            db,
-            journal,
-            session_id,
-            &run_id,
-            user_message_id,
-            user_message,
-            user_message_parts,
-            max_iterations_override,
-            cancel_flag.clone(),
-            tool_confirm_responder.clone(),
-        )
-        .await;
-
-        match Self::classify_task_engine_result(task_engine_result) {
-            SessionTurnCompletion::DirectDispatch {
-                output,
-                turn_state,
-                task_record,
-            } => {
-                let commit_result = OutcomeCommitter::commit_terminal_outcome(
-                    app,
-                    db,
-                    journal,
-                    session_id,
-                    &run_id,
-                    TerminalOutcome::DirectDispatch { output, turn_state },
-                )
-                .await;
-                Self::finalize_task_after_commit(
-                    db,
-                    journal,
-                    session_id,
-                    &task_record,
-                    commit_result,
-                    None,
-                )
-                .await
-            }
-            SessionTurnCompletion::RouteExecution {
-                route_execution,
-                reconstructed_history_len,
-                turn_state,
-                task_record,
-            } => {
-                let commit_result = OutcomeCommitter::commit_terminal_outcome(
-                    app,
-                    db,
-                    journal,
-                    session_id,
-                    &run_id,
-                    TerminalOutcome::RouteExecution {
-                        route_execution,
-                        reconstructed_history_len,
-                        turn_state,
-                    },
-                )
-                .await;
-                Self::finalize_task_after_commit(
-                    db,
-                    journal,
-                    session_id,
-                    &task_record,
-                    commit_result,
-                    None,
-                )
-                .await
-            }
-            SessionTurnCompletion::SkillCommandFailed {
-                error,
-                turn_state,
-                task_record,
-            } => {
-                let commit_result = OutcomeCommitter::commit_terminal_outcome(
-                    app,
-                    db,
-                    journal,
-                    session_id,
-                    &run_id,
-                    TerminalOutcome::SkillCommandFailed { error, turn_state },
-                )
-                .await;
-                Self::finalize_task_after_commit(
-                    db,
-                    journal,
-                    session_id,
-                    &task_record,
-                    commit_result,
-                    Some("skill_command_dispatch".to_string()),
-                )
-                .await
-            }
-            SessionTurnCompletion::SkillCommandStopped {
-                turn_state,
-                stop_reason,
-                error,
-                task_record,
-            } => {
-                let task_reason = stop_reason.kind.as_key().to_string();
-                let commit_result = OutcomeCommitter::commit_terminal_outcome(
-                    app,
-                    db,
-                    journal,
-                    session_id,
-                    &run_id,
-                    TerminalOutcome::SkillCommandStopped {
-                        turn_state,
-                        stop_reason,
-                        error,
-                    },
-                )
-                .await;
-                Self::finalize_task_after_commit(
-                    db,
-                    journal,
-                    session_id,
-                    &task_record,
-                    commit_result,
-                    Some(task_reason),
-                )
-                .await
-            }
-            SessionTurnCompletion::GenericError(error) => Err(error),
-        }
-    }
-
-    async fn finalize_task_after_commit(
-        db: &sqlx::SqlitePool,
-        journal: &SessionJournalStore,
-        session_id: &str,
-        task_record: &TaskRecord,
-        commit_result: Result<(), String>,
-        failure_reason: Option<String>,
-    ) -> Result<(), String> {
-        TaskEngine::finalize_after_commit(
-            db,
-            journal,
-            session_id,
-            task_record,
-            commit_result,
-            failure_reason,
+        task_entry::run_and_finalize_primary_local_chat_task(
+            PrimaryLocalChatTaskRunAndFinalizeRequest {
+                app,
+                agent_executor,
+                db,
+                journal,
+                session_id,
+                run_id: &run_id,
+                user_message_id,
+                user_message,
+                user_message_parts,
+                max_iterations_override,
+                cancel_flag: cancel_flag.clone(),
+                tool_confirm_responder: tool_confirm_responder.clone(),
+            },
         )
         .await
-    }
-
-    fn classify_task_engine_result(
-        result: Result<TaskExecutionOutcome, SessionEngineError>,
-    ) -> SessionTurnCompletion {
-        match result {
-            Ok(TaskExecutionOutcome {
-                task_state,
-                active_task_record,
-                execution_outcome,
-            }) => Self::classify_session_engine_result(
-                Ok(TaskEngine::attach_task_state(
-                    &task_state,
-                    execution_outcome,
-                )),
-                Some(active_task_record),
-            ),
-            Err(error) => Self::classify_session_engine_result(Err(error), None),
-        }
-    }
-
-    fn classify_session_engine_result(
-        result: Result<ExecutionOutcome, SessionEngineError>,
-        task_record: Option<TaskRecord>,
-    ) -> SessionTurnCompletion {
-        match result {
-            Ok(ExecutionOutcome::DirectDispatch { output, turn_state }) => {
-                SessionTurnCompletion::DirectDispatch {
-                    output,
-                    turn_state,
-                    task_record: task_record.expect("task record required for terminal outcome"),
-                }
-            }
-            Ok(ExecutionOutcome::RouteExecution {
-                route_execution,
-                reconstructed_history_len,
-                turn_state,
-            }) => SessionTurnCompletion::RouteExecution {
-                route_execution,
-                reconstructed_history_len,
-                turn_state,
-                task_record: task_record.expect("task record required for terminal outcome"),
-            },
-            Ok(ExecutionOutcome::SkillCommandFailed { error, turn_state }) => {
-                SessionTurnCompletion::SkillCommandFailed {
-                    error,
-                    turn_state,
-                    task_record: task_record.expect("task record required for terminal outcome"),
-                }
-            }
-            Ok(ExecutionOutcome::SkillCommandStopped {
-                turn_state,
-                stop_reason,
-                error,
-            }) => SessionTurnCompletion::SkillCommandStopped {
-                turn_state,
-                stop_reason,
-                error,
-                task_record: task_record.expect("task record required for terminal outcome"),
-            },
-            Err(SessionEngineError::Generic(error)) => SessionTurnCompletion::GenericError(error),
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{SessionRuntime, SessionTurnCompletion};
-    use crate::agent::runtime::kernel::execution_plan::ExecutionOutcome;
-    use crate::agent::runtime::kernel::turn_state::TurnStateSnapshot;
-    use crate::agent::runtime::task_engine::{TaskEngine, TaskExecutionOutcome};
-    use crate::agent::runtime::task_record::TaskRecord;
-    use crate::agent::runtime::task_state::{TaskKind, TaskSurfaceKind};
-
-    #[test]
-    fn classify_task_engine_result_accepts_primary_user_task_outcome() {
-        let task_state =
-            TaskEngine::build_primary_local_chat_task_state("session-1", "user-1", "run-1");
-        assert_eq!(task_state.task_kind, TaskKind::PrimaryUserTask);
-
-        let task_record = TaskRecord::new_pending(
-            task_state.task_identity.clone(),
-            task_state.task_kind,
-            task_state.surface_kind,
-            task_state.backend_kind,
-            task_state.session_id.clone(),
-            task_state.user_message_id.clone(),
-            task_state.run_id.clone(),
-            "2026-04-09T10:00:00Z",
-        );
-        let result = Ok(TaskExecutionOutcome::new(
-            task_state,
-            task_record,
-            ExecutionOutcome::DirectDispatch {
-                output: "done".to_string(),
-                turn_state: TurnStateSnapshot::default(),
-            },
-        ));
-
-        let completion = SessionRuntime::classify_task_engine_result(result);
-
-        assert!(matches!(
-            completion,
-            SessionTurnCompletion::DirectDispatch { output, .. } if output == "done"
-        ));
-    }
-
-    #[test]
-    fn classify_task_engine_result_preserves_task_identity_in_turn_state() {
-        let task_state =
-            TaskEngine::build_primary_local_chat_task_state("session-1", "user-1", "run-1");
-
-        let task_record = TaskRecord::new_pending(
-            task_state.task_identity.clone(),
-            task_state.task_kind,
-            task_state.surface_kind,
-            task_state.backend_kind,
-            task_state.session_id.clone(),
-            task_state.user_message_id.clone(),
-            task_state.run_id.clone(),
-            "2026-04-09T10:00:00Z",
-        );
-        let result = Ok(TaskExecutionOutcome::new(
-            task_state.clone(),
-            task_record,
-            ExecutionOutcome::DirectDispatch {
-                output: "done".to_string(),
-                turn_state: TurnStateSnapshot::default(),
-            },
-        ));
-
-        let completion = SessionRuntime::classify_task_engine_result(result);
-
-        match completion {
-            SessionTurnCompletion::DirectDispatch { turn_state, .. } => {
-                assert_eq!(
-                    turn_state
-                        .task_identity
-                        .as_ref()
-                        .map(|identity| identity.task_id.as_str()),
-                    Some(task_state.task_identity.task_id.as_str())
-                );
-                assert_eq!(turn_state.task_kind, Some(TaskKind::PrimaryUserTask));
-                assert_eq!(
-                    turn_state.task_surface,
-                    Some(TaskSurfaceKind::LocalChatSurface)
-                );
-            }
-            other => panic!("unexpected completion: {other:?}"),
-        }
     }
 }

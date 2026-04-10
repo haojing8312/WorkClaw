@@ -54,6 +54,24 @@ impl TaskBackendKind {
             TaskBackendKind::EmployeeStepBackend => "employee_step_backend",
         }
     }
+
+    pub(crate) fn generic_error_kind(self) -> &'static str {
+        match self {
+            TaskBackendKind::InteractiveChatBackend => "local_chat",
+            TaskBackendKind::HiddenChildBackend => "child_session",
+            TaskBackendKind::EmployeeStepBackend => "employee_step",
+        }
+    }
+
+    pub(crate) fn empty_success_error(self) -> Option<&'static str> {
+        match self {
+            TaskBackendKind::InteractiveChatBackend => None,
+            TaskBackendKind::HiddenChildBackend => None,
+            TaskBackendKind::EmployeeStepBackend => {
+                Some("employee step execution returned empty assistant output")
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -256,5 +274,53 @@ mod tests {
             Some("task-parent")
         );
         assert_eq!(task_state.task_identity.root_task_id, "task-root");
+    }
+
+    #[test]
+    fn sub_agent_task_can_inherit_existing_task_lineage() {
+        let parent = TaskIdentity::new("task-parent", Option::<String>::None, Some("task-root"));
+
+        let task_state = TaskState::new_sub_agent("session-1", "user-1", "run-1", Some(&parent));
+
+        assert_eq!(task_state.task_kind, TaskKind::SubAgentTask);
+        assert_eq!(task_state.surface_kind, TaskSurfaceKind::HiddenChildSurface);
+        assert_eq!(task_state.backend_kind, TaskBackendKind::HiddenChildBackend);
+        assert_eq!(
+            task_state.task_identity.parent_task_id.as_deref(),
+            Some("task-parent")
+        );
+        assert_eq!(task_state.task_identity.root_task_id, "task-root");
+    }
+
+    #[test]
+    fn backend_kind_exposes_runtime_error_contracts() {
+        assert_eq!(
+            TaskBackendKind::InteractiveChatBackend.generic_error_kind(),
+            "local_chat"
+        );
+        assert_eq!(
+            TaskBackendKind::HiddenChildBackend.generic_error_kind(),
+            "child_session"
+        );
+        assert_eq!(
+            TaskBackendKind::EmployeeStepBackend.generic_error_kind(),
+            "employee_step"
+        );
+    }
+
+    #[test]
+    fn backend_kind_exposes_empty_success_policy() {
+        assert_eq!(
+            TaskBackendKind::InteractiveChatBackend.empty_success_error(),
+            None
+        );
+        assert_eq!(
+            TaskBackendKind::HiddenChildBackend.empty_success_error(),
+            None
+        );
+        assert_eq!(
+            TaskBackendKind::EmployeeStepBackend.empty_success_error(),
+            Some("employee step execution returned empty assistant output")
+        );
     }
 }

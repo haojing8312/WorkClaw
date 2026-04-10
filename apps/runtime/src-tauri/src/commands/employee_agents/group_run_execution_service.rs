@@ -7,23 +7,28 @@ use super::super::repo::{
 };
 use super::super::{EmployeeGroupRunResult, StartEmployeeGroupRunInput};
 use super::{get_employee_group_run_snapshot_by_run_id_with_pool, list_agent_employees_with_pool};
-use crate::agent::run_guard::{RunStopReason, RunStopReasonKind};
-use crate::agent::runtime::kernel::execution_plan::{ExecutionOutcome, SessionEngineError};
-use crate::agent::runtime::runtime_io::{
-    append_partial_assistant_chunk_with_pool, append_run_failed_with_pool,
-    append_run_started_with_pool, append_run_stopped_with_pool, finalize_run_success_with_pool,
-    insert_session_message_with_pool,
+use crate::agent::run_guard::RunStopReasonKind;
+use crate::agent::runtime::kernel::execution_plan::ExecutionOutcome;
+use crate::agent::runtime::runtime_io::insert_session_message_with_pool;
+use crate::agent::runtime::task_active_run::{
+    DelegatedTaskBackendRunRequest, TaskExecutionOutcome,
 };
 use crate::agent::runtime::task_backend::{
-    execute_prepared_task_backend, prepare_task_backend, DelegatedPreparedTaskBackendExecution,
-    EmployeeStepTaskBackendPreparationRequest, PreparedTaskBackendExecutionRequest,
+    execute_prepared_task_backend_with_context, prepare_task_backend,
+    EmployeeStepTaskBackendPreparationRequest, TaskBackendExecutionContext,
     TaskBackendPreparationRequest, TaskBackendTokenCallback,
 };
-use crate::agent::runtime::task_engine::{TaskBeginParentContext, TaskEngine};
+use crate::agent::runtime::task_entry;
+use crate::agent::runtime::task_entry::{
+    DelegatedTaskBackendRunAndFinalizeRequest, DelegatedTaskTerminalFinalizeEntryRequest,
+};
+use crate::agent::runtime::task_lifecycle;
+use crate::agent::runtime::task_lifecycle::TaskBeginParentContext;
 use crate::agent::runtime::task_record::TaskRecord;
 use crate::agent::runtime::task_state::TaskState;
+use crate::agent::runtime::task_terminal::DelegatedTaskTerminalOutcome;
 use crate::agent::tools::{EmployeeManageTool, MemoryTool};
-use crate::agent::{runtime::RuntimeTranscript, AgentExecutor, ToolRegistry};
+use crate::agent::{AgentExecutor, ToolRegistry};
 use crate::commands::chat_runtime_io::extract_assistant_text_content;
 use crate::commands::models::resolve_default_model_id_with_pool;
 use crate::session_journal::SessionJournalStore;
@@ -35,24 +40,9 @@ use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 struct PreparedEmployeeStepSessionRun {
-    session_id: String,
     run_id: String,
     task_state: TaskState,
-    task_record: TaskRecord,
-}
-
-#[derive(Debug, Clone)]
-enum FinalizedEmployeeStepExecutionOutcome {
-    Completed {
-        output: String,
-    },
-    Stopped {
-        stop_reason: RunStopReason,
-        error: String,
-    },
-    Failed {
-        error: String,
-    },
+    parent_task_record: Option<TaskRecord>,
 }
 
 async fn prepare_employee_step_session_run(
@@ -65,8 +55,8 @@ async fn prepare_employee_step_session_run(
         insert_session_message_with_pool(pool, session_id, "user", prompt, None).await?;
     let run_id = Uuid::new_v4().to_string();
     let parent_task_record =
-        TaskEngine::resolve_latest_task_record_for_session(journal, session_id).await;
-    let task_state = TaskEngine::build_employee_step_task_state(
+        task_lifecycle::resolve_latest_task_record_for_session(journal, session_id).await;
+    let task_state = TaskState::new_employee_step(
         session_id,
         &user_message_id,
         &run_id,
@@ -74,225 +64,30 @@ async fn prepare_employee_step_session_run(
             .as_ref()
             .map(|record| &record.task_identity),
     );
-    let task_record = TaskEngine::begin_task_run(
-        pool,
-        journal,
-        &task_state,
-        parent_task_record
-            .as_ref()
-            .map(|record| TaskBeginParentContext {
-                session_id,
-                active_task_record: record,
-            }),
-    )
-    .await?;
-    append_run_started_with_pool(pool, journal, session_id, &run_id, &user_message_id).await?;
-
     Ok(PreparedEmployeeStepSessionRun {
-        session_id: session_id.to_string(),
         run_id,
         task_state,
-        task_record,
+        parent_task_record,
     })
 }
 
+#[cfg(test)]
 async fn finalize_employee_step_execution_outcome(
     pool: &SqlitePool,
     journal: &SessionJournalStore,
-    prepared: &PreparedEmployeeStepSessionRun,
-    outcome: ExecutionOutcome,
-) -> Result<FinalizedEmployeeStepExecutionOutcome, String> {
-    match TaskEngine::attach_task_state(&prepared.task_state, outcome) {
-        ExecutionOutcome::RouteExecution {
-            route_execution,
-            reconstructed_history_len,
-            turn_state,
-        } => {
-            if let Some(final_messages) = route_execution.final_messages {
-                let (final_text, has_tool_calls, content) =
-                    RuntimeTranscript::build_assistant_content_from_final_messages(
-                        &final_messages,
-                        reconstructed_history_len,
-                    );
-                if final_text.trim().is_empty() {
-                    return Err(
-                        "employee step execution returned empty assistant output".to_string()
-                    );
-                }
-                finalize_run_success_with_pool(
-                    pool,
-                    journal,
-                    &prepared.session_id,
-                    &prepared.run_id,
-                    &final_text,
-                    has_tool_calls,
-                    &content,
-                    &route_execution.reasoning_text,
-                    route_execution.reasoning_duration_ms,
-                    Some(&turn_state),
-                )
-                .await?;
-                TaskEngine::finalize_after_terminal(
-                    pool,
-                    journal,
-                    &prepared.session_id,
-                    &prepared.task_record,
-                    true,
-                    None,
-                )
-                .await;
-
-                Ok(FinalizedEmployeeStepExecutionOutcome::Completed { output: final_text })
-            } else {
-                let partial_text = if route_execution.partial_text.is_empty() {
-                    turn_state.partial_assistant_text.clone()
-                } else {
-                    route_execution.partial_text.clone()
-                };
-                if !partial_text.is_empty() {
-                    append_partial_assistant_chunk_with_pool(
-                        pool,
-                        journal,
-                        &prepared.session_id,
-                        &prepared.run_id,
-                        &partial_text,
-                    )
-                    .await;
-                }
-
-                let error_text = route_execution
-                    .last_error
-                    .clone()
-                    .unwrap_or_else(|| "employee step execution failed".to_string());
-                if let Some(stop_reason) = route_execution
-                    .last_stop_reason
-                    .as_ref()
-                    .or(turn_state.stop_reason.as_ref())
-                {
-                    append_run_stopped_with_pool(
-                        pool,
-                        journal,
-                        &prepared.session_id,
-                        &prepared.run_id,
-                        stop_reason,
-                        Some(&turn_state),
-                    )
-                    .await?;
-                    TaskEngine::finalize_after_stop(
-                        pool,
-                        journal,
-                        &prepared.session_id,
-                        &prepared.task_record,
-                        stop_reason.kind,
-                        Some(stop_reason.kind.as_key()),
-                    )
-                    .await;
-                    Ok(FinalizedEmployeeStepExecutionOutcome::Stopped {
-                        stop_reason: stop_reason.clone(),
-                        error: error_text,
-                    })
-                } else {
-                    append_run_failed_with_pool(
-                        pool,
-                        journal,
-                        &prepared.session_id,
-                        &prepared.run_id,
-                        route_execution
-                            .last_error_kind
-                            .as_deref()
-                            .unwrap_or("employee_step"),
-                        &error_text,
-                        Some(&turn_state),
-                    )
-                    .await;
-                    TaskEngine::finalize_after_terminal(
-                        pool,
-                        journal,
-                        &prepared.session_id,
-                        &prepared.task_record,
-                        false,
-                        route_execution
-                            .last_error_kind
-                            .as_deref()
-                            .or(Some("employee_step")),
-                    )
-                    .await;
-                    Ok(FinalizedEmployeeStepExecutionOutcome::Failed { error: error_text })
-                }
-            }
-        }
-        ExecutionOutcome::DirectDispatch { output, turn_state } => {
-            finalize_run_success_with_pool(
-                pool,
-                journal,
-                &prepared.session_id,
-                &prepared.run_id,
-                &output,
-                false,
-                &output,
-                "",
-                None,
-                Some(&turn_state),
-            )
-            .await?;
-            TaskEngine::finalize_after_terminal(
-                pool,
-                journal,
-                &prepared.session_id,
-                &prepared.task_record,
-                true,
-                None,
-            )
-            .await;
-            Ok(FinalizedEmployeeStepExecutionOutcome::Completed { output })
-        }
-        ExecutionOutcome::SkillCommandFailed { error, turn_state } => {
-            append_run_failed_with_pool(
-                pool,
-                journal,
-                &prepared.session_id,
-                &prepared.run_id,
-                "skill_command_dispatch",
-                &error,
-                Some(&turn_state),
-            )
-            .await;
-            TaskEngine::finalize_after_terminal(
-                pool,
-                journal,
-                &prepared.session_id,
-                &prepared.task_record,
-                false,
-                Some("skill_command_dispatch"),
-            )
-            .await;
-            Ok(FinalizedEmployeeStepExecutionOutcome::Failed { error })
-        }
-        ExecutionOutcome::SkillCommandStopped {
-            turn_state,
-            stop_reason,
-            error,
-        } => {
-            append_run_stopped_with_pool(
-                pool,
-                journal,
-                &prepared.session_id,
-                &prepared.run_id,
-                &stop_reason,
-                Some(&turn_state),
-            )
-            .await?;
-            TaskEngine::finalize_after_stop(
-                pool,
-                journal,
-                &prepared.session_id,
-                &prepared.task_record,
-                stop_reason.kind,
-                Some(stop_reason.kind.as_key()),
-            )
-            .await;
-            Ok(FinalizedEmployeeStepExecutionOutcome::Stopped { stop_reason, error })
-        }
+    _prepared: &PreparedEmployeeStepSessionRun,
+    outcome: TaskExecutionOutcome,
+) -> Result<DelegatedTaskTerminalOutcome, String> {
+    match task_entry::finalize_delegated_task_execution_outcome_entry(
+        DelegatedTaskTerminalFinalizeEntryRequest {
+            db: pool,
+            journal,
+            task_execution_outcome: outcome,
+        },
+    )
+    .await?
+    {
+        outcome => Ok(outcome),
     }
 }
 
@@ -373,47 +168,128 @@ pub(crate) async fn execute_group_step_in_employee_context_with_pool(
         Arc::clone(&registry),
         max_iterations,
     ));
-    let mut prepared_surface = prepare_task_backend(TaskBackendPreparationRequest::EmployeeStep(
-        EmployeeStepTaskBackendPreparationRequest {
-            agent_executor: &executor,
-            user_prompt: &user_prompt,
-            employee_step_system_prompt: &system_prompt,
-            api_format: &model_row.api_format,
-            base_url: &model_row.base_url,
-            api_key: &model_row.api_key,
-            model: &model_row.model_name,
-            allowed_tools,
-            max_iterations,
-            work_dir: if session_row.work_dir.trim().is_empty() {
-                None
-            } else {
-                Some(session_row.work_dir.clone())
-            },
-        },
-    ))
-    .await?;
-    prepared_surface.turn_context.messages = messages;
-
-    let assistant_output = match execute_prepared_task_backend(
-        PreparedTaskBackendExecutionRequest::Delegated(DelegatedPreparedTaskBackendExecution {
-            prepared_surface: &prepared_surface,
-            app_handle: None,
-            agent_executor: Arc::clone(&executor),
-            session_id,
-            on_token: Arc::new(|_| {}) as TaskBackendTokenCallback,
-        }),
-    )
-    .await
+    let assistant_output = if let (Some(journal), Some(prepared_run)) =
+        (journal, prepared_run.as_ref())
     {
-        Ok(outcome) => {
-            if let (Some(journal), Some(prepared_run)) = (journal, prepared_run.as_ref()) {
-                match finalize_employee_step_execution_outcome(pool, journal, prepared_run, outcome)
-                    .await?
-                {
-                    FinalizedEmployeeStepExecutionOutcome::Completed { output } => output,
-                    FinalizedEmployeeStepExecutionOutcome::Stopped { stop_reason, error } => {
+        match task_entry::run_and_finalize_delegated_task_backend(
+            DelegatedTaskBackendRunAndFinalizeRequest {
+                backend_request: DelegatedTaskBackendRunRequest {
+                    db: pool,
+                    journal,
+                    task_state: prepared_run.task_state.clone(),
+                    parent_context: prepared_run.parent_task_record.as_ref().map(|record| {
+                        TaskBeginParentContext {
+                            session_id,
+                            active_task_record: record,
+                        }
+                    }),
+                    preparation_request: TaskBackendPreparationRequest::EmployeeStep(
+                        EmployeeStepTaskBackendPreparationRequest {
+                            agent_executor: &executor,
+                            user_prompt: &user_prompt,
+                            employee_step_system_prompt: &system_prompt,
+                            api_format: &model_row.api_format,
+                            base_url: &model_row.base_url,
+                            api_key: &model_row.api_key,
+                            model: &model_row.model_name,
+                            allowed_tools,
+                            max_iterations,
+                            work_dir: if session_row.work_dir.trim().is_empty() {
+                                None
+                            } else {
+                                Some(session_row.work_dir.clone())
+                            },
+                        },
+                    ),
+                    app_handle: None,
+                    agent_executor: Arc::clone(&executor),
+                    on_token: Arc::new(|_| {}) as TaskBackendTokenCallback,
+                    prepare_surface: move |prepared_surface| {
+                        prepared_surface.turn_context.messages = messages;
+                    },
+                },
+            },
+        )
+        .await?
+        {
+            DelegatedTaskTerminalOutcome::Completed { output } => output,
+            DelegatedTaskTerminalOutcome::Stopped { stop_reason, error } => {
+                if stop_reason.kind != RunStopReasonKind::MaxTurns {
+                    return Err(error);
+                }
+                let fallback_output = super::super::build_group_step_iteration_fallback_output(
+                    &employee,
+                    user_goal,
+                    step_input,
+                    stop_reason
+                        .detail
+                        .as_deref()
+                        .unwrap_or(stop_reason.message.as_str()),
+                );
+                let finished_at = chrono::Utc::now().to_rfc3339();
+                insert_session_message(
+                    pool,
+                    session_id,
+                    "assistant",
+                    &fallback_output,
+                    &finished_at,
+                )
+                .await?;
+                return Ok(fallback_output);
+            }
+            DelegatedTaskTerminalOutcome::Failed { error } => return Err(error),
+        }
+    } else {
+        let mut prepared_surface =
+            prepare_task_backend(TaskBackendPreparationRequest::EmployeeStep(
+                EmployeeStepTaskBackendPreparationRequest {
+                    agent_executor: &executor,
+                    user_prompt: &user_prompt,
+                    employee_step_system_prompt: &system_prompt,
+                    api_format: &model_row.api_format,
+                    base_url: &model_row.base_url,
+                    api_key: &model_row.api_key,
+                    model: &model_row.model_name,
+                    allowed_tools,
+                    max_iterations,
+                    work_dir: if session_row.work_dir.trim().is_empty() {
+                        None
+                    } else {
+                        Some(session_row.work_dir.clone())
+                    },
+                },
+            ))
+            .await?;
+        prepared_surface.turn_context.messages = messages;
+
+        match execute_prepared_task_backend_with_context(
+            &prepared_surface,
+            TaskBackendExecutionContext::Delegated {
+                app_handle: None,
+                agent_executor: Arc::clone(&executor),
+                session_id,
+                on_token: Arc::new(|_| {}) as TaskBackendTokenCallback,
+            },
+        )
+        .await
+        {
+            Ok(outcome) => match outcome {
+                ExecutionOutcome::RouteExecution {
+                    route_execution, ..
+                } => {
+                    if let Some(final_messages) = route_execution.final_messages {
+                        let assistant_output =
+                            super::super::extract_assistant_text(&final_messages);
+                        if assistant_output.trim().is_empty() {
+                            return Err("employee step execution returned empty assistant output"
+                                .to_string());
+                        }
+                        assistant_output
+                    } else if let Some(stop_reason) = route_execution.last_stop_reason {
                         if stop_reason.kind != RunStopReasonKind::MaxTurns {
-                            return Err(error);
+                            return Err(route_execution
+                                .last_error
+                                .unwrap_or_else(|| stop_reason.message.clone()));
                         }
                         let fallback_output =
                             super::super::build_group_step_iteration_fallback_output(
@@ -435,85 +311,17 @@ pub(crate) async fn execute_group_step_in_employee_context_with_pool(
                         )
                         .await?;
                         return Ok(fallback_output);
+                    } else {
+                        return Err(route_execution
+                            .last_error
+                            .unwrap_or_else(|| "employee step execution failed".to_string()));
                     }
-                    FinalizedEmployeeStepExecutionOutcome::Failed { error } => return Err(error),
                 }
-            } else {
-                match outcome {
-                    ExecutionOutcome::RouteExecution {
-                        route_execution, ..
-                    } => {
-                        if let Some(final_messages) = route_execution.final_messages {
-                            let assistant_output =
-                                super::super::extract_assistant_text(&final_messages);
-                            if assistant_output.trim().is_empty() {
-                                return Err(
-                                    "employee step execution returned empty assistant output"
-                                        .to_string(),
-                                );
-                            }
-                            assistant_output
-                        } else if let Some(stop_reason) = route_execution.last_stop_reason {
-                            if stop_reason.kind != RunStopReasonKind::MaxTurns {
-                                return Err(route_execution
-                                    .last_error
-                                    .unwrap_or_else(|| stop_reason.message.clone()));
-                            }
-                            let fallback_output =
-                                super::super::build_group_step_iteration_fallback_output(
-                                    &employee,
-                                    user_goal,
-                                    step_input,
-                                    stop_reason
-                                        .detail
-                                        .as_deref()
-                                        .unwrap_or(stop_reason.message.as_str()),
-                                );
-                            let finished_at = chrono::Utc::now().to_rfc3339();
-                            insert_session_message(
-                                pool,
-                                session_id,
-                                "assistant",
-                                &fallback_output,
-                                &finished_at,
-                            )
-                            .await?;
-                            return Ok(fallback_output);
-                        } else {
-                            return Err(route_execution
-                                .last_error
-                                .unwrap_or_else(|| "employee step execution failed".to_string()));
-                        }
-                    }
-                    ExecutionOutcome::DirectDispatch { output, .. } => output,
-                    ExecutionOutcome::SkillCommandFailed { error, .. }
-                    | ExecutionOutcome::SkillCommandStopped { error, .. } => return Err(error),
-                }
-            }
-        }
-        Err(SessionEngineError::Generic(message)) => {
-            if let (Some(journal), Some(prepared_run)) = (journal, prepared_run.as_ref()) {
-                append_run_failed_with_pool(
-                    pool,
-                    journal,
-                    session_id,
-                    &prepared_run.run_id,
-                    "employee_step",
-                    &message,
-                    None,
-                )
-                .await;
-                TaskEngine::finalize_after_terminal(
-                    pool,
-                    journal,
-                    session_id,
-                    &prepared_run.task_record,
-                    false,
-                    Some(&message),
-                )
-                .await;
-            }
-            return Err(message);
+                ExecutionOutcome::DirectDispatch { output, .. } => output,
+                ExecutionOutcome::SkillCommandFailed { error, .. }
+                | ExecutionOutcome::SkillCommandStopped { error, .. } => return Err(error),
+            },
+            Err(message) => return Err(message),
         }
     };
 
@@ -813,14 +621,15 @@ pub(crate) async fn start_employee_group_run_internal_with_pool(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        finalize_employee_step_execution_outcome, prepare_employee_step_session_run,
-        FinalizedEmployeeStepExecutionOutcome,
-    };
+    use super::{finalize_employee_step_execution_outcome, prepare_employee_step_session_run};
     use crate::agent::runtime::attempt_runner::RouteExecutionOutcome;
     use crate::agent::runtime::kernel::execution_plan::{ExecutionLane, ExecutionOutcome};
     use crate::agent::runtime::kernel::session_profile::SessionSurfaceKind;
     use crate::agent::runtime::kernel::turn_state::TurnStateSnapshot;
+    use crate::agent::runtime::task_active_run::TaskExecutionOutcome;
+    use crate::agent::runtime::task_lifecycle;
+    use crate::agent::runtime::task_lifecycle::TaskBeginParentContext;
+    use crate::agent::runtime::task_terminal::DelegatedTaskTerminalOutcome;
     use crate::session_journal::{
         SessionJournalStore, SessionRunEvent, SessionRunTaskIdentitySnapshot,
     };
@@ -926,14 +735,25 @@ mod tests {
                 .with_execution_lane(ExecutionLane::OpenTask),
         };
 
+        let active_task_record = task_lifecycle::begin_task_run(
+            &pool,
+            &journal,
+            &prepared.task_state,
+            None::<TaskBeginParentContext<'_>>,
+        )
+        .await
+        .expect("begin employee step task run");
+        let wrapped =
+            TaskExecutionOutcome::new(prepared.task_state.clone(), active_task_record, outcome);
+
         let finalized =
-            finalize_employee_step_execution_outcome(&pool, &journal, &prepared, outcome)
+            finalize_employee_step_execution_outcome(&pool, &journal, &prepared, wrapped)
                 .await
                 .expect("finalize employee step outcome");
 
         assert!(matches!(
             finalized,
-            FinalizedEmployeeStepExecutionOutcome::Completed { ref output }
+            DelegatedTaskTerminalOutcome::Completed { ref output }
                 if output == "已汇总日报，并补充了当前风险项。"
         ));
 

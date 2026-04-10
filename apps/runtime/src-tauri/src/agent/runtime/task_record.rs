@@ -9,7 +9,7 @@ pub(crate) struct TaskLifecycleTransitionError {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) enum TaskLifecycleStatus {
+pub enum TaskLifecycleStatus {
     #[serde(rename = "pending")]
     Pending,
     #[serde(rename = "running")]

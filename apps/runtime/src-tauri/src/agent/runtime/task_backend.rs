@@ -1,18 +1,27 @@
+use crate::agent::run_guard::parse_run_stop_reason;
+use crate::agent::runtime::attempt_runner::RouteExecutionOutcome;
 use crate::agent::runtime::events::ToolConfirmResponder;
 use crate::agent::runtime::kernel::execution_plan::{
-    ExecutionContext, ExecutionOutcome, SessionEngineError, TurnContext,
+    ExecutionContext, ExecutionLane, ExecutionOutcome, TurnContext,
 };
-use crate::agent::runtime::kernel::session_engine::SessionEngine;
+use crate::agent::runtime::kernel::lane_executor::{execute_execution_lane, LaneExecutionParams};
 use crate::agent::runtime::kernel::session_profile::SessionSurfaceKind;
 use crate::agent::runtime::kernel::turn_preparation::{
-    prepare_employee_step_turn, prepare_hidden_child_turn,
+    prepare_employee_step_turn, prepare_hidden_child_turn, prepare_local_turn,
+    PrepareLocalTurnParams,
 };
+use crate::agent::runtime::kernel::turn_state::TurnStateSnapshot;
+use crate::agent::runtime::runtime_io as chat_io;
+use crate::agent::runtime::session_runtime::SessionRuntime;
+use crate::agent::runtime::skill_routing::runner::plan_implicit_route_with_observation;
 use crate::agent::runtime::task_state::TaskBackendKind;
 use crate::agent::types::StreamDelta;
 use crate::agent::AgentExecutor;
+use crate::model_transport::resolve_model_transport;
 use serde_json::Value;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::sync::Mutex;
 use tauri::AppHandle;
 
 pub(crate) type TaskBackendTokenCallback = Arc<dyn Fn(StreamDelta) + Send + Sync + 'static>;
@@ -34,7 +43,6 @@ pub(crate) struct InteractiveChatTaskBackendRequest<'a> {
     pub journal: &'a crate::session_journal::SessionJournalStore,
     pub session_id: &'a str,
     pub run_id: &'a str,
-    pub user_message_id: &'a str,
     pub user_message: &'a str,
     pub turn_context: &'a TurnContext,
     pub execution_context: &'a ExecutionContext,
@@ -90,7 +98,7 @@ pub(crate) struct PreparedTaskBackendSurface {
     pub execution_context: ExecutionContext,
 }
 
-pub(crate) struct InteractiveChatPreparedTaskBackendExecution<'a> {
+struct InteractiveChatPreparedTaskBackendExecution<'a> {
     pub prepared_surface: &'a PreparedTaskBackendSurface,
     pub app: AppHandle,
     pub agent_executor: Arc<AgentExecutor>,
@@ -98,13 +106,12 @@ pub(crate) struct InteractiveChatPreparedTaskBackendExecution<'a> {
     pub journal: &'a crate::session_journal::SessionJournalStore,
     pub session_id: &'a str,
     pub run_id: &'a str,
-    pub user_message_id: &'a str,
     pub user_message: &'a str,
     pub cancel_flag: Arc<AtomicBool>,
     pub tool_confirm_responder: ToolConfirmResponder,
 }
 
-pub(crate) struct DelegatedPreparedTaskBackendExecution<'a> {
+struct DelegatedPreparedTaskBackendExecution<'a> {
     pub prepared_surface: &'a PreparedTaskBackendSurface,
     pub app_handle: Option<AppHandle>,
     pub agent_executor: Arc<AgentExecutor>,
@@ -112,9 +119,29 @@ pub(crate) struct DelegatedPreparedTaskBackendExecution<'a> {
     pub on_token: TaskBackendTokenCallback,
 }
 
-pub(crate) enum PreparedTaskBackendExecutionRequest<'a> {
+enum PreparedTaskBackendExecutionRequest<'a> {
     InteractiveChat(InteractiveChatPreparedTaskBackendExecution<'a>),
     Delegated(DelegatedPreparedTaskBackendExecution<'a>),
+}
+
+pub(crate) enum TaskBackendExecutionContext<'a> {
+    InteractiveChat {
+        app: AppHandle,
+        agent_executor: Arc<AgentExecutor>,
+        db: &'a sqlx::SqlitePool,
+        journal: &'a crate::session_journal::SessionJournalStore,
+        session_id: &'a str,
+        run_id: &'a str,
+        user_message: &'a str,
+        cancel_flag: Arc<AtomicBool>,
+        tool_confirm_responder: ToolConfirmResponder,
+    },
+    Delegated {
+        app_handle: Option<AppHandle>,
+        agent_executor: Arc<AgentExecutor>,
+        session_id: &'a str,
+        on_token: TaskBackendTokenCallback,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,11 +160,23 @@ impl TaskBackendContract {
         }
     }
 
+    pub(crate) fn generic_error_kind(self) -> &'static str {
+        self.backend_kind().generic_error_kind()
+    }
+
     pub(crate) fn session_surface(self) -> SessionSurfaceKind {
         match self {
             TaskBackendContract::InteractiveChat => SessionSurfaceKind::LocalChat,
             TaskBackendContract::HiddenChild => SessionSurfaceKind::HiddenChildSession,
             TaskBackendContract::EmployeeStep => SessionSurfaceKind::EmployeeStepSession,
+        }
+    }
+
+    pub(crate) fn missing_candidate_message(self) -> &'static str {
+        match self {
+            TaskBackendContract::InteractiveChat => "本地聊天缺少可执行模型候选",
+            TaskBackendContract::HiddenChild => "隐藏子会话缺少可执行模型候选",
+            TaskBackendContract::EmployeeStep => "员工步骤会话缺少可执行模型候选",
         }
     }
 }
@@ -176,6 +215,10 @@ impl TaskBackendPreparationRequest<'_> {
             TaskBackendPreparationRequest::EmployeeStep(_) => TaskBackendContract::EmployeeStep,
         }
     }
+
+    pub(crate) fn generic_error_kind(&self) -> &'static str {
+        self.contract().generic_error_kind()
+    }
 }
 
 pub(crate) async fn prepare_task_backend(
@@ -184,19 +227,16 @@ pub(crate) async fn prepare_task_backend(
     let contract = request.contract();
     let (turn_context, execution_context) = match request {
         TaskBackendPreparationRequest::InteractiveChat(request) => {
-            SessionEngine::prepare_local_turn_context(
-                request.app,
-                request.agent_executor,
-                request.db,
-                request.session_id,
-                request.user_message,
-                request.user_message_parts,
-                request.max_iterations_override,
-            )
-            .await
-            .map_err(|error| match error {
-                SessionEngineError::Generic(message) => message,
-            })?
+            prepare_local_turn(PrepareLocalTurnParams {
+                app: request.app,
+                db: request.db,
+                agent_executor: request.agent_executor,
+                session_id: request.session_id,
+                user_message: request.user_message,
+                user_message_parts: request.user_message_parts,
+                max_iterations_override: request.max_iterations_override,
+            })
+            .await?
         }
         TaskBackendPreparationRequest::HiddenChild(request) => prepare_hidden_child_turn(
             request.agent_executor,
@@ -234,7 +274,7 @@ pub(crate) async fn prepare_task_backend(
 
 pub(crate) async fn run_task_backend(
     request: TaskBackendRunRequest<'_>,
-) -> Result<ExecutionOutcome, SessionEngineError> {
+) -> Result<ExecutionOutcome, String> {
     debug_assert_eq!(request.contract().backend_kind(), request.backend_kind());
     debug_assert_eq!(
         request.contract().session_surface(),
@@ -243,52 +283,235 @@ pub(crate) async fn run_task_backend(
 
     match request {
         TaskBackendRunRequest::InteractiveChat(request) => {
-            SessionEngine::execute_prepared_local_turn(
-                &request.app,
-                &request.agent_executor,
-                request.db,
-                request.journal,
-                request.session_id,
-                request.run_id,
-                request.user_message_id,
-                request.user_message,
-                request.turn_context,
-                request.execution_context,
-                request.cancel_flag,
-                request.tool_confirm_responder,
-            )
-            .await
+            run_interactive_chat_backend(request).await
         }
         TaskBackendRunRequest::HiddenChild(request) => {
-            let callback = Arc::clone(&request.on_token);
-            SessionEngine::run_hidden_child_turn(
-                request.app_handle.as_ref(),
-                &request.agent_executor,
-                request.session_id,
-                request.turn_context,
-                request.execution_context,
-                move |delta| (callback)(delta),
-            )
-            .await
+            run_delegated_surface_backend(TaskBackendContract::HiddenChild, request).await
         }
         TaskBackendRunRequest::EmployeeStep(request) => {
-            let callback = Arc::clone(&request.on_token);
-            SessionEngine::run_employee_step_turn(
-                request.app_handle.as_ref(),
-                &request.agent_executor,
-                request.session_id,
-                request.turn_context,
-                request.execution_context,
-                move |delta| (callback)(delta),
-            )
-            .await
+            run_delegated_surface_backend(TaskBackendContract::EmployeeStep, request).await
         }
     }
 }
 
-pub(crate) async fn execute_prepared_task_backend(
+async fn run_interactive_chat_backend(
+    request: InteractiveChatTaskBackendRequest<'_>,
+) -> Result<ExecutionOutcome, String> {
+    debug_assert_eq!(
+        request.execution_context.session_profile.surface,
+        SessionSurfaceKind::LocalChat
+    );
+
+    match SessionRuntime::maybe_execute_user_skill_command(
+        &request.app,
+        &request.agent_executor,
+        request.session_id,
+        request.run_id,
+        request.user_message,
+        request.execution_context,
+        request.cancel_flag.clone(),
+        request.tool_confirm_responder.clone(),
+    )
+    .await
+    {
+        Ok(Some(dispatch_outcome)) => {
+            let turn_state = TurnStateSnapshot::new(
+                request
+                    .execution_context
+                    .allowed_tools()
+                    .map(|tools| tools.to_vec()),
+            )
+            .with_session_surface(request.execution_context.session_profile.surface)
+            .with_execution_lane(ExecutionLane::DirectDispatch)
+            .with_invoked_skill(dispatch_outcome.skill_id);
+            return Ok(ExecutionOutcome::DirectDispatch {
+                output: dispatch_outcome.output,
+                turn_state,
+            });
+        }
+        Ok(None) => {}
+        Err(dispatch_error) => {
+            let error = dispatch_error.error;
+            let turn_state = TurnStateSnapshot::new(
+                request
+                    .execution_context
+                    .allowed_tools()
+                    .map(|tools| tools.to_vec()),
+            )
+            .with_session_surface(request.execution_context.session_profile.surface)
+            .with_execution_lane(ExecutionLane::DirectDispatch)
+            .with_invoked_skill(dispatch_error.skill_id);
+            return Ok(match parse_run_stop_reason(&error) {
+                Some(stop_reason) => ExecutionOutcome::SkillCommandStopped {
+                    turn_state: turn_state.with_stop_reason(stop_reason.clone()),
+                    stop_reason,
+                    error,
+                },
+                None => ExecutionOutcome::SkillCommandFailed { error, turn_state },
+            });
+        }
+    }
+
+    let planned_route = plan_implicit_route_with_observation(
+        &request.execution_context.route_index,
+        &request.execution_context.workspace_skill_entries,
+        request.execution_context.skill_command_specs(),
+        request.user_message,
+        request.turn_context.continuation_preference.as_ref(),
+    );
+    let execution_plan = planned_route.execution_plan.clone();
+    chat_io::append_skill_route_recorded_with_pool(
+        request.db,
+        request.journal,
+        request.session_id,
+        request.run_id,
+        &planned_route.observation,
+        request.execution_context.tool_plan_record(),
+    )
+    .await?;
+
+    let mut turn_state = TurnStateSnapshot::default()
+        .with_session_surface(request.execution_context.session_profile.surface)
+        .with_route_observation(planned_route.observation.clone())
+        .with_execution_lane(execution_plan.lane);
+    if let Some(skill_id) = planned_route.observation.selected_skill.as_deref() {
+        turn_state = turn_state.with_invoked_skill(skill_id);
+    }
+
+    execute_execution_lane(LaneExecutionParams {
+        app: &request.app,
+        agent_executor: &request.agent_executor,
+        db: request.db,
+        session_id: request.session_id,
+        run_id: request.run_id,
+        turn_context: request.turn_context,
+        execution_context: request.execution_context,
+        execution_plan: &execution_plan,
+        turn_state,
+        cancel_flag: request.cancel_flag,
+        tool_confirm_responder: request.tool_confirm_responder,
+    })
+    .await
+}
+
+async fn run_delegated_surface_backend(
+    contract: TaskBackendContract,
+    request: PreparedSurfaceTaskBackendRequest<'_>,
+) -> Result<ExecutionOutcome, String> {
+    let expected_surface = contract.session_surface();
+    debug_assert_eq!(
+        request.execution_context.session_profile.surface,
+        expected_surface
+    );
+
+    let Some((provider_key, api_format, base_url, model_name, api_key)) =
+        request.turn_context.primary_route_candidate()
+    else {
+        return Err(contract.missing_candidate_message().to_string());
+    };
+
+    let transport = resolve_model_transport(
+        api_format,
+        base_url,
+        Some(provider_key.as_str()).filter(|value| !value.trim().is_empty()),
+    );
+    let streamed_text = Arc::new(Mutex::new(String::new()));
+    let streamed_text_for_callback = Arc::clone(&streamed_text);
+    let callback = Arc::clone(&request.on_token);
+
+    let route_execution = match request
+        .agent_executor
+        .execute_turn_with_transport_outcome(
+            transport,
+            api_format,
+            base_url,
+            api_key,
+            model_name,
+            &request.execution_context.system_prompt,
+            request.turn_context.messages.clone(),
+            move |delta| {
+                if let StreamDelta::Text(token) = &delta {
+                    if let Ok(mut buffer) = streamed_text_for_callback.lock() {
+                        buffer.push_str(token);
+                    }
+                }
+                callback(delta);
+            },
+            request.app_handle.as_ref(),
+            Some(request.session_id),
+            request.execution_context.allowed_tools(),
+            request.execution_context.permission_mode,
+            None,
+            request.execution_context.executor_work_dir.clone(),
+            request.execution_context.max_iterations,
+            None,
+            Some(request.execution_context.node_timeout_seconds),
+            Some(request.execution_context.route_retry_count),
+        )
+        .await
+    {
+        Ok(outcome) => RouteExecutionOutcome {
+            final_messages: Some(outcome.messages),
+            last_error: None,
+            last_error_kind: None,
+            last_stop_reason: None,
+            partial_text: streamed_text
+                .lock()
+                .map(|buffer| buffer.clone())
+                .unwrap_or_default(),
+            reasoning_text: String::new(),
+            reasoning_duration_ms: None,
+            tool_exposure_expanded: false,
+            tool_exposure_expansion_reason: None,
+            compaction_boundary: outcome.compaction_outcome.as_ref().map(Into::into),
+        },
+        Err(error) => {
+            let error_text = error.error.to_string();
+            let stop_reason = parse_run_stop_reason(&error_text);
+            RouteExecutionOutcome {
+                final_messages: None,
+                last_error: Some(error_text),
+                last_error_kind: Some(
+                    stop_reason
+                        .as_ref()
+                        .map(|reason| reason.kind.as_key().to_string())
+                        .unwrap_or_else(|| contract.generic_error_kind().to_string()),
+                ),
+                last_stop_reason: stop_reason,
+                partial_text: streamed_text
+                    .lock()
+                    .map(|buffer| buffer.clone())
+                    .unwrap_or_default(),
+                reasoning_text: String::new(),
+                reasoning_duration_ms: None,
+                tool_exposure_expanded: false,
+                tool_exposure_expansion_reason: None,
+                compaction_boundary: error.compaction_outcome.as_ref().map(Into::into),
+            }
+        }
+    };
+
+    let reconstructed_history_len = request.turn_context.messages.len();
+    let turn_state = TurnStateSnapshot::new(
+        request
+            .execution_context
+            .allowed_tools()
+            .map(|tools| tools.to_vec()),
+    )
+    .with_session_surface(request.execution_context.session_profile.surface)
+    .with_execution_lane(ExecutionLane::OpenTask)
+    .with_route_execution(&route_execution, reconstructed_history_len);
+
+    Ok(ExecutionOutcome::RouteExecution {
+        route_execution,
+        reconstructed_history_len,
+        turn_state,
+    })
+}
+
+async fn execute_prepared_task_backend(
     request: PreparedTaskBackendExecutionRequest<'_>,
-) -> Result<ExecutionOutcome, SessionEngineError> {
+) -> Result<ExecutionOutcome, String> {
     match request {
         PreparedTaskBackendExecutionRequest::InteractiveChat(request) => {
             debug_assert_eq!(
@@ -303,7 +526,6 @@ pub(crate) async fn execute_prepared_task_backend(
                     journal: request.journal,
                     session_id: request.session_id,
                     run_id: request.run_id,
-                    user_message_id: request.user_message_id,
                     user_message: request.user_message,
                     turn_context: &request.prepared_surface.turn_context,
                     execution_context: &request.prepared_surface.execution_context,
@@ -340,13 +562,81 @@ pub(crate) async fn execute_prepared_task_backend(
                         false,
                         "interactive chat prepared surfaces should use interactive execution"
                     );
-                    return Err(SessionEngineError::Generic(
+                    return Err(
                         "interactive chat backend requires interactive execution params"
                             .to_string(),
-                    ));
+                    );
                 }
             };
             run_task_backend(run_request).await
+        }
+    }
+}
+
+pub(crate) async fn execute_prepared_task_backend_with_context(
+    prepared_surface: &PreparedTaskBackendSurface,
+    context: TaskBackendExecutionContext<'_>,
+) -> Result<ExecutionOutcome, String> {
+    let request = build_prepared_task_backend_execution_request(prepared_surface, context)?;
+    execute_prepared_task_backend(request).await
+}
+
+fn build_prepared_task_backend_execution_request<'a>(
+    prepared_surface: &'a PreparedTaskBackendSurface,
+    context: TaskBackendExecutionContext<'a>,
+) -> Result<PreparedTaskBackendExecutionRequest<'a>, String> {
+    match context {
+        TaskBackendExecutionContext::InteractiveChat {
+            app,
+            agent_executor,
+            db,
+            journal,
+            session_id,
+            run_id,
+            user_message,
+            cancel_flag,
+            tool_confirm_responder,
+        } => {
+            if prepared_surface.contract != TaskBackendContract::InteractiveChat {
+                return Err(
+                    "interactive chat backend requires interactive prepared surface".to_string(),
+                );
+            }
+            Ok(PreparedTaskBackendExecutionRequest::InteractiveChat(
+                InteractiveChatPreparedTaskBackendExecution {
+                    prepared_surface,
+                    app,
+                    agent_executor,
+                    db,
+                    journal,
+                    session_id,
+                    run_id,
+                    user_message,
+                    cancel_flag,
+                    tool_confirm_responder,
+                },
+            ))
+        }
+        TaskBackendExecutionContext::Delegated {
+            app_handle,
+            agent_executor,
+            session_id,
+            on_token,
+        } => {
+            if prepared_surface.contract == TaskBackendContract::InteractiveChat {
+                return Err(
+                    "interactive chat backend requires interactive execution params".to_string(),
+                );
+            }
+            Ok(PreparedTaskBackendExecutionRequest::Delegated(
+                DelegatedPreparedTaskBackendExecution {
+                    prepared_surface,
+                    app_handle,
+                    agent_executor,
+                    session_id,
+                    on_token,
+                },
+            ))
         }
     }
 }
@@ -359,7 +649,6 @@ mod tests {
         PreparedTaskBackendExecutionRequest, TaskBackendContract, TaskBackendPreparationRequest,
         TaskBackendTokenCallback,
     };
-    use crate::agent::runtime::kernel::execution_plan::SessionEngineError;
     use crate::agent::runtime::kernel::session_profile::SessionSurfaceKind;
     use crate::agent::runtime::task_state::TaskBackendKind;
     use crate::agent::{AgentExecutor, ToolRegistry};
@@ -482,7 +771,7 @@ mod tests {
         ));
 
         assert!(
-            matches!(result, Err(SessionEngineError::Generic(message)) if message.contains("interactive chat backend requires interactive execution params"))
+            matches!(result, Err(message) if message.contains("interactive chat backend requires interactive execution params"))
         );
     }
 }

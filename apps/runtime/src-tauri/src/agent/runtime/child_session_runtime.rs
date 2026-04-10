@@ -1,18 +1,21 @@
-use super::runtime_io::{
-    append_partial_assistant_chunk_with_pool, append_run_failed_with_pool,
-    append_run_started_with_pool, append_run_stopped_with_pool, finalize_run_success_with_pool,
-    insert_session_message_with_pool,
-};
+use super::runtime_io::{finalize_run_success_with_pool, insert_session_message_with_pool};
 use super::RuntimeTranscript;
-use crate::agent::runtime::kernel::execution_plan::{ExecutionOutcome, SessionEngineError};
-use crate::agent::runtime::task_backend::{
-    execute_prepared_task_backend, prepare_task_backend, DelegatedPreparedTaskBackendExecution,
-    HiddenChildTaskBackendPreparationRequest, PreparedTaskBackendExecutionRequest,
-    TaskBackendPreparationRequest, TaskBackendTokenCallback,
+use crate::agent::runtime::task_active_run::{
+    DelegatedTaskBackendRunRequest, TaskExecutionOutcome,
 };
-use crate::agent::runtime::task_engine::{TaskBeginParentContext, TaskEngine};
+use crate::agent::runtime::task_backend::{
+    HiddenChildTaskBackendPreparationRequest, TaskBackendPreparationRequest,
+    TaskBackendTokenCallback,
+};
+use crate::agent::runtime::task_entry;
+use crate::agent::runtime::task_entry::{
+    DelegatedTaskBackendRunAndFinalizeRequest, DelegatedTaskTerminalFinalizeEntryRequest,
+};
+use crate::agent::runtime::task_lifecycle;
+use crate::agent::runtime::task_lifecycle::TaskBeginParentContext;
 use crate::agent::runtime::task_record::TaskRecord;
 use crate::agent::runtime::task_state::TaskState;
+use crate::agent::runtime::task_terminal::DelegatedTaskTerminalOutcome;
 use crate::agent::types::StreamDelta;
 use crate::agent::{AgentExecutor, ToolRegistry};
 use crate::session_journal::SessionJournalStore;
@@ -53,7 +56,7 @@ pub(crate) struct PreparedChildSessionRun {
     pub child_session_id: String,
     pub run_id: String,
     pub task_state: TaskState,
-    pub task_record: TaskRecord,
+    pub parent_task_record: Option<TaskRecord>,
 }
 
 pub(crate) async fn prepare_hidden_child_session_run(
@@ -69,8 +72,8 @@ pub(crate) async fn prepare_hidden_child_session_run(
             .map_err(anyhow::Error::msg)?;
     let run_id = Uuid::new_v4().to_string();
     let parent_task_record =
-        TaskEngine::resolve_latest_task_record_for_session(journal, parent_session_id).await;
-    let task_state = TaskEngine::build_hidden_child_task_state(
+        task_lifecycle::resolve_latest_task_record_for_session(journal, parent_session_id).await;
+    let task_state = TaskState::new_sub_agent(
         &child_session_id,
         &user_message_id,
         &run_id,
@@ -78,38 +81,27 @@ pub(crate) async fn prepare_hidden_child_session_run(
             .as_ref()
             .map(|record| &record.task_identity),
     );
-    let task_record = TaskEngine::begin_task_run(
-        db,
-        journal,
-        &task_state,
-        parent_task_record
-            .as_ref()
-            .map(|record| TaskBeginParentContext {
-                session_id: parent_session_id,
-                active_task_record: record,
-            }),
-    )
-    .await
-    .map_err(anyhow::Error::msg)?;
-    append_run_started_with_pool(db, journal, &child_session_id, &run_id, &user_message_id)
-        .await
-        .map_err(anyhow::Error::msg)?;
     journal.observability().record_child_session_link();
 
     Ok(PreparedChildSessionRun {
         child_session_id,
         run_id,
         task_state,
-        task_record,
+        parent_task_record,
     })
 }
 
+#[cfg(test)]
 pub(crate) async fn finalize_hidden_child_session_success_with_messages(
     db: &sqlx::SqlitePool,
     journal: &SessionJournalStore,
     prepared: &PreparedChildSessionRun,
     final_messages: &[Value],
 ) -> Result<String> {
+    let active_task_record =
+        task_lifecycle::begin_task_run(db, journal, &prepared.task_state, None)
+            .await
+            .map_err(anyhow::Error::msg)?;
     let (final_text, has_tool_calls, content) =
         RuntimeTranscript::build_assistant_content_from_final_messages(final_messages, 0);
     finalize_run_success_with_pool(
@@ -126,11 +118,11 @@ pub(crate) async fn finalize_hidden_child_session_success_with_messages(
     )
     .await
     .map_err(anyhow::Error::msg)?;
-    TaskEngine::finalize_after_terminal(
+    task_lifecycle::finalize_after_terminal(
         db,
         journal,
         &prepared.child_session_id,
-        &prepared.task_record,
+        &active_task_record,
         true,
         None,
     )
@@ -139,199 +131,28 @@ pub(crate) async fn finalize_hidden_child_session_success_with_messages(
     Ok(final_text)
 }
 
+#[cfg(test)]
 async fn finalize_hidden_child_session_execution_outcome(
     db: &sqlx::SqlitePool,
     journal: &SessionJournalStore,
-    prepared: &PreparedChildSessionRun,
-    outcome: ExecutionOutcome,
+    _prepared: &PreparedChildSessionRun,
+    outcome: TaskExecutionOutcome,
 ) -> Result<ChildSessionRunOutcome> {
-    match TaskEngine::attach_task_state(&prepared.task_state, outcome) {
-        ExecutionOutcome::RouteExecution {
-            route_execution,
-            reconstructed_history_len,
-            turn_state,
-        } => {
-            let final_messages = route_execution.final_messages.clone();
-            if let Some(final_messages) = final_messages {
-                let (final_text, has_tool_calls, content) =
-                    RuntimeTranscript::build_assistant_content_from_final_messages(
-                        &final_messages,
-                        reconstructed_history_len,
-                    );
-                finalize_run_success_with_pool(
-                    db,
-                    journal,
-                    &prepared.child_session_id,
-                    &prepared.run_id,
-                    &final_text,
-                    has_tool_calls,
-                    &content,
-                    &route_execution.reasoning_text,
-                    route_execution.reasoning_duration_ms,
-                    Some(&turn_state),
-                )
-                .await
-                .map_err(anyhow::Error::msg)?;
-                TaskEngine::finalize_after_terminal(
-                    db,
-                    journal,
-                    &prepared.child_session_id,
-                    &prepared.task_record,
-                    true,
-                    None,
-                )
-                .await;
-
-                Ok(ChildSessionRunOutcome { final_text })
-            } else {
-                let partial_text = if route_execution.partial_text.is_empty() {
-                    turn_state.partial_assistant_text.clone()
-                } else {
-                    route_execution.partial_text.clone()
-                };
-                if !partial_text.is_empty() {
-                    append_partial_assistant_chunk_with_pool(
-                        db,
-                        journal,
-                        &prepared.child_session_id,
-                        &prepared.run_id,
-                        &partial_text,
-                    )
-                    .await;
-                }
-
-                let error_text = route_execution
-                    .last_error
-                    .clone()
-                    .unwrap_or_else(|| "子会话执行失败".to_string());
-                if let Some(stop_reason) = route_execution
-                    .last_stop_reason
-                    .as_ref()
-                    .or(turn_state.stop_reason.as_ref())
-                {
-                    append_run_stopped_with_pool(
-                        db,
-                        journal,
-                        &prepared.child_session_id,
-                        &prepared.run_id,
-                        stop_reason,
-                        Some(&turn_state),
-                    )
-                    .await
-                    .map_err(anyhow::Error::msg)?;
-                    TaskEngine::finalize_after_stop(
-                        db,
-                        journal,
-                        &prepared.child_session_id,
-                        &prepared.task_record,
-                        stop_reason.kind,
-                        Some(stop_reason.kind.as_key()),
-                    )
-                    .await;
-                } else {
-                    append_run_failed_with_pool(
-                        db,
-                        journal,
-                        &prepared.child_session_id,
-                        &prepared.run_id,
-                        route_execution
-                            .last_error_kind
-                            .as_deref()
-                            .unwrap_or("child_session"),
-                        &error_text,
-                        Some(&turn_state),
-                    )
-                    .await;
-                    TaskEngine::finalize_after_terminal(
-                        db,
-                        journal,
-                        &prepared.child_session_id,
-                        &prepared.task_record,
-                        false,
-                        route_execution
-                            .last_error_kind
-                            .as_deref()
-                            .or(Some("child_session")),
-                    )
-                    .await;
-                }
-                Err(anyhow::Error::msg(error_text))
-            }
-        }
-        ExecutionOutcome::DirectDispatch { output, turn_state } => {
-            finalize_run_success_with_pool(
-                db,
-                journal,
-                &prepared.child_session_id,
-                &prepared.run_id,
-                &output,
-                false,
-                &output,
-                "",
-                None,
-                Some(&turn_state),
-            )
-            .await
-            .map_err(anyhow::Error::msg)?;
-            TaskEngine::finalize_after_terminal(
-                db,
-                journal,
-                &prepared.child_session_id,
-                &prepared.task_record,
-                true,
-                None,
-            )
-            .await;
+    match task_entry::finalize_delegated_task_execution_outcome_entry(
+        DelegatedTaskTerminalFinalizeEntryRequest {
+            db,
+            journal,
+            task_execution_outcome: outcome,
+        },
+    )
+    .await
+    .map_err(anyhow::Error::msg)?
+    {
+        DelegatedTaskTerminalOutcome::Completed { output } => {
             Ok(ChildSessionRunOutcome { final_text: output })
         }
-        ExecutionOutcome::SkillCommandFailed { error, turn_state } => {
-            append_run_failed_with_pool(
-                db,
-                journal,
-                &prepared.child_session_id,
-                &prepared.run_id,
-                "skill_command_dispatch",
-                &error,
-                Some(&turn_state),
-            )
-            .await;
-            TaskEngine::finalize_after_terminal(
-                db,
-                journal,
-                &prepared.child_session_id,
-                &prepared.task_record,
-                false,
-                Some("skill_command_dispatch"),
-            )
-            .await;
-            Err(anyhow::Error::msg(error))
-        }
-        ExecutionOutcome::SkillCommandStopped {
-            turn_state,
-            stop_reason,
-            error,
-        } => {
-            append_run_stopped_with_pool(
-                db,
-                journal,
-                &prepared.child_session_id,
-                &prepared.run_id,
-                &stop_reason,
-                Some(&turn_state),
-            )
-            .await
-            .map_err(anyhow::Error::msg)?;
-            TaskEngine::finalize_after_stop(
-                db,
-                journal,
-                &prepared.child_session_id,
-                &prepared.task_record,
-                stop_reason.kind,
-                Some(stop_reason.kind.as_key()),
-            )
-            .await;
-            Err(anyhow::Error::msg(error))
-        }
+        DelegatedTaskTerminalOutcome::Stopped { error, .. }
+        | DelegatedTaskTerminalOutcome::Failed { error } => Err(anyhow::Error::msg(error)),
     }
 }
 
@@ -356,24 +177,6 @@ pub(crate) async fn run_hidden_child_session(
     let child_run_for_stream = prepared.run_id.clone();
     let role_id = params.delegate_role_id.unwrap_or_default().to_string();
     let role_name = params.delegate_role_name.unwrap_or_default().to_string();
-    let prepared_surface = prepare_task_backend(TaskBackendPreparationRequest::HiddenChild(
-        HiddenChildTaskBackendPreparationRequest {
-            agent_executor: &executor,
-            prompt: params.prompt,
-            agent_type: params.agent_type,
-            delegate_display_name: params.delegate_display_name,
-            api_format: params.api_format,
-            base_url: params.base_url,
-            api_key: params.api_key,
-            model: params.model,
-            allowed_tools: params.allowed_tools.clone(),
-            max_iterations: params.max_iterations,
-            work_dir: params.work_dir.clone(),
-        },
-    ))
-    .await
-    .map_err(anyhow::Error::msg)?;
-
     let token_callback: TaskBackendTokenCallback = Arc::new(move |delta: StreamDelta| {
         if let StreamDelta::Text(token) = delta {
             if let (Some(app), Some(parent_session_id)) = (&stream_app, &parent_stream_session_id) {
@@ -393,50 +196,49 @@ pub(crate) async fn run_hidden_child_session(
             }
         }
     });
-    let outcome = execute_prepared_task_backend(PreparedTaskBackendExecutionRequest::Delegated(
-        DelegatedPreparedTaskBackendExecution {
-            prepared_surface: &prepared_surface,
-            app_handle: params.app_handle.cloned(),
-            agent_executor: Arc::clone(&executor),
-            session_id: &prepared.child_session_id,
-            on_token: token_callback,
+    let finalized = match task_entry::run_and_finalize_delegated_task_backend(
+        DelegatedTaskBackendRunAndFinalizeRequest {
+            backend_request: DelegatedTaskBackendRunRequest {
+                db: params.db,
+                journal: params.journal,
+                task_state: prepared.task_state.clone(),
+                parent_context: prepared.parent_task_record.as_ref().map(|record| {
+                    TaskBeginParentContext {
+                        session_id: params.parent_session_id,
+                        active_task_record: record,
+                    }
+                }),
+                preparation_request: TaskBackendPreparationRequest::HiddenChild(
+                    HiddenChildTaskBackendPreparationRequest {
+                        agent_executor: &executor,
+                        prompt: params.prompt,
+                        agent_type: params.agent_type,
+                        delegate_display_name: params.delegate_display_name,
+                        api_format: params.api_format,
+                        base_url: params.base_url,
+                        api_key: params.api_key,
+                        model: params.model,
+                        allowed_tools: params.allowed_tools.clone(),
+                        max_iterations: params.max_iterations,
+                        work_dir: params.work_dir.clone(),
+                    },
+                ),
+                app_handle: params.app_handle.cloned(),
+                agent_executor: Arc::clone(&executor),
+                on_token: token_callback,
+                prepare_surface: |_| {},
+            },
         },
-    ))
-    .await;
-
-    let outcome = match outcome {
-        Ok(outcome) => outcome,
-        Err(SessionEngineError::Generic(message)) => {
-            append_run_failed_with_pool(
-                params.db,
-                params.journal,
-                &prepared.child_session_id,
-                &prepared.run_id,
-                "child_session",
-                &message,
-                None,
-            )
-            .await;
-            TaskEngine::finalize_after_terminal(
-                params.db,
-                params.journal,
-                &prepared.child_session_id,
-                &prepared.task_record,
-                false,
-                Some(&message),
-            )
-            .await;
-            return Err(anyhow::Error::msg(message));
-        }
-    };
-
-    let finalized = finalize_hidden_child_session_execution_outcome(
-        params.db,
-        params.journal,
-        &prepared,
-        outcome,
     )
-    .await;
+    .await
+    .map_err(anyhow::Error::msg)?
+    {
+        DelegatedTaskTerminalOutcome::Completed { output } => {
+            Ok(ChildSessionRunOutcome { final_text: output })
+        }
+        DelegatedTaskTerminalOutcome::Stopped { error, .. }
+        | DelegatedTaskTerminalOutcome::Failed { error } => Err(anyhow::Error::msg(error)),
+    };
 
     if let (Some(app), Some(parent_session_id)) =
         (params.app_handle, params.parent_stream_session_id)
@@ -493,6 +295,9 @@ mod tests {
     use crate::agent::runtime::kernel::execution_plan::{ExecutionLane, ExecutionOutcome};
     use crate::agent::runtime::kernel::session_profile::SessionSurfaceKind;
     use crate::agent::runtime::kernel::turn_state::TurnStateSnapshot;
+    use crate::agent::runtime::task_active_run::TaskExecutionOutcome;
+    use crate::agent::runtime::task_lifecycle;
+    use crate::agent::runtime::task_lifecycle::TaskBeginParentContext;
     use crate::agent::runtime::{RunRegistry, RuntimeObservability};
     use crate::session_journal::{
         SessionJournalStore, SessionRunEvent, SessionRunTaskIdentitySnapshot,
@@ -797,8 +602,19 @@ mod tests {
                 .with_execution_lane(ExecutionLane::OpenTask),
         };
 
+        let active_task_record = task_lifecycle::begin_task_run(
+            &pool,
+            &journal,
+            &prepared.task_state,
+            None::<TaskBeginParentContext<'_>>,
+        )
+        .await
+        .expect("begin hidden child task run");
+        let wrapped =
+            TaskExecutionOutcome::new(prepared.task_state.clone(), active_task_record, outcome);
+
         let final_text =
-            finalize_hidden_child_session_execution_outcome(&pool, &journal, &prepared, outcome)
+            finalize_hidden_child_session_execution_outcome(&pool, &journal, &prepared, wrapped)
                 .await
                 .expect("finalize hidden child execution outcome")
                 .final_text;

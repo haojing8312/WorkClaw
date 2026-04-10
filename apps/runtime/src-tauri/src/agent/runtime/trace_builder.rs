@@ -129,6 +129,28 @@ fn summarize_event(
     event: SessionRunEvent,
 ) -> SessionRunEventSummary {
     match event {
+        SessionRunEvent::TaskContinued { task_identity, .. } => SessionRunEventSummary {
+            session_id: record.session_id.clone(),
+            run_id: record.run_id.clone(),
+            event_type: record.event_type.clone(),
+            created_at: record.created_at.clone(),
+            status: Some("continued".to_string()),
+            tool_name: None,
+            call_id: None,
+            approval_id: None,
+            warning_kind: None,
+            error_kind: None,
+            message: Some(format!(
+                "task={} surface={} continued",
+                task_identity.task_kind, task_identity.surface_kind
+            )),
+            detail: Some(summarize_task_identity_detail(&task_identity)),
+            irreversible: None,
+            last_completed_step: None,
+            child_session_id: None,
+            is_error: Some(false),
+            parse_warning: None,
+        },
         SessionRunEvent::TaskStateProjected { task_identity, .. } => SessionRunEventSummary {
             session_id: record.session_id.clone(),
             run_id: record.run_id.clone(),
@@ -698,7 +720,8 @@ fn extract_task_identity(
     event: &SessionRunEvent,
 ) -> Option<&crate::session_journal::SessionRunTaskIdentitySnapshot> {
     match event {
-        SessionRunEvent::TaskStateProjected { task_identity, .. } => Some(task_identity),
+        SessionRunEvent::TaskContinued { task_identity, .. }
+        | SessionRunEvent::TaskStateProjected { task_identity, .. } => Some(task_identity),
         SessionRunEvent::TaskDelegated { delegated_task, .. } => Some(delegated_task),
         SessionRunEvent::RunCompleted { turn_state, .. }
         | SessionRunEvent::RunFailed { turn_state, .. }

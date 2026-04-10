@@ -48,7 +48,8 @@ impl RunRegistry {
 
     pub fn apply_event(&self, session_id: &str, event: &SessionRunEvent) {
         match event {
-            SessionRunEvent::TaskStateProjected { .. }
+            SessionRunEvent::TaskContinued { .. }
+            | SessionRunEvent::TaskStateProjected { .. }
             | SessionRunEvent::TaskDelegated { .. }
             | SessionRunEvent::TaskRecordUpserted { .. }
             | SessionRunEvent::TaskStatusChanged { .. } => {}

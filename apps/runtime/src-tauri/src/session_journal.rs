@@ -368,6 +368,10 @@ pub enum SessionRunStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SessionRunEvent {
+    TaskContinued {
+        run_id: String,
+        task_identity: SessionRunTaskIdentitySnapshot,
+    },
     TaskStateProjected {
         run_id: String,
         task_identity: SessionRunTaskIdentitySnapshot,
@@ -472,7 +476,8 @@ pub struct SessionJournalRecord {
 
 fn apply_event(state: &mut SessionJournalState, event: &SessionRunEvent) {
     let run_id = match event {
-        SessionRunEvent::TaskStateProjected { run_id, .. }
+        SessionRunEvent::TaskContinued { run_id, .. }
+        | SessionRunEvent::TaskStateProjected { run_id, .. }
         | SessionRunEvent::TaskDelegated { run_id, .. }
         | SessionRunEvent::TaskRecordUpserted { run_id, .. }
         | SessionRunEvent::TaskStatusChanged { run_id, .. }
@@ -491,7 +496,8 @@ fn apply_event(state: &mut SessionJournalState, event: &SessionRunEvent) {
     let run_index = upsert_run_index(state, &run_id);
 
     match event {
-        SessionRunEvent::TaskStateProjected { task_identity, .. } => {
+        SessionRunEvent::TaskContinued { task_identity, .. }
+        | SessionRunEvent::TaskStateProjected { task_identity, .. } => {
             state.runs[run_index].task_identity = Some(task_identity.clone());
         }
         SessionRunEvent::TaskDelegated { .. } => {}
@@ -687,6 +693,39 @@ fn build_observed_session_run_event(
     event: &SessionRunEvent,
 ) -> RuntimeObservedEvent {
     let observed = match event {
+        SessionRunEvent::TaskContinued {
+            run_id,
+            task_identity,
+        } => RuntimeObservedRunEvent {
+            session_id: session_id.to_string(),
+            run_id: run_id.clone(),
+            event_type: "task_continued".to_string(),
+            created_at: recorded_at.to_string(),
+            status: Some("continued".to_string()),
+            tool_name: None,
+            approval_id: None,
+            warning_kind: None,
+            error_kind: None,
+            child_session_id: None,
+            route_latency_ms: None,
+            candidate_count: None,
+            selected_skill: Some(task_identity.task_kind.clone()),
+            fallback_reason: None,
+            tool_recommendation_summary: None,
+            tool_recommendation_aligned: None,
+            tool_plan_summary: None,
+            message: Some(
+                json!({
+                    "task_id": task_identity.task_id,
+                    "parent_task_id": task_identity.parent_task_id,
+                    "root_task_id": task_identity.root_task_id,
+                    "task_kind": task_identity.task_kind,
+                    "surface_kind": task_identity.surface_kind,
+                    "backend_kind": task_identity.backend_kind,
+                })
+                .to_string(),
+            ),
+        },
         SessionRunEvent::TaskStateProjected {
             run_id,
             task_identity,
@@ -1581,6 +1620,55 @@ mod tests {
                 .as_ref()
                 .map(|identity| identity.backend_kind.as_str()),
             Some("interactive_chat_backend")
+        );
+    }
+
+    #[tokio::test]
+    async fn append_event_projects_task_continued_into_session_state() {
+        let journal_root = tempdir().expect("journal tempdir");
+        let journal = SessionJournalStore::new(journal_root.path().to_path_buf());
+
+        journal
+            .append_event(
+                "session-task-continued",
+                SessionRunEvent::TaskContinued {
+                    run_id: "run-1".to_string(),
+                    task_identity: SessionRunTaskIdentitySnapshot {
+                        task_id: "task-1".to_string(),
+                        parent_task_id: Some("task-parent".to_string()),
+                        root_task_id: "task-root".to_string(),
+                        task_kind: "primary_user_task".to_string(),
+                        surface_kind: "local_chat_surface".to_string(),
+                        backend_kind: "interactive_chat_backend".to_string(),
+                    },
+                },
+            )
+            .await
+            .expect("append task continued");
+
+        let state = journal
+            .read_state("session-task-continued")
+            .await
+            .expect("read projected state");
+        let run = state.runs.first().expect("run snapshot");
+
+        assert_eq!(
+            run.task_identity
+                .as_ref()
+                .map(|identity| identity.task_id.as_str()),
+            Some("task-1")
+        );
+        assert_eq!(
+            run.task_identity
+                .as_ref()
+                .and_then(|identity| identity.parent_task_id.as_deref()),
+            Some("task-parent")
+        );
+        assert_eq!(
+            run.task_identity
+                .as_ref()
+                .map(|identity| identity.root_task_id.as_str()),
+            Some("task-root")
         );
     }
 
