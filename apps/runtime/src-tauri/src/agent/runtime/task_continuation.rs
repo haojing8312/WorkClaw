@@ -49,9 +49,27 @@ pub(crate) fn resolve_local_chat_continuation_contract(
         .as_deref()
         .filter(|reason| !reason.trim().is_empty())
         .unwrap_or("recovery_resume");
-    let normalized_reason = terminal_reason.trim().to_ascii_lowercase();
+    let mode = resolve_continuation_mode_from_reason(terminal_reason);
 
-    let mode = if normalized_reason.contains("approval") {
+    (mode, terminal_reason.to_string())
+}
+
+pub(crate) fn resolve_parent_rejoin_continuation_contract(
+    returned_task_record: &TaskRecord,
+) -> (TaskContinuationMode, String) {
+    let terminal_reason = returned_task_record
+        .terminal_reason
+        .as_deref()
+        .filter(|reason| !reason.trim().is_empty())
+        .unwrap_or_else(|| returned_task_record.status.as_key());
+    let mode = resolve_continuation_mode_from_reason(terminal_reason);
+    (mode, format!("delegated_return:{}", terminal_reason.trim()))
+}
+
+fn resolve_continuation_mode_from_reason(reason: &str) -> TaskContinuationMode {
+    let normalized_reason = reason.trim().to_ascii_lowercase();
+
+    if normalized_reason.contains("approval") {
         TaskContinuationMode::ApprovalResume
     } else if normalized_reason.contains("permission denied")
         || normalized_reason.contains("permission_denied")
@@ -60,9 +78,7 @@ pub(crate) fn resolve_local_chat_continuation_contract(
         TaskContinuationMode::PermissionResume
     } else {
         TaskContinuationMode::RecoveryResume
-    };
-
-    (mode, terminal_reason.to_string())
+    }
 }
 
 fn canonicalize_continuation_match(value: &str) -> String {
@@ -78,7 +94,7 @@ fn canonicalize_continuation_match(value: &str) -> String {
 mod tests {
     use super::{
         is_task_continuation_request, resolve_local_chat_continuation_contract,
-        should_resume_local_chat_task,
+        resolve_parent_rejoin_continuation_contract, should_resume_local_chat_task,
     };
     use crate::agent::runtime::task_record::{TaskLifecycleStatus, TaskRecord};
     use crate::agent::runtime::task_state::{
@@ -186,5 +202,34 @@ mod tests {
 
         assert_eq!(mode, TaskContinuationMode::PermissionResume);
         assert_eq!(reason, "PERMISSION_DENIED: tool is blocked");
+    }
+
+    #[test]
+    fn resolve_parent_rejoin_continuation_contract_marks_approval_returns() {
+        let (mode, reason) = resolve_parent_rejoin_continuation_contract(&build_record(
+            TaskKind::SubAgentTask,
+            TaskSurfaceKind::HiddenChildSurface,
+            TaskLifecycleStatus::Failed,
+            "approval_recovery",
+        ));
+
+        assert_eq!(mode, TaskContinuationMode::ApprovalResume);
+        assert_eq!(reason, "delegated_return:approval_recovery");
+    }
+
+    #[test]
+    fn resolve_parent_rejoin_continuation_contract_uses_status_when_terminal_reason_missing() {
+        let mut record = build_record(
+            TaskKind::EmployeeStepTask,
+            TaskSurfaceKind::EmployeeStepSurface,
+            TaskLifecycleStatus::Completed,
+            "completed",
+        );
+        record.terminal_reason = None;
+
+        let (mode, reason) = resolve_parent_rejoin_continuation_contract(&record);
+
+        assert_eq!(mode, TaskContinuationMode::RecoveryResume);
+        assert_eq!(reason, "delegated_return:completed");
     }
 }

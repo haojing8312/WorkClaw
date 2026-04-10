@@ -802,6 +802,8 @@ mod tests {
                         surface_kind: "local_chat_surface".to_string(),
                         backend_kind: "interactive_chat_backend".to_string(),
                     }),
+                    task_continuation_mode: None,
+                    task_continuation_reason: None,
                     turn_state: None,
                 }],
                 tasks: vec![],
@@ -833,6 +835,8 @@ mod tests {
                     last_error_kind: Some("max_turns".to_string()),
                     last_error_message: Some("已达到执行步数上限".to_string()),
                     task_identity: None,
+                    task_continuation_mode: None,
+                    task_continuation_reason: None,
                     turn_state: Some(crate::session_journal::SessionRunTurnStateSnapshot {
                         task_identity: Some(SessionRunTaskIdentitySnapshot {
                             task_id: "task-child".to_string(),
@@ -891,6 +895,8 @@ mod tests {
                             surface_kind: "local_chat_surface".to_string(),
                             backend_kind: "interactive_chat_backend".to_string(),
                         }),
+                        task_continuation_mode: None,
+                        task_continuation_reason: None,
                         turn_state: None,
                     },
                     SessionRunSnapshot {
@@ -901,6 +907,8 @@ mod tests {
                         last_error_kind: Some("max_turns".to_string()),
                         last_error_message: Some("子任务停止".to_string()),
                         task_identity: None,
+                        task_continuation_mode: None,
+                        task_continuation_reason: None,
                         turn_state: Some(crate::session_journal::SessionRunTurnStateSnapshot {
                             task_identity: Some(SessionRunTaskIdentitySnapshot {
                                 task_id: "task-child".to_string(),
@@ -958,6 +966,8 @@ mod tests {
                         surface_kind: "local_chat_surface".to_string(),
                         backend_kind: "interactive_chat_backend".to_string(),
                     }),
+                    task_continuation_mode: None,
+                    task_continuation_reason: None,
                     turn_state: None,
                 }],
                 tasks: vec![crate::session_journal::SessionTaskRecordSnapshot {

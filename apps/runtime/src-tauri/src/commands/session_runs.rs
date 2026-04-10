@@ -36,6 +36,10 @@ pub struct SessionRunProjection {
     pub task_status: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_record: Option<SessionRunTaskRecordProjection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_continuation_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_continuation_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -141,6 +145,8 @@ pub async fn list_session_runs_with_pool(
                 task_path: None,
                 task_status: None,
                 task_record: None,
+                task_continuation_mode: None,
+                task_continuation_reason: None,
             },
         )
         .collect())
@@ -193,6 +199,8 @@ pub async fn list_session_runs_with_runtime_state(
             run.task_record = resolve_task_record_for_run(&state, snapshot)
                 .map(SessionRunTaskRecordProjection::from);
             run.task_status = run.task_record.as_ref().map(|task| task.status.clone());
+            run.task_continuation_mode = snapshot.task_continuation_mode.clone();
+            run.task_continuation_reason = snapshot.task_continuation_reason.clone();
         }
     }
 
@@ -1308,6 +1316,64 @@ mod tests {
                 .as_ref()
                 .map(|record| record.backend_kind.as_str()),
             Some("interactive_chat_backend")
+        );
+    }
+
+    #[tokio::test]
+    async fn list_session_runs_with_runtime_state_projects_task_continuation_contract() {
+        let pool = setup_session_run_event_pool().await;
+        let journal_root = tempdir().expect("journal temp dir");
+        let journal = SessionJournalStore::new(journal_root.path().to_path_buf());
+
+        sqlx::query(
+            "INSERT INTO session_runs (id, session_id, user_message_id, assistant_message_id, status, buffered_text, error_kind, error_message, created_at, updated_at)
+             VALUES (?, ?, ?, '', ?, ?, ?, ?, ?, ?)",
+        )
+        .bind("run-task-continued")
+        .bind("session-1")
+        .bind("user-1")
+        .bind("thinking")
+        .bind("")
+        .bind("")
+        .bind("")
+        .bind("2026-04-10T00:00:00Z")
+        .bind("2026-04-10T00:00:01Z")
+        .execute(&pool)
+        .await
+        .expect("insert session run");
+
+        journal
+            .append_event(
+                "session-1",
+                SessionRunEvent::TaskContinued {
+                    run_id: "run-task-continued".to_string(),
+                    task_identity: crate::session_journal::SessionRunTaskIdentitySnapshot {
+                        task_id: "task-parent".to_string(),
+                        parent_task_id: None,
+                        root_task_id: "task-parent".to_string(),
+                        task_kind: "primary_user_task".to_string(),
+                        surface_kind: "local_chat_surface".to_string(),
+                        backend_kind: "interactive_chat_backend".to_string(),
+                    },
+                    continuation_mode: "approval_resume".to_string(),
+                    continuation_reason: "delegated_return:approval_recovery".to_string(),
+                },
+            )
+            .await
+            .expect("append task continued");
+
+        let runs = super::list_session_runs_with_runtime_state(&pool, "session-1", Some(&journal))
+            .await
+            .expect("list session runs");
+
+        assert_eq!(runs.len(), 1);
+        assert_eq!(
+            runs[0].task_continuation_mode.as_deref(),
+            Some("approval_resume")
+        );
+        assert_eq!(
+            runs[0].task_continuation_reason.as_deref(),
+            Some("delegated_return:approval_recovery")
         );
     }
 

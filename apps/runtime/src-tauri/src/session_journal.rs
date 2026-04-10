@@ -186,6 +186,10 @@ pub struct SessionRunSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_identity: Option<SessionRunTaskIdentitySnapshot>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_continuation_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_continuation_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_state: Option<SessionRunTurnStateSnapshot>,
 }
 
@@ -199,6 +203,8 @@ impl SessionRunSnapshot {
             last_error_kind: None,
             last_error_message: None,
             task_identity: None,
+            task_continuation_mode: None,
+            task_continuation_reason: None,
             turn_state: None,
         }
     }
@@ -515,8 +521,17 @@ fn apply_event(state: &mut SessionJournalState, event: &SessionRunEvent) {
     let run_index = upsert_run_index(state, &run_id);
 
     match event {
-        SessionRunEvent::TaskContinued { task_identity, .. }
-        | SessionRunEvent::TaskStateProjected { task_identity, .. } => {
+        SessionRunEvent::TaskContinued {
+            task_identity,
+            continuation_mode,
+            continuation_reason,
+            ..
+        } => {
+            state.runs[run_index].task_identity = Some(task_identity.clone());
+            state.runs[run_index].task_continuation_mode = Some(continuation_mode.clone());
+            state.runs[run_index].task_continuation_reason = Some(continuation_reason.clone());
+        }
+        SessionRunEvent::TaskStateProjected { task_identity, .. } => {
             state.runs[run_index].task_identity = Some(task_identity.clone());
         }
         SessionRunEvent::TaskDelegated { .. } | SessionRunEvent::TaskReturned { .. } => {}
@@ -536,6 +551,8 @@ fn apply_event(state: &mut SessionJournalState, event: &SessionRunEvent) {
             run.status = SessionRunStatus::Thinking;
             run.last_error_kind = None;
             run.last_error_message = None;
+            run.task_continuation_mode = None;
+            run.task_continuation_reason = None;
             run.turn_state = None;
         }
         SessionRunEvent::SkillRouteRecorded { .. } => {}
@@ -1746,6 +1763,14 @@ mod tests {
                 .as_ref()
                 .map(|identity| identity.root_task_id.as_str()),
             Some("task-root")
+        );
+        assert_eq!(
+            run.task_continuation_mode.as_deref(),
+            Some("recovery_resume")
+        );
+        assert_eq!(
+            run.task_continuation_reason.as_deref(),
+            Some("recovery_resume")
         );
     }
 

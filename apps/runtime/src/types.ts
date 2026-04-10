@@ -274,6 +274,8 @@ export interface SessionRunProjection {
   task_path?: string | null;
   task_status?: string | null;
   task_record?: SessionRunTaskRecordProjection | null;
+  task_continuation_mode?: string | null;
+  task_continuation_reason?: string | null;
 }
 
 export interface SessionRunTaskIdentitySnapshot {

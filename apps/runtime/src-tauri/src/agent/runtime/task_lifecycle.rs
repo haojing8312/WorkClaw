@@ -8,7 +8,8 @@ use crate::agent::runtime::task_state::{
 };
 use crate::agent::runtime::task_transition::{
     resolve_commit_transition, resolve_delegated_return_transition, resolve_initial_transition,
-    resolve_stop_transition, resolve_terminal_transition, TaskContinuationMode, TaskTransition,
+    resolve_parent_rejoin_transition, resolve_stop_transition, resolve_terminal_transition,
+    TaskContinuationMode, TaskTransition,
 };
 use crate::session_journal::{
     SessionJournalStore, SessionRunEvent, SessionRunTaskIdentitySnapshot, SessionTaskRecordSnapshot,
@@ -563,13 +564,22 @@ pub(crate) async fn project_delegated_task_return(
     parent_task_record: &TaskRecord,
     returned_task_record: &TaskRecord,
 ) -> Result<(), String> {
-    let transition = resolve_delegated_return_transition(returned_task_record);
+    let return_transition = resolve_delegated_return_transition(returned_task_record);
     let _ = apply_transition(
         db,
         journal,
         parent_session_id,
         parent_task_record,
-        &transition,
+        &return_transition,
+    )
+    .await?;
+    let rejoin_transition = resolve_parent_rejoin_transition(returned_task_record);
+    let _ = apply_transition(
+        db,
+        journal,
+        parent_session_id,
+        parent_task_record,
+        &rejoin_transition,
     )
     .await?;
     Ok(())

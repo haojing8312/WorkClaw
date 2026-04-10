@@ -1,4 +1,5 @@
 use crate::agent::run_guard::RunStopReasonKind;
+use crate::agent::runtime::task_continuation::resolve_parent_rejoin_continuation_contract;
 use crate::agent::runtime::task_record::{TaskLifecycleStatus, TaskRecord};
 use crate::agent::runtime::task_state::{
     TaskBackendKind, TaskIdentity, TaskKind, TaskState, TaskSurfaceKind,
@@ -186,12 +187,20 @@ pub(crate) fn resolve_delegated_return_transition(
     }
 }
 
+pub(crate) fn resolve_parent_rejoin_transition(
+    returned_task_record: &TaskRecord,
+) -> TaskTransition {
+    let (mode, reason) = resolve_parent_rejoin_continuation_contract(returned_task_record);
+    TaskTransition::continued(mode, reason)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         resolve_commit_transition, resolve_delegated_return_transition,
-        resolve_delegation_transition, resolve_initial_transition, resolve_stop_transition,
-        resolve_terminal_transition, TaskContinuationMode, TaskTransition,
+        resolve_delegation_transition, resolve_initial_transition,
+        resolve_parent_rejoin_transition, resolve_stop_transition, resolve_terminal_transition,
+        TaskContinuationMode, TaskTransition,
     };
     use crate::agent::run_guard::RunStopReasonKind;
     use crate::agent::runtime::task_record::{TaskLifecycleStatus, TaskRecord};
@@ -375,6 +384,33 @@ mod tests {
                 returned_backend_kind: TaskBackendKind::HiddenChildBackend,
                 returned_status: TaskLifecycleStatus::Failed,
                 terminal_reason: Some("tool_failure_circuit_breaker".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn resolve_parent_rejoin_transition_preserves_permission_resume_contract() {
+        let record = TaskRecord {
+            task_identity: TaskIdentity::new("task-child", Some("task-parent"), Some("task-root")),
+            task_kind: TaskKind::EmployeeStepTask,
+            surface_kind: TaskSurfaceKind::EmployeeStepSurface,
+            backend_kind: TaskBackendKind::EmployeeStepBackend,
+            session_id: "session-parent".to_string(),
+            user_message_id: "user-1".to_string(),
+            run_id: "run-child".to_string(),
+            status: TaskLifecycleStatus::Failed,
+            created_at: "2026-04-10T10:00:00Z".to_string(),
+            updated_at: "2026-04-10T10:02:00Z".to_string(),
+            started_at: Some("2026-04-10T10:00:30Z".to_string()),
+            completed_at: Some("2026-04-10T10:02:00Z".to_string()),
+            terminal_reason: Some("permission_denied".to_string()),
+        };
+
+        assert_eq!(
+            resolve_parent_rejoin_transition(&record),
+            TaskTransition::Continue {
+                mode: TaskContinuationMode::PermissionResume,
+                reason: "delegated_return:permission_denied".to_string(),
             }
         );
     }

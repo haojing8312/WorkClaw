@@ -1096,6 +1096,8 @@ mod tests {
                 last_error_kind: Some("max_turns".to_string()),
                 last_error_message: Some("已达到执行步数上限".to_string()),
                 task_identity: None,
+                task_continuation_mode: None,
+                task_continuation_reason: None,
                 turn_state: Some(SessionRunTurnStateSnapshot {
                     task_identity: None,
                     session_surface: None,
@@ -1142,6 +1144,8 @@ mod tests {
                 last_error_kind: Some("max_turns".to_string()),
                 last_error_message: Some("已达到执行步数上限".to_string()),
                 task_identity: None,
+                task_continuation_mode: None,
+                task_continuation_reason: None,
                 turn_state: Some(SessionRunTurnStateSnapshot {
                     task_identity: None,
                     session_surface: None,
@@ -1180,6 +1184,8 @@ mod tests {
                 last_error_kind: Some("max_turns".to_string()),
                 last_error_message: Some("已达到执行步数上限".to_string()),
                 task_identity: None,
+                task_continuation_mode: None,
+                task_continuation_reason: None,
                 turn_state: Some(SessionRunTurnStateSnapshot {
                     task_identity: None,
                     session_surface: None,
@@ -1233,6 +1239,8 @@ mod tests {
                 last_error_kind: Some("max_turns".to_string()),
                 last_error_message: Some("已达到执行步数上限".to_string()),
                 task_identity: None,
+                task_continuation_mode: None,
+                task_continuation_reason: None,
                 turn_state: Some(SessionRunTurnStateSnapshot {
                     task_identity: None,
                     session_surface: Some("employee_step_session".to_string()),
@@ -1282,6 +1290,8 @@ mod tests {
                 last_error_kind: Some("cancelled".to_string()),
                 last_error_message: Some("user cancelled".to_string()),
                 task_identity: None,
+                task_continuation_mode: None,
+                task_continuation_reason: None,
                 turn_state: Some(SessionRunTurnStateSnapshot {
                     task_identity: None,
                     session_surface: Some("hidden_child_session".to_string()),
@@ -1328,6 +1338,8 @@ mod tests {
                 last_error_kind: Some("auth".to_string()),
                 last_error_message: Some("permission denied".to_string()),
                 task_identity: None,
+                task_continuation_mode: None,
+                task_continuation_reason: None,
                 turn_state: Some(SessionRunTurnStateSnapshot {
                     task_identity: None,
                     session_surface: Some("employee_step_session".to_string()),
