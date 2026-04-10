@@ -82,7 +82,36 @@ git push origin v0.1.0
 
 如果你只是想安装并直接使用 WorkClaw，请优先选择 `.exe` 安装包。
 
-## 4. English Summary
+## 4. 本地构建缓存治理
+
+仓库现在会在 `pnpm install` 时自动把本地 git hooks 安装到 `.githooks`，并在 `git commit` / `git push` 前运行构建缓存治理脚本。
+
+默认策略：
+
+- 自动清理 `cargo-targets/workclaw/debug/incremental`
+  - 最后修改时间超过 `7` 天
+  - 或目录大小超过 `20 GB`
+- 自动清理 `.cargo-targets/isolated`
+  - 单个隔离构建目录最后修改时间超过 `3` 天
+  - 或总量超过 `20 GB`
+  - 或只保留最近 `5` 个隔离构建目录
+- 只校验 `cargo-targets/workclaw/debug/deps`
+  - 目录大小超过 `40 GB` 时阻止提交/推送
+  - 不会自动删除，避免破坏当前可复用构建产物
+
+手动命令：
+
+```bash
+# 只做检查（本地会按策略自动清 incremental）
+pnpm cache:build:check
+
+# 手动深度清理 incremental + deps（先停止 cargo / pnpm app）
+pnpm cache:build:clean -- --include-deps
+```
+
+CI 也会运行同一个脚本，但使用只读模式，不会在 runner 上删除文件。
+
+## 5. English Summary
 
 This document covers the Windows-specific contributor path for source builds and the GitHub-based Windows release flow.
 
@@ -119,3 +148,23 @@ git push origin v0.1.0
 ```
 
 CI validates that the pushed `tag(vX.Y.Z)` matches `apps/runtime/src-tauri/tauri.conf.json` `version`.
+
+### Build Cache Governance
+
+The repo now installs git hooks from `.githooks` during `pnpm install` and runs a shared cache governance script before `git commit` and `git push`.
+
+- `cargo-targets/workclaw/debug/incremental`
+  - auto-pruned when older than `7` days
+  - or when larger than `20 GB`
+- `.cargo-targets/isolated`
+  - auto-pruned when individual isolated runs are older than `3` days
+  - or when the total isolated cache is larger than `20 GB`
+  - or when more than `5` isolated run directories are present
+- `cargo-targets/workclaw/debug/deps`
+  - checked against a `40 GB` limit
+  - never auto-deleted by hooks because it may still be an active reusable build output
+
+Manual commands:
+
+- `pnpm cache:build:check`
+- `pnpm cache:build:clean -- --include-deps`

@@ -2,6 +2,7 @@
   "name": "workclaw",
   "private": true,
   "scripts": {
+    "prepare": "node scripts/install-git-hooks.mjs",
     "brand:apply": "node scripts/apply-brand.mjs",
     "app": "node scripts/start-runtime-dev.mjs",
     "runtime": "node scripts/start-runtime-dev.mjs",
@@ -21,6 +22,8 @@
     "eval:agent-real": "node scripts/run-agent-evals.mjs",
     "test:rust-fast": "node scripts/test-rust-fast.mjs",
     "cargo:isolated": "node scripts/run-cargo-isolated.mjs",
+    "cache:build:check": "node scripts/check-build-cache.mjs",
+    "cache:build:clean": "node scripts/check-build-cache.mjs --mode=clean",
     "test:builtin-skills": "cargo test --manifest-path packages/builtin-skill-checks/Cargo.toml -- --nocapture",
     "sync:openclaw-core": "node scripts/sync-openclaw-core.mjs",
     "sync:openclaw-im-core": "node scripts/sync-openclaw-im-core.mjs",
