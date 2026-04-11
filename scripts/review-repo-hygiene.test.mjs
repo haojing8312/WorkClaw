@@ -1,10 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { runRepoHygieneReview } from "./review-repo-hygiene.mjs";
+import { collectArtifactsSignals } from "./lib/repo-hygiene/collect-artifacts-signals.mjs";
+import { collectDeadcodeSignals } from "./lib/repo-hygiene/collect-deadcode-signals.mjs";
+import { collectDriftSignals } from "./lib/repo-hygiene/collect-drift-signals.mjs";
 
 const projectRoot = process.cwd();
 const scriptPath = path.join(projectRoot, "scripts", "review-repo-hygiene.mjs");
@@ -94,5 +97,202 @@ test("review-repo-hygiene routes collectors by mode", async () => {
     assert.deepEqual(report.countsByCategory, { "dead-code": 1 });
   } finally {
     await rm(outputDir, { recursive: true, force: true });
+  }
+});
+
+test("review-repo-hygiene keeps category visibility for all mode", async () => {
+  const outputDir = await mkdtemp(path.join(os.tmpdir(), "repo-hygiene-"));
+  try {
+    await runRepoHygieneReview({
+      outputDir,
+      mode: "all",
+      collectors: {
+        deadcode: async ({ mode }) => [
+          {
+            category: "dead-code",
+            confidence: "confirmed",
+            action: "ignore-with-rationale",
+            detail: `mode=${mode}`,
+          },
+        ],
+        artifacts: async ({ mode }) => [
+          {
+            category: "temporary-artifacts",
+            confidence: "likely",
+            action: "review-first",
+            detail: `mode=${mode}`,
+          },
+        ],
+        drift: async ({ mode }) => [
+          {
+            category: "stale-doc-or-skill-reference",
+            confidence: "likely",
+            action: "review-first",
+            detail: `mode=${mode}`,
+          },
+        ],
+      },
+    });
+
+    const report = JSON.parse(await readFile(path.join(outputDir, "report.json"), "utf8"));
+
+    assert.deepEqual(report.countsByCategory, {
+      "dead-code": 1,
+      "stale-doc-or-skill-reference": 1,
+      "temporary-artifacts": 1,
+    });
+    assert.deepEqual(
+      report.findings.map((finding) => finding.category).sort(),
+      ["dead-code", "stale-doc-or-skill-reference", "temporary-artifacts"],
+    );
+    assert.equal(
+      report.findings.every((finding) => finding.detail === "mode=all"),
+      true,
+    );
+  } finally {
+    await rm(outputDir, { recursive: true, force: true });
+  }
+});
+
+test("collect-artifacts-signals reports deterministic root temporary artifacts", async () => {
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), "repo-hygiene-artifacts-"));
+  try {
+    await writeFile(path.join(rootDir, "tmp-session.log"), "artifact\n", "utf8");
+    await writeFile(path.join(rootDir, "temp-runtime.txt"), "artifact\n", "utf8");
+    await writeFile(path.join(rootDir, ".tmp_state"), "artifact\n", "utf8");
+    await writeFile(path.join(rootDir, "release.tgz"), "artifact\n", "utf8");
+    await writeFile(path.join(rootDir, "README.md"), "keep\n", "utf8");
+
+    const findings = await collectArtifactsSignals({ rootDir, mode: "artifacts" });
+
+    assert.equal(Array.isArray(findings), true);
+    assert.equal(findings.every((finding) => finding.category === "temporary-artifacts"), true);
+    assert.deepEqual(
+      findings.map((finding) => finding.source),
+      [".tmp_state", "release.tgz", "temp-runtime.txt", "tmp-session.log"],
+    );
+  } finally {
+    await rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test("collect-deadcode-signals degrades safely when knip exits non-zero", async () => {
+  const findings = await collectDeadcodeSignals({
+    rootDir: projectRoot,
+    mode: "deadcode",
+    runCommand: async () => ({
+      stdout: "",
+      stderr: "knip missing",
+      exitCode: 1,
+    }),
+  });
+
+  assert.deepEqual(findings, []);
+});
+
+test("collect-deadcode-signals shapes knip findings on success", async () => {
+  const findings = await collectDeadcodeSignals({
+    rootDir: projectRoot,
+    mode: "deadcode",
+    runCommand: async () => ({
+      stdout: [
+        "Unused files (2)",
+        "src/unused.ts Unused file",
+        "src/extra.ts Unused export",
+        "",
+      ].join("\n"),
+      stderr: "",
+      exitCode: 0,
+    }),
+  });
+
+  assert.deepEqual(findings, [
+    {
+      category: "dead-code",
+      confidence: "probable",
+      action: "review-first",
+      source: "src/unused.ts",
+      detail: "src/unused.ts Unused file",
+    },
+    {
+      category: "dead-code",
+      confidence: "probable",
+      action: "review-first",
+      source: "src/extra.ts",
+      detail: "src/extra.ts Unused export",
+    },
+  ]);
+});
+
+test("collect-drift-signals reports missing workflow references deterministically", async () => {
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), "repo-hygiene-drift-"));
+  try {
+    await writeFile(
+      path.join(rootDir, "package.json"),
+      JSON.stringify({ name: "fixture", scripts: {} }, null, 2),
+      "utf8",
+    );
+    await mkdir(path.join(rootDir, "docs", "maintenance"), { recursive: true });
+    await writeFile(
+      path.join(rootDir, "docs", "maintenance", "repo-hygiene.md"),
+      "# Repo Hygiene\n\nRun `pnpm review:repo-hygiene` first.\n",
+      "utf8",
+    );
+
+    const findings = await collectDriftSignals({ rootDir, mode: "drift" });
+
+    assert.deepEqual(
+      findings.map((finding) => finding.category).sort(),
+      ["stale-doc-or-skill-reference", "stale-doc-or-skill-reference"],
+    );
+    assert.equal(
+      findings.some((finding) => finding.detail.includes("review:repo-hygiene package script")),
+      true,
+    );
+    assert.equal(
+      findings.some((finding) => finding.detail.includes("workclaw-repo-hygiene-review")),
+      true,
+    );
+  } finally {
+    await rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test("collect-drift-signals validates the review script target exists", async () => {
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), "repo-hygiene-drift-target-"));
+  try {
+    await writeFile(
+      path.join(rootDir, "package.json"),
+      JSON.stringify(
+        {
+          name: "fixture",
+          scripts: {
+            "review:repo-hygiene": "node scripts/review-repo-hygiene.mjs",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    await mkdir(path.join(rootDir, "docs", "maintenance"), { recursive: true });
+    await writeFile(
+      path.join(rootDir, "docs", "maintenance", "repo-hygiene.md"),
+      "# Repo Hygiene\n\nRun `pnpm review:repo-hygiene` first.\nUse `workclaw-repo-hygiene-review`.\n",
+      "utf8",
+    );
+
+    const findings = await collectDriftSignals({ rootDir, mode: "drift" });
+
+    assert.equal(
+      findings.some(
+        (finding) =>
+          finding.detail.includes("review:repo-hygiene script target")
+          && finding.source === "scripts/review-repo-hygiene.mjs",
+      ),
+      true,
+    );
+  } finally {
+    await rm(rootDir, { recursive: true, force: true });
   }
 });

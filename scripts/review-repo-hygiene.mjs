@@ -1,5 +1,8 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { collectArtifactsSignals } from "./lib/repo-hygiene/collect-artifacts-signals.mjs";
+import { collectDeadcodeSignals } from "./lib/repo-hygiene/collect-deadcode-signals.mjs";
+import { collectDriftSignals } from "./lib/repo-hygiene/collect-drift-signals.mjs";
 import { writeRepoHygieneReport } from "./lib/repo-hygiene/write-report.mjs";
 
 const SUPPORTED_MODES = new Set(["all", "deadcode", "drift", "artifacts"]);
@@ -41,18 +44,6 @@ function buildCountsByCategory(findings) {
     counts[category] = (counts[category] ?? 0) + 1;
     return counts;
   }, {});
-}
-
-async function collectDeadcodeSignals(_options) {
-  return [];
-}
-
-async function collectArtifactsSignals(_options) {
-  return [];
-}
-
-async function collectDriftSignals(_options) {
-  return [];
 }
 
 function resolveCollectorPlan(mode, collectors) {
