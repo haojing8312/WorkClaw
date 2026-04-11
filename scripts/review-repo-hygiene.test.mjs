@@ -100,6 +100,13 @@ test("review-repo-hygiene routes collectors by mode", async () => {
   }
 });
 
+test("review-repo-hygiene module can be imported without CLI argv assumptions", async () => {
+  const mod = await import("./review-repo-hygiene.mjs");
+
+  assert.equal(typeof mod.runRepoHygieneReview, "function");
+  assert.equal(typeof mod.parseArgs, "function");
+});
+
 test("review-repo-hygiene keeps category visibility for all mode", async () => {
   const outputDir = await mkdtemp(path.join(os.tmpdir(), "repo-hygiene-"));
   try {
@@ -206,6 +213,11 @@ test("collect-deadcode-signals shapes knip findings on success", async () => {
       stderr: "",
       exitCode: 0,
     }),
+    runCargoCommand: async () => ({
+      stdout: "",
+      stderr: "cargo tool unavailable",
+      exitCode: 1,
+    }),
   });
 
   assert.deepEqual(findings, [
@@ -213,6 +225,7 @@ test("collect-deadcode-signals shapes knip findings on success", async () => {
       category: "dead-code",
       confidence: "probable",
       action: "review-first",
+      language: "ts",
       source: "src/unused.ts",
       detail: "src/unused.ts Unused file",
     },
@@ -220,10 +233,80 @@ test("collect-deadcode-signals shapes knip findings on success", async () => {
       category: "dead-code",
       confidence: "probable",
       action: "review-first",
+      language: "ts",
       source: "src/extra.ts",
       detail: "src/extra.ts Unused export",
     },
   ]);
+});
+
+test("collect-deadcode-signals includes rust findings when cargo deadcode tool is available", async () => {
+  const findings = await collectDeadcodeSignals({
+    rootDir: projectRoot,
+    mode: "deadcode",
+    runCommand: async () => ({
+      stdout: "",
+      stderr: "",
+      exitCode: 0,
+    }),
+    runCargoCommand: async ({ args }) => {
+      if (args.includes("--help")) {
+        if (args[0] === "machete") {
+          return { stdout: "cargo machete help", stderr: "", exitCode: 0 };
+        }
+        return { stdout: "", stderr: "missing", exitCode: 1 };
+      }
+
+      return {
+        stdout: [
+          "apps/runtime/src-tauri/Cargo.toml serde_json",
+          "packages/runtime-policy/Cargo.toml regex",
+        ].join("\n"),
+        stderr: "",
+        exitCode: 0,
+      };
+    },
+  });
+
+  assert.deepEqual(findings, [
+    {
+      category: "dead-code",
+      confidence: "probable",
+      action: "review-first",
+      language: "rust",
+      tool: "cargo-machete",
+      source: "apps/runtime/src-tauri/Cargo.toml",
+      detail: "apps/runtime/src-tauri/Cargo.toml serde_json",
+    },
+    {
+      category: "dead-code",
+      confidence: "probable",
+      action: "review-first",
+      language: "rust",
+      tool: "cargo-machete",
+      source: "packages/runtime-policy/Cargo.toml",
+      detail: "packages/runtime-policy/Cargo.toml regex",
+    },
+  ]);
+});
+
+test("collect-deadcode-signals safely skips rust detection when no cargo deadcode tool is available", async () => {
+  const findings = await collectDeadcodeSignals({
+    rootDir: projectRoot,
+    mode: "deadcode",
+    runCommand: async () => ({
+      stdout: "",
+      stderr: "",
+      exitCode: 0,
+    }),
+    runCargoCommand: async () => ({
+      stdout: "",
+      stderr: "missing",
+      exitCode: 1,
+    }),
+  });
+
+  assert.deepEqual(findings, []);
 });
 
 test("collect-drift-signals reports missing repo hygiene references deterministically", async () => {
