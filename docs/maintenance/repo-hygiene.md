@@ -39,6 +39,7 @@ WorkClaw uses long-running AI-assisted development across runtime, sidecar, Rust
 6. Run `workclaw-change-verification` when the cleanup changes code, tests, docs, or skill files.
 
 Reports are written to `.artifacts/repo-hygiene/` for local review and should stay untracked.
+The GitHub Actions `Repo Hygiene` workflow also runs this command in a non-blocking lane and uploads the generated report as a workflow artifact for review.
 
 ## High-Risk Surfaces
 
