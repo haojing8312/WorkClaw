@@ -194,6 +194,11 @@ test("collect-deadcode-signals degrades safely when knip exits non-zero", async 
       stderr: "knip missing",
       exitCode: 1,
     }),
+    runCargoCommand: async () => ({
+      stdout: "",
+      stderr: "cargo tool unavailable",
+      exitCode: 1,
+    }),
   });
 
   assert.deepEqual(findings, []);
@@ -259,11 +264,14 @@ test("collect-deadcode-signals includes rust findings when cargo deadcode tool i
 
       return {
         stdout: [
-          "apps/runtime/src-tauri/Cargo.toml serde_json",
-          "packages/runtime-policy/Cargo.toml regex",
+          "cargo-machete found the following unused dependencies in this directory:",
+          "tauri-app -- apps/runtime/src-tauri/Cargo.toml:",
+          "\tserde_json",
+          "runtime-policy -- packages/runtime-policy/Cargo.toml:",
+          "\tregex",
         ].join("\n"),
         stderr: "",
-        exitCode: 0,
+        exitCode: 1,
       };
     },
   });
@@ -276,7 +284,7 @@ test("collect-deadcode-signals includes rust findings when cargo deadcode tool i
       language: "rust",
       tool: "cargo-machete",
       source: "apps/runtime/src-tauri/Cargo.toml",
-      detail: "apps/runtime/src-tauri/Cargo.toml serde_json",
+      detail: "unused dependency serde_json",
     },
     {
       category: "dead-code",
@@ -285,7 +293,7 @@ test("collect-deadcode-signals includes rust findings when cargo deadcode tool i
       language: "rust",
       tool: "cargo-machete",
       source: "packages/runtime-policy/Cargo.toml",
-      detail: "packages/runtime-policy/Cargo.toml regex",
+      detail: "unused dependency regex",
     },
   ]);
 });

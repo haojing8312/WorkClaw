@@ -1,5 +1,6 @@
 import path from "node:path";
 import { spawn } from "node:child_process";
+import os from "node:os";
 
 const SUPPORTED_MODES = new Set(["all", "deadcode"]);
 
@@ -33,6 +34,38 @@ function parseKnipOutput(stdout) {
 }
 
 function parseRustDeadcodeOutput(stdout, tool) {
+  if (tool === "cargo-machete") {
+    const findings = [];
+    let currentManifest = null;
+
+    for (const rawLine of stdout.split(/\r?\n/u)) {
+      const line = rawLine.trim();
+      if (!line) {
+        continue;
+      }
+
+      const manifestMatch = line.match(/^[^\s].*--\s+(.+Cargo\.toml):$/u);
+      if (manifestMatch) {
+        currentManifest = manifestMatch[1].replaceAll("\\", "/");
+        continue;
+      }
+
+      if (currentManifest && /^[A-Za-z0-9_.-]+$/u.test(line)) {
+        findings.push({
+          category: "dead-code",
+          confidence: "probable",
+          action: "review-first",
+          language: "rust",
+          tool,
+          source: currentManifest,
+          detail: `unused dependency ${line}`,
+        });
+      }
+    }
+
+    return findings;
+  }
+
   return stdout
     .split(/\r?\n/u)
     .map((line) => line.trim())
@@ -91,8 +124,28 @@ async function runKnipCommand({ cwd }) {
 }
 
 async function runCargoCommand({ cwd, args }) {
+  const cargoHome = process.env.CARGO_HOME
+    || (process.platform === "win32" && "D:/worksoftdata/.cargo")
+    || path.join(os.homedir(), ".cargo");
+  const toolName = args[0];
+  const executableName = toolName === "machete"
+    ? "cargo-machete"
+    : toolName === "udeps"
+      ? "cargo-udeps"
+      : toolName;
+  const directExecutable = process.platform === "win32"
+    ? path.join(cargoHome, "bin", `${executableName}.exe`)
+    : path.join(cargoHome, "bin", executableName);
+
+  const command = toolName === "machete" || toolName === "udeps"
+    ? (directExecutable)
+    : "cargo";
+  const commandArgs = toolName === "machete" || toolName === "udeps"
+    ? args.slice(1)
+    : args;
+
   return new Promise((resolve) => {
-    const child = spawn("cargo", args, {
+    const child = spawn(command, commandArgs, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
       shell: process.platform === "win32",
@@ -147,11 +200,12 @@ async function collectRustDeadcodeSignals(options = {}) {
     }
 
     const scanResult = await runCargo({ cwd: rootDir, args: candidate.args });
-    if ((scanResult?.exitCode ?? 1) !== 0) {
+    const stdout = scanResult?.stdout?.trim() ?? "";
+    const exitCode = scanResult?.exitCode ?? 1;
+    if (!stdout && exitCode !== 0) {
       return [];
     }
 
-    const stdout = scanResult?.stdout?.trim() ?? "";
     if (!stdout) {
       return [];
     }
