@@ -4,6 +4,10 @@ version = "0.5.9"
 edition = "2021"
 default-run = "runtime"
 
+[features]
+default = []
+headless-evals = []
+
 [lib]
 name = "runtime_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
@@ -15,6 +19,7 @@ path = "src/main.rs"
 [[bin]]
 name = "agent_eval"
 path = "src/bin/agent_eval.rs"
+required-features = ["headless-evals"]
 
 [dependencies]
 tauri = { version = "2", features = ["test"] }

@@ -1,10 +1,6 @@
 use crate::agent::runtime::runtime_io::{
     WorkspaceSkillRouteExecutionMode, WorkspaceSkillRouteProjection, WorkspaceSkillRuntimeEntry,
 };
-use runtime_skill_core::{
-    OpenClawSkillMetadata, SkillCommandArgMode, SkillCommandDispatchKind, SkillCommandDispatchSpec,
-    SkillConfig, SkillInvocationPolicy,
-};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -55,10 +51,6 @@ impl SkillRouteIndex {
             entries,
             entries_by_skill_id,
         }
-    }
-
-    pub fn len(&self) -> usize {
-        self.entries.len()
     }
 
     pub fn get(&self, skill_id: &str) -> Option<&WorkspaceSkillRouteProjection> {

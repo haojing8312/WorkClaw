@@ -1046,6 +1046,7 @@ fn quote_powershell_literal(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn matches_feishu_runtime_command_line(
     command_line: &str,
     plugin_root: &str,

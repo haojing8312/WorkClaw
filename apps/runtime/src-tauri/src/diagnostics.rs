@@ -372,6 +372,7 @@ pub fn install_panic_hook(paths: DiagnosticsPaths, run_id: String) {
     }));
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn initialize_for_app(app: &AppHandle, version: String) -> Result<DiagnosticsState, String> {
     let paths = DiagnosticsPaths::from_app(app);
     initialize_with_paths(paths, version)

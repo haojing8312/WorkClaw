@@ -42,6 +42,7 @@ where
     pub prepare_surface: F,
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct DelegatedTaskTerminalFinalizeEntryRequest<'a> {
     pub db: &'a sqlx::SqlitePool,
     pub journal: &'a SessionJournalStore,
@@ -149,6 +150,7 @@ pub(crate) async fn run_and_finalize_primary_local_chat_task(
     .await
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) async fn finalize_delegated_task_execution_outcome_entry(
     request: DelegatedTaskTerminalFinalizeEntryRequest<'_>,
 ) -> Result<DelegatedTaskEntryOutcome, String> {

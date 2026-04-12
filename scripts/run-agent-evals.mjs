@@ -38,6 +38,8 @@ export function buildCargoArgs({ scenario, config }) {
     "run",
     "--manifest-path",
     "apps/runtime/src-tauri/Cargo.toml",
+    "--features",
+    "headless-evals",
     "--bin",
     "agent_eval",
     "--",

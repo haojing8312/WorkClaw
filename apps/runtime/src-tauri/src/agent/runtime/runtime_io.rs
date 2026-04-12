@@ -1,6 +1,5 @@
 #![allow(unused_imports)]
 
-mod message_reconstruction;
 mod runtime_events;
 mod runtime_inputs;
 mod runtime_support;
@@ -8,10 +7,6 @@ mod session_titles;
 mod types;
 mod workspace_skills;
 
-pub(crate) use message_reconstruction::{
-    build_assistant_content_from_final_messages, build_assistant_content_with_stream_fallback,
-    reconstruct_history_messages,
-};
 pub(crate) use runtime_events::{
     append_partial_assistant_chunk_with_pool, append_run_failed_with_pool,
     append_run_guard_warning_with_pool, append_run_started_with_pool, append_run_stopped_with_pool,

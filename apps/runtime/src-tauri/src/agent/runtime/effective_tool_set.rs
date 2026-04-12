@@ -101,6 +101,7 @@ pub struct EffectiveToolDecisionRecord {
     pub discovery_candidates: Vec<ToolDiscoveryCandidateRecord>,
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub type EffectiveToolPlanSummary = EffectiveToolDecisionRecord;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -156,10 +157,12 @@ pub struct EffectiveToolPolicySummary {
 }
 
 impl EffectiveToolSet {
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn tool_names_csv(&self) -> String {
         self.active_tools.join(", ")
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn decision_record(&self) -> EffectiveToolDecisionRecord {
         self.decision_record_with_candidates(Vec::new())
     }
@@ -193,10 +196,12 @@ impl EffectiveToolSet {
         }
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn summary(&self) -> EffectiveToolPlanSummary {
         self.decision_record()
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn exclusions_for_reason(
         &self,
         reason: ToolFilterReason,
@@ -315,6 +320,7 @@ impl EffectiveToolSet {
         self.allowed_tools = Some(active_tools);
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn expand_to_full(&mut self, reason: impl Into<String>) {
         if !self.has_deferred_tools() {
             return;

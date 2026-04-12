@@ -30,7 +30,7 @@ test("desktop runtime package declares explicit runtime and agent_eval binary ta
   );
   assert.match(
     cargoToml,
-    /\[\[bin\]\][\s\S]*?name\s*=\s*"agent_eval"[\s\S]*?path\s*=\s*"src\/bin\/agent_eval\.rs"/m,
+    /\[\[bin\]\][\s\S]*?name\s*=\s*"agent_eval"[\s\S]*?path\s*=\s*"src\/bin\/agent_eval\.rs"[\s\S]*?required-features\s*=\s*\["headless-evals"\]/m,
     "Expected Cargo.toml to declare the eval harness binary explicitly without making it the packaged app entrypoint",
   );
 });

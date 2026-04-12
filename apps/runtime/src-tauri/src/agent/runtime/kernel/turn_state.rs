@@ -66,6 +66,7 @@ impl TurnStateSnapshot {
         self
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn resolved_session_surface(&self) -> SessionSurfaceKind {
         self.session_surface.unwrap_or_default()
     }
@@ -93,11 +94,13 @@ impl TurnStateSnapshot {
         self
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn with_partial_assistant_text(mut self, text: impl Into<String>) -> Self {
         self.partial_assistant_text = text.into();
         self
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn with_tool_failure_streak(mut self, streak: usize) -> Self {
         self.tool_failure_streak = streak;
         self
@@ -108,6 +111,7 @@ impl TurnStateSnapshot {
         self
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn with_compaction_boundary(
         mut self,
         compaction_boundary: TurnCompactionBoundary,

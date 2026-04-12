@@ -1,4 +1,7 @@
 use crate::commands::skills::DbState;
+use crate::employee_runtime_adapter::employee_adapter::{
+    build_group_run_execute_targets, build_team_runtime_view,
+};
 use crate::im::types::ImEvent;
 use serde_json::Value;
 use sqlx::{Row, SqlitePool};
@@ -36,11 +39,7 @@ pub(crate) use group_run_entry::{
     extract_assistant_text, maybe_handle_team_entry_session_message_with_pool,
     run_group_step_with_pool_and_journal, start_employee_group_run_with_pool_and_journal,
 };
-use team_rules::{
-    group_rule_matches_relation_types, normalize_member_employee_ids,
-    resolve_group_planner_employee_id, resolve_group_reviewer_employee_id,
-    select_group_execute_dispatch_targets,
-};
+use team_rules::{group_rule_matches_relation_types, normalize_member_employee_ids};
 use types::{default_group_execution_window, default_group_max_retry};
 pub use types::{
     AgentEmployee, CloneEmployeeGroupTemplateInput, CreateEmployeeGroupInput,
@@ -61,7 +60,9 @@ async fn load_execute_reassignment_targets_with_pool(
         "SELECT g.id,
                 COALESCE(g.member_employee_ids_json, '[]'),
                 COALESCE(r.main_employee_id, ''),
-                COALESCE(g.coordinator_employee_id, '')
+                COALESCE(g.coordinator_employee_id, ''),
+                COALESCE(g.entry_employee_id, ''),
+                COALESCE(g.review_mode, 'none')
          FROM group_runs r
          INNER JOIN employee_groups g ON g.id = r.group_id
          WHERE r.id = ?",
@@ -76,6 +77,8 @@ async fn load_execute_reassignment_targets_with_pool(
     let member_employee_ids_json: String = row.try_get(1).map_err(|e| e.to_string())?;
     let main_employee_id: String = row.try_get(2).map_err(|e| e.to_string())?;
     let coordinator_employee_id: String = row.try_get(3).map_err(|e| e.to_string())?;
+    let entry_employee_id: String = row.try_get(4).map_err(|e| e.to_string())?;
+    let review_mode: String = row.try_get(5).map_err(|e| e.to_string())?;
     let member_employee_ids =
         serde_json::from_str::<Vec<String>>(&member_employee_ids_json).unwrap_or_default();
     let normalized_member_ids = normalize_member_employee_ids(&member_employee_ids);
@@ -95,11 +98,18 @@ async fn load_execute_reassignment_targets_with_pool(
     };
 
     let rules = list_employee_group_rules_with_pool(pool, &group_id).await?;
-    let (targets, has_execute_rules) = select_group_execute_dispatch_targets(
-        &rules,
+    let employees = service::list_agent_employees_with_pool(pool).await?;
+    let team_runtime_view = build_team_runtime_view(
+        &employees,
+        &coordinator_employee_id,
+        &entry_employee_id,
         &member_employee_ids,
+        &review_mode,
+        &rules,
         &[dispatch_source_employee_id, run_dispatch_source_employee_id],
     );
+    let targets = build_group_run_execute_targets(&team_runtime_view);
+    let has_execute_rules = !team_runtime_view.delegation_policy.targets.is_empty();
     if !has_execute_rules {
         return Ok((normalized_member_ids, false));
     }

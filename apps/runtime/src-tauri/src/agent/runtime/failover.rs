@@ -44,7 +44,9 @@ pub(crate) struct RuntimeFailoverOutcome {
     pub partial_text: String,
     pub reasoning_text: String,
     pub reasoning_duration_ms: Option<u64>,
+    #[cfg_attr(not(test), allow(dead_code))]
     pub tool_exposure_expanded: bool,
+    #[cfg_attr(not(test), allow(dead_code))]
     pub tool_exposure_expansion_reason: Option<String>,
     pub compaction_boundary: Option<TurnCompactionBoundary>,
 }

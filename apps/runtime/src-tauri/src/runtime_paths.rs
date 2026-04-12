@@ -125,6 +125,7 @@ pub fn resolve_runtime_root() -> PathBuf {
     resolve_runtime_root_with_home_env(std::env::var_os("USERPROFILE"), std::env::var_os("HOME"))
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn resolve_runtime_root_with_env(
     _appdata: Option<OsString>,
     userprofile: Option<OsString>,
@@ -147,6 +148,7 @@ pub fn resolve_runtime_root_with_home_env(
     std::env::temp_dir().join(DEFAULT_RUNTIME_ROOT_DIR_NAME)
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn resolve_default_work_dir() -> PathBuf {
     resolve_runtime_root().join("workspace")
 }

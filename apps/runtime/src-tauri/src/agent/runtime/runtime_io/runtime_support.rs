@@ -24,6 +24,7 @@ pub(crate) fn resolve_tool_name_list(
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn resolve_tool_names(
     allowed_tools: &Option<Vec<String>>,
     agent_executor: &AgentExecutor,

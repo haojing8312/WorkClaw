@@ -138,6 +138,7 @@ fn is_recoverable_bootstrap_read_error(error: &RuntimeBootstrapError) -> bool {
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn bootstrap_file_path(bootstrap_dir: &Path) -> PathBuf {
     bootstrap_dir.join(BOOTSTRAP_FILE_NAME)
 }

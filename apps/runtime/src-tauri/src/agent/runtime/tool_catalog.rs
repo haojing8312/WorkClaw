@@ -96,6 +96,7 @@ pub(crate) fn format_tool_discovery_index(entries: &[ToolManifestEntry]) -> Opti
     Some(lines.join("\n"))
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn format_tool_candidate_hints(
     entries: &[ToolManifestEntry],
     query: &str,

@@ -658,6 +658,7 @@ fn resolve_recent_parent_rejoin_runtime_notes(
         .collect()
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn resolve_compaction_continuation_preference(
     user_message: &str,
     state: &SessionJournalState,

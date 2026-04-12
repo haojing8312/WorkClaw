@@ -1,5 +1,4 @@
-use super::runtime_io::{finalize_run_success_with_pool, insert_session_message_with_pool};
-use super::RuntimeTranscript;
+use super::runtime_io::insert_session_message_with_pool;
 use crate::agent::runtime::task_backend::{
     HiddenChildTaskBackendPreparationRequest, TaskBackendPreparationRequest,
     TaskBackendTokenCallback,
@@ -7,9 +6,7 @@ use crate::agent::runtime::task_backend::{
 use crate::agent::runtime::task_entry;
 use crate::agent::runtime::task_entry::{
     DelegatedTaskBackendRunAndFinalizeRequest, DelegatedTaskEntryOutcome,
-    DelegatedTaskTerminalFinalizeEntryRequest,
 };
-use crate::agent::runtime::task_execution::TaskExecutionOutcome;
 use crate::agent::runtime::task_lifecycle;
 use crate::agent::runtime::task_lifecycle::TaskBeginParentContext;
 use crate::agent::runtime::task_record::TaskRecord;
@@ -18,7 +15,7 @@ use crate::agent::types::StreamDelta;
 use crate::agent::{AgentExecutor, ToolRegistry};
 use crate::session_journal::SessionJournalStore;
 use anyhow::Result;
-use serde_json::{json, Value};
+use serde_json::json;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;

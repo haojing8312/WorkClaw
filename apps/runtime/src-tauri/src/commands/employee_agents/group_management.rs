@@ -3,6 +3,7 @@ use super::{
     CloneEmployeeGroupTemplateInput, CreateEmployeeGroupInput, CreateEmployeeTeamInput,
     CreateEmployeeTeamRuleInput, EmployeeGroup, EmployeeGroupRule, EmployeeGroupRunSummary,
 };
+use crate::employee_runtime_adapter::team_topology::resolve_executor_employee_ids;
 use serde_json::{json, Value};
 use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
@@ -113,33 +114,21 @@ fn build_default_employee_team_rules(
         priority += 10;
     }
 
-    let management_ids = [entry_employee_id, planner_employee_id, reviewer_employee_id]
-        .iter()
-        .map(|employee_id| employee_id.trim().to_lowercase())
-        .filter(|employee_id| !employee_id.is_empty())
-        .collect::<std::collections::HashSet<_>>();
-    let mut execute_targets = member_employee_ids
-        .iter()
-        .map(|employee_id| employee_id.trim().to_lowercase())
-        .filter(|employee_id| !employee_id.is_empty())
-        .filter(|employee_id| employee_id != coordinator_employee_id)
-        .filter(|employee_id| !management_ids.contains(employee_id))
-        .collect::<Vec<_>>();
-    if execute_targets.is_empty() {
-        execute_targets = member_employee_ids
-            .iter()
-            .map(|employee_id| employee_id.trim().to_lowercase())
-            .filter(|employee_id| !employee_id.is_empty())
-            .filter(|employee_id| employee_id != reviewer_employee_id)
-            .filter(|employee_id| employee_id != entry_employee_id)
-            .collect::<Vec<_>>();
-    }
-    if execute_targets.is_empty() && !coordinator_employee_id.is_empty() {
-        execute_targets.push(coordinator_employee_id.to_string());
-    }
-
     let mut seen_execute_targets = std::collections::HashSet::new();
+    let execute_targets = resolve_executor_employee_ids(
+        coordinator_employee_id,
+        member_employee_ids,
+        planner_employee_id,
+        if reviewer_employee_id.trim().is_empty() {
+            None
+        } else {
+            Some(reviewer_employee_id)
+        },
+    );
     for execute_target in execute_targets {
+        if execute_target == coordinator_employee_id {
+            continue;
+        }
         if !seen_execute_targets.insert(execute_target.clone()) {
             continue;
         }

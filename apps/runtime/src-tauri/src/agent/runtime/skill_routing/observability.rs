@@ -1,7 +1,7 @@
 use super::intent::RouteFallbackReason;
 use crate::agent::runtime::effective_tool_set::{EffectiveToolDecisionRecord, ToolLoadingPolicy};
 use crate::agent::runtime::kernel::execution_plan::ExecutionPlan;
-use crate::agent::runtime::kernel::route_lane::{RouteRunPlan, RoutedSkillToolSetup};
+use crate::agent::runtime::kernel::route_lane::RouteRunPlan;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ImplicitRouteObservation {
@@ -57,6 +57,7 @@ pub(crate) fn build_implicit_route_observation(
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn attach_tool_recommendation_observation(
     mut observation: ImplicitRouteObservation,
     plan: &EffectiveToolDecisionRecord,

@@ -1,5 +1,7 @@
 mod adapters;
+pub(crate) mod agent_catalog;
 pub mod agent;
+pub(crate) mod agent_core;
 pub mod approval_bus;
 pub mod approval_rules;
 mod builtin_skills;
@@ -7,6 +9,7 @@ mod branding_generated;
 pub mod commands;
 mod db;
 mod diagnostics;
+pub(crate) mod employee_runtime_adapter;
 pub mod im;
 mod model_errors;
 mod model_transport;

@@ -496,6 +496,7 @@ pub(crate) fn resolve_plugin_host_run_feishu_script() -> PathBuf {
         .join("run-feishu-host.mjs")
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn build_plugin_host_fixture_root_from_runtime_root(runtime_root: &Path) -> PathBuf {
     runtime_root.join("plugin-host-fixtures")
 }
@@ -651,6 +652,7 @@ async fn inspect_openclaw_plugin_with_pool_and_app(
         .map_err(|e| format!("failed to parse plugin host inspect json: {e}"))
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub async fn inspect_openclaw_plugin_with_pool(
     pool: &SqlitePool,
     plugin_id: &str,
@@ -764,6 +766,7 @@ async fn list_openclaw_plugin_channel_hosts_with_pool_and_app(
     Ok(hosts)
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub async fn list_openclaw_plugin_channel_hosts_with_pool(
     pool: &SqlitePool,
 ) -> Result<Vec<OpenClawPluginChannelHost>, String> {

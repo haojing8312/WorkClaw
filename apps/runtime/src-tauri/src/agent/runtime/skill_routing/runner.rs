@@ -44,6 +44,7 @@ pub(crate) fn resolve_direct_dispatch_raw_args(
     Some(candidate.to_string())
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn plan_implicit_route(
     route_index: &SkillRouteIndex,
     workspace_skill_entries: &[WorkspaceSkillRuntimeEntry],

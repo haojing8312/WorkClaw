@@ -57,6 +57,7 @@ pub(crate) fn build_local_skill_id(seed: &str, dir_path: &str) -> String {
     format!("local-skill-{:x}", hasher.finish())
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn default_skill_base_dir() -> PathBuf {
     crate::runtime_paths::resolve_runtime_root().join("skills")
 }

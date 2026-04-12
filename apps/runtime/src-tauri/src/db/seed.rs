@@ -22,6 +22,7 @@ pub(super) fn build_builtin_manifest_json(skill_id: &str, skill_markdown: &str) 
     .to_string()
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) async fn sync_builtin_skills(pool: &SqlitePool) -> Result<()> {
     let vendor_root = std::env::temp_dir().join("workclaw-missing-vendor-root");
     sync_builtin_skills_with_root(pool, &vendor_root).await

@@ -20,7 +20,7 @@ use crate::adapters;
 use crate::agent::runtime::RuntimeObservabilityState;
 use crate::model_transport::{resolve_model_transport, ModelTransportKind, ResolvedModelTransport};
 use crate::runtime_environment::runtime_paths_from_app;
-use anyhow::{anyhow, Result};
+use anyhow::anyhow;
 use runtime_executor_core::{
     estimate_tokens, micro_compact, trim_messages, ToolFailureStreak, DEFAULT_TOKEN_BUDGET,
 };

@@ -388,11 +388,7 @@ fn normalize_execute_targets(
         }
         let dispatch_source_employee_id = target.dispatch_source_employee_id.trim().to_lowercase();
         out.push(GroupRunExecuteTarget {
-            dispatch_source_employee_id: if dispatch_source_employee_id.is_empty() {
-                default_dispatch_source.clone()
-            } else {
-                dispatch_source_employee_id
-            },
+            dispatch_source_employee_id,
             assignee_employee_id,
         });
         if out.len() >= 10 {
@@ -411,7 +407,7 @@ fn normalize_timeouts(raw: &[String]) -> std::collections::HashSet<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{simulate_group_run, GroupRunRequest, GroupRunState};
+    use super::{build_group_run_plan, simulate_group_run, GroupRunExecuteTarget, GroupRunRequest, GroupRunState};
 
     #[test]
     fn simulate_group_run_has_required_phases_and_report_sections() {
@@ -444,5 +440,32 @@ mod tests {
         assert!(outcome.final_report.contains("计划"));
         assert!(outcome.final_report.contains("执行"));
         assert!(outcome.final_report.contains("汇报"));
+    }
+
+    #[test]
+    fn build_group_run_plan_preserves_empty_dispatch_source_for_self_execute() {
+        let plan = build_group_run_plan(GroupRunRequest {
+            group_id: "g1".to_string(),
+            coordinator_employee_id: "lead".to_string(),
+            planner_employee_id: Some("lead".to_string()),
+            reviewer_employee_id: None,
+            member_employee_ids: vec!["lead".to_string()],
+            execute_targets: vec![GroupRunExecuteTarget {
+                dispatch_source_employee_id: String::new(),
+                assignee_employee_id: "lead".to_string(),
+            }],
+            user_goal: "整理简报".to_string(),
+            execution_window: 1,
+            timeout_employee_ids: Vec::new(),
+            max_retry_per_step: 1,
+        });
+
+        let execute_step = plan
+            .steps
+            .iter()
+            .find(|step| step.step_type == "execute")
+            .expect("execute step");
+        assert!(execute_step.dispatch_source_employee_id.is_empty());
+        assert_eq!(execute_step.assignee_employee_id, "lead");
     }
 }

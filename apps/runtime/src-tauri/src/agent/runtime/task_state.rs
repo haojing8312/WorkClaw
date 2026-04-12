@@ -171,6 +171,7 @@ impl TaskState {
         )
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn new_recovery_local_chat(
         session_id: impl Into<String>,
         user_message_id: impl Into<String>,

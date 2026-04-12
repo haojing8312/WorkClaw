@@ -1,5 +1,6 @@
 #![recursion_limit = "256"]
 
+use anyhow::Context;
 use runtime_lib::agent::evals::{
     evaluate_and_write_report, EvalReportStatus, EvalScenario, LocalEvalConfig, RealAgentEvalRunner,
 };
@@ -12,9 +13,20 @@ struct CliArgs {
     config_path: PathBuf,
 }
 
-#[tokio::main]
-async fn main() {
-    match run().await {
+fn main() {
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("build tokio runtime")
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("[agent-eval] {error}");
+            std::process::exit(1);
+        }
+    };
+
+    match runtime.block_on(run()) {
         Ok(status) => {
             let code = match status {
                 EvalReportStatus::Pass | EvalReportStatus::Warn => 0,

@@ -17,7 +17,6 @@ use crate::agent::runtime::kernel::workspace_skill_context::build_workspace_skil
 use crate::agent::runtime::runtime_io::WorkspaceSkillRuntimeEntry;
 use crate::agent::tool_manifest::{ToolCategory, ToolSource};
 use crate::agent::AgentExecutor;
-use crate::agent::ToolManifestEntry;
 use reqwest::Url;
 use runtime_chat_app::{ChatExecutionGuidance, ChatExecutionPreparationService};
 use std::sync::Arc;
@@ -27,7 +26,6 @@ use tauri::AppHandle;
 pub(crate) struct PreparedRuntimeTools {
     pub allowed_tools: Option<Vec<String>>,
     pub full_allowed_tools: Vec<String>,
-    pub tool_manifest: Vec<ToolManifestEntry>,
     pub effective_tool_plan: EffectiveToolSet,
     pub discovery_candidates: Vec<ToolDiscoveryCandidateRecord>,
     pub system_prompt: String,
@@ -35,6 +33,7 @@ pub(crate) struct PreparedRuntimeTools {
 }
 
 impl PreparedRuntimeTools {
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn tool_plan_record(
         &self,
     ) -> crate::agent::runtime::effective_tool_set::EffectiveToolDecisionRecord {
@@ -211,7 +210,6 @@ pub(crate) async fn prepare_runtime_tools(
     Ok(PreparedRuntimeTools {
         allowed_tools: capability_snapshot.allowed_tools.clone(),
         full_allowed_tools: capability_snapshot.full_allowed_tools.clone(),
-        tool_manifest: capability_snapshot.tool_manifest.clone(),
         effective_tool_plan: capability_snapshot
             .effective_tool_plan
             .clone()

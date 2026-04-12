@@ -18,9 +18,7 @@ use crate::agent::runtime::task_backend::{
 use crate::agent::runtime::task_entry;
 use crate::agent::runtime::task_entry::{
     DelegatedTaskBackendRunAndFinalizeRequest, DelegatedTaskEntryOutcome,
-    DelegatedTaskTerminalFinalizeEntryRequest,
 };
-use crate::agent::runtime::task_execution::TaskExecutionOutcome;
 use crate::agent::runtime::task_lifecycle;
 use crate::agent::runtime::task_lifecycle::TaskBeginParentContext;
 use crate::agent::runtime::task_record::TaskRecord;
@@ -29,6 +27,9 @@ use crate::agent::tools::{EmployeeManageTool, MemoryTool};
 use crate::agent::{AgentExecutor, ToolRegistry};
 use crate::commands::chat_runtime_io::extract_assistant_text_content;
 use crate::commands::models::resolve_default_model_id_with_pool;
+use crate::employee_runtime_adapter::employee_adapter::{
+    build_group_run_execute_targets, build_team_runtime_view,
+};
 use crate::session_journal::SessionJournalStore;
 use serde_json::Value;
 use sqlx::SqlitePool;
@@ -38,6 +39,7 @@ use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 struct PreparedEmployeeStepSessionRun {
+    #[cfg_attr(not(test), allow(dead_code))]
     run_id: String,
     task_state: TaskState,
     parent_task_record: Option<TaskRecord>,
@@ -501,25 +503,22 @@ pub(crate) async fn start_employee_group_run_internal_with_pool(
     let member_employee_ids =
         serde_json::from_str::<Vec<String>>(&config.member_employee_ids_json).unwrap_or_default();
     let rules = super::super::list_employee_group_rules_with_pool(pool, &group_id).await?;
-    let planner_employee_id = super::super::resolve_group_planner_employee_id(
-        &config.entry_employee_id,
+    let employees = list_agent_employees_with_pool(pool).await?;
+    let team_runtime_view = build_team_runtime_view(
+        &employees,
         &config.coordinator_employee_id,
-        &rules,
-    );
-    let reviewer_employee_id = super::super::resolve_group_reviewer_employee_id(
-        &config.review_mode,
-        &planner_employee_id,
-        &rules,
-    );
-    let (execute_targets, _) = super::super::select_group_execute_dispatch_targets(
-        &rules,
+        &config.entry_employee_id,
         &member_employee_ids,
+        &config.review_mode,
+        &rules,
         &[
             config.coordinator_employee_id.clone(),
-            planner_employee_id.clone(),
             config.entry_employee_id.clone(),
         ],
     );
+    let planner_employee_id = team_runtime_view.topology.planner_employee_id.clone();
+    let reviewer_employee_id = team_runtime_view.topology.reviewer_employee_id.clone();
+    let execute_targets = build_group_run_execute_targets(&team_runtime_view);
 
     let plan = crate::agent::group_orchestrator::build_group_run_plan(
         crate::agent::group_orchestrator::GroupRunRequest {

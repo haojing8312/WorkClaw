@@ -1,7 +1,7 @@
 use super::{
     clear_employee_memory_from_root, collect_employee_memory_stats_from_root,
     employee_memory_skills_root, export_employee_memory_from_root, normalize_employee_id,
-    EmployeeMemoryExport, EmployeeMemoryStats, UpsertAgentEmployeeInput,
+    EmployeeMemoryExport, EmployeeMemoryStats,
 };
 use crate::runtime_environment::runtime_paths_from_app;
 

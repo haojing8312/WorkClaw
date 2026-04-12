@@ -3,12 +3,12 @@ import type { AppMainContentProps } from "../components/AppMainContent";
 import type { QuickModelSetupDialogProps } from "../components/ModelSetupOverlays";
 import type { PendingAttachment } from "../types";
 
-interface BuildAppShellRenderPropsResult {
+export interface BuildAppShellRenderPropsResult {
   quickModelSetupDialogProps: QuickModelSetupDialogProps;
   appMainContentProps: AppMainContentProps;
 }
 
-interface BuildAppShellRenderPropsOptions {
+export interface BuildAppShellRenderPropsOptions {
   showQuickModelSetup: QuickModelSetupDialogProps["show"];
   quickSetupStep: QuickModelSetupDialogProps["quickSetupStep"];
   canDismissQuickModelSetup: QuickModelSetupDialogProps["canDismissQuickModelSetup"];

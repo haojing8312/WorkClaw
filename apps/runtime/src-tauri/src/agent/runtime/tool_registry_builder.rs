@@ -11,8 +11,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::{AppHandle, Manager};
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) const DEFAULT_BROWSER_SIDECAR_URL: &str = "http://localhost:8765";
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn standard_web_search_input_schema() -> Value {
     json!({
         "type": "object",
@@ -36,6 +38,7 @@ fn standard_web_search_input_schema() -> Value {
     })
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Clone)]
 struct McpSearchFallbackTool {
     inner: Arc<dyn Tool>,
@@ -46,6 +49,7 @@ struct McpSearchFallbackTool {
 }
 
 impl McpSearchFallbackTool {
+    #[cfg_attr(not(test), allow(dead_code))]
     fn build_input(&self, input: Value) -> Value {
         let mut mapped = Map::new();
 
@@ -99,6 +103,7 @@ impl Tool for McpSearchFallbackTool {
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Clone)]
 struct McpSearchFallbackSpec {
     tool_name: String,
@@ -108,6 +113,7 @@ struct McpSearchFallbackSpec {
     freshness_key: Option<String>,
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn infer_query_key(schema: &Value) -> Option<String> {
     let properties = schema.get("properties")?.as_object()?;
     for key in ["query", "q", "searchTerm", "search_term", "keywords"] {
@@ -123,6 +129,7 @@ fn infer_query_key(schema: &Value) -> Option<String> {
     None
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn infer_limit_key(schema: &Value) -> Option<String> {
     let properties = schema.get("properties")?.as_object()?;
     for key in ["count", "limit", "numResults", "num_results", "max_results"] {
@@ -133,6 +140,7 @@ fn infer_limit_key(schema: &Value) -> Option<String> {
     None
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn infer_freshness_key(schema: &Value) -> Option<String> {
     let properties = schema.get("properties")?.as_object()?;
     for key in ["freshness", "time_range", "timeRange"] {
@@ -143,6 +151,7 @@ fn infer_freshness_key(schema: &Value) -> Option<String> {
     None
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn score_mcp_search_candidate(tool_name: &str, description: &str, query_key: &str) -> Option<i32> {
     let haystack = format!(
         "{} {}",
@@ -175,6 +184,7 @@ fn score_mcp_search_candidate(tool_name: &str, description: &str, query_key: &st
     Some(score)
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn format_mcp_source_label(tool_name: &str) -> String {
     tool_name
         .strip_prefix("mcp_")
@@ -182,15 +192,18 @@ fn format_mcp_source_label(tool_name: &str) -> String {
         .to_string()
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct RuntimeToolRegistryBuilder<'a> {
     registry: &'a ToolRegistry,
 }
 
 impl<'a> RuntimeToolRegistryBuilder<'a> {
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn new(registry: &'a ToolRegistry) -> Self {
         Self { registry }
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn register_process_shell_tools(&self, process_manager: Arc<ProcessManager>) {
         self.registry
             .register(Arc::new(BashOutputTool::new(Arc::clone(&process_manager))));
@@ -201,6 +214,7 @@ impl<'a> RuntimeToolRegistryBuilder<'a> {
             .register(Arc::new(BashTool::with_process_manager(process_manager)));
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn register_browser_and_alias_tools(&self, sidecar_url: &str) {
         register_browser_tools(self.registry, sidecar_url);
         register_browser_compat_tool(self.registry, sidecar_url);
@@ -215,6 +229,7 @@ impl<'a> RuntimeToolRegistryBuilder<'a> {
         }
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn register_skill_and_compaction_tools(
         &self,
         session_id: &str,
@@ -227,6 +242,7 @@ impl<'a> RuntimeToolRegistryBuilder<'a> {
         self.registry.register(Arc::new(CompactTool::new()));
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn register_ask_user_tool(&self, app: &AppHandle, session_id: &str) {
         let ask_user_responder = app.state::<AskUserState>().0.clone();
         let ask_user_tool =
@@ -234,6 +250,7 @@ impl<'a> RuntimeToolRegistryBuilder<'a> {
         self.registry.register(Arc::new(ask_user_tool));
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn register_runtime_support_tools(
         &self,
         task_tool: TaskTool,
@@ -251,10 +268,12 @@ impl<'a> RuntimeToolRegistryBuilder<'a> {
             .register(Arc::new(MemoryTool::new(memory_dir)));
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn register_search_tool(&self, tool: Arc<dyn Tool>) {
         self.registry.register(tool);
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn register_mcp_search_fallback(&self) -> Option<String> {
         let mut names = self.registry.tools_with_prefix("mcp_");
         names.sort();

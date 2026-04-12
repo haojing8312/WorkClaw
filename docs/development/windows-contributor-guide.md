@@ -111,7 +111,33 @@ pnpm cache:build:clean -- --include-deps
 
 CI 也会运行同一个脚本，但使用只读模式，不会在 runner 上删除文件。
 
-## 5. English Summary
+## 5. Windows 下员工智能体重型回归
+
+在部分 Windows 本地环境里，`apps/runtime/src-tauri/tests/test_im_employee_agents.rs` 的重型场景族会在 Rust `libtest` 进程启动前触发历史性的 `0xc0000139` 问题。为了避免这个历史环境问题阻塞开发，当前 Windows 回归分成两层：
+
+- 轻量 `libtest` 回归：
+  - `cargo test --manifest-path apps/runtime/src-tauri/Cargo.toml --test test_im_employee_agents -- --list`
+  - 这里保留轻量 employee-id / 基础契约场景，确保本地 `cargo test` 仍然可用
+- 重型普通二进制回归：
+  - `pnpm test:group-run-regression`
+  - `pnpm test:employee-im-heavy-regression`
+  - 这些命令覆盖 group run、IM routing、team entry、group management 等重型场景
+
+统一入口：
+
+```bash
+pnpm test:employee-agents-windows
+```
+
+这个命令会按顺序执行：
+
+- `test_im_employee_agents` 轻量场景列举
+- `employee_group_run_regression`
+- `employee_im_heavy_regression`
+
+如果你在 Windows 本机看到 `0xc0000139`，优先使用上面的统一入口，而不要把它当成当前业务逻辑回归失败。
+
+## 6. English Summary
 
 This document covers the Windows-specific contributor path for source builds and the GitHub-based Windows release flow.
 
@@ -168,3 +194,23 @@ Manual commands:
 
 - `pnpm cache:build:check`
 - `pnpm cache:build:clean -- --include-deps`
+
+### Heavy Employee-Agent Regressions On Windows
+
+Some local Windows environments can hit a historical pre-main `0xc0000139` failure when the heavyweight `test_im_employee_agents` integration binary is launched by Rust `libtest`.
+
+The Windows regression path is intentionally split:
+
+- lightweight `libtest` coverage:
+  - `cargo test --manifest-path apps/runtime/src-tauri/Cargo.toml --test test_im_employee_agents -- --list`
+- heavyweight regression binaries:
+  - `pnpm test:group-run-regression`
+  - `pnpm test:employee-im-heavy-regression`
+
+Recommended single entrypoint on Windows:
+
+```bash
+pnpm test:employee-agents-windows
+```
+
+Use this command as the canonical local regression path for employee-agent behavior on Windows when the historical `0xc0000139` issue is present.

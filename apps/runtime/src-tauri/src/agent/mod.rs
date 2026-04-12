@@ -2,6 +2,7 @@ pub mod approval_flow;
 pub mod browser_progress;
 pub mod compactor;
 pub mod context;
+#[cfg(feature = "headless-evals")]
 pub mod evals;
 pub mod event_bridge;
 pub mod execution_caps;

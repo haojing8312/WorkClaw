@@ -1,3 +1,10 @@
+use crate::agent_catalog::agent_definition::{
+    default_memory_scope_for_role, normalize_agent_id, AgentDefinition, AgentRoleKind,
+};
+use crate::agent_catalog::agent_permissions::{
+    derive_allowed_tools_for_role, derive_capabilities_for_role,
+};
+use crate::agent_catalog::agent_workspace::build_agent_profile_context;
 use crate::agent::run_guard::{RunBudgetPolicy, RunBudgetScope};
 use crate::agent::skill_config::SkillConfig;
 use std::path::PathBuf;
@@ -22,6 +29,7 @@ pub(crate) fn build_employee_step_execution_profile(
     employee: EmployeeStepPersona<'_>,
     session_skill_id: &str,
 ) -> EmployeeStepExecutionProfile {
+    let agent_definition = build_executor_agent_definition(employee);
     let skill_config = SkillConfig::parse(crate::builtin_skills::builtin_general_skill_markdown());
     let base_prompt = if skill_config.system_prompt.trim().is_empty() {
         "你是一名专业、可靠、注重交付结果的 AI 员工。".to_string()
@@ -46,11 +54,16 @@ pub(crate) fn build_employee_step_execution_profile(
         ),
     ];
     if !employee.default_work_dir.trim().is_empty() {
-        sections.push(format!("- 工作目录: {}", employee.default_work_dir.trim()));
+        sections.push(format!("- 工作目录: {}", agent_definition.workspace_dir));
     }
-    if !employee.persona.trim().is_empty() {
-        sections.push(format!("- 员工人设: {}", employee.persona.trim()));
+    if !agent_definition.persona_text.trim().is_empty() {
+        sections.push(format!("- 员工人设: {}", agent_definition.persona_text));
     }
+    sections.push(format!("- role_kind: {:?}", agent_definition.role_kind));
+    sections.push(format!(
+        "- memory_scope: {:?}",
+        agent_definition.memory_scope
+    ));
     sections.push(
         "执行要求:\n- 聚焦当前分配步骤\n- 优先直接用自然语言给出结论，只有在当前步骤明确需要读取文件、编辑文件、执行命令或抓取网页时才使用工具\n- 先给结论，再给关键依据或产出\n- 不要输出“模拟结果”或“占位结果”措辞".to_string(),
     );
@@ -60,7 +73,7 @@ pub(crate) fn build_employee_step_execution_profile(
 
     EmployeeStepExecutionProfile {
         base_prompt: sections.join("\n"),
-        allowed_tools: Some(default_group_step_allowed_tools()),
+        allowed_tools: Some(agent_definition.allowed_tools),
         max_iterations: RunBudgetPolicy::resolve(
             RunBudgetScope::Employee,
             skill_config.max_iterations,
@@ -138,19 +151,21 @@ fn load_group_step_profile_markdown(employee: &EmployeeStepPersona<'_>) -> Strin
     sections.join("\n\n")
 }
 
-fn default_group_step_allowed_tools() -> Vec<String> {
-    vec![
-        "read_file".to_string(),
-        "write_file".to_string(),
-        "glob".to_string(),
-        "grep".to_string(),
-        "edit".to_string(),
-        "list_dir".to_string(),
-        "file_stat".to_string(),
-        "file_copy".to_string(),
-        "bash".to_string(),
-        "web_fetch".to_string(),
-    ]
+fn build_executor_agent_definition(employee: EmployeeStepPersona<'_>) -> AgentDefinition {
+    let profile_context = build_agent_profile_context(employee.default_work_dir, employee.persona);
+    let role_kind = AgentRoleKind::Executor;
+    AgentDefinition {
+        agent_id: normalize_agent_id(employee.employee_id),
+        display_name: employee.name.trim().to_string(),
+        role_kind: role_kind.clone(),
+        workspace_dir: profile_context.workspace_dir,
+        persona_text: profile_context.persona_text,
+        allowed_tools: derive_allowed_tools_for_role(&role_kind),
+        permission_mode: "default".to_string(),
+        model_id: None,
+        memory_scope: default_memory_scope_for_role(&role_kind),
+        capabilities: derive_capabilities_for_role(&role_kind),
+    }
 }
 
 #[cfg(test)]
