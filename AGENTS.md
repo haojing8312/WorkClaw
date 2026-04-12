@@ -19,6 +19,14 @@
 - Treat orphan files, dead code, stale docs, duplicate implementations, and temporary artifacts as a maintenance surface, not a one-off cleanup task.
 - Prefer repo hygiene review before deletion. Do not remove suspicious files or code only because they appear unused in one static signal.
 - Use `pnpm review:repo-hygiene` for non-blocking repo hygiene reporting when the task is cleanup-focused or when a large feature leaves likely follow-up debris.
+- Use focused repo hygiene subcommands when one narrow signal is enough:
+  - `pnpm review:repo-hygiene:deadcode`
+  - `pnpm review:repo-hygiene:artifacts`
+  - `pnpm review:repo-hygiene:drift`
+  - `pnpm review:repo-hygiene:dup`
+  - `pnpm review:repo-hygiene:loc`
+  - `pnpm review:repo-hygiene:cycles`
+- Treat duplicate implementations, oversized files, and import cycles as review-first governance signals. They should trigger triage and split plans, not blind deletion or mechanical rewrites.
 - Use `workclaw-repo-hygiene-review` to classify candidates and recommend the smallest safe cleanup batch before destructive edits.
 - Use `workclaw-cleanup-execution` only after review selected a cleanup batch and its reviewed action per file.
 - Cleanup changes still require `workclaw-change-verification` when code, tests, docs, or skill files change.

@@ -10,6 +10,8 @@ WorkClaw uses long-running AI-assisted development across runtime, sidecar, Rust
 - orphan-files
 - dead-code
 - duplicate-implementations
+- oversized-file
+- import-cycle
 - stale-docs
 - stale-skill-or-command-references
 - generated-or-runtime-owned-candidates
@@ -32,14 +34,31 @@ WorkClaw uses long-running AI-assisted development across runtime, sidecar, Rust
 ## Default Workflow
 
 1. Run `pnpm review:repo-hygiene`.
-2. Review the report and triage candidates by finding category and confidence.
-3. Use `workclaw-repo-hygiene-review` to classify findings before any destructive edit.
-4. Choose the smallest cleanup batch that is still well supported.
-5. Use `workclaw-cleanup-execution` only for the reviewed batch.
-6. Run `workclaw-change-verification` when the cleanup changes code, tests, docs, or skill files.
+2. Use focused subcommands when you need one narrow signal only:
+   - `pnpm review:repo-hygiene:deadcode`
+   - `pnpm review:repo-hygiene:artifacts`
+   - `pnpm review:repo-hygiene:drift`
+   - `pnpm review:repo-hygiene:dup`
+   - `pnpm review:repo-hygiene:loc`
+   - `pnpm review:repo-hygiene:cycles`
+3. Review the report and triage candidates by finding category and confidence.
+4. Use `workclaw-repo-hygiene-review` to classify findings before any destructive edit.
+5. Choose the smallest cleanup batch that is still well supported.
+6. Use `workclaw-cleanup-execution` only for the reviewed batch.
+7. Run `workclaw-change-verification` when the cleanup changes code, tests, docs, or skill files.
 
 Reports are written to `.artifacts/repo-hygiene/` for local review and should stay untracked.
 The GitHub Actions `Repo Hygiene` workflow also runs this command in a non-blocking lane and uploads the generated report as a workflow artifact for review.
+
+## OpenClaw-Style Check Layers
+
+- `dead-code`: static dead-code candidates for TypeScript and Rust.
+- `duplicate-implementations`: duplicated code candidates from `jscpd`. These are review-first signals, not auto-delete instructions.
+- `oversized-file`: governance triggers for runtime frontend and Tauri Rust files using the repo's documented line-count thresholds.
+- `import-cycle`: circular import candidates for runtime TypeScript surfaces.
+- `temporary-artifacts` and `stale-doc-or-skill-reference`: housekeeping and drift signals for long-running AI-assisted work.
+
+This mirrors the OpenClaw pattern of small named checks under one umbrella command instead of relying on a single general-purpose linter.
 
 ## High-Risk Surfaces
 

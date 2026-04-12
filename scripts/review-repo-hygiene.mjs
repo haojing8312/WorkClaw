@@ -3,9 +3,12 @@ import { pathToFileURL } from "node:url";
 import { collectArtifactsSignals } from "./lib/repo-hygiene/collect-artifacts-signals.mjs";
 import { collectDeadcodeSignals } from "./lib/repo-hygiene/collect-deadcode-signals.mjs";
 import { collectDriftSignals } from "./lib/repo-hygiene/collect-drift-signals.mjs";
+import { collectDuplicateSignals } from "./lib/repo-hygiene/collect-duplicate-signals.mjs";
+import { collectImportCycleSignals } from "./lib/repo-hygiene/collect-import-cycle-signals.mjs";
+import { collectLocSignals } from "./lib/repo-hygiene/collect-loc-signals.mjs";
 import { writeRepoHygieneReport } from "./lib/repo-hygiene/write-report.mjs";
 
-const SUPPORTED_MODES = new Set(["all", "deadcode", "drift", "artifacts"]);
+const SUPPORTED_MODES = new Set(["all", "deadcode", "drift", "artifacts", "dup", "loc", "cycles"]);
 
 function parseArgs(argv) {
   const args = {
@@ -57,24 +60,63 @@ function resolveCollectorPlan(mode, collectors) {
         deadcode: collectors.deadcode,
         artifacts: [],
         drift: [],
+        duplicate: [],
+        loc: [],
+        cycles: [],
       };
     case "drift":
       return {
         deadcode: [],
         artifacts: [],
         drift: collectors.drift,
+        duplicate: [],
+        loc: [],
+        cycles: [],
       };
     case "artifacts":
       return {
         deadcode: [],
         artifacts: collectors.artifacts,
         drift: [],
+        duplicate: [],
+        loc: [],
+        cycles: [],
+      };
+    case "dup":
+      return {
+        deadcode: [],
+        artifacts: [],
+        drift: [],
+        duplicate: collectors.duplicate,
+        loc: [],
+        cycles: [],
+      };
+    case "loc":
+      return {
+        deadcode: [],
+        artifacts: [],
+        drift: [],
+        duplicate: [],
+        loc: collectors.loc,
+        cycles: [],
+      };
+    case "cycles":
+      return {
+        deadcode: [],
+        artifacts: [],
+        drift: [],
+        duplicate: [],
+        loc: [],
+        cycles: collectors.cycles,
       };
     default:
       return {
         deadcode: collectors.deadcode,
         artifacts: collectors.artifacts,
         drift: collectors.drift,
+        duplicate: collectors.duplicate,
+        loc: collectors.loc,
+        cycles: collectors.cycles,
       };
   }
 }
@@ -94,16 +136,22 @@ export async function runRepoHygieneReview(options = {}) {
     deadcode: collectDeadcodeSignals,
     artifacts: collectArtifactsSignals,
     drift: collectDriftSignals,
+    duplicate: collectDuplicateSignals,
+    loc: collectLocSignals,
+    cycles: collectImportCycleSignals,
   };
   const collectorPlan = resolveCollectorPlan(mode, collectors);
 
-  const [deadcode, artifacts, drift] = await Promise.all([
+  const [deadcode, artifacts, drift, duplicate, loc, cycles] = await Promise.all([
     executeCollector(collectorPlan.deadcode, mode),
     executeCollector(collectorPlan.artifacts, mode),
     executeCollector(collectorPlan.drift, mode),
+    executeCollector(collectorPlan.duplicate, mode),
+    executeCollector(collectorPlan.loc, mode),
+    executeCollector(collectorPlan.cycles, mode),
   ]);
 
-  const findings = [...deadcode, ...artifacts, ...drift];
+  const findings = [...deadcode, ...artifacts, ...drift, ...duplicate, ...loc, ...cycles];
   const report = {
     generatedAt: new Date().toISOString(),
     mode,
@@ -131,6 +179,9 @@ export {
   collectArtifactsSignals,
   collectDeadcodeSignals,
   collectDriftSignals,
+  collectDuplicateSignals,
+  collectImportCycleSignals,
+  collectLocSignals,
   parseArgs,
   resolveCollectorPlan,
 };

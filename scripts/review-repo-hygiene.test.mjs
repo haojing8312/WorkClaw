@@ -8,6 +8,9 @@ import { runRepoHygieneReview } from "./review-repo-hygiene.mjs";
 import { collectArtifactsSignals } from "./lib/repo-hygiene/collect-artifacts-signals.mjs";
 import { collectDeadcodeSignals } from "./lib/repo-hygiene/collect-deadcode-signals.mjs";
 import { collectDriftSignals } from "./lib/repo-hygiene/collect-drift-signals.mjs";
+import { collectDuplicateSignals } from "./lib/repo-hygiene/collect-duplicate-signals.mjs";
+import { collectImportCycleSignals } from "./lib/repo-hygiene/collect-import-cycle-signals.mjs";
+import { collectLocSignals } from "./lib/repo-hygiene/collect-loc-signals.mjs";
 
 const projectRoot = process.cwd();
 const scriptPath = path.join(projectRoot, "scripts", "review-repo-hygiene.mjs");
@@ -89,6 +92,36 @@ test("review-repo-hygiene routes collectors by mode", async () => {
             },
           ];
         },
+        duplicate: async () => {
+          calls.push("duplicate");
+          return [
+            {
+              category: "duplicate-implementations",
+              confidence: "probable",
+              action: "review-first",
+            },
+          ];
+        },
+        loc: async () => {
+          calls.push("loc");
+          return [
+            {
+              category: "oversized-file",
+              confidence: "likely",
+              action: "review-first",
+            },
+          ];
+        },
+        cycles: async () => {
+          calls.push("cycles");
+          return [
+            {
+              category: "import-cycle",
+              confidence: "likely",
+              action: "review-first",
+            },
+          ];
+        },
       },
     });
 
@@ -138,6 +171,30 @@ test("review-repo-hygiene keeps category visibility for all mode", async () => {
             detail: `mode=${mode}`,
           },
         ],
+        duplicate: async ({ mode }) => [
+          {
+            category: "duplicate-implementations",
+            confidence: "likely",
+            action: "review-first",
+            detail: `mode=${mode}`,
+          },
+        ],
+        loc: async ({ mode }) => [
+          {
+            category: "oversized-file",
+            confidence: "likely",
+            action: "review-first",
+            detail: `mode=${mode}`,
+          },
+        ],
+        cycles: async ({ mode }) => [
+          {
+            category: "import-cycle",
+            confidence: "likely",
+            action: "review-first",
+            detail: `mode=${mode}`,
+          },
+        ],
       },
     });
 
@@ -145,12 +202,22 @@ test("review-repo-hygiene keeps category visibility for all mode", async () => {
 
     assert.deepEqual(report.countsByCategory, {
       "dead-code": 1,
+      "duplicate-implementations": 1,
+      "import-cycle": 1,
+      "oversized-file": 1,
       "stale-doc-or-skill-reference": 1,
       "temporary-artifacts": 1,
     });
     assert.deepEqual(
       report.findings.map((finding) => finding.category).sort(),
-      ["dead-code", "stale-doc-or-skill-reference", "temporary-artifacts"],
+      [
+        "dead-code",
+        "duplicate-implementations",
+        "import-cycle",
+        "oversized-file",
+        "stale-doc-or-skill-reference",
+        "temporary-artifacts",
+      ],
     );
     assert.equal(
       report.findings.every((finding) => finding.detail === "mode=all"),
@@ -182,6 +249,129 @@ test("collect-artifacts-signals reports deterministic root temporary artifacts",
     );
   } finally {
     await rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test("review-repo-hygiene routes duplicate collector by mode", async () => {
+  const outputDir = await mkdtemp(path.join(os.tmpdir(), "repo-hygiene-"));
+  try {
+    const calls = [];
+    await runRepoHygieneReview({
+      outputDir,
+      mode: "dup",
+      collectors: {
+        deadcode: async () => {
+          calls.push("deadcode");
+          return [];
+        },
+        artifacts: async () => {
+          calls.push("artifacts");
+          return [];
+        },
+        drift: async () => {
+          calls.push("drift");
+          return [];
+        },
+        duplicate: async () => {
+          calls.push("duplicate");
+          return [{ category: "duplicate-implementations" }];
+        },
+        loc: async () => {
+          calls.push("loc");
+          return [];
+        },
+        cycles: async () => {
+          calls.push("cycles");
+          return [];
+        },
+      },
+    });
+
+    assert.deepEqual(calls, ["duplicate"]);
+  } finally {
+    await rm(outputDir, { recursive: true, force: true });
+  }
+});
+
+test("review-repo-hygiene routes loc collector by mode", async () => {
+  const outputDir = await mkdtemp(path.join(os.tmpdir(), "repo-hygiene-"));
+  try {
+    const calls = [];
+    await runRepoHygieneReview({
+      outputDir,
+      mode: "loc",
+      collectors: {
+        deadcode: async () => {
+          calls.push("deadcode");
+          return [];
+        },
+        artifacts: async () => {
+          calls.push("artifacts");
+          return [];
+        },
+        drift: async () => {
+          calls.push("drift");
+          return [];
+        },
+        duplicate: async () => {
+          calls.push("duplicate");
+          return [];
+        },
+        loc: async () => {
+          calls.push("loc");
+          return [{ category: "oversized-file" }];
+        },
+        cycles: async () => {
+          calls.push("cycles");
+          return [];
+        },
+      },
+    });
+
+    assert.deepEqual(calls, ["loc"]);
+  } finally {
+    await rm(outputDir, { recursive: true, force: true });
+  }
+});
+
+test("review-repo-hygiene routes cycle collector by mode", async () => {
+  const outputDir = await mkdtemp(path.join(os.tmpdir(), "repo-hygiene-"));
+  try {
+    const calls = [];
+    await runRepoHygieneReview({
+      outputDir,
+      mode: "cycles",
+      collectors: {
+        deadcode: async () => {
+          calls.push("deadcode");
+          return [];
+        },
+        artifacts: async () => {
+          calls.push("artifacts");
+          return [];
+        },
+        drift: async () => {
+          calls.push("drift");
+          return [];
+        },
+        duplicate: async () => {
+          calls.push("duplicate");
+          return [];
+        },
+        loc: async () => {
+          calls.push("loc");
+          return [];
+        },
+        cycles: async () => {
+          calls.push("cycles");
+          return [{ category: "import-cycle" }];
+        },
+      },
+    });
+
+    assert.deepEqual(calls, ["cycles"]);
+  } finally {
+    await rm(outputDir, { recursive: true, force: true });
   }
 });
 
@@ -310,6 +500,165 @@ test("collect-deadcode-signals safely skips rust detection when no cargo deadcod
     runCargoCommand: async () => ({
       stdout: "",
       stderr: "missing",
+      exitCode: 1,
+    }),
+  });
+
+  assert.deepEqual(findings, []);
+});
+
+test("collect-duplicate-signals parses jscpd json reports", async () => {
+  const findings = await collectDuplicateSignals({
+    rootDir: projectRoot,
+    mode: "dup",
+    runCommand: async ({ outputDir }) => {
+      await mkdir(outputDir, { recursive: true });
+      await writeFile(
+        path.join(outputDir, "jscpd-report.json"),
+        JSON.stringify({
+          duplicates: [
+            {
+              firstFile: { name: "apps/runtime/src/App.tsx" },
+              secondFile: { name: "apps/runtime/src/scenes/Home.tsx" },
+              lines: 24,
+              tokens: 110,
+            },
+          ],
+        }),
+        "utf8",
+      );
+
+      return { stdout: "", stderr: "", exitCode: 0 };
+    },
+  });
+
+  assert.deepEqual(findings, [
+    {
+      category: "duplicate-implementations",
+      confidence: "likely",
+      action: "review-first",
+      source: "apps/runtime/src/App.tsx <-> apps/runtime/src/scenes/Home.tsx",
+      detail: "24 duplicated lines, 110 duplicated tokens",
+    },
+  ]);
+});
+
+test("collect-duplicate-signals safely skips when jscpd report is unavailable", async () => {
+  const findings = await collectDuplicateSignals({
+    rootDir: projectRoot,
+    mode: "dup",
+    runCommand: async () => ({
+      stdout: "",
+      stderr: "jscpd unavailable",
+      exitCode: 1,
+    }),
+  });
+
+  assert.deepEqual(findings, []);
+});
+
+test("collect-loc-signals reports frontend and rust oversized files", async () => {
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), "repo-hygiene-loc-"));
+  try {
+    await mkdir(path.join(rootDir, "apps", "runtime", "src"), { recursive: true });
+    await mkdir(path.join(rootDir, "apps", "runtime", "src-tauri", "src"), { recursive: true });
+    await writeFile(
+      path.join(rootDir, "apps", "runtime", "src", "LargePage.tsx"),
+      `${Array.from({ length: 320 }, () => "const x = 1;").join("\n")}\n`,
+      "utf8",
+    );
+    await writeFile(
+      path.join(rootDir, "apps", "runtime", "src-tauri", "src", "giant.rs"),
+      `${Array.from({ length: 820 }, () => "fn x() {}").join("\n")}\n`,
+      "utf8",
+    );
+
+    const findings = await collectLocSignals({ rootDir, mode: "loc" });
+
+    assert.deepEqual(findings, [
+      {
+        category: "oversized-file",
+        confidence: "likely",
+        action: "review-first",
+        source: "apps/runtime/src-tauri/src/giant.rs",
+        detail: "rust file has 821 lines (plan threshold 800+)",
+      },
+      {
+        category: "oversized-file",
+        confidence: "probable",
+        action: "review-first",
+        source: "apps/runtime/src/LargePage.tsx",
+        detail: "frontend file has 321 lines (warn threshold 300+)",
+      },
+    ]);
+  } finally {
+    await rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test("collect-loc-signals ignores frontend test files", async () => {
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), "repo-hygiene-loc-ignore-"));
+  try {
+    await mkdir(path.join(rootDir, "apps", "runtime", "src"), { recursive: true });
+    await writeFile(
+      path.join(rootDir, "apps", "runtime", "src", "LargePage.test.tsx"),
+      `${Array.from({ length: 700 }, () => "const x = 1;").join("\n")}\n`,
+      "utf8",
+    );
+
+    const findings = await collectLocSignals({ rootDir, mode: "loc" });
+
+    assert.deepEqual(findings, []);
+  } finally {
+    await rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test("collect-import-cycle-signals parses madge circular output", async () => {
+  const findings = await collectImportCycleSignals({
+    rootDir: projectRoot,
+    mode: "cycles",
+    runCommand: async ({ target }) => {
+      if (target.includes(path.join("sidecar", "src"))) {
+        return {
+          stdout: "[]",
+          stderr: "",
+          exitCode: 0,
+        };
+      }
+
+      return {
+        stdout: JSON.stringify([
+          [
+            "apps/runtime/src/lib/a.ts",
+            "apps/runtime/src/lib/b.ts",
+            "apps/runtime/src/lib/a.ts",
+          ],
+        ]),
+        stderr: "",
+        exitCode: 0,
+      };
+    },
+  });
+
+  assert.deepEqual(findings, [
+    {
+      category: "import-cycle",
+      confidence: "likely",
+      action: "review-first",
+      source: "apps/runtime/src",
+      detail: "apps/runtime/src/lib/a.ts -> apps/runtime/src/lib/b.ts -> apps/runtime/src/lib/a.ts",
+    },
+  ]);
+});
+
+test("collect-import-cycle-signals safely skips when madge is unavailable", async () => {
+  const findings = await collectImportCycleSignals({
+    rootDir: projectRoot,
+    mode: "cycles",
+    runCommand: async () => ({
+      stdout: "",
+      stderr: "madge unavailable",
       exitCode: 1,
     }),
   });
