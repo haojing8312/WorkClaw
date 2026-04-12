@@ -5,6 +5,7 @@ import type {
   ModelConfig,
   PersistedChatRuntimeState,
   SessionInfo,
+  SkillManifest,
 } from "../types";
 
 type WorkTab =
@@ -33,7 +34,7 @@ export function useAppSidebarControllers(options: {
   getAdjacentSessionId: (list: SessionInfo[], sessionId: string) => string | null;
   handleSelectSession: (sessionId: string, options?: { openChatView?: boolean }) => void;
   loadSessions: (skillId: string) => Promise<void> | void;
-  loadSkills: () => Promise<unknown>;
+  loadSkills: () => Promise<SkillManifest[]>;
   models: ModelConfig[];
   openStartTaskInActiveTab: () => void;
   prepareTabForNewTask: () => string;

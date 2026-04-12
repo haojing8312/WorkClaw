@@ -353,6 +353,7 @@ export default function App() {
     handleSelectSession,
     getAdjacentSessionId,
     openStartTaskInActiveTab,
+    loadSessions,
     setSessions,
     setTabs,
     setEmployeeAssistantSessionContexts,

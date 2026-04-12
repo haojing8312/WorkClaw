@@ -9,6 +9,7 @@ import {
   getFeishuErrorMessage,
   installOpenClawLarkPlugin as installOpenClawLarkPluginFromService,
   probeFeishuCredentials as probeFeishuCredentialsFromService,
+  saveFeishuGatewaySettings as saveFeishuGatewaySettingsFromService,
   saveFeishuAdvancedSettings as saveFeishuAdvancedSettingsFromService,
   sendFeishuInstallerInput as sendFeishuInstallerInputFromService,
   stopFeishuInstallerSession as stopFeishuInstallerSessionFromService,
@@ -16,6 +17,7 @@ import {
 import type { FeishuSettingsControllerActionDeps } from "./feishuSettingsControllerActionTypes";
 import { createFeishuSettingsControllerLoaders } from "./feishuSettingsControllerLoaders";
 import { createFeishuSettingsControllerRuntimeActions } from "./feishuSettingsControllerRuntimeActions";
+import { DEFAULT_FEISHU_INSTALLER_SESSION } from "./useFeishuInstallerSessionController";
 
 const FEISHU_OFFICIAL_PLUGIN_DOC_URL =
   "https://bytedance.larkoffice.com/docx/MFK7dDFLFoVlOGxWCv5cTXKmnMh#M0usd9GLwoiBxtx1UyjcpeMhnRe";

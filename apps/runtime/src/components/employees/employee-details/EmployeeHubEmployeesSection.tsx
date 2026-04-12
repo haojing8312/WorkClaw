@@ -1,9 +1,24 @@
-import type { AgentEmployee } from "../../../types";
+import type {
+  AgentEmployee,
+  AgentProfileFilesView,
+  EmployeeMemoryStats,
+  ImRoutingBinding,
+  OpenClawPluginFeishuRuntimeStatus,
+} from "../../../types";
 import { EmployeeFeishuAssociationSection } from "../EmployeeFeishuAssociationSection";
 import type { EmployeeHubEmployeeFilter } from "../employeeHubOverview";
-import type { EmployeeHubFeishuRuntimeStatus } from "../hooks/useEmployeeHubFeishu";
+import { toEmployeeHubFeishuRuntimeStatus } from "../hooks/useEmployeeHubFeishu";
 import { EmployeeMemoryToolsSection } from "../tools/EmployeeMemoryToolsSection";
 import { EmployeeProfileFilesSection } from "../tools/EmployeeProfileFilesSection";
+
+type EmployeeHubFeishuRuntimeStatus = ReturnType<typeof toEmployeeHubFeishuRuntimeStatus>;
+type FeishuAssociationSavePayload = {
+  enabled: boolean;
+  mode: "default" | "scoped";
+  peerKind: "group" | "channel" | "direct";
+  peerId: string;
+  priority: number;
+};
 
 interface EmployeeHubEmployeesSectionProps {
   employeeFilter: EmployeeHubEmployeeFilter;
@@ -17,13 +32,8 @@ interface EmployeeHubEmployeesSectionProps {
   memoryLoading: boolean;
   memoryScopeSkillId: string;
   memorySkillScopeOptions: string[];
-  memoryStats: {
-    messageCount: number;
-    totalBytes: number;
-    skillScopes: string[];
-    updatedAt: string | null;
-  } | null;
-  officialFeishuRuntimeStatus: unknown;
+  memoryStats: EmployeeMemoryStats | null;
+  officialFeishuRuntimeStatus: OpenClawPluginFeishuRuntimeStatus | null;
   onClearEmployeeFilter: () => void;
   onExportEmployeeMemory: () => void | Promise<void>;
   onMemoryScopeChange: (value: string) => void;
@@ -37,18 +47,18 @@ interface EmployeeHubEmployeesSectionProps {
   onSetAsMainAndEnter: (employeeId: string) => void;
   onStartTaskWithEmployee: (employeeId: string) => void | Promise<void>;
   profileLoading: boolean;
-  profileView: {
-    defaultPath: string | null;
-    exists: boolean;
-    fileName: string;
-    content: string;
-  } | null;
-  resolveFeishuStatus: (employee: AgentEmployee, runtimeStatus: unknown) => {
+  profileView: AgentProfileFilesView | null;
+  resolveFeishuStatus: (
+    employee: AgentEmployee,
+    runtimeStatus: OpenClawPluginFeishuRuntimeStatus | null,
+  ) => {
     dotClass: string;
     label: string;
+    detail: string;
+    error: string;
   };
-  routingBindings: Record<string, string>;
-  saveFeishuAssociation: (employeeId: string, chatId: string | null) => void | Promise<void>;
+  routingBindings: ImRoutingBinding[];
+  saveFeishuAssociation: (payload: FeishuAssociationSavePayload) => Promise<void>;
   saving: boolean;
   savingFeishuAssociation: boolean;
   selectedEmployee: AgentEmployee | null;

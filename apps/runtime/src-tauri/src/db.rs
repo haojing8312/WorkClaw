@@ -17,6 +17,7 @@ use migrations::ensure_im_thread_sessions_channel_column;
 #[cfg(test)]
 use seed::{build_builtin_manifest_json, sync_builtin_skills_with_root};
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub async fn init_db(app: &AppHandle) -> Result<SqlitePool> {
     let runtime_environment = initialize_runtime_environment(app).map_err(anyhow::Error::msg)?;
     init_db_at_runtime_paths(&runtime_environment.paths).await

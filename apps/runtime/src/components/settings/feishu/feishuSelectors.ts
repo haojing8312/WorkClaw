@@ -31,6 +31,13 @@ export {
   resolveFeishuOnboardingPanelDisplay,
 } from "./feishuOnboardingHelpers";
 
+export type {
+  FeishuOnboardingInput,
+  FeishuOnboardingPanelDisplay,
+  FeishuOnboardingState,
+  FeishuOnboardingStep,
+} from "./feishuOnboardingHelpers";
+
 export {
   extractFeishuInstallerQrBlock,
   getLatestInstallerOutputLine,

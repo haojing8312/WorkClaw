@@ -260,7 +260,9 @@ export function SkillLibraryView({ installedSkillIds, onInstall }: Props) {
         translationFallbackActive={translationFallbackActive}
         onRefreshCatalog={handleRefreshCatalog}
         onSelectTag={setSelectedTag}
-        onTranslateNow={translateNow}
+        onTranslateNow={async () => {
+          await translateNow();
+        }}
       />
 
       {error && <div className="text-sm text-red-500">{error}</div>}

@@ -641,6 +641,7 @@ pub async fn setup_test_db() -> (SqlitePool, TempDir) {
 }
 
 /// 创建测试用 Skill 目录（含 SKILL.md + templates）
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn create_test_skill_dir() -> (TempDir, PathBuf) {
     let tmp = TempDir::new().unwrap();
     let skill_dir = tmp.path().join("test-skill");
