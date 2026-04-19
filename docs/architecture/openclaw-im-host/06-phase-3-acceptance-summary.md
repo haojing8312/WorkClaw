@@ -122,11 +122,14 @@ WeCom 当前已经拿到的关键证明包括：
   - PASS
 - `pnpm test:rust-fast`
   - PASS
+- `pnpm verify:openclaw-im-host:phase3 --compile-only`
+  - PASS
 
 这说明：
 
 - 新增的 `im_host` / WeCom host lifecycle / dispatch 改动已能编译进入 `runtime`
 - 仓库要求的 Rust fast path 回归仍然保持通过
+- 当前机器已经具备一个可重复执行的 compile-only Phase 3 验证入口，便于后续 handoff 或换机会话继续推进
 
 ### 4.4 环境阻塞说明
 
@@ -171,6 +174,7 @@ WeCom 当前已经拿到的关键证明包括：
 - 把执行结果回填到 `appendix-b-risk-and-verification.md`
 - 按 [07-phase-3-external-verification-runbook.md](/D:/code/WorkClaw/docs/architecture/openclaw-im-host/07-phase-3-external-verification-runbook.md) 的顺序执行，避免遗漏新增 WeCom host-level 用例
 - 优先使用仓库脚本 `pnpm verify:openclaw-im-host:phase3`；若当前机器只能做 compile-level 验证，可先运行 `pnpm verify:openclaw-im-host:phase3 --compile-only`
+- 结果记录可直接复用 [08-phase-3-external-verification-result-template.md](/D:/code/WorkClaw/docs/architecture/openclaw-im-host/08-phase-3-external-verification-result-template.md)
 
 ### 次优先
 

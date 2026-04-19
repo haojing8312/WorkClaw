@@ -358,6 +358,7 @@ where
 mod tests {
     use super::{
         build_session_lifecycle_dispatch, build_session_processing_stop_dispatch,
+        maybe_dispatch_registered_im_session_reply_with_pool,
         maybe_emit_registered_host_lifecycle_phase_for_session_with_pool, ImReplyLifecyclePhase,
     };
     use crate::commands::feishu_gateway::{
@@ -367,7 +368,9 @@ mod tests {
         set_feishu_runtime_lifecycle_event_hook_for_tests, OpenClawPluginFeishuLifecycleEventRequest,
         OpenClawPluginFeishuRuntimeState,
     };
-    use crate::commands::wecom_gateway::set_wecom_lifecycle_event_hook_for_tests;
+    use crate::commands::wecom_gateway::{
+        set_wecom_lifecycle_event_hook_for_tests, set_wecom_outbound_send_hook_for_tests,
+    };
     use sqlx::SqlitePool;
     use std::sync::{Arc, Mutex};
 
@@ -540,6 +543,25 @@ mod tests {
         set_wecom_lifecycle_event_hook_for_tests(None);
     }
 
+    fn install_wecom_send_hook() -> Arc<Mutex<Vec<String>>> {
+        let sent_texts = Arc::new(Mutex::new(Vec::<String>::new()));
+        let sent_texts_for_hook = sent_texts.clone();
+        set_wecom_outbound_send_hook_for_tests(Some(Arc::new(move |_thread_id, text| {
+            sent_texts_for_hook
+                .lock()
+                .expect("lock wecom sent texts")
+                .push(text.to_string());
+            Ok(serde_json::json!({
+                "message_id": "wm_reply_dispatch_1",
+            }))
+        })));
+        sent_texts
+    }
+
+    fn cleanup_wecom_send_hook() {
+        set_wecom_outbound_send_hook_for_tests(None);
+    }
+
     #[tokio::test]
     async fn host_lifecycle_emit_routes_answer_and_resume_phases_to_feishu_runtime() {
         let pool = setup_lifecycle_pool().await;
@@ -652,5 +674,34 @@ mod tests {
                 "wm_parent_lifecycle:\"resumed\"",
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn host_reply_dispatch_routes_wecom_session_via_unified_host() {
+        let pool = setup_lifecycle_pool().await;
+        seed_session_channel(
+            &pool,
+            "session-wecom-dispatch",
+            "wecom_chat_dispatch",
+            "wecom",
+            "wm_parent_dispatch",
+        )
+        .await;
+        let sent_texts = install_wecom_send_hook();
+
+        let handled = maybe_dispatch_registered_im_session_reply_with_pool(
+            &pool,
+            "session-wecom-dispatch",
+            "企微 unified host 最终回复",
+        )
+        .await
+        .expect("dispatch wecom reply");
+
+        cleanup_wecom_send_hook();
+
+        assert!(handled);
+        let sent = sent_texts.lock().expect("lock wecom sent texts");
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0], "企微 unified host 最终回复");
     }
 }

@@ -132,7 +132,11 @@ fn decision_asks_for_destructive_bash() {
     );
 
     assert_eq!(decision.action, ToolPermissionAction::Ask);
-    assert!(decision.reason.as_deref().unwrap_or_default().contains("bash"));
+    assert!(decision
+        .reason
+        .as_deref()
+        .unwrap_or_default()
+        .contains("bash"));
     assert!(decision.fingerprint.is_some());
 }
 

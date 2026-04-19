@@ -113,6 +113,7 @@ pnpm --dir apps/runtime test -- src/components/__tests__/SettingsView.wecom-conn
 
 - [appendix-b-risk-and-verification.md](/D:/code/WorkClaw/docs/architecture/openclaw-im-host/appendix-b-risk-and-verification.md)
 - [06-phase-3-acceptance-summary.md](/D:/code/WorkClaw/docs/architecture/openclaw-im-host/06-phase-3-acceptance-summary.md)
+- [08-phase-3-external-verification-result-template.md](/D:/code/WorkClaw/docs/architecture/openclaw-im-host/08-phase-3-external-verification-result-template.md)
 
 建议至少更新以下内容：
 
@@ -120,6 +121,32 @@ pnpm --dir apps/runtime test -- src/components/__tests__/SettingsView.wecom-conn
 - PASS / FAIL
 - 若失败，失败是在编译、链接、运行还是断言阶段
 - 是否可以把 Phase 3 状态从“93%-95%”提升到“执行级验证完成”
+
+建议按下面模板回填：
+
+```md
+## 外部机器验证结果（YYYY-MM-DD）
+
+- 机器 / 环境：
+- 执行人：
+- 代码基线：
+
+### 执行命令
+
+- `pnpm verify:openclaw-im-host:phase3`
+
+### 结果
+
+- waiting-state order:
+- resumed lifecycle routing:
+- final reply dispatch:
+- frontend WeCom registry/settings:
+
+### 结论
+
+- 是否可把 Phase 3 状态提升为“执行级验证完成”：
+- 仍剩余的问题：
+```
 
 ## 验收通过标准
 

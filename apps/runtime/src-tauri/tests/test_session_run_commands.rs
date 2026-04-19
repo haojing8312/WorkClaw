@@ -175,7 +175,10 @@ async fn runtime_state_projection_includes_task_continuation_contract() {
         .await
         .expect("list session runs with runtime state");
     assert_eq!(runs.len(), 1);
-    assert_eq!(runs[0].task_continuation_mode.as_deref(), Some("parent_rejoin"));
+    assert_eq!(
+        runs[0].task_continuation_mode.as_deref(),
+        Some("parent_rejoin")
+    );
     assert_eq!(
         runs[0].task_continuation_source.as_deref(),
         Some("parent_rejoin")

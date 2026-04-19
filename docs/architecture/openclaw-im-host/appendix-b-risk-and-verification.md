@@ -91,6 +91,13 @@ direct chat、thread、reply-to、pairing chat_id 等规则若继续分散，飞
 - `pnpm test:rust-fast`
   - 结果：PASS
   - 覆盖：Rust fast path 回归，确认与本轮 IM host 收口直接相关的共享 Rust crate 快速回归未被文档冻结动作破坏。
+- `pnpm verify:openclaw-im-host:phase3 --compile-only`
+  - 结果：PASS
+  - 覆盖：以仓库脚本形式复核当前机器可诚实完成的 Phase 3 验证集合，包含：
+    - `src/components/__tests__/SettingsView.wecom-connector.test.tsx`
+    - `cargo check -p runtime`
+    - `pnpm test:rust-fast`
+  - 说明：该模式刻意跳过本机仍受 `STATUS_ENTRYPOINT_NOT_FOUND` 影响的 `runtime` libtest 执行步骤，用于给当前环境提供稳定、可复跑的 compile-level 验证入口。
 - `pnpm --dir apps/runtime test -- App.im-feishu-bridge.test.tsx`
   - 结果：PASS（17 tests）
   - 覆盖：确认 Feishu follow-up 继续通过宿主侧 `send_message` / `answer_user_question` 路径进入 runtime，UI 层不再承担 `send_feishu_text_message` 最终答复发送责任。

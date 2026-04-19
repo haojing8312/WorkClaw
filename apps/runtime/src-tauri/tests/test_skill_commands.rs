@@ -50,12 +50,8 @@ async fn render_local_skill_preview_uses_template_and_returns_save_path() {
     let tmp = tempfile::tempdir().expect("create temp dir");
     let base = tmp.path();
 
-    let preview = render_local_skill_preview_in_dir(
-        "My Skill",
-        "用于整理文件",
-        "需要整理大量文件时",
-        base,
-    );
+    let preview =
+        render_local_skill_preview_in_dir("My Skill", "用于整理文件", "需要整理大量文件时", base);
 
     assert!(preview.markdown.contains("name: My Skill"));
     assert!(preview

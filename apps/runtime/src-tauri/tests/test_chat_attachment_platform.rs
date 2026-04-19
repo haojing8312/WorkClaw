@@ -52,7 +52,12 @@ fn resolve_ffmpeg_command() -> Option<PathBuf> {
                     .join("Links")
                     .join("ffmpeg.exe"),
             );
-            candidates.push(base.join("Programs").join("ffmpeg").join("bin").join("ffmpeg.exe"));
+            candidates.push(
+                base.join("Programs")
+                    .join("ffmpeg")
+                    .join("bin")
+                    .join("ffmpeg.exe"),
+            );
         }
         if let Some(user_profile) = std::env::var_os("USERPROFILE") {
             candidates.push(
@@ -106,8 +111,8 @@ fn build_minimal_docx_with_text(text: &str) -> Vec<u8> {
 
     let cursor = std::io::Cursor::new(Vec::new());
     let mut writer = zip::ZipWriter::new(cursor);
-    let options = zip::write::FileOptions::default()
-        .compression_method(zip::CompressionMethod::Stored);
+    let options =
+        zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
     writer.start_file("[Content_Types].xml", options).unwrap();
     writer
         .write_all(
@@ -154,8 +159,8 @@ fn build_minimal_xlsx_with_values() -> Vec<u8> {
 
     let cursor = std::io::Cursor::new(Vec::new());
     let mut writer = zip::ZipWriter::new(cursor);
-    let options = zip::write::FileOptions::default()
-        .compression_method(zip::CompressionMethod::Stored);
+    let options =
+        zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
     writer.start_file("[Content_Types].xml", options).unwrap();
     writer.write_all(br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
@@ -177,19 +182,30 @@ fn build_minimal_xlsx_with_values() -> Vec<u8> {
     <sheet name="预算表" sheetId="1" r:id="rId1"/>
   </sheets>
 </workbook>"#.as_bytes()).unwrap();
-    writer.start_file("xl/_rels/workbook.xml.rels", options).unwrap();
+    writer
+        .start_file("xl/_rels/workbook.xml.rels", options)
+        .unwrap();
     writer.write_all(br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
 </Relationships>"#).unwrap();
     writer.start_file("xl/sharedStrings.xml", options).unwrap();
-    writer.write_all(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+    writer
+        .write_all(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="2" uniqueCount="2">
   <si><t>项目</t></si>
   <si><t>预算</t></si>
-</sst>"#.as_bytes()).unwrap();
-    writer.start_file("xl/worksheets/sheet1.xml", options).unwrap();
-    writer.write_all(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+</sst>"#
+                .as_bytes(),
+        )
+        .unwrap();
+    writer
+        .start_file("xl/worksheets/sheet1.xml", options)
+        .unwrap();
+    writer
+        .write_all(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
   <sheetData>
     <row r="1">
@@ -201,7 +217,10 @@ fn build_minimal_xlsx_with_values() -> Vec<u8> {
       <c r="B2"><v>1200</v></c>
     </row>
   </sheetData>
-</worksheet>"#.as_bytes()).unwrap();
+</worksheet>"#
+                .as_bytes(),
+        )
+        .unwrap();
     writer.finish().unwrap().into_inner()
 }
 
@@ -489,8 +508,7 @@ fn attachment_parts_preserve_binary_document_inputs_as_unified_attachment_parts(
                 source_type: "browser_file".to_string(),
                 name: "budget.xlsx".to_string(),
                 declared_mime_type: Some(
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                        .to_string(),
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".to_string(),
                 ),
                 size_bytes: Some(256),
                 source_payload: None,
@@ -547,8 +565,8 @@ fn attachment_parts_extract_docx_documents_to_text_parts() {
 
 #[test]
 fn attachment_parts_extract_xlsx_documents_to_text_parts() {
-    let payload = base64::engine::general_purpose::STANDARD
-        .encode(build_minimal_xlsx_with_values());
+    let payload =
+        base64::engine::general_purpose::STANDARD.encode(build_minimal_xlsx_with_values());
     let parts =
         runtime_lib::commands::chat::normalize_send_message_parts(&[SendMessagePart::Attachment {
             attachment: runtime_lib::commands::chat::AttachmentInput {
@@ -557,8 +575,7 @@ fn attachment_parts_extract_xlsx_documents_to_text_parts() {
                 source_type: "browser_file".to_string(),
                 name: "budget.xlsx".to_string(),
                 declared_mime_type: Some(
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                        .to_string(),
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".to_string(),
                 ),
                 size_bytes: Some(256),
                 source_payload: Some(payload),
@@ -578,10 +595,11 @@ fn attachment_parts_extract_xlsx_documents_to_text_parts() {
 
 #[test]
 fn attachment_parts_extract_legacy_doc_documents_to_text_parts() {
-    let payload = base64::engine::general_purpose::STANDARD.encode(build_legacy_office_like_bytes(&[
-        "旧版文档标题",
-        "第一段正文",
-    ]));
+    let payload =
+        base64::engine::general_purpose::STANDARD.encode(build_legacy_office_like_bytes(&[
+            "旧版文档标题",
+            "第一段正文",
+        ]));
     let parts =
         runtime_lib::commands::chat::normalize_send_message_parts(&[SendMessagePart::Attachment {
             attachment: runtime_lib::commands::chat::AttachmentInput {
@@ -607,10 +625,8 @@ fn attachment_parts_extract_legacy_doc_documents_to_text_parts() {
 
 #[test]
 fn attachment_parts_extract_legacy_xls_documents_to_text_parts() {
-    let payload = base64::engine::general_purpose::STANDARD.encode(build_legacy_office_like_bytes(&[
-        "预算汇总",
-        "差旅 1200",
-    ]));
+    let payload = base64::engine::general_purpose::STANDARD
+        .encode(build_legacy_office_like_bytes(&["预算汇总", "差旅 1200"]));
     let parts =
         runtime_lib::commands::chat::normalize_send_message_parts(&[SendMessagePart::Attachment {
             attachment: runtime_lib::commands::chat::AttachmentInput {
@@ -703,8 +719,10 @@ fn validation_rejects_oversized_image_attachment() {
 #[test]
 fn validation_rejects_oversized_image_attachment_without_declared_size() {
     let oversized_payload = "A".repeat((5 * 1024 * 1024) + 1);
-    let encoded =
-        format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(oversized_payload));
+    let encoded = format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(oversized_payload)
+    );
     let attachment = build_attachment_input(
         "image",
         "browser_file",
@@ -814,9 +832,7 @@ fn attachment_parts_truncate_provided_pdf_extracted_text() {
         }])
         .expect("normalize pdf attachment with inline extracted text");
 
-    let normalized_text = parts[0]["extractedText"]
-        .as_str()
-        .expect("extracted text");
+    let normalized_text = parts[0]["extractedText"].as_str().expect("extracted text");
     assert_eq!(normalized_text.len(), 200_000);
     assert_eq!(parts[0]["truncated"].as_bool(), Some(true));
 }
@@ -873,7 +889,10 @@ fn resolution_preserves_attachment_kind_and_mime_metadata_for_supported_inputs()
     assert_eq!(audio.kind, "audio");
     assert_eq!(audio.resolved_mime_type, "audio/mpeg");
     assert_eq!(audio.transcript.as_deref(), Some("TRANSCRIPTION_REQUIRED"));
-    assert!(audio.warnings.iter().any(|warning| warning == "transcription_pending"));
+    assert!(audio
+        .warnings
+        .iter()
+        .any(|warning| warning == "transcription_pending"));
 
     let video = resolve_attachment_input(
         &default_attachment_policy(),
@@ -891,7 +910,10 @@ fn resolution_preserves_attachment_kind_and_mime_metadata_for_supported_inputs()
     assert_eq!(video.kind, "video");
     assert_eq!(video.resolved_mime_type, "video/mp4");
     assert_eq!(video.summary.as_deref(), Some("SUMMARY_REQUIRED"));
-    assert!(video.warnings.iter().any(|warning| warning == "summary_pending"));
+    assert!(video
+        .warnings
+        .iter()
+        .any(|warning| warning == "summary_pending"));
 
     let no_audio_video = resolve_attachment_input(
         &default_attachment_policy(),
@@ -909,7 +931,10 @@ fn resolution_preserves_attachment_kind_and_mime_metadata_for_supported_inputs()
     )
     .expect("resolve no-audio video");
 
-    assert_eq!(no_audio_video.summary.as_deref(), Some("VIDEO_NO_AUDIO_TRACK"));
+    assert_eq!(
+        no_audio_video.summary.as_deref(),
+        Some("VIDEO_NO_AUDIO_TRACK")
+    );
     assert!(no_audio_video
         .warnings
         .iter()
@@ -1107,9 +1132,7 @@ async fn async_normalize_send_message_parts_summarizes_video_when_audio_route_an
                 name: "demo.mp4".to_string(),
                 declared_mime_type: Some("video/mp4".to_string()),
                 size_bytes: Some(video_bytes.len()),
-                source_payload: Some(
-                    base64::engine::general_purpose::STANDARD.encode(video_bytes),
-                ),
+                source_payload: Some(base64::engine::general_purpose::STANDARD.encode(video_bytes)),
                 source_uri: None,
                 extracted_text: None,
                 truncated: None,
@@ -1164,9 +1187,7 @@ async fn async_normalize_send_message_parts_marks_video_without_audio_track_expl
                 name: "silent.mp4".to_string(),
                 declared_mime_type: Some("video/mp4".to_string()),
                 size_bytes: Some(video_bytes.len()),
-                source_payload: Some(
-                    base64::engine::general_purpose::STANDARD.encode(video_bytes),
-                ),
+                source_payload: Some(base64::engine::general_purpose::STANDARD.encode(video_bytes)),
                 source_uri: None,
                 extracted_text: None,
                 truncated: None,
@@ -1220,9 +1241,7 @@ async fn async_normalize_send_message_parts_summarizes_silent_video_with_vision_
                 name: "silent-vision.mp4".to_string(),
                 declared_mime_type: Some("video/mp4".to_string()),
                 size_bytes: Some(video_bytes.len()),
-                source_payload: Some(
-                    base64::engine::general_purpose::STANDARD.encode(video_bytes),
-                ),
+                source_payload: Some(base64::engine::general_purpose::STANDARD.encode(video_bytes)),
                 source_uri: None,
                 extracted_text: None,
                 truncated: None,

@@ -52,4 +52,3 @@ impl ToolPermissionDecision {
         matches!(self.action, ToolPermissionAction::Deny)
     }
 }
-
