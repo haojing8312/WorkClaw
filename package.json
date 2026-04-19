@@ -31,6 +31,7 @@
     "test:group-run-regression": "cargo run --manifest-path apps/runtime/src-tauri/Cargo.toml --bin employee_group_run_regression",
     "test:employee-agents-windows": "node scripts/run-employee-agent-windows-regressions.mjs",
     "test:rust-fast": "node scripts/test-rust-fast.mjs",
+    "verify:openclaw-im-host:phase3": "node scripts/run-openclaw-im-host-phase3-verification.mjs",
     "cargo:isolated": "node scripts/run-cargo-isolated.mjs",
     "cache:build:check": "node scripts/check-build-cache.mjs",
     "cache:build:clean": "node scripts/check-build-cache.mjs --mode=clean",

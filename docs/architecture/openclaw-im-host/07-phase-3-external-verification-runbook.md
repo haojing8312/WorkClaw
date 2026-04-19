@@ -34,6 +34,18 @@
 
 ## 建议执行顺序
 
+如需直接按仓库脚本执行，可优先使用：
+
+```bash
+pnpm verify:openclaw-im-host:phase3
+```
+
+如果当前机器只能接受 compile-level 验证，可先运行：
+
+```bash
+pnpm verify:openclaw-im-host:phase3 --compile-only
+```
+
 ### 1. 基础编译确认
 
 ```bash

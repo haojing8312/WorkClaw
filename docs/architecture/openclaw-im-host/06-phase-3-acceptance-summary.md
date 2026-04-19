@@ -170,6 +170,7 @@ WeCom 当前已经拿到的关键证明包括：
 - 执行新增的 `im_host` Rust lifecycle / dispatch tests
 - 把执行结果回填到 `appendix-b-risk-and-verification.md`
 - 按 [07-phase-3-external-verification-runbook.md](/D:/code/WorkClaw/docs/architecture/openclaw-im-host/07-phase-3-external-verification-runbook.md) 的顺序执行，避免遗漏新增 WeCom host-level 用例
+- 优先使用仓库脚本 `pnpm verify:openclaw-im-host:phase3`；若当前机器只能做 compile-level 验证，可先运行 `pnpm verify:openclaw-im-host:phase3 --compile-only`
 
 ### 次优先
 
