@@ -85,6 +85,10 @@ cargo test --manifest-path apps/runtime/src-tauri/Cargo.toml --lib host_reply_di
 - `Phase 3 complete`
 - `Phase 3 complete with known Windows runtime_lib libtest caveat`
 
+结论正文可直接复用：
+
+- [10-phase-3-final-status-draft.md](/D:/code/WorkClaw/docs/architecture/openclaw-im-host/10-phase-3-final-status-draft.md)
+
 ## 何时可以宣布 Phase 3 结束
 
 满足以下条件即可：

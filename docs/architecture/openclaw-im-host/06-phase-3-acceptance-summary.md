@@ -21,14 +21,14 @@
 
 ## 2. 当前完成度
 
-按 2026-04-19 当前证据判断，整体大约已完成 `93%-95%`。
+按 2026-04-19 当前证据判断，整体大约已完成 `95%-97%`。
 
 可以把当前状态理解为：
 
 - Feishu 主线改造已基本完成
 - `im_host` 已从设计概念进入真实平台层
 - WeCom 已从“计划支持”推进到“已有 unified host 证据”
-- 剩余工作主要集中在最终验收和环境无关验证，而不是大的架构空白
+- 剩余工作主要集中在最终阶段判定与补充环境证据，而不是大的架构空白
 
 ## 3. 已完成的核心结果
 
@@ -157,11 +157,11 @@ WeCom 当前已经拿到的关键证明包括：
 
 当前剩余工作已经不是大的架构空白，而是最后的验收收口：
 
-- 继续把 `dispatch_idle` 作为最终完成边界的证据收紧成更聚焦的 lifecycle 验收
 - 在非 Windows 或更完整环境上补跑原始 `cargo test --lib ...` 路径，作为附加证据而不是唯一出口
-- 如果要正式宣布第三阶段结束，补一份更偏发布/验收口径的阶段结论
+- 把外部补充验证结果回填到结果模板与风险文档
+- 视补充验证结果，将阶段结论固定为 `Phase 3 complete` 或 `Phase 3 complete with known Windows runtime_lib libtest caveat`
 
-换句话说，现在离“结构上做完”已经很近；当前 Windows 机器上的执行级验证已经可完成，但如果还想把原始 libtest 路径也补齐，仍有最后一小段环境相关收尾工作。
+换句话说，结构上已经做完，当前 Windows 机器上的执行级验证也已经可完成；剩下的是把补充环境证据补齐，让阶段结论从“基本收口”升级成“正式收口”。
 
 ## 6. 对应设计与计划文档
 
@@ -175,6 +175,7 @@ WeCom 当前已经拿到的关键证明包括：
 - Phase 3 平台化计划：[05-phase-3-plan.md](/D:/code/WorkClaw/docs/architecture/openclaw-im-host/05-phase-3-plan.md)
 - Phase 3 收尾清单：[09-phase-3-closeout-checklist.md](/D:/code/WorkClaw/docs/architecture/openclaw-im-host/09-phase-3-closeout-checklist.md)
 - 风险与验证：[appendix-b-risk-and-verification.md](/D:/code/WorkClaw/docs/architecture/openclaw-im-host/appendix-b-risk-and-verification.md)
+- 最终阶段结论草案：[10-phase-3-final-status-draft.md](/D:/code/WorkClaw/docs/architecture/openclaw-im-host/10-phase-3-final-status-draft.md)
 
 ## 7. 建议的继续路径
 
@@ -190,8 +191,8 @@ WeCom 当前已经拿到的关键证明包括：
 
 ### 次优先
 
-- 输出一版更正式的“Phase 3 done / not done”验收结论
-- 明确是否把当前阶段定义为“平台化基本完成，进入验证收尾”
+- 复用 [10-phase-3-final-status-draft.md](/D:/code/WorkClaw/docs/architecture/openclaw-im-host/10-phase-3-final-status-draft.md) 输出正式阶段判定
+- 在补充环境验证后，决定是否去掉当前 Windows libtest caveat
 
 ### 如果还要继续扩展
 
@@ -200,4 +201,4 @@ WeCom 当前已经拿到的关键证明包括：
 
 ## 8. 当前一句话结论
 
-WorkClaw 这项任务已经不再停留在“修飞书消息发送问题”，而是基本完成了从“私有飞书桥接”向“OpenClaw-compatible 多渠道 IM 宿主”的结构性迁移；剩下的主要是最后一段执行级验证与阶段验收收口。
+WorkClaw 这项任务已经完成了从“私有飞书桥接”向“OpenClaw-compatible 多渠道 IM 宿主”的主要结构迁移；当前更准确的阶段结论是 `Phase 3 complete with known Windows runtime_lib libtest caveat`。
