@@ -105,9 +105,46 @@ function resolveAgentRoute(params: {
 
 type ReplyDispatchKind = "tool" | "block" | "final";
 
-function createReplyDispatcher() {
+type ReplyLifecyclePhase =
+  | "reply_started"
+  | "processing_started"
+  | "ask_user_requested"
+  | "ask_user_answered"
+  | "approval_requested"
+  | "approval_resolved"
+  | "interrupt_requested"
+  | "resumed"
+  | "failed"
+  | "stopped"
+  | "tool_chunk_queued"
+  | "block_chunk_queued"
+  | "final_chunk_queued"
+  | "wait_for_idle"
+  | "idle_reached"
+  | "fully_complete"
+  | "dispatch_idle"
+  | "processing_stopped";
+
+type ReplyLifecycleContext = {
+  logicalReplyId: string;
+  channel: "feishu";
+  accountId?: string;
+  threadId?: string;
+  chatId?: string;
+  messageId?: string;
+};
+
+type ReplyLifecycleRecorder = (
+  phase: ReplyLifecyclePhase,
+  extra?: Record<string, unknown>,
+) => void;
+
+function createReplyDispatcher(recordLifecycle: ReplyLifecycleRecorder) {
   let sendChain: Promise<void> = Promise.resolve();
   let completeCalled = false;
+  let waitEmitted = false;
+  let idleReachedEmitted = false;
+  let completeEmitted = false;
   const queuedCounts: Record<ReplyDispatchKind, number> = {
     tool: 0,
     block: 0,
@@ -117,6 +154,14 @@ function createReplyDispatcher() {
   const enqueue = (kind: ReplyDispatchKind) => {
     queuedCounts[kind] += 1;
     sendChain = sendChain.then(async () => undefined);
+    recordLifecycle(
+      kind === "tool"
+        ? "tool_chunk_queued"
+        : kind === "block"
+          ? "block_chunk_queued"
+          : "final_chunk_queued",
+      { queuedCounts: { ...queuedCounts } },
+    );
     return true;
   };
 
@@ -131,13 +176,25 @@ function createReplyDispatcher() {
       return enqueue("final");
     },
     async waitForIdle() {
+      if (!waitEmitted) {
+        waitEmitted = true;
+        recordLifecycle("wait_for_idle", { queuedCounts: { ...queuedCounts } });
+      }
       await sendChain;
+      if (!idleReachedEmitted) {
+        idleReachedEmitted = true;
+        recordLifecycle("idle_reached", { queuedCounts: { ...queuedCounts } });
+      }
     },
     getQueuedCounts() {
       return { ...queuedCounts };
     },
     markComplete() {
       completeCalled = true;
+      if (!completeEmitted) {
+        completeEmitted = true;
+        recordLifecycle("fully_complete", { queuedCounts: { ...queuedCounts } });
+      }
     },
     isComplete() {
       return completeCalled;
@@ -274,6 +331,7 @@ export type PluginRuntimeState = {
   system: {
     records: Array<{ message: string; meta?: Record<string, unknown> }>;
     dispatchRequests: Array<Record<string, unknown>>;
+    replyLifecycleEvents: Array<Record<string, unknown>>;
     enqueueSystemEvent: (message: string, meta?: Record<string, unknown>) => void;
   };
   logging: {
@@ -291,6 +349,7 @@ export function createPluginRuntime(input: {
   const records: RuntimeLogRecord[] = [];
   const systemRecords: Array<{ message: string; meta?: Record<string, unknown> }> = [];
   const dispatchRequests: Array<Record<string, unknown>> = [];
+  const replyLifecycleEvents: Array<Record<string, unknown>> = [];
   const pairingRequests = new Map<string, Record<string, unknown>>();
   let outboundSendSequence = 0;
   const config = input.config ?? {};
@@ -302,6 +361,24 @@ export function createPluginRuntime(input: {
       warn: (...args) => records.push({ level: "warn", scope, args }),
       error: (...args) => records.push({ level: "error", scope, args }),
     };
+  }
+
+  function enqueueReplyLifecycle(meta: ReplyLifecycleContext, phase: ReplyLifecyclePhase, extra?: Record<string, unknown>) {
+    const event = {
+      logicalReplyId: meta.logicalReplyId,
+      phase,
+      channel: meta.channel,
+      ...(meta.accountId ? { accountId: meta.accountId } : {}),
+      ...(meta.threadId ? { threadId: meta.threadId } : {}),
+      ...(meta.chatId ? { chatId: meta.chatId } : {}),
+      ...(meta.messageId ? { messageId: meta.messageId } : {}),
+      ...(extra ?? {}),
+    };
+    replyLifecycleEvents.push(event);
+    systemRecords.push({
+      message: "reply-lifecycle",
+      meta: event,
+    });
   }
 
   return {
@@ -460,7 +537,20 @@ export function createPluginRuntime(input: {
           return { ...ctx };
         },
         createReplyDispatcherWithTyping() {
-          const dispatcher = createReplyDispatcher();
+          const lifecycle: ReplyLifecycleContext = {
+            logicalReplyId: `reply_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
+            channel: "feishu",
+          };
+          const dispatcher = createReplyDispatcher((phase, extra) =>
+            enqueueReplyLifecycle(lifecycle, phase, extra),
+          ) as ReturnType<typeof createReplyDispatcher> & {
+            setLifecycleContext?: (patch: Partial<ReplyLifecycleContext>) => void;
+            getLifecycleContext?: () => ReplyLifecycleContext;
+          };
+          dispatcher.setLifecycleContext = (patch) => {
+            Object.assign(lifecycle, patch);
+          };
+          dispatcher.getLifecycleContext = () => ({ ...lifecycle });
           return {
             dispatcher,
             replyOptions: {},
@@ -479,15 +569,29 @@ export function createPluginRuntime(input: {
           try {
             return await params.run();
           } finally {
-            params.dispatcher.markComplete();
             try {
               await params.dispatcher.waitForIdle();
             } finally {
+              params.dispatcher.markComplete();
+              const lifecycleMeta =
+                (params.dispatcher as {
+                  getLifecycleContext?: () => ReplyLifecycleContext;
+                }).getLifecycleContext?.() ??
+                { logicalReplyId: `reply_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`, channel: "feishu" as const };
+              enqueueReplyLifecycle(lifecycleMeta, "dispatch_idle", {
+                queuedCounts: params.dispatcher.getQueuedCounts(),
+              });
               await params.onSettled?.();
             }
           }
         },
         async dispatchReplyFromConfig(params) {
+          const dispatcher = params.dispatcher as
+            | (ReturnType<typeof createReplyDispatcher> & {
+                setLifecycleContext?: (patch: Partial<ReplyLifecycleContext>) => void;
+                getLifecycleContext?: () => ReplyLifecycleContext;
+              })
+            | undefined;
           const ctx = asRecord(params.ctx) ?? {};
           const chatId =
             stripPrefixedTarget(ctx.To, "chat:") ??
@@ -507,6 +611,30 @@ export function createPluginRuntime(input: {
               "",
             chatType: readString(ctx.ChatType) ?? "direct",
           });
+          dispatcher?.setLifecycleContext?.({
+            accountId: readString(ctx.AccountId) ?? "default",
+            threadId: deriveDispatchThreadId(ctx),
+            ...(chatId ? { chatId } : {}),
+            ...(readString(ctx.MessageSid) ? { messageId: readString(ctx.MessageSid) } : {}),
+          });
+          if (dispatcher) {
+            const queuedCounts = dispatcher.getQueuedCounts();
+            const lifecycleMeta = dispatcher.getLifecycleContext?.() ?? {
+              logicalReplyId: `reply_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
+              channel: "feishu" as const,
+            };
+            enqueueReplyLifecycle(
+              lifecycleMeta,
+              "reply_started",
+              {
+                queuedCounts,
+              },
+            );
+            enqueueReplyLifecycle(
+              lifecycleMeta,
+              "processing_started",
+            );
+          }
           return {
             queuedFinal: false,
             counts: { final: 0 },
@@ -526,6 +654,7 @@ export function createPluginRuntime(input: {
     system: {
       records: systemRecords,
       dispatchRequests,
+      replyLifecycleEvents,
       enqueueSystemEvent(message, meta) {
         systemRecords.push({ message, meta });
       },

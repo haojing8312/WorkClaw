@@ -6,8 +6,8 @@ mod test_helpers;
 
 use runtime_lib::commands::employee_agents::test_support::{
     clone_employee_group_template_with_pool, create_employee_group_with_pool,
-    create_employee_team_with_pool, list_employee_group_rules_with_pool, list_employee_groups_with_pool,
-    maybe_handle_team_entry_session_message_with_pool,
+    create_employee_team_with_pool, list_employee_group_rules_with_pool,
+    list_employee_groups_with_pool, maybe_handle_team_entry_session_message_with_pool,
 };
 use runtime_lib::commands::employee_agents::{
     ensure_employee_sessions_for_event_with_pool, link_inbound_event_to_session_with_pool,
@@ -206,7 +206,9 @@ async fn scenario_create_team_persists_runtime_config() -> Result<RegressionCase
         || group.execution_mode != "parallel"
         || group.visibility_mode != "shared"
     {
-        return Err(anyhow!("unexpected runtime config persisted on created team"));
+        return Err(anyhow!(
+            "unexpected runtime config persisted on created team"
+        ));
     }
 
     let rules = list_employee_group_rules_with_pool(&pool, &group_id)
@@ -545,7 +547,9 @@ async fn scenario_team_entry_binding_prefers_entry_employee() -> Result<Regressi
         .await
         .map_err(|error| anyhow!("ensure employee sessions: {error}"))?;
 
-    if sessions.len() != 1 || sessions[0].employee_id != taizi_id || sessions[0].employee_id == main_id
+    if sessions.len() != 1
+        || sessions[0].employee_id != taizi_id
+        || sessions[0].employee_id == main_id
     {
         return Err(anyhow!("team entry binding did not prefer entry employee"));
     }
@@ -632,7 +636,9 @@ async fn scenario_team_entry_ignores_non_entry_sessions() -> Result<RegressionCa
         .map_err(|error| anyhow!("handle team entry session: {error}"))?;
 
         if handled.is_some() {
-            return Err(anyhow!("{session_mode} session should not trigger team orchestration"));
+            return Err(anyhow!(
+                "{session_mode} session should not trigger team orchestration"
+            ));
         }
     }
 
@@ -738,7 +744,9 @@ async fn scenario_team_entry_reuses_existing_chat_session() -> Result<Regression
     .ok_or_else(|| anyhow!("team entry should be handled"))?;
 
     if handled.group_id != group_id || handled.session_id != session_id || handled.state != "done" {
-        return Err(anyhow!("team entry handler did not reuse existing session correctly"));
+        return Err(anyhow!(
+            "team entry handler did not reuse existing session correctly"
+        ));
     }
 
     let (run_session_id, entry_session_id, state): (String, String, String) = sqlx::query_as(
@@ -767,7 +775,9 @@ async fn scenario_team_entry_reuses_existing_chat_session() -> Result<Regression
         .iter()
         .any(|(role, content)| role == "assistant" && content.contains("团队协作已完成"));
     if user_count != 1 || !has_summary {
-        return Err(anyhow!("team entry session messages were not reused correctly"));
+        return Err(anyhow!(
+            "team entry session messages were not reused correctly"
+        ));
     }
 
     Ok(RegressionCaseSummary {

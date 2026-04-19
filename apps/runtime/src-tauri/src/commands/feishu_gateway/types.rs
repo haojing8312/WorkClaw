@@ -35,15 +35,6 @@ pub struct FeishuGatewayResult {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-pub struct ImRouteDecisionEvent {
-    pub session_id: String,
-    pub thread_id: String,
-    pub agent_id: String,
-    pub session_key: String,
-    pub matched_by: String,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct FeishuGatewaySettings {
     pub app_id: String,
     pub app_secret: String,

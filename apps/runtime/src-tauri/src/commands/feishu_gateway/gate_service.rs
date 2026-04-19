@@ -1,13 +1,15 @@
 use super::list_feishu_pairing_allow_from_with_pool;
-use super::types::{
-    FeishuGateAccountConfig, FeishuGateGroupConfig, FeishuInboundGateDecision,
+use super::metadata_service::{
+    resolve_feishu_host_metadata_from_registry_with_pool, FeishuChannelAccountMetadata,
+    FeishuHostMetadata,
 };
-use crate::commands::openclaw_plugins::{
-    get_openclaw_plugin_feishu_channel_snapshot_with_pool, OpenClawPluginChannelAccountSnapshot,
-    OpenClawPluginChannelSnapshotResult,
-};
+use super::types::{FeishuGateAccountConfig, FeishuGateGroupConfig, FeishuInboundGateDecision};
+use crate::commands::channel_connectors::ChannelConnectorMonitorState;
+use crate::commands::im_host::ImChannelHostRuntimeState;
+use crate::commands::openclaw_plugins::OpenClawPluginFeishuRuntimeState;
 use crate::im::types::ImEvent;
 use sqlx::SqlitePool;
+use tauri::AppHandle;
 
 pub(crate) fn is_direct_feishu_chat(event: &ImEvent) -> bool {
     matches!(
@@ -71,7 +73,7 @@ fn resolve_feishu_group_config<'a>(
 }
 
 fn build_feishu_gate_account_config(
-    account_snapshot: &OpenClawPluginChannelAccountSnapshot,
+    account_snapshot: &FeishuChannelAccountMetadata,
 ) -> FeishuGateAccountConfig {
     account_snapshot
         .account
@@ -82,53 +84,17 @@ fn build_feishu_gate_account_config(
 }
 
 pub(crate) fn select_feishu_channel_account_snapshot<'a>(
-    snapshot: &'a OpenClawPluginChannelSnapshotResult,
+    metadata: &'a FeishuHostMetadata,
     event: &ImEvent,
-) -> Option<&'a OpenClawPluginChannelAccountSnapshot> {
-    let normalized_event_account = event
-        .account_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_ascii_lowercase);
-    let default_account = snapshot
-        .snapshot
-        .default_account_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_ascii_lowercase);
-
-    if let Some(event_account_id) = normalized_event_account.as_deref() {
-        if let Some(found) = snapshot.snapshot.accounts.iter().find(|account| {
-            account
-                .account_id
-                .trim()
-                .eq_ignore_ascii_case(event_account_id)
-        }) {
-            return Some(found);
-        }
-    }
-
-    if let Some(default_account_id) = default_account.as_deref() {
-        if let Some(found) = snapshot.snapshot.accounts.iter().find(|account| {
-            account
-                .account_id
-                .trim()
-                .eq_ignore_ascii_case(default_account_id)
-        }) {
-            return Some(found);
-        }
-    }
-
-    snapshot.snapshot.accounts.first()
+) -> Option<&'a FeishuChannelAccountMetadata> {
+    metadata.select_account(event.account_id.as_deref())
 }
 
 pub(crate) fn evaluate_openclaw_feishu_gate(
     event: &ImEvent,
-    snapshot: &OpenClawPluginChannelSnapshotResult,
+    metadata: &FeishuHostMetadata,
 ) -> FeishuInboundGateDecision {
-    let Some(account_snapshot) = select_feishu_channel_account_snapshot(snapshot, event) else {
+    let Some(account_snapshot) = select_feishu_channel_account_snapshot(metadata, event) else {
         return FeishuInboundGateDecision::Allow;
     };
     let account_config = build_feishu_gate_account_config(account_snapshot);
@@ -174,14 +140,15 @@ pub(crate) fn evaluate_openclaw_feishu_gate(
         split_legacy_group_allow_from(&account_config.group_allow_from);
 
     let groups_configured = groups.keys().any(|key| key.trim() != "*");
-    let group_level_policy = account_config
-        .group_policy
-        .as_deref()
-        .unwrap_or(if groups_configured {
-            "allowlist"
-        } else {
-            "open"
-        });
+    let group_level_policy =
+        account_config
+            .group_policy
+            .as_deref()
+            .unwrap_or(if groups_configured {
+                "allowlist"
+            } else {
+                "open"
+            });
 
     let group_allowed = match group_level_policy {
         "disabled" => false,
@@ -252,29 +219,51 @@ pub(crate) async fn evaluate_openclaw_feishu_gate_with_pool(
     pool: &SqlitePool,
     event: &ImEvent,
 ) -> Result<FeishuInboundGateDecision, String> {
-    let mut snapshot =
-        match get_openclaw_plugin_feishu_channel_snapshot_with_pool(pool, "openclaw-lark").await {
-            Ok(snapshot) => snapshot,
+    let mut metadata =
+        match super::metadata_service::resolve_feishu_host_metadata_with_pool(pool).await {
+            Ok(metadata) => metadata,
             Err(_) => return Ok(FeishuInboundGateDecision::Allow),
         };
-    if let Some(account_snapshot) = select_feishu_channel_account_snapshot(&snapshot, event) {
+    if let Some(target_account_id) = select_feishu_channel_account_snapshot(&metadata, event)
+        .map(|account_snapshot| account_snapshot.account_id.clone())
+    {
         let pairing_allow_from =
-            list_feishu_pairing_allow_from_with_pool(pool, &account_snapshot.account_id).await?;
+            list_feishu_pairing_allow_from_with_pool(pool, &target_account_id).await?;
         if !pairing_allow_from.is_empty() {
-            let target_account_id = account_snapshot.account_id.clone();
-            if let Some(account) = snapshot
-                .snapshot
-                .accounts
-                .iter_mut()
-                .find(|account| account.account_id == target_account_id)
-            {
-                for sender_id in pairing_allow_from {
-                    if !account.allow_from.iter().any(|entry| entry == &sender_id) {
-                        account.allow_from.push(sender_id);
-                    }
-                }
-            }
+            metadata.extend_account_allow_from(&target_account_id, &pairing_allow_from);
         }
     }
-    Ok(evaluate_openclaw_feishu_gate(event, &snapshot))
+    Ok(evaluate_openclaw_feishu_gate(event, &metadata))
+}
+
+pub(crate) async fn evaluate_openclaw_feishu_gate_from_registry_with_pool(
+    pool: &SqlitePool,
+    runtime_state: &OpenClawPluginFeishuRuntimeState,
+    channel_monitor_state: &ChannelConnectorMonitorState,
+    host_runtime_state: &ImChannelHostRuntimeState,
+    app: &AppHandle,
+    event: &ImEvent,
+) -> Result<FeishuInboundGateDecision, String> {
+    let mut metadata = match resolve_feishu_host_metadata_from_registry_with_pool(
+        pool,
+        runtime_state,
+        channel_monitor_state,
+        host_runtime_state,
+        app,
+    )
+    .await
+    {
+        Ok(metadata) => metadata,
+        Err(_) => return Ok(FeishuInboundGateDecision::Allow),
+    };
+    if let Some(target_account_id) = select_feishu_channel_account_snapshot(&metadata, event)
+        .map(|account_snapshot| account_snapshot.account_id.clone())
+    {
+        let pairing_allow_from =
+            list_feishu_pairing_allow_from_with_pool(pool, &target_account_id).await?;
+        if !pairing_allow_from.is_empty() {
+            metadata.extend_account_allow_from(&target_account_id, &pairing_allow_from);
+        }
+    }
+    Ok(evaluate_openclaw_feishu_gate(event, &metadata))
 }

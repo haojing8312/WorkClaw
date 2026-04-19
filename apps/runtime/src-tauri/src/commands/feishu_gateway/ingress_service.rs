@@ -1,31 +1,17 @@
 use super::{
-    apply_default_feishu_account_id, emit_employee_inbound_dispatch_sessions,
-    get_app_setting,
-    maybe_handle_feishu_approval_command_with_pool, parse_feishu_approval_command,
-    remember_feishu_runtime_state_for_outbound,
-    FeishuCallbackResult, FeishuEmployeeConnectionInput, FeishuGatewayResult,
-    ImEvent, OpenClawPluginFeishuRuntimeState,
+    apply_default_feishu_account_id, get_app_setting,
+    remember_feishu_runtime_state_for_outbound, FeishuCallbackResult,
+    FeishuEmployeeConnectionInput, FeishuGatewayResult, ImEvent, OpenClawPluginFeishuRuntimeState,
 };
 use crate::approval_bus::ApprovalManager;
-use crate::commands::approvals::load_approval_record_with_pool;
 use crate::commands::chat::ApprovalManagerState;
-use crate::commands::employee_agents::bridge_inbound_event_to_employee_sessions_with_pool;
-use crate::commands::feishu_gateway::pairing_service::maybe_create_feishu_pairing_request_with_pool;
+use crate::commands::feishu_gateway::metadata_service::resolve_feishu_host_metadata_with_pool;
 use crate::commands::feishu_gateway::types::FeishuInboundGateDecision;
-use crate::commands::im_gateway::process_im_event;
-use crate::commands::openclaw_gateway::resolve_openclaw_route_with_pool;
-use crate::commands::openclaw_plugins::get_openclaw_plugin_feishu_channel_snapshot_with_pool;
+use crate::commands::im_host::dispatch_im_inbound_to_workclaw_with_pool_and_app;
 use crate::commands::skills::DbState;
 use sqlx::SqlitePool;
-use tauri::Emitter;
 use tauri::Manager;
 use tauri::State;
-
-fn normalize_optional_non_empty(value: Option<String>) -> Option<String> {
-    value
-        .map(|raw| raw.trim().to_string())
-        .filter(|raw| !raw.is_empty())
-}
 
 pub(crate) fn resolve_fallback_default_feishu_account_id(
     has_default_credentials: bool,
@@ -45,20 +31,11 @@ pub(crate) fn resolve_fallback_default_feishu_account_id(
 pub(crate) async fn resolve_default_feishu_account_id_with_pool(
     pool: &SqlitePool,
 ) -> Result<Option<String>, String> {
-    if let Ok(snapshot) =
-        get_openclaw_plugin_feishu_channel_snapshot_with_pool(pool, "openclaw-lark").await
-    {
-        if let Some(default_account_id) =
-            normalize_optional_non_empty(snapshot.snapshot.default_account_id)
-        {
+    if let Ok(metadata) = resolve_feishu_host_metadata_with_pool(pool).await {
+        if let Some(default_account_id) = metadata.default_account_id().map(str::to_string) {
             return Ok(Some(default_account_id));
         }
-        let fallback = snapshot
-            .snapshot
-            .account_ids
-            .into_iter()
-            .map(|value: String| value.trim().to_string())
-            .find(|value: &String| !value.is_empty());
+        let fallback = metadata.account_ids().map(str::to_string).next();
         if fallback.is_some() {
             return Ok(fallback);
         }
@@ -166,51 +143,12 @@ pub(crate) async fn dispatch_feishu_inbound_to_workclaw_with_pool_and_app(
     pool: &SqlitePool,
     app: &tauri::AppHandle,
     event: &ImEvent,
-    approval_manager: Option<&ApprovalManager>,
+    _approval_manager: Option<&ApprovalManager>,
 ) -> Result<FeishuCallbackResult, String> {
     if let Some(runtime_state) = app.try_state::<OpenClawPluginFeishuRuntimeState>() {
         remember_feishu_runtime_state_for_outbound(runtime_state.inner());
     }
-    let result = process_im_event(pool, event.clone()).await?;
-    if result.deduped {
-        return Ok(result);
-    }
-
-    if let Some(approval_manager) = approval_manager {
-        let approval_command = parse_feishu_approval_command(event.text.as_deref());
-        if let Some(command) = approval_command {
-            if maybe_handle_feishu_approval_command_with_pool(pool, approval_manager, event, None)
-                .await?
-                .is_some()
-            {
-                if let Some(record) =
-                    load_approval_record_with_pool(pool, &command.approval_id).await?
-                {
-                    let _ = app.emit("approval-resolved", &record);
-                }
-                return Ok(result);
-            }
-        }
-    }
-
-    let route_decision = resolve_openclaw_route_with_pool(pool, event).await.ok();
-    let dispatches =
-        bridge_inbound_event_to_employee_sessions_with_pool(pool, event, route_decision.as_ref())
-            .await?;
-    emit_employee_inbound_dispatch_sessions(app, "feishu", &dispatches);
-
-    if dispatches.is_empty() {
-        let planned = super::plan_role_events_for_feishu(pool, event).await?;
-        for evt in planned {
-            let _ = app.emit("im-role-event", evt);
-        }
-        let dispatches = super::plan_role_dispatch_requests_for_feishu(pool, event).await?;
-        for req in dispatches {
-            let _ = app.emit("im-role-dispatch-request", req);
-        }
-    }
-
-    Ok(result)
+    dispatch_im_inbound_to_workclaw_with_pool_and_app(pool, app, event).await
 }
 
 pub async fn handle_feishu_event_with_pool_and_app(
@@ -237,12 +175,32 @@ pub async fn handle_feishu_event_with_pool_and_app(
         super::ParsedFeishuPayload::Event(mut event) => {
             let default_account_id = resolve_default_feishu_account_id_with_pool(&db.0).await?;
             apply_default_feishu_account_id(&mut event, default_account_id.as_deref());
-            match super::evaluate_openclaw_feishu_gate_with_pool(&db.0, &event).await? {
+            match super::evaluate_openclaw_feishu_gate_from_registry_with_pool(
+                &db.0,
+                app.state::<OpenClawPluginFeishuRuntimeState>().inner(),
+                app.state::<crate::commands::channel_connectors::ChannelConnectorMonitorState>()
+                    .inner(),
+                app.state::<crate::commands::im_host::ImChannelHostRuntimeState>()
+                    .inner(),
+                &app,
+                &event,
+            )
+            .await?
+            {
                 FeishuInboundGateDecision::Allow => {}
                 FeishuInboundGateDecision::Reject { reason } => {
                     if reason == "pairing_pending" {
-                        let _ =
-                            maybe_create_feishu_pairing_request_with_pool(&db.0, &event).await?;
+                        let _ = super::pairing_service::maybe_create_feishu_pairing_request_from_registry_with_pool(
+                            &db.0,
+                            app.state::<OpenClawPluginFeishuRuntimeState>().inner(),
+                            app.state::<crate::commands::channel_connectors::ChannelConnectorMonitorState>()
+                                .inner(),
+                            app.state::<crate::commands::im_host::ImChannelHostRuntimeState>()
+                                .inner(),
+                            &app,
+                            &event,
+                        )
+                        .await?;
                     }
                     return Ok(FeishuGatewayResult {
                         accepted: false,

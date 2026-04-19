@@ -1,8 +1,14 @@
 use crate::agent::types::{Tool, ToolContext};
+use crate::commands::im_host::{
+    maybe_emit_registered_host_lifecycle_phase_for_session_with_pool,
+    maybe_notify_registered_ask_user_requested_with_pool,
+};
+use crate::commands::openclaw_plugins::im_host_contract::ImReplyLifecyclePhase;
+use crate::commands::skills::DbState;
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 use std::sync::{mpsc, Arc, Mutex};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 /// AskUser 响应通道 - 前端通过 Tauri command 发送用户响应
 pub type AskUserResponder = Arc<Mutex<Option<mpsc::Sender<String>>>>;
@@ -20,6 +26,7 @@ pub struct AskUserTool {
     app_handle: AppHandle,
     session_id: String,
     responder: AskUserResponder,
+    pending_session: Arc<Mutex<Option<String>>>,
 }
 
 #[derive(serde::Serialize, Clone, Debug)]
@@ -30,11 +37,17 @@ struct AskUserEvent {
 }
 
 impl AskUserTool {
-    pub fn new(app_handle: AppHandle, session_id: String, responder: AskUserResponder) -> Self {
+    pub fn new(
+        app_handle: AppHandle,
+        session_id: String,
+        responder: AskUserResponder,
+        pending_session: Arc<Mutex<Option<String>>>,
+    ) -> Self {
         Self {
             app_handle,
             session_id,
             responder,
+            pending_session,
         }
     }
 }
@@ -92,6 +105,13 @@ impl Tool for AskUserTool {
                 .map_err(|e| anyhow!("锁获取失败: {}", e))?;
             *guard = Some(tx);
         }
+        {
+            let mut guard = self
+                .pending_session
+                .lock()
+                .map_err(|e| anyhow!("锁获取失败: {}", e))?;
+            *guard = Some(self.session_id.clone());
+        }
 
         // 发送事件到前端
         self.app_handle
@@ -100,10 +120,25 @@ impl Tool for AskUserTool {
                 AskUserEvent {
                     session_id: self.session_id.clone(),
                     question: question.clone(),
-                    options,
+                    options: options.clone(),
                 },
             )
             .map_err(|e| anyhow!("事件发送失败: {}", e))?;
+
+        if let Some(db_state) = self.app_handle.try_state::<DbState>() {
+            let result = tauri::async_runtime::block_on(
+                maybe_notify_registered_ask_user_requested_with_pool(
+                    &db_state.0,
+                    &self.session_id,
+                    &question,
+                    &options,
+                    None,
+                ),
+            );
+            if let Err(error) = result {
+                eprintln!("[agent] AskUser: IM 宿主发问失败: {}", error);
+            }
+        }
 
         eprintln!("[agent] AskUser: 等待用户回答 \"{}\"", question);
 
@@ -119,6 +154,24 @@ impl Tool for AskUserTool {
                 .lock()
                 .map_err(|e| anyhow!("锁获取失败: {}", e))?;
             *guard = None;
+        }
+        {
+            let mut guard = self
+                .pending_session
+                .lock()
+                .map_err(|e| anyhow!("锁获取失败: {}", e))?;
+            *guard = None;
+        }
+        if let Some(db_state) = self.app_handle.try_state::<DbState>() {
+            let _ = tauri::async_runtime::block_on(
+                maybe_emit_registered_host_lifecycle_phase_for_session_with_pool(
+                    &db_state.0,
+                    &self.session_id,
+                    None,
+                    ImReplyLifecyclePhase::Resumed,
+                    None,
+                ),
+            );
         }
 
         eprintln!("[agent] AskUser: 收到用户回答: {}", response);

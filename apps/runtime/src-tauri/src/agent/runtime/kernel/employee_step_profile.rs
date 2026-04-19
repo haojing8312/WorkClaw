@@ -1,3 +1,5 @@
+use crate::agent::run_guard::{RunBudgetPolicy, RunBudgetScope};
+use crate::agent::skill_config::SkillConfig;
 use crate::agent_catalog::agent_definition::{
     default_memory_scope_for_role, normalize_agent_id, AgentDefinition, AgentRoleKind,
 };
@@ -5,8 +7,6 @@ use crate::agent_catalog::agent_permissions::{
     derive_allowed_tools_for_role, derive_capabilities_for_role,
 };
 use crate::agent_catalog::agent_workspace::build_agent_profile_context;
-use crate::agent::run_guard::{RunBudgetPolicy, RunBudgetScope};
-use crate::agent::skill_config::SkillConfig;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy)]

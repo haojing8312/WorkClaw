@@ -1,3 +1,6 @@
+use crate::commands::channel_connectors::ChannelConnectorMonitorState;
+use crate::commands::im_host::ImChannelHostRuntimeState;
+use crate::commands::im_host::{ImReplyLifecycleEvent, ImReplyLifecyclePhase};
 use crate::commands::skills::DbState;
 use crate::windows_process::hide_console_window;
 use std::collections::HashMap;
@@ -9,6 +12,10 @@ use std::process::{Child, ChildStdin};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, State};
 
+#[path = "openclaw_plugins/feishu_runtime_adapter.rs"]
+mod feishu_runtime_adapter;
+#[path = "openclaw_plugins/im_host_contract.rs"]
+pub(crate) mod im_host_contract;
 #[path = "openclaw_plugins/install_repo.rs"]
 mod install_repo;
 #[path = "openclaw_plugins/install_service.rs"]
@@ -25,7 +32,10 @@ mod settings_service;
 mod setup_service;
 #[path = "openclaw_plugins/tauri_commands.rs"]
 mod tauri_commands;
+#[path = "openclaw_plugins/wecom_runtime_adapter.rs"]
+mod wecom_runtime_adapter;
 
+pub(crate) use feishu_runtime_adapter::handle_openclaw_plugin_feishu_runtime_stdout_line;
 pub(crate) use install_repo::{
     delete_openclaw_plugin_install_with_pool, get_openclaw_plugin_install_by_id_with_pool,
     list_openclaw_plugin_installs_with_pool, upsert_openclaw_plugin_install_with_pool,
@@ -48,9 +58,19 @@ pub(crate) use plugin_host_service::{
     resolve_plugin_host_run_feishu_script, resolve_windows_node_command_path,
 };
 pub(crate) use runtime_service::{
-    current_feishu_runtime_status, maybe_restore_openclaw_plugin_feishu_runtime_with_pool,
+    classify_feishu_runtime_outbound_failure, current_feishu_runtime_status,
+    infer_feishu_runtime_outbound_failure_kind,
+    maybe_restore_openclaw_plugin_feishu_runtime_with_pool,
+    record_feishu_runtime_reply_trace, record_feishu_runtime_reply_trace_error,
+    send_openclaw_plugin_feishu_runtime_lifecycle_event_in_state,
     send_openclaw_plugin_feishu_runtime_outbound_message_in_state,
+    send_openclaw_plugin_feishu_runtime_processing_stop_in_state,
     start_openclaw_plugin_feishu_runtime_with_pool, stop_openclaw_plugin_feishu_runtime_in_state,
+};
+#[cfg(test)]
+pub(crate) use runtime_service::{
+    set_feishu_runtime_lifecycle_event_hook_for_tests,
+    set_feishu_runtime_processing_stop_hook_for_tests,
 };
 use settings_service::{
     app_setting_string_or_default, build_feishu_openclaw_config_with_pool,
@@ -78,6 +98,11 @@ use tauri_commands::{
     start_openclaw_lark_installer_session_command, start_openclaw_plugin_feishu_runtime_command,
     stop_openclaw_lark_installer_session_command, stop_openclaw_plugin_feishu_runtime_command,
     upsert_openclaw_plugin_install_command,
+};
+pub(crate) use wecom_runtime_adapter::{
+    build_wecom_runtime_status_value, handle_openclaw_plugin_wecom_runtime_stdout_line,
+    handle_openclaw_plugin_wecom_runtime_stdout_line_with_bridge, merge_wecom_runtime_status,
+    parse_wecom_runtime_status_value, WecomRuntimeAdapterStatus,
 };
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -239,6 +264,29 @@ pub struct OpenClawPluginChannelSnapshotResult {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenClawPluginFeishuReplyCompletionState {
+    Running,
+    WaitingForIdle,
+    IdleReached,
+    AwaitingUser,
+    AwaitingApproval,
+    Interrupted,
+    Completed,
+    Failed,
+    Stopped,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenClawPluginFeishuLatestReplyCompletion {
+    pub logical_reply_id: String,
+    pub phase: ImReplyLifecyclePhase,
+    pub state: OpenClawPluginFeishuReplyCompletionState,
+    pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct OpenClawPluginFeishuRuntimeStatus {
     pub plugin_id: String,
     pub account_id: String,
@@ -250,6 +298,10 @@ pub struct OpenClawPluginFeishuRuntimeStatus {
     pub pid: Option<u32>,
     pub port: Option<u16>,
     pub recent_logs: Vec<String>,
+    #[serde(default)]
+    pub recent_reply_lifecycle: Vec<ImReplyLifecycleEvent>,
+    #[serde(default)]
+    pub latest_reply_completion: Option<OpenClawPluginFeishuLatestReplyCompletion>,
 }
 
 pub const FEISHU_PLUGIN_MIN_NODE_MAJOR: u64 = 22;
@@ -332,14 +384,23 @@ pub struct OpenClawPluginFeishuOutboundCommandErrorEvent {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-struct OpenClawPluginFeishuOutboundSendCommandPayload {
-    request_id: String,
-    command: String,
-    account_id: String,
-    target: String,
-    thread_id: Option<String>,
-    text: String,
-    mode: String,
+pub struct OpenClawPluginFeishuProcessingStopRequest {
+    pub request_id: String,
+    pub account_id: String,
+    pub message_id: String,
+    pub logical_reply_id: Option<String>,
+    pub final_state: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenClawPluginFeishuLifecycleEventRequest {
+    pub request_id: String,
+    pub account_id: String,
+    pub phase: ImReplyLifecyclePhase,
+    pub logical_reply_id: Option<String>,
+    pub thread_id: Option<String>,
+    pub message_id: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -383,6 +444,8 @@ impl Default for OpenClawPluginFeishuRuntimeStatus {
             pid: None,
             port: None,
             recent_logs: Vec::new(),
+            recent_reply_lifecycle: Vec::new(),
+            latest_reply_completion: None,
         }
     }
 }
@@ -542,6 +605,19 @@ fn now_rfc3339() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
+pub(crate) async fn resolve_primary_feishu_plugin_id_with_pool(
+    pool: &sqlx::SqlitePool,
+) -> Result<String, String> {
+    let hosts = plugin_host_service::list_openclaw_plugin_channel_hosts_with_pool(pool)
+        .await
+        .unwrap_or_default();
+    Ok(hosts
+        .into_iter()
+        .find(|host| host.channel.eq_ignore_ascii_case("feishu"))
+        .map(|host| host.plugin_id)
+        .unwrap_or_else(|| "openclaw-lark".to_string()))
+}
+
 fn merge_pairing_allow_from(base: Option<&str>, extra_entries: Vec<String>) -> serde_json::Value {
     let mut entries = Vec::<String>::new();
     if let Some(value) = base {
@@ -584,9 +660,14 @@ pub async fn stop_openclaw_plugin_feishu_runtime(
 
 #[tauri::command]
 pub async fn get_openclaw_plugin_feishu_runtime_status(
+    app: tauri::AppHandle,
+    db: State<'_, DbState>,
     runtime: State<'_, OpenClawPluginFeishuRuntimeState>,
+    monitor: State<'_, ChannelConnectorMonitorState>,
+    host_runtime_state: State<'_, ImChannelHostRuntimeState>,
 ) -> Result<OpenClawPluginFeishuRuntimeStatus, String> {
-    get_openclaw_plugin_feishu_runtime_status_command(runtime).await
+    get_openclaw_plugin_feishu_runtime_status_command(app, db, runtime, monitor, host_runtime_state)
+        .await
 }
 
 #[tauri::command]
@@ -703,8 +784,11 @@ pub async fn inspect_openclaw_plugin(
 pub async fn list_openclaw_plugin_channel_hosts(
     app: AppHandle,
     db: State<'_, DbState>,
+    runtime: State<'_, OpenClawPluginFeishuRuntimeState>,
+    monitor: State<'_, ChannelConnectorMonitorState>,
+    host_runtime_state: State<'_, ImChannelHostRuntimeState>,
 ) -> Result<Vec<OpenClawPluginChannelHost>, String> {
-    list_openclaw_plugin_channel_hosts_command(app, db).await
+    list_openclaw_plugin_channel_hosts_command(app, db, runtime, monitor, host_runtime_state).await
 }
 
 #[tauri::command]
@@ -712,8 +796,19 @@ pub async fn get_openclaw_plugin_feishu_channel_snapshot(
     plugin_id: String,
     app: AppHandle,
     db: State<'_, DbState>,
+    runtime: State<'_, OpenClawPluginFeishuRuntimeState>,
+    monitor: State<'_, ChannelConnectorMonitorState>,
+    host_runtime_state: State<'_, ImChannelHostRuntimeState>,
 ) -> Result<OpenClawPluginChannelSnapshotResult, String> {
-    get_openclaw_plugin_feishu_channel_snapshot_command(plugin_id, app, db).await
+    get_openclaw_plugin_feishu_channel_snapshot_command(
+        plugin_id,
+        app,
+        db,
+        runtime,
+        monitor,
+        host_runtime_state,
+    )
+    .await
 }
 
 #[tauri::command]

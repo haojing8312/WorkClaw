@@ -22,6 +22,8 @@ pub type ToolConfirmResponder = Arc<Mutex<Option<std::sync::mpsc::Sender<bool>>>
 
 pub struct AskUserState(pub AskUserResponder);
 
+pub struct AskUserPendingSessionState(pub Arc<Mutex<Option<String>>>);
+
 pub struct SearchCacheState(pub Arc<SearchCache>);
 
 pub struct CancelFlagState(pub Arc<AtomicBool>);

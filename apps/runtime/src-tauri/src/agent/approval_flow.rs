@@ -1,7 +1,11 @@
 use super::safety::critical_action_summary;
 use crate::approval_bus::{ApprovalDecision, ApprovalManager, CreateApprovalRequest};
 use crate::commands::chat::{ApprovalManagerState, PendingApprovalBridgeState};
-use crate::commands::feishu_gateway::notify_feishu_approval_requested_with_pool;
+use crate::commands::im_host::{
+    maybe_emit_registered_host_lifecycle_phase_for_session_with_pool,
+    maybe_notify_registered_approval_requested_with_pool,
+};
+use crate::commands::openclaw_plugins::im_host_contract::ImReplyLifecyclePhase;
 use crate::commands::skills::DbState;
 use crate::session_journal::{
     SessionJournalStateHandle, SessionJournalStore, SessionRunTaskContinuationSnapshot,
@@ -146,8 +150,13 @@ pub(super) async fn request_tool_approval_and_wait(
         );
     }
 
-    let _ =
-        notify_feishu_approval_requested_with_pool(&runtime.pool, session_id, &record, None).await;
+    let _ = maybe_notify_registered_approval_requested_with_pool(
+        &runtime.pool,
+        session_id,
+        &record,
+        None,
+    )
+    .await;
 
     let resolution = runtime
         .approval_manager
@@ -160,6 +169,15 @@ pub(super) async fn request_tool_approval_and_wait(
             *guard = None;
         }
     }
+
+    let _ = maybe_emit_registered_host_lifecycle_phase_for_session_with_pool(
+        &runtime.pool,
+        session_id,
+        run_id,
+        ImReplyLifecyclePhase::Resumed,
+        None,
+    )
+    .await;
 
     Ok(resolution.decision)
 }

@@ -54,7 +54,8 @@ async fn async_main() -> Result<()> {
 
     seed_model_config(&pool, &config).await?;
 
-    let single_member = run_single_member_self_execute_regression(&pool, runtime_tmp.path()).await?;
+    let single_member =
+        run_single_member_self_execute_regression(&pool, runtime_tmp.path()).await?;
     let multi_member = run_multi_member_no_rules_regression(&pool, runtime_tmp.path()).await?;
 
     println!(
@@ -300,10 +301,7 @@ fn assert_run_done(scenario: &str, state: &str) -> Result<()> {
     bail!("{scenario} expected state=done, got state={state}");
 }
 
-fn assert_no_self_dispatch_edges(
-    scenario: &str,
-    steps: &[EmployeeGroupRunStep],
-) -> Result<()> {
+fn assert_no_self_dispatch_edges(scenario: &str, steps: &[EmployeeGroupRunStep]) -> Result<()> {
     let offenders = steps
         .iter()
         .filter(|step| step.step_type == "execute")
@@ -323,13 +321,15 @@ fn assert_no_self_dispatch_edges(
         return Ok(());
     }
 
-    bail!("{scenario} emitted self-dispatch edges: {}", offenders.join(", "));
+    bail!(
+        "{scenario} emitted self-dispatch edges: {}",
+        offenders.join(", ")
+    );
 }
 
-fn summarize_execute_edges(
-    steps: &[EmployeeGroupRunStep],
-) -> Vec<String> {
-    steps.iter()
+fn summarize_execute_edges(steps: &[EmployeeGroupRunStep]) -> Vec<String> {
+    steps
+        .iter()
         .filter(|step| step.step_type == "execute")
         .map(|step| {
             let source = step.dispatch_source_employee_id.trim();

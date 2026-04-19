@@ -1,50 +1,47 @@
+use super::tauri_commands::should_restart_official_feishu_runtime_after_pairing_approval;
+use super::types::FeishuInboundGateDecision;
 use super::{
-    apply_default_feishu_account_id, evaluate_openclaw_feishu_gate,
-    generate_feishu_pairing_code, list_feishu_pairing_allow_from_with_pool,
+    apply_default_feishu_account_id, evaluate_openclaw_feishu_gate, generate_feishu_pairing_code,
+    list_feishu_pairing_allow_from_with_pool, metadata_service::FeishuHostMetadata,
     parse_feishu_payload, resolve_fallback_default_feishu_account_id,
     resolve_feishu_pairing_account_id, resolve_feishu_pairing_request_with_pool,
     resolve_ws_role_id, sanitize_ws_inbound_text, upsert_feishu_pairing_request_with_pool,
     FeishuWsEventRecord, ParsedFeishuPayload,
 };
-use super::tauri_commands::should_restart_official_feishu_runtime_after_pairing_approval;
-use super::types::FeishuInboundGateDecision;
 use crate::commands::employee_agents::AgentEmployee;
 use crate::commands::openclaw_plugins::{
-    OpenClawPluginChannelAccountSnapshot, OpenClawPluginChannelSnapshot,
-    OpenClawPluginChannelSnapshotResult, OpenClawPluginFeishuRuntimeStatus,
+    OpenClawPluginFeishuOutboundDeliveryResult, OpenClawPluginFeishuRuntimeState,
+    OpenClawPluginFeishuRuntimeStatus,
 };
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
+use std::sync::{Arc, Mutex};
 
-fn sample_channel_snapshot(
+fn sample_host_metadata(
     account_id: &str,
     allow_from: Vec<&str>,
     account_config: serde_json::Value,
-) -> OpenClawPluginChannelSnapshotResult {
-    OpenClawPluginChannelSnapshotResult {
-        plugin_root: "plugin-root".to_string(),
-        prepared_root: "prepared-root".to_string(),
-        manifest: serde_json::json!({}),
-        entry_path: "index.js".to_string(),
-        snapshot: OpenClawPluginChannelSnapshot {
-            channel_id: "feishu".to_string(),
-            default_account_id: Some(account_id.to_string()),
-            account_ids: vec![account_id.to_string()],
-            accounts: vec![OpenClawPluginChannelAccountSnapshot {
-                account_id: account_id.to_string(),
-                account: serde_json::json!({
-                    "accountId": account_id,
-                    "config": account_config,
-                }),
-                described_account: serde_json::json!({
-                    "accountId": account_id,
-                }),
-                allow_from: allow_from.into_iter().map(str::to_string).collect(),
-                warnings: Vec::new(),
-            }],
-            reload_config_prefixes: vec!["channels.feishu".to_string()],
-            target_hint: None,
-        },
-        log_record_count: 0,
+) -> FeishuHostMetadata {
+    FeishuHostMetadata {
+        channel: "feishu".to_string(),
+        host_kind: "openclaw_plugin".to_string(),
+        status: "ready".to_string(),
+        instance_id: Some(account_id.to_string()),
+        default_account_id: Some(account_id.to_string()),
+        account_ids: vec![account_id.to_string()],
+        accounts: vec![crate::commands::im_host::ImChannelAccountMetadata {
+            account_id: account_id.to_string(),
+            account: serde_json::json!({
+                "accountId": account_id,
+                "config": account_config,
+            }),
+            described_account: serde_json::json!({
+                "accountId": account_id,
+            }),
+            allow_from: allow_from.into_iter().map(str::to_string).collect(),
+            warnings: Vec::new(),
+        }],
+        runtime_status: None,
+        plugin_host: None,
     }
 }
 
@@ -344,7 +341,7 @@ fn apply_default_feishu_account_id_only_fills_missing_values() {
 
 #[test]
 fn resolve_feishu_pairing_account_id_prefers_selected_snapshot_account() {
-    let snapshot = sample_channel_snapshot(
+    let metadata = sample_host_metadata(
         "default",
         vec![],
         serde_json::json!({
@@ -365,13 +362,13 @@ fn resolve_feishu_pairing_account_id_prefers_selected_snapshot_account() {
         tenant_id: Some("tenant_key".to_string()),
     };
 
-    let resolved = resolve_feishu_pairing_account_id(&event, Some(&snapshot));
+    let resolved = resolve_feishu_pairing_account_id(&event, Some(&metadata));
     assert_eq!(resolved, "default");
 }
 
 #[test]
 fn evaluate_openclaw_feishu_gate_allows_allowlisted_direct_sender() {
-    let snapshot = sample_channel_snapshot(
+    let metadata = sample_host_metadata(
         "default",
         vec!["ou_allowed"],
         serde_json::json!({
@@ -393,14 +390,14 @@ fn evaluate_openclaw_feishu_gate_allows_allowlisted_direct_sender() {
     };
 
     assert_eq!(
-        evaluate_openclaw_feishu_gate(&event, &snapshot),
+        evaluate_openclaw_feishu_gate(&event, &metadata),
         FeishuInboundGateDecision::Allow
     );
 }
 
 #[test]
 fn evaluate_openclaw_feishu_gate_rejects_unpaired_direct_sender() {
-    let snapshot = sample_channel_snapshot(
+    let metadata = sample_host_metadata(
         "default",
         vec![],
         serde_json::json!({
@@ -422,7 +419,7 @@ fn evaluate_openclaw_feishu_gate_rejects_unpaired_direct_sender() {
     };
 
     assert_eq!(
-        evaluate_openclaw_feishu_gate(&event, &snapshot),
+        evaluate_openclaw_feishu_gate(&event, &metadata),
         FeishuInboundGateDecision::Reject {
             reason: "pairing_pending"
         }
@@ -431,7 +428,7 @@ fn evaluate_openclaw_feishu_gate_rejects_unpaired_direct_sender() {
 
 #[test]
 fn evaluate_openclaw_feishu_gate_rejects_group_without_required_mention() {
-    let snapshot = sample_channel_snapshot(
+    let metadata = sample_host_metadata(
         "default",
         vec![],
         serde_json::json!({
@@ -454,14 +451,16 @@ fn evaluate_openclaw_feishu_gate_rejects_group_without_required_mention() {
     };
 
     assert_eq!(
-        evaluate_openclaw_feishu_gate(&event, &snapshot),
-        FeishuInboundGateDecision::Reject { reason: "no_mention" }
+        evaluate_openclaw_feishu_gate(&event, &metadata),
+        FeishuInboundGateDecision::Reject {
+            reason: "no_mention"
+        }
     );
 }
 
 #[test]
 fn evaluate_openclaw_feishu_gate_rejects_group_outside_allowlist() {
-    let snapshot = sample_channel_snapshot(
+    let metadata = sample_host_metadata(
         "default",
         vec![],
         serde_json::json!({
@@ -488,7 +487,7 @@ fn evaluate_openclaw_feishu_gate_rejects_group_outside_allowlist() {
     };
 
     assert_eq!(
-        evaluate_openclaw_feishu_gate(&event, &snapshot),
+        evaluate_openclaw_feishu_gate(&event, &metadata),
         FeishuInboundGateDecision::Reject {
             reason: "group_not_allowed"
         }
@@ -510,15 +509,10 @@ async fn upsert_feishu_pairing_request_reuses_existing_pending_record() {
         upsert_feishu_pairing_request_with_pool(&pool, "default", "ou_sender", "oc_chat", None)
             .await
             .expect("create first request");
-    let (second, created_second) = upsert_feishu_pairing_request_with_pool(
-        &pool,
-        "default",
-        "ou_sender",
-        "oc_chat_new",
-        None,
-    )
-    .await
-    .expect("reuse pending request");
+    let (second, created_second) =
+        upsert_feishu_pairing_request_with_pool(&pool, "default", "ou_sender", "oc_chat_new", None)
+            .await
+            .expect("reuse pending request");
 
     assert!(created_first);
     assert!(!created_second);
@@ -571,18 +565,18 @@ fn pairing_approval_requests_runtime_restart_only_for_matching_running_account()
         ..OpenClawPluginFeishuRuntimeStatus::default()
     };
 
-    assert!(should_restart_official_feishu_runtime_after_pairing_approval(
-        &running_default,
-        "default"
-    ));
-    assert!(!should_restart_official_feishu_runtime_after_pairing_approval(
-        &stopped_default,
-        "default"
-    ));
-    assert!(!should_restart_official_feishu_runtime_after_pairing_approval(
-        &running_workspace,
-        "default"
-    ));
+    assert!(
+        should_restart_official_feishu_runtime_after_pairing_approval(&running_default, "default")
+    );
+    assert!(
+        !should_restart_official_feishu_runtime_after_pairing_approval(&stopped_default, "default")
+    );
+    assert!(
+        !should_restart_official_feishu_runtime_after_pairing_approval(
+            &running_workspace,
+            "default"
+        )
+    );
 }
 
 #[tokio::test]
@@ -631,10 +625,9 @@ async fn list_feishu_pairing_requests_filters_by_status() {
     .await
     .expect("approve request");
 
-    let pending =
-        super::list_feishu_pairing_requests_with_pool(&pool, Some("pending".to_string()))
-            .await
-            .expect("list pending requests");
+    let pending = super::list_feishu_pairing_requests_with_pool(&pool, Some("pending".to_string()))
+        .await
+        .expect("list pending requests");
     let approved =
         super::list_feishu_pairing_requests_with_pool(&pool, Some("approved".to_string()))
             .await
@@ -769,10 +762,7 @@ async fn build_direct_outbound_target_uses_latest_inbox_message_as_reply_context
     .expect("lookup latest feishu inbox message id");
     assert_eq!(latest.as_deref(), Some("om_direct_latest_1"));
 
-    let target = super::build_feishu_outbound_route_target(
-        "ou_direct_sender_1",
-        latest.as_deref(),
-    );
+    let target = super::build_feishu_outbound_route_target("ou_direct_sender_1", latest.as_deref());
     assert_eq!(
         target,
         "ou_direct_sender_1#__feishu_reply_to=om_direct_latest_1&__feishu_thread_id=ou_direct_sender_1"
@@ -793,13 +783,10 @@ async fn lookup_direct_outbound_target_prefers_known_chat_id_mapping() {
     .await
     .expect("seed direct sender chat mapping");
 
-    let mapped = super::lookup_feishu_chat_id_for_sender_with_pool(
-        &pool,
-        "default",
-        "ou_direct_sender_2",
-    )
-    .await
-    .expect("lookup direct chat mapping");
+    let mapped =
+        super::lookup_feishu_chat_id_for_sender_with_pool(&pool, "default", "ou_direct_sender_2")
+            .await
+            .expect("lookup direct chat mapping");
     assert_eq!(mapped.as_deref(), Some("oc_direct_chat_2"));
 }
 
@@ -826,12 +813,136 @@ async fn remember_direct_outbound_chat_id_backfills_sender_mapping() {
     .await
     .expect("backfill direct sender chat mapping");
 
-    let mapped = super::lookup_feishu_chat_id_for_sender_with_pool(
+    let mapped =
+        super::lookup_feishu_chat_id_for_sender_with_pool(&pool, "default", "ou_direct_sender_3")
+            .await
+            .expect("lookup backfilled direct chat mapping");
+    assert_eq!(mapped.as_deref(), Some("oc_direct_chat_3"));
+}
+
+#[tokio::test]
+async fn send_feishu_reply_plan_sends_all_chunks() {
+    let pool = setup_pairing_pool().await;
+    let runtime_state = OpenClawPluginFeishuRuntimeState::default();
+    let sent_texts = Arc::new(Mutex::new(Vec::<String>::new()));
+    let sent_texts_for_hook = sent_texts.clone();
+
+    super::set_feishu_official_runtime_outbound_send_hook_for_tests(Some(Arc::new(
+        move |request| {
+            sent_texts_for_hook
+                .lock()
+                .expect("lock sent texts")
+                .push(request.text.clone());
+            Ok(OpenClawPluginFeishuOutboundDeliveryResult {
+                delivered: true,
+                channel: "feishu".to_string(),
+                account_id: request.account_id.clone(),
+                target: request.target.clone(),
+                thread_id: request.thread_id.clone(),
+                text: request.text.clone(),
+                mode: request.mode.clone(),
+                message_id: format!("om_{}", request.request_id),
+                chat_id: "oc_chat_plan".to_string(),
+                sequence: 1,
+            })
+        },
+    )));
+
+    let original = "A".repeat(4000);
+    let plan =
+        super::build_feishu_reply_plan("reply-plan-1", "session-plan-1", "oc_chat_plan", &original);
+    let result = super::execute_feishu_reply_plan_with_pool(
         &pool,
-        "default",
-        "ou_direct_sender_3",
+        &runtime_state,
+        &plan,
+        Some("default".to_string()),
     )
     .await
-    .expect("lookup backfilled direct chat mapping");
-    assert_eq!(mapped.as_deref(), Some("oc_direct_chat_3"));
+    .expect("execute reply plan");
+
+    super::set_feishu_official_runtime_outbound_send_hook_for_tests(None);
+
+    assert!(result.deliveries.len() > 1);
+    assert_eq!(result.trace.delivered_chunk_count, result.deliveries.len());
+    assert_eq!(
+        result.trace.final_state,
+        Some(crate::commands::openclaw_plugins::im_host_contract::ImReplyDeliveryState::Completed)
+    );
+
+    let rebuilt = sent_texts
+        .lock()
+        .expect("lock sent texts")
+        .iter()
+        .map(String::as_str)
+        .collect::<String>();
+    assert_eq!(rebuilt, original);
+    let status = crate::commands::openclaw_plugins::current_feishu_runtime_status(&runtime_state);
+    assert!(
+        status
+            .recent_logs
+            .iter()
+            .any(|entry: &String| entry.contains("[reply_trace]") && entry.contains("state=Completed"))
+    );
+}
+
+#[tokio::test]
+async fn send_feishu_reply_plan_reports_partial_failure_after_first_chunk() {
+    let pool = setup_pairing_pool().await;
+    let runtime_state = OpenClawPluginFeishuRuntimeState::default();
+    let call_count = Arc::new(Mutex::new(0usize));
+    let call_count_for_hook = call_count.clone();
+
+    super::set_feishu_official_runtime_outbound_send_hook_for_tests(Some(Arc::new(
+        move |request| {
+            let mut guard = call_count_for_hook.lock().expect("lock call count");
+            let current = *guard;
+            *guard += 1;
+            if current == 0 {
+                Ok(OpenClawPluginFeishuOutboundDeliveryResult {
+                    delivered: true,
+                    channel: "feishu".to_string(),
+                    account_id: request.account_id.clone(),
+                    target: request.target.clone(),
+                    thread_id: request.thread_id.clone(),
+                    text: request.text.clone(),
+                    mode: request.mode.clone(),
+                    message_id: format!("om_{}", request.request_id),
+                    chat_id: "oc_chat_partial".to_string(),
+                    sequence: 1,
+                })
+            } else {
+                Err("simulated chunk delivery failure".to_string())
+            }
+        },
+    )));
+
+    let plan = super::build_feishu_reply_plan(
+        "reply-plan-2",
+        "session-plan-2",
+        "oc_chat_partial",
+        &"B".repeat(4000),
+    );
+    let error = super::execute_feishu_reply_plan_with_pool(
+        &pool,
+        &runtime_state,
+        &plan,
+        Some("default".to_string()),
+    )
+    .await
+    .expect_err("second chunk should fail");
+
+    super::set_feishu_official_runtime_outbound_send_hook_for_tests(None);
+
+    assert!(error.contains("simulated chunk delivery failure"));
+    assert!(
+        error.contains("\"finalState\":\"FailedPartial\"")
+            || error.contains("\"final_state\":\"FailedPartial\"")
+    );
+    let status = crate::commands::openclaw_plugins::current_feishu_runtime_status(&runtime_state);
+    assert!(
+        status
+            .recent_logs
+            .iter()
+            .any(|entry: &String| entry.contains("[reply_trace]") && entry.contains("state=FailedPartial"))
+    );
 }

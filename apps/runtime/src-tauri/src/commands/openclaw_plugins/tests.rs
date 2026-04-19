@@ -1,3 +1,4 @@
+use super::feishu_runtime_adapter::handle_openclaw_plugin_feishu_runtime_stdout_line;
 use super::install_service::delete_openclaw_plugin_install_with_pool_and_app;
 use super::installer_session::{
     build_openclaw_lark_installer_command, build_openclaw_shim_script, derive_installer_auto_input,
@@ -12,8 +13,7 @@ use super::plugin_host_service::{
 use super::runtime_service::{
     handle_feishu_runtime_pairing_request_event,
     handle_openclaw_plugin_feishu_runtime_command_error_event,
-    handle_openclaw_plugin_feishu_runtime_send_result_event,
-    handle_openclaw_plugin_feishu_runtime_stdout_line, matches_feishu_runtime_command_line,
+    handle_openclaw_plugin_feishu_runtime_send_result_event, matches_feishu_runtime_command_line,
     merge_feishu_runtime_status_event, parse_feishu_runtime_dispatch_event_with_pool,
     register_pending_feishu_runtime_outbound_send_waiter,
 };

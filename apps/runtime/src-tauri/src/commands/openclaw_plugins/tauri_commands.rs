@@ -1,18 +1,23 @@
+use crate::commands::channel_connectors::ChannelConnectorMonitorState;
+use crate::commands::im_host::channel_registry::{
+    get_feishu_channel_snapshot_from_registry_with_pool,
+    get_feishu_runtime_status_from_registry_with_pool,
+    get_plugin_channel_hosts_from_registry_with_pool,
+};
+use crate::commands::im_host::ImChannelHostRuntimeState;
 use crate::commands::skills::DbState;
 use tauri::{AppHandle, State};
 
 use super::{
-    current_feishu_runtime_status, current_openclaw_lark_installer_session_status,
-    get_feishu_plugin_environment_status_internal, get_feishu_setup_progress_with_pool,
-    get_openclaw_plugin_feishu_advanced_settings_with_pool,
-    get_openclaw_plugin_feishu_channel_snapshot_with_pool_and_app,
+    current_openclaw_lark_installer_session_status, get_feishu_plugin_environment_status_internal,
+    get_feishu_setup_progress_with_pool, get_openclaw_plugin_feishu_advanced_settings_with_pool,
     inspect_openclaw_plugin_with_pool_and_app,
     install_service::{
         delete_openclaw_plugin_install_with_pool_and_app,
         install_openclaw_plugin_from_npm_with_pool_and_app,
     },
-    list_openclaw_plugin_channel_hosts_with_pool_and_app, list_openclaw_plugin_installs_with_pool,
-    normalize_required, probe_openclaw_plugin_feishu_credentials_with_app_secret,
+    list_openclaw_plugin_installs_with_pool, normalize_required,
+    probe_openclaw_plugin_feishu_credentials_with_app_secret,
     resolve_controlled_openclaw_state_root, resolve_openclaw_shim_root,
     set_openclaw_plugin_feishu_advanced_settings_with_pool,
     start_openclaw_lark_installer_session_with_pool,
@@ -52,9 +57,20 @@ pub(crate) async fn stop_openclaw_plugin_feishu_runtime_command(
 }
 
 pub(crate) async fn get_openclaw_plugin_feishu_runtime_status_command(
+    app: AppHandle,
+    db: State<'_, DbState>,
     runtime: State<'_, OpenClawPluginFeishuRuntimeState>,
+    monitor: State<'_, ChannelConnectorMonitorState>,
+    host_runtime_state: State<'_, ImChannelHostRuntimeState>,
 ) -> Result<OpenClawPluginFeishuRuntimeStatus, String> {
-    Ok(current_feishu_runtime_status(runtime.inner()))
+    get_feishu_runtime_status_from_registry_with_pool(
+        &db.0,
+        runtime.inner(),
+        monitor.inner(),
+        host_runtime_state.inner(),
+        &app,
+    )
+    .await
 }
 
 pub(crate) async fn get_feishu_plugin_environment_status_command(
@@ -182,17 +198,37 @@ pub(crate) async fn inspect_openclaw_plugin_command(
 pub(crate) async fn list_openclaw_plugin_channel_hosts_command(
     app: AppHandle,
     db: State<'_, DbState>,
+    runtime: State<'_, OpenClawPluginFeishuRuntimeState>,
+    monitor: State<'_, ChannelConnectorMonitorState>,
+    host_runtime_state: State<'_, ImChannelHostRuntimeState>,
 ) -> Result<Vec<OpenClawPluginChannelHost>, String> {
-    list_openclaw_plugin_channel_hosts_with_pool_and_app(&db.0, Some(&app)).await
+    get_plugin_channel_hosts_from_registry_with_pool(
+        &db.0,
+        runtime.inner(),
+        monitor.inner(),
+        host_runtime_state.inner(),
+        &app,
+    )
+    .await
 }
 
 pub(crate) async fn get_openclaw_plugin_feishu_channel_snapshot_command(
     plugin_id: String,
     app: AppHandle,
     db: State<'_, DbState>,
+    runtime: State<'_, OpenClawPluginFeishuRuntimeState>,
+    monitor: State<'_, ChannelConnectorMonitorState>,
+    host_runtime_state: State<'_, ImChannelHostRuntimeState>,
 ) -> Result<OpenClawPluginChannelSnapshotResult, String> {
-    get_openclaw_plugin_feishu_channel_snapshot_with_pool_and_app(&db.0, &plugin_id, Some(&app))
-        .await
+    get_feishu_channel_snapshot_from_registry_with_pool(
+        &db.0,
+        runtime.inner(),
+        monitor.inner(),
+        host_runtime_state.inner(),
+        &app,
+        Some(&plugin_id),
+    )
+    .await
 }
 
 pub(crate) async fn install_openclaw_plugin_from_npm_command(

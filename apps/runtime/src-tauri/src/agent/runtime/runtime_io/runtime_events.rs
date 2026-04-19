@@ -8,6 +8,11 @@ use crate::agent::runtime::skill_routing::observability::{
     route_fallback_reason_key, ImplicitRouteObservation,
 };
 use crate::agent::runtime::tool_dispatch::INTERNAL_SKILL_DISPATCH_INPUT_KEY;
+use crate::commands::im_host::{
+    maybe_dispatch_registered_im_session_reply_with_pool,
+    maybe_emit_registered_host_lifecycle_phase_for_session_with_pool,
+    maybe_stop_registered_host_processing_for_session_with_pool,
+};
 use crate::session_journal::{SessionJournalStore, SessionRunEvent, SessionRunTurnStateSnapshot};
 use chrono::Utc;
 use serde_json::{json, Value};
@@ -125,6 +130,22 @@ pub(crate) async fn append_run_failed_with_pool(
     error_message: &str,
     turn_state: Option<&TurnStateSnapshot>,
 ) {
+    let _ = maybe_emit_registered_host_lifecycle_phase_for_session_with_pool(
+        pool,
+        session_id,
+        Some(run_id),
+        crate::commands::openclaw_plugins::im_host_contract::ImReplyLifecyclePhase::Failed,
+        None,
+    )
+    .await;
+    let _ = maybe_stop_registered_host_processing_for_session_with_pool(
+        pool,
+        session_id,
+        Some(run_id),
+        Some("failed"),
+        None,
+    )
+    .await;
     let _ = append_session_run_event_with_pool(
         pool,
         journal,
@@ -151,6 +172,14 @@ pub(crate) async fn append_run_guard_warning_with_pool(
     detail: Option<&str>,
     last_completed_step: Option<&str>,
 ) -> Result<(), String> {
+    let _ = maybe_stop_registered_host_processing_for_session_with_pool(
+        pool,
+        session_id,
+        Some(run_id),
+        Some("run_guard_warning"),
+        None,
+    )
+    .await;
     append_session_run_event_with_pool(
         pool,
         journal,
@@ -175,6 +204,22 @@ pub(crate) async fn append_run_stopped_with_pool(
     stop_reason: &RunStopReason,
     turn_state: Option<&TurnStateSnapshot>,
 ) -> Result<(), String> {
+    let _ = maybe_emit_registered_host_lifecycle_phase_for_session_with_pool(
+        pool,
+        session_id,
+        Some(run_id),
+        crate::commands::openclaw_plugins::im_host_contract::ImReplyLifecyclePhase::Stopped,
+        None,
+    )
+    .await;
+    let _ = maybe_stop_registered_host_processing_for_session_with_pool(
+        pool,
+        session_id,
+        Some(run_id),
+        Some(stop_reason.kind.as_key()),
+        None,
+    )
+    .await;
     append_session_run_event_with_pool(
         pool,
         journal,
@@ -418,6 +463,14 @@ pub(crate) async fn finalize_run_success_with_pool(
         attach_assistant_message_to_run_with_pool(pool, run_id, &msg_id).await?;
     }
 
+    if !final_text.trim().is_empty() {
+        if let Err(error) =
+            maybe_dispatch_registered_im_session_reply_with_pool(pool, session_id, final_text).await
+        {
+            eprintln!("failed to dispatch IM final reply for session {session_id}: {error}");
+        }
+    }
+
     append_session_run_event_with_pool(
         pool,
         journal,
@@ -436,12 +489,21 @@ pub(crate) async fn finalize_run_success_with_pool(
 mod run_guard_persistence_tests {
     use super::{
         append_run_guard_warning_with_pool, append_run_started_with_pool,
-        append_run_stopped_with_pool, persist_partial_assistant_message_for_run_with_pool,
+        append_run_stopped_with_pool, finalize_run_success_with_pool,
+        persist_partial_assistant_message_for_run_with_pool,
     };
     use crate::agent::run_guard::RunStopReason;
+    use crate::commands::feishu_gateway::{
+        clear_feishu_runtime_state_for_outbound, remember_feishu_runtime_state_for_outbound,
+        set_feishu_official_runtime_outbound_send_hook_for_tests,
+    };
+    use crate::commands::openclaw_plugins::{
+        OpenClawPluginFeishuOutboundDeliveryResult, OpenClawPluginFeishuRuntimeState,
+    };
     use crate::session_journal::SessionJournalStore;
     use serde_json::{json, Value};
     use sqlx::sqlite::SqlitePoolOptions;
+    use std::sync::{Arc, Mutex};
     use tempfile::tempdir;
 
     async fn setup_run_event_pool() -> sqlx::SqlitePool {
@@ -482,6 +544,61 @@ mod run_guard_persistence_tests {
         .execute(&pool)
         .await
         .expect("create session_run_events table");
+
+        sqlx::query(
+            "CREATE TABLE im_thread_sessions (
+                thread_id TEXT NOT NULL,
+                employee_id TEXT NOT NULL DEFAULT '',
+                session_id TEXT NOT NULL,
+                route_session_key TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create im_thread_sessions table");
+
+        sqlx::query(
+            "CREATE TABLE im_inbox_events (
+                id TEXT PRIMARY KEY,
+                event_id TEXT NOT NULL DEFAULT '',
+                thread_id TEXT NOT NULL,
+                message_id TEXT NOT NULL DEFAULT '',
+                text_preview TEXT NOT NULL DEFAULT '',
+                source TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create im_inbox_events table");
+
+        sqlx::query(
+            "CREATE TABLE app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create app_settings table");
+
+        sqlx::query(
+            "CREATE TABLE agent_employees (
+                employee_id TEXT NOT NULL DEFAULT '',
+                role_id TEXT NOT NULL DEFAULT '',
+                name TEXT NOT NULL DEFAULT '',
+                feishu_app_id TEXT NOT NULL DEFAULT '',
+                feishu_app_secret TEXT NOT NULL DEFAULT '',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                is_default INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL DEFAULT ''
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create agent_employees table");
 
         pool
     }
@@ -665,6 +782,87 @@ mod run_guard_persistence_tests {
             parsed["items"][1]["toolCall"]["output"].as_str(),
             Some("hi")
         );
+    }
+
+    #[tokio::test]
+    async fn finalize_run_success_dispatches_feishu_reply_from_backend() {
+        let pool = setup_partial_message_pool().await;
+        let journal_root = tempdir().expect("journal tempdir");
+        let journal = SessionJournalStore::new(journal_root.path().to_path_buf());
+        let runtime_state = OpenClawPluginFeishuRuntimeState::default();
+        let sent_texts = Arc::new(Mutex::new(Vec::<String>::new()));
+        let sent_texts_for_hook = sent_texts.clone();
+
+        remember_feishu_runtime_state_for_outbound(&runtime_state);
+
+        sqlx::query(
+            "INSERT INTO session_runs (id, session_id, user_message_id, assistant_message_id, status, buffered_text, error_kind, error_message, created_at, updated_at)
+             VALUES ('run-feishu-1', 'session-feishu-1', 'user-1', '', 'thinking', '', '', '', '2026-03-29T00:00:00Z', '2026-03-29T00:00:01Z')",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed feishu session run");
+
+        sqlx::query(
+            "INSERT INTO im_thread_sessions (thread_id, employee_id, session_id, route_session_key, created_at, updated_at)
+             VALUES ('oc_chat_backend_final', '', 'session-feishu-1', '', '2026-03-29T00:00:00Z', '2026-03-29T00:00:01Z')",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed im thread session");
+
+        sqlx::query(
+            "INSERT INTO im_inbox_events (id, event_id, thread_id, message_id, text_preview, source, created_at)
+             VALUES ('evt-feishu-1', 'evt-feishu-1', 'oc_chat_backend_final', 'om_parent_1', '你好', 'feishu', '2026-03-29T00:00:00Z')",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed feishu inbox event");
+
+        set_feishu_official_runtime_outbound_send_hook_for_tests(Some(Arc::new(move |request| {
+            sent_texts_for_hook
+                .lock()
+                .expect("lock sent texts")
+                .push(request.text.clone());
+            Ok(OpenClawPluginFeishuOutboundDeliveryResult {
+                delivered: true,
+                channel: "feishu".to_string(),
+                account_id: request.account_id.clone(),
+                target: request.target.clone(),
+                thread_id: request.thread_id.clone(),
+                text: request.text.clone(),
+                mode: request.mode.clone(),
+                message_id: format!("om_{}", request.request_id),
+                chat_id: "oc_chat_backend_final".to_string(),
+                sequence: 1,
+            })
+        })));
+
+        finalize_run_success_with_pool(
+            &pool,
+            &journal,
+            "session-feishu-1",
+            "run-feishu-1",
+            &"A".repeat(4000),
+            false,
+            &"A".repeat(4000),
+            "",
+            None,
+            None,
+        )
+        .await
+        .expect("finalize run success");
+
+        set_feishu_official_runtime_outbound_send_hook_for_tests(None);
+        clear_feishu_runtime_state_for_outbound();
+
+        let rebuilt = sent_texts
+            .lock()
+            .expect("lock sent texts")
+            .iter()
+            .map(String::as_str)
+            .collect::<String>();
+        assert_eq!(rebuilt, "A".repeat(4000));
     }
 
     #[tokio::test]

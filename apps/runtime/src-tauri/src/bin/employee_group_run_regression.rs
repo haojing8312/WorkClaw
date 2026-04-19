@@ -124,7 +124,13 @@ async fn run_execute_rules_regression(pool: &SqlitePool) -> Result<RegressionCas
     seed_default_model(pool).await?;
 
     for employee_id in ["shangshu", "bingbu", "gongbu", "hubu"] {
-        seed_employee(pool, employee_id, "负责团队协作执行", employee_id == "shangshu").await?;
+        seed_employee(
+            pool,
+            employee_id,
+            "负责团队协作执行",
+            employee_id == "shangshu",
+        )
+        .await?;
     }
 
     let group_id = create_employee_group_with_pool(

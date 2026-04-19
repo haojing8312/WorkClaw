@@ -245,8 +245,16 @@ impl<'a> RuntimeToolRegistryBuilder<'a> {
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn register_ask_user_tool(&self, app: &AppHandle, session_id: &str) {
         let ask_user_responder = app.state::<AskUserState>().0.clone();
-        let ask_user_tool =
-            AskUserTool::new(app.clone(), session_id.to_string(), ask_user_responder);
+        let ask_user_pending_session = app
+            .state::<crate::agent::runtime::AskUserPendingSessionState>()
+            .0
+            .clone();
+        let ask_user_tool = AskUserTool::new(
+            app.clone(),
+            session_id.to_string(),
+            ask_user_responder,
+            ask_user_pending_session,
+        );
         self.registry.register(Arc::new(ask_user_tool));
     }
 

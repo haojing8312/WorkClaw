@@ -1,34 +1,32 @@
+use super::payload_parser::strip_placeholder_mentions;
 use super::{
-    emit_employee_inbound_dispatch_sessions, evaluate_openclaw_feishu_gate_with_pool,
-    list_enabled_employee_feishu_connections_with_pool,
-    maybe_handle_feishu_approval_command_with_pool, parse_feishu_approval_command,
+    evaluate_openclaw_feishu_gate_with_pool, list_enabled_employee_feishu_connections_with_pool,
     resolve_default_feishu_account_id_with_pool, resolve_feishu_app_credentials,
     resolve_feishu_sidecar_base_url,
 };
-use crate::commands::approvals::load_approval_record_with_pool;
 use crate::commands::chat::ApprovalManagerState;
 use crate::commands::employee_agents::{
     bridge_inbound_event_to_employee_sessions_with_pool, list_agent_employees_with_pool,
     AgentEmployee,
 };
+use crate::commands::im_host::emit_inbound_dispatch_sessions;
+use crate::commands::im_host::maybe_handle_registered_approval_command_with_pool_and_app;
+use crate::commands::feishu_gateway::pairing_service::maybe_create_feishu_pairing_request_with_pool;
+use crate::commands::feishu_gateway::types::FeishuInboundGateDecision;
 use crate::commands::im_gateway::process_im_event;
 use crate::commands::openclaw_gateway::resolve_openclaw_route_with_pool;
-use crate::commands::feishu_gateway::pairing_service::maybe_create_feishu_pairing_request_with_pool;
 use crate::commands::skills::DbState;
 use crate::diagnostics::{self, ManagedDiagnosticsState};
 use crate::im::feishu_adapter::build_feishu_markdown_message;
 use crate::im::feishu_formatter::format_role_message;
 use crate::im::types::{ImEvent, ImEventType};
-use crate::commands::feishu_gateway::types::FeishuInboundGateDecision;
 use reqwest::Client;
 use sqlx::SqlitePool;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tauri::Emitter;
 use tauri::Manager;
 use tauri::State;
-use super::payload_parser::strip_placeholder_mentions;
 
 #[derive(Debug, serde::Deserialize)]
 struct SidecarResponse {
@@ -405,7 +403,8 @@ pub(crate) async fn get_feishu_employee_connection_statuses_with_pool(
     sidecar_base_url: Option<String>,
     relay: &FeishuEventRelayState,
 ) -> Result<FeishuEmployeeConnectionStatuses, String> {
-    let sidecar = get_feishu_long_connection_status_summary_with_pool(pool, sidecar_base_url).await?;
+    let sidecar =
+        get_feishu_long_connection_status_summary_with_pool(pool, sidecar_base_url).await?;
     Ok(FeishuEmployeeConnectionStatuses {
         relay: feishu_event_relay_status(relay),
         sidecar,
@@ -491,27 +490,14 @@ pub(crate) async fn sync_feishu_ws_events_core(
         let r = process_im_event(pool, inbound.clone()).await?;
         if r.accepted && !r.deduped {
             if let Some(app) = app {
-                if let Some(approval_state) = app.try_state::<ApprovalManagerState>() {
-                    let approval_command = parse_feishu_approval_command(inbound.text.as_deref());
-                    if let Some(command) = approval_command {
-                        if maybe_handle_feishu_approval_command_with_pool(
-                            pool,
-                            approval_state.0.as_ref(),
-                            &inbound,
-                            None,
-                        )
-                        .await?
-                        .is_some()
-                        {
-                            if let Some(record) =
-                                load_approval_record_with_pool(pool, &command.approval_id).await?
-                            {
-                                let _ = app.emit("approval-resolved", &record);
-                            }
-                            accepted += 1;
-                            continue;
-                        }
-                    }
+                if app.try_state::<ApprovalManagerState>().is_some()
+                    && maybe_handle_registered_approval_command_with_pool_and_app(
+                        pool, app, &inbound,
+                    )
+                    .await?
+                {
+                    accepted += 1;
+                    continue;
                 }
             }
             let route_decision = resolve_openclaw_route_with_pool(pool, &inbound).await.ok();
@@ -523,7 +509,7 @@ pub(crate) async fn sync_feishu_ws_events_core(
             .await
             {
                 if let Some(app) = app {
-                    emit_employee_inbound_dispatch_sessions(app, "feishu", &dispatches);
+                    emit_inbound_dispatch_sessions(app, "feishu", &dispatches);
                 }
             }
             accepted += 1;

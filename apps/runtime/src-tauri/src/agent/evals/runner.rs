@@ -7,8 +7,8 @@ use crate::agent::tools::new_responder;
 use crate::agent::tools::search_providers::cache::SearchCache;
 use crate::agent::{AgentExecutor, ToolRegistry};
 use crate::commands::chat::{
-    create_session, send_message, AskUserState, CancelFlagState, SendMessagePart,
-    SendMessageRequest, ToolConfirmState,
+    create_session, send_message, AskUserPendingSessionState, AskUserState, CancelFlagState,
+    SendMessagePart, SendMessageRequest, ToolConfirmState,
 };
 use crate::commands::chat_session_commands::export_session_markdown_with_pool;
 use crate::commands::chat_session_io::get_messages_with_pool;
@@ -77,6 +77,9 @@ impl RealAgentEvalRunner {
 
         let ask_user_responder = new_responder();
         app.manage(AskUserState(ask_user_responder));
+        app.manage(AskUserPendingSessionState(Arc::new(std::sync::Mutex::new(
+            None,
+        ))));
 
         let tool_confirm_responder: ToolConfirmResponder = Arc::new(std::sync::Mutex::new(None));
         app.manage(ToolConfirmState(tool_confirm_responder.clone()));

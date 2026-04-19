@@ -1,7 +1,11 @@
 use super::chat::{ApprovalManagerState, PendingApprovalBridgeState};
-use super::feishu_gateway::notify_feishu_approval_resolved_with_pool;
+use super::im_host::{
+    maybe_emit_registered_host_lifecycle_phase_for_session_with_pool,
+    maybe_notify_registered_approval_resolved_with_pool,
+};
 use super::skills::DbState;
 use crate::approval_bus::{ApprovalDecision, ApprovalResolveResult, PendingApprovalRecord};
+use crate::commands::openclaw_plugins::im_host_contract::ImReplyLifecyclePhase;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::{FromRow, SqlitePool};
@@ -146,9 +150,18 @@ pub async fn resolve_approval(
 
     if let Some(record) = load_approval_record_with_pool(&db.0, &approval_id).await? {
         let _ = app.emit("approval-resolved", &record);
-    }
-    if matches!(result, ApprovalResolveResult::Applied { .. }) {
-        let _ = notify_feishu_approval_resolved_with_pool(&db.0, &approval_id, None).await;
+        let _ = maybe_emit_registered_host_lifecycle_phase_for_session_with_pool(
+            &db.0,
+            &record.session_id,
+            record.run_id.as_deref(),
+            ImReplyLifecyclePhase::ApprovalResolved,
+            None,
+        )
+        .await;
+        if matches!(result, ApprovalResolveResult::Applied { .. }) {
+            let _ = maybe_notify_registered_approval_resolved_with_pool(&db.0, &approval_id, None)
+                .await;
+        }
     }
 
     Ok(result)

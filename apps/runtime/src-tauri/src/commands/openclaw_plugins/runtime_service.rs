@@ -1,132 +1,392 @@
-use crate::commands::feishu_gateway::{
-    dispatch_feishu_inbound_to_workclaw_with_pool_and_app, upsert_feishu_pairing_request_with_pool,
+use super::{
+    app_setting_string_or_default, build_feishu_openclaw_config_with_pool,
+    ensure_supported_feishu_host_node_version, get_feishu_setup_progress_with_pool,
+    get_openclaw_plugin_install_by_id_with_pool, handle_openclaw_plugin_feishu_runtime_stdout_line,
+    normalize_required, now_rfc3339, resolve_plugin_host_dir, resolve_plugin_host_fixture_root,
+    resolve_plugin_host_run_feishu_script, should_auto_restore_feishu_runtime,
+    OpenClawPluginFeishuLatestReplyCompletion, OpenClawPluginFeishuReplyCompletionState,
+    OpenClawPluginFeishuLifecycleEventRequest, OpenClawPluginFeishuOutboundCommandErrorEvent,
+    OpenClawPluginFeishuOutboundSendRequest, OpenClawPluginFeishuOutboundSendResult,
+    OpenClawPluginFeishuProcessingStopRequest, OpenClawPluginFeishuRuntimeState,
+    OpenClawPluginFeishuRuntimeStatus,
+};
+use crate::commands::feishu_gateway::upsert_feishu_pairing_request_with_pool;
+use crate::commands::im_host::{
+    build_runtime_lifecycle_event_command_payload, build_runtime_processing_stop_command_payload,
+    build_runtime_text_command_payload, deliver_runtime_command_error,
+    deliver_runtime_result_with_status, drop_pending_runtime_request_with_status,
+    ensure_runtime_stdin_for_commands, fail_pending_runtime_requests_with_status,
+    merge_runtime_reply_lifecycle_event, merge_runtime_status_event, parse_runtime_event,
+    register_pending_runtime_request_with_status, resolve_dispatch_thread_target,
+    trim_recent_entries, write_runtime_command_json, ImReplyDeliveryState, ReplyDeliveryTrace,
+    ImRuntimeLifecycleEventCommandPayload, ImRuntimeProcessingStopCommandPayload,
+    ImRuntimeTextCommandPayload,
 };
 use crate::im::types::{ImEvent, ImEventType};
 use crate::windows_process::hide_console_window;
 use sqlx::SqlitePool;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
+use std::sync::OnceLock;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use tauri::AppHandle;
 
-use super::{
-    app_setting_string_or_default, build_feishu_openclaw_config_with_pool,
-    ensure_supported_feishu_host_node_version, get_feishu_setup_progress_with_pool,
-    get_openclaw_plugin_install_by_id_with_pool, normalize_required, now_rfc3339,
-    resolve_plugin_host_dir, resolve_plugin_host_fixture_root,
-    resolve_plugin_host_run_feishu_script, should_auto_restore_feishu_runtime,
-    OpenClawPluginFeishuOutboundCommandErrorEvent, OpenClawPluginFeishuOutboundSendCommandPayload,
-    OpenClawPluginFeishuOutboundSendRequest, OpenClawPluginFeishuOutboundSendResult,
-    OpenClawPluginFeishuRuntimeState, OpenClawPluginFeishuRuntimeStatus,
-};
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FeishuRuntimeOutboundFailureKind {
+    Timeout,
+    Disconnected,
+    CommandError,
+    WriteFailed,
+    Other,
+}
+
+pub type FeishuRuntimeProcessingStopHook = dyn Fn(
+        &OpenClawPluginFeishuProcessingStopRequest,
+    ) -> Result<(), String>
+    + Send
+    + Sync;
+
+pub type FeishuRuntimeLifecycleEventHook = dyn Fn(
+        &OpenClawPluginFeishuLifecycleEventRequest,
+    ) -> Result<(), String>
+    + Send
+    + Sync;
+
+fn feishu_runtime_processing_stop_hook_slot(
+) -> &'static Mutex<Option<Arc<FeishuRuntimeProcessingStopHook>>> {
+    static SLOT: OnceLock<Mutex<Option<Arc<FeishuRuntimeProcessingStopHook>>>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(None))
+}
+
+fn feishu_runtime_lifecycle_event_hook_slot(
+) -> &'static Mutex<Option<Arc<FeishuRuntimeLifecycleEventHook>>> {
+    static SLOT: OnceLock<Mutex<Option<Arc<FeishuRuntimeLifecycleEventHook>>>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(None))
+}
+
+#[cfg(test)]
+#[doc(hidden)]
+pub fn set_feishu_runtime_processing_stop_hook_for_tests(
+    hook: Option<Arc<FeishuRuntimeProcessingStopHook>>,
+) {
+    if let Ok(mut guard) = feishu_runtime_processing_stop_hook_slot().lock() {
+        *guard = hook;
+    }
+}
+
+#[cfg(test)]
+#[doc(hidden)]
+pub fn set_feishu_runtime_lifecycle_event_hook_for_tests(
+    hook: Option<Arc<FeishuRuntimeLifecycleEventHook>>,
+) {
+    if let Ok(mut guard) = feishu_runtime_lifecycle_event_hook_slot().lock() {
+        *guard = hook;
+    }
+}
+
+pub(crate) fn infer_feishu_runtime_outbound_failure_kind(
+    error: &str,
+) -> FeishuRuntimeOutboundFailureKind {
+    let normalized = error.trim().to_ascii_lowercase();
+    if normalized.contains("timed out waiting for outbound send_result") {
+        return FeishuRuntimeOutboundFailureKind::Timeout;
+    }
+    if normalized.contains("disconnected before outbound send_result") {
+        return FeishuRuntimeOutboundFailureKind::Disconnected;
+    }
+    if normalized.contains("command error") {
+        return FeishuRuntimeOutboundFailureKind::CommandError;
+    }
+    if normalized.contains("failed to write outbound command") {
+        return FeishuRuntimeOutboundFailureKind::WriteFailed;
+    }
+    FeishuRuntimeOutboundFailureKind::Other
+}
+
+pub(crate) fn classify_feishu_runtime_outbound_failure(
+    delivered_chunk_count: usize,
+    _kind: FeishuRuntimeOutboundFailureKind,
+) -> ImReplyDeliveryState {
+    if delivered_chunk_count > 0 {
+        ImReplyDeliveryState::FailedPartial
+    } else {
+        ImReplyDeliveryState::Failed
+    }
+}
 
 pub(crate) fn merge_feishu_runtime_status_event(
     status: &mut OpenClawPluginFeishuRuntimeStatus,
     value: &serde_json::Value,
 ) {
-    let Some(event) = value.get("event").and_then(|entry| entry.as_str()) else {
-        return;
+    merge_runtime_status_event(
+        value,
+        &mut status.last_event_at,
+        &mut status.last_error,
+        &mut status.recent_logs,
+        &mut status.account_id,
+        &mut status.port,
+        now_rfc3339(),
+        40,
+    );
+}
+
+pub(super) fn trim_recent_runtime_logs(status: &mut OpenClawPluginFeishuRuntimeStatus) {
+    trim_recent_entries(&mut status.recent_logs, 40);
+}
+
+fn format_reply_trace_log_entry(trace: &ReplyDeliveryTrace) -> String {
+    let final_state = trace
+        .final_state
+        .as_ref()
+        .map(|value| format!("{value:?}"))
+        .unwrap_or_else(|| "Unknown".to_string());
+    let failed_chunks = if trace.failed_chunk_indexes.is_empty() {
+        "-".to_string()
+    } else {
+        trace
+            .failed_chunk_indexes
+            .iter()
+            .map(|index| index.to_string())
+            .collect::<Vec<_>>()
+            .join(",")
     };
+    format!(
+        "[reply_trace] id={} channel={} thread={} delivered={}/{} failed={} state={}",
+        trace.logical_reply_id,
+        trace.channel,
+        trace.target_thread_id,
+        trace.delivered_chunk_count,
+        trace.planned_chunk_count,
+        failed_chunks,
+        final_state
+    )
+}
 
-    match event {
-        "status" => {
-            status.last_event_at = Some(now_rfc3339());
-            if let Some(patch) = value.get("patch").and_then(|entry| entry.as_object()) {
-                if let Some(account_id) = patch.get("accountId").and_then(|entry| entry.as_str()) {
-                    status.account_id = account_id.to_string();
-                }
-                if let Some(port) = patch.get("port").and_then(|entry| entry.as_u64()) {
-                    status.port = Some(port as u16);
-                }
-                if let Some(last_error) = patch.get("lastError").and_then(|entry| entry.as_str()) {
-                    let normalized = last_error.trim();
-                    status.last_error = if normalized.is_empty() {
-                        None
-                    } else {
-                        Some(normalized.to_string())
-                    };
-                } else if !patch.is_empty() {
-                    status.last_error = None;
-                }
-            }
-        }
-        "log" => {
-            status.last_event_at = Some(now_rfc3339());
-            let level = value
-                .get("level")
-                .and_then(|entry| entry.as_str())
-                .unwrap_or("info")
-                .trim()
-                .to_string();
-            let scope = value
-                .get("scope")
-                .and_then(|entry| entry.as_str())
-                .unwrap_or("runtime")
-                .trim()
-                .to_string();
-            let message = value
-                .get("message")
-                .and_then(|entry| entry.as_str())
-                .unwrap_or("")
-                .trim()
-                .to_string();
-
-            if !message.is_empty() {
-                let entry = format!("[{level}] {scope}: {message}");
-                status.recent_logs.push(entry.clone());
-                trim_recent_runtime_logs(status);
-                if level == "error" {
-                    status.last_error = Some(entry);
-                }
-            }
-        }
-        "fatal" => {
-            status.last_event_at = Some(now_rfc3339());
-            if let Some(error) = value.get("error").and_then(|entry| entry.as_str()) {
-                let normalized = error.trim();
-                if !normalized.is_empty() {
-                    status.last_error = Some(normalized.to_string());
-                    status
-                        .recent_logs
-                        .push(format!("[fatal] runtime: {normalized}"));
-                    trim_recent_runtime_logs(status);
-                }
-            }
-        }
-        _ => {}
+pub(crate) fn record_feishu_runtime_reply_trace(
+    state: &OpenClawPluginFeishuRuntimeState,
+    trace: &ReplyDeliveryTrace,
+) {
+    if let Ok(mut guard) = state.0.lock() {
+        guard.status.last_event_at = Some(now_rfc3339());
+        guard
+            .status
+            .recent_logs
+            .push(format_reply_trace_log_entry(trace));
+        trim_recent_runtime_logs(&mut guard.status);
     }
 }
 
-fn trim_recent_runtime_logs(status: &mut OpenClawPluginFeishuRuntimeStatus) {
-    if status.recent_logs.len() > 40 {
-        let overflow = status.recent_logs.len() - 40;
-        status.recent_logs.drain(0..overflow);
+pub(crate) fn record_feishu_runtime_reply_trace_error(
+    state: &OpenClawPluginFeishuRuntimeState,
+    error: &str,
+) {
+    let normalized_error = error.trim();
+    let (message, maybe_trace_json) = match normalized_error.split_once("\ntrace=") {
+        Some((message, trace_json)) => (message.trim(), Some(trace_json.trim())),
+        None => (normalized_error, None),
+    };
+
+    if let Some(trace_json) = maybe_trace_json {
+        if let Ok(trace) = serde_json::from_str::<ReplyDeliveryTrace>(trace_json) {
+            if let Ok(mut guard) = state.0.lock() {
+                guard.status.last_event_at = Some(now_rfc3339());
+                guard.status.last_error = Some(message.to_string());
+                guard
+                    .status
+                    .recent_logs
+                    .push(format!("[reply_trace] error={message}"));
+                guard
+                    .status
+                    .recent_logs
+                    .push(format_reply_trace_log_entry(&trace));
+                trim_recent_runtime_logs(&mut guard.status);
+            }
+            return;
+        }
     }
+
+    if let Ok(mut guard) = state.0.lock() {
+        guard.status.last_event_at = Some(now_rfc3339());
+        guard.status.last_error = Some(message.to_string());
+        guard
+            .status
+            .recent_logs
+            .push(format!("[reply_trace] error={message}"));
+        trim_recent_runtime_logs(&mut guard.status);
+    }
+}
+
+pub(super) fn merge_feishu_runtime_reply_lifecycle_event(
+    status: &mut OpenClawPluginFeishuRuntimeStatus,
+    value: &serde_json::Value,
+) -> Result<(), String> {
+    let result = merge_runtime_reply_lifecycle_event(
+        value,
+        &mut status.last_event_at,
+        &mut status.recent_logs,
+        &mut status.recent_reply_lifecycle,
+        now_rfc3339(),
+        40,
+        20,
+    );
+    if result.is_ok() {
+        status.latest_reply_completion =
+            project_latest_reply_completion(&status.recent_reply_lifecycle, status.last_event_at.clone());
+    }
+    result
+}
+
+fn map_phase_to_projected_state(
+    phase: &crate::commands::im_host::ImReplyLifecyclePhase,
+) -> Option<OpenClawPluginFeishuReplyCompletionState> {
+    use crate::commands::im_host::ImReplyLifecyclePhase as Phase;
+
+    match phase {
+        Phase::DispatchIdle => {
+            Some(OpenClawPluginFeishuReplyCompletionState::Completed)
+        }
+        Phase::Failed => Some(OpenClawPluginFeishuReplyCompletionState::Failed),
+        Phase::Stopped => Some(OpenClawPluginFeishuReplyCompletionState::Stopped),
+        Phase::AskUserRequested => Some(OpenClawPluginFeishuReplyCompletionState::AwaitingUser),
+        Phase::ApprovalRequested => {
+            Some(OpenClawPluginFeishuReplyCompletionState::AwaitingApproval)
+        }
+        Phase::InterruptRequested => Some(OpenClawPluginFeishuReplyCompletionState::Interrupted),
+        Phase::WaitForIdle => Some(OpenClawPluginFeishuReplyCompletionState::WaitingForIdle),
+        Phase::IdleReached => Some(OpenClawPluginFeishuReplyCompletionState::IdleReached),
+        Phase::ReplyStarted
+        | Phase::ProcessingStarted
+        | Phase::AskUserAnswered
+        | Phase::ApprovalResolved
+        | Phase::Resumed
+        | Phase::FullyComplete
+        | Phase::ToolChunkQueued
+        | Phase::BlockChunkQueued
+        | Phase::FinalChunkQueued => Some(OpenClawPluginFeishuReplyCompletionState::Running),
+        Phase::ProcessingStopped => None,
+    }
+}
+
+fn project_latest_reply_completion(
+    events: &[crate::commands::im_host::ImReplyLifecycleEvent],
+    updated_at: Option<String>,
+) -> Option<OpenClawPluginFeishuLatestReplyCompletion> {
+    let latest = events.last()?;
+    let logical_reply_id = latest.logical_reply_id.clone();
+
+    for event in events.iter().rev() {
+        if event.logical_reply_id != logical_reply_id {
+            continue;
+        }
+        if let Some(state) = map_phase_to_projected_state(&event.phase) {
+            return Some(OpenClawPluginFeishuLatestReplyCompletion {
+                logical_reply_id: logical_reply_id.clone(),
+                phase: event.phase.clone(),
+                state,
+                updated_at,
+            });
+        }
+    }
+
+    Some(OpenClawPluginFeishuLatestReplyCompletion {
+        logical_reply_id,
+        phase: latest.phase.clone(),
+        state: OpenClawPluginFeishuReplyCompletionState::Running,
+        updated_at,
+    })
 }
 
 fn build_feishu_runtime_outbound_send_command_payload(
     request: &OpenClawPluginFeishuOutboundSendRequest,
-) -> Result<OpenClawPluginFeishuOutboundSendCommandPayload, String> {
+) -> Result<ImRuntimeTextCommandPayload, String> {
     let request_id = normalize_required(&request.request_id, "request_id")?;
     let account_id = app_setting_string_or_default(Some(request.account_id.clone()), "default");
     let target = normalize_required(&request.target, "target")?;
     let text = request.text.trim().to_string();
     let mode = app_setting_string_or_default(Some(request.mode.clone()), "text");
 
-    Ok(OpenClawPluginFeishuOutboundSendCommandPayload {
+    Ok(build_runtime_text_command_payload(
         request_id,
-        command: "send_message".to_string(),
+        "send_message",
         account_id,
         target,
-        thread_id: request
+        request
             .thread_id
             .as_ref()
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty()),
         text,
         mode,
-    })
+    ))
+}
+
+fn build_feishu_runtime_processing_stop_command_payload(
+    request: &OpenClawPluginFeishuProcessingStopRequest,
+) -> Result<ImRuntimeProcessingStopCommandPayload, String> {
+    Ok(build_runtime_processing_stop_command_payload(
+        normalize_required(&request.request_id, "request_id")?,
+        "processing_stop",
+        app_setting_string_or_default(Some(request.account_id.clone()), "default"),
+        normalize_required(&request.message_id, "message_id")?,
+        request
+            .logical_reply_id
+            .as_ref()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
+        request
+            .final_state
+            .as_ref()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
+    ))
+}
+
+fn build_feishu_runtime_lifecycle_event_command_payload(
+    request: &OpenClawPluginFeishuLifecycleEventRequest,
+) -> Result<ImRuntimeLifecycleEventCommandPayload, String> {
+    Ok(build_runtime_lifecycle_event_command_payload(
+        normalize_required(&request.request_id, "request_id")?,
+        "lifecycle_event",
+        app_setting_string_or_default(Some(request.account_id.clone()), "default"),
+        request.phase.clone(),
+        request
+            .logical_reply_id
+            .as_ref()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
+        request
+            .thread_id
+            .as_ref()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
+        request
+            .message_id
+            .as_ref()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
+    ))
+}
+
+fn write_feishu_runtime_command_json_in_state(
+    state: &OpenClawPluginFeishuRuntimeState,
+    payload_json: &str,
+) -> Result<(), String> {
+    let stdin = {
+        let guard = state
+            .0
+            .lock()
+            .map_err(|_| "failed to lock feishu runtime state".to_string())?;
+        ensure_runtime_stdin_for_commands(
+            guard.status.running,
+            guard.stdin.clone(),
+            "official feishu runtime",
+        )?
+    };
+
+    write_runtime_command_json(&stdin, payload_json)
+        .map_err(|error| error.replace("runtime stdin", "feishu runtime stdin"))
 }
 
 pub(crate) fn register_pending_feishu_runtime_outbound_send_waiter(
@@ -134,23 +394,22 @@ pub(crate) fn register_pending_feishu_runtime_outbound_send_waiter(
     request_id: &str,
 ) -> Result<std::sync::mpsc::Receiver<Result<OpenClawPluginFeishuOutboundSendResult, String>>, String>
 {
-    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
     let mut guard = state
         .0
         .lock()
         .map_err(|_| "failed to lock feishu runtime state".to_string())?;
-    if guard.pending_outbound_send_results.contains_key(request_id) {
-        return Err(format!("duplicate outbound requestId: {request_id}"));
-    }
-    guard
-        .pending_outbound_send_results
-        .insert(request_id.to_string(), sender);
-    guard.status.last_event_at = Some(now_rfc3339());
-    guard.status.recent_logs.push(format!(
-        "[outbound] queued send_message requestId={request_id}"
-    ));
-    trim_recent_runtime_logs(&mut guard.status);
-    Ok(receiver)
+    let store = &mut *guard;
+    let pending_requests = &mut store.pending_outbound_send_results;
+    let status = &mut store.status;
+    register_pending_runtime_request_with_status(
+        pending_requests,
+        request_id,
+        &mut status.last_event_at,
+        &mut status.recent_logs,
+        format!("[outbound] queued send_message requestId={request_id}"),
+        now_rfc3339(),
+        40,
+    )
 }
 
 fn deliver_pending_feishu_runtime_outbound_send_result(
@@ -158,31 +417,27 @@ fn deliver_pending_feishu_runtime_outbound_send_result(
     result: OpenClawPluginFeishuOutboundSendResult,
 ) -> bool {
     let request_id = result.request_id.clone();
-    let sender = {
+    {
         let mut guard = match state.0.lock() {
             Ok(guard) => guard,
             Err(_) => return false,
         };
-        guard.status.last_event_at = Some(now_rfc3339());
-        guard
-            .status
-            .recent_logs
-            .push(format!("[outbound] send_result requestId={request_id}"));
-        trim_recent_runtime_logs(&mut guard.status);
-        guard.pending_outbound_send_results.remove(&request_id)
-    };
-
-    match sender {
-        Some(sender) => sender.send(Ok(result)).is_ok(),
-        None => {
-            if let Ok(mut guard) = state.0.lock() {
-                guard.status.recent_logs.push(format!(
-                    "[warn] runtime: unhandled outbound send_result requestId={request_id}"
-                ));
-                trim_recent_runtime_logs(&mut guard.status);
-            }
-            false
-        }
+        let store = &mut *guard;
+        let pending_requests = &mut store.pending_outbound_send_results;
+        let status = &mut store.status;
+        deliver_runtime_result_with_status(
+            pending_requests,
+            &request_id,
+            result,
+            &mut status.last_event_at,
+            &mut status.recent_logs,
+            format!("[outbound] send_result requestId={request_id}"),
+            Some(format!(
+                "[warn] runtime: unhandled outbound send_result requestId={request_id}"
+            )),
+            now_rfc3339(),
+            40,
+        )
     }
 }
 
@@ -191,96 +446,78 @@ fn deliver_pending_feishu_runtime_outbound_command_error(
     error_event: OpenClawPluginFeishuOutboundCommandErrorEvent,
 ) -> bool {
     let error_message = error_event.error.trim().to_string();
-    let Some(request_id) = error_event
+    let normalized_request_id = error_event
         .request_id
         .as_deref()
         .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        let failed = fail_pending_feishu_runtime_outbound_send_waiters(
-            state,
-            if error_message.is_empty() {
-                "official feishu runtime reported an outbound command error".to_string()
-            } else {
-                format!("official feishu runtime command error: {error_message}")
-            },
-        );
-        return failed > 0;
-    };
+        .filter(|value| !value.is_empty());
 
-    let sender = {
+    let outcome = {
         let mut guard = match state.0.lock() {
             Ok(guard) => guard,
             Err(_) => return false,
         };
         guard.status.last_event_at = Some(now_rfc3339());
         guard.status.last_error = Some(error_message.clone());
-        guard.status.recent_logs.push(format!(
-            "[outbound] command_error requestId={request_id}: {error_message}"
-        ));
+        if let Some(request_id) = normalized_request_id {
+            guard.status.recent_logs.push(format!(
+                "[outbound] command_error requestId={request_id}: {error_message}"
+            ));
+        } else {
+            guard
+                .status
+                .recent_logs
+                .push("[outbound] command_error without requestId".to_string());
+        }
         trim_recent_runtime_logs(&mut guard.status);
-        guard.pending_outbound_send_results.remove(request_id)
+        deliver_runtime_command_error(
+            &mut guard.pending_outbound_send_results,
+            normalized_request_id,
+            &error_message,
+            "official feishu runtime",
+            "official feishu runtime reported an outbound command error",
+        )
     };
 
-    match sender {
-        Some(sender) => sender
-            .send(Err(format!(
-                "official feishu runtime command error: {error_message}"
-            )))
-            .is_ok(),
-        None => false,
-    }
+    outcome.delivered || outcome.failed_count > 0
 }
 
 fn fail_pending_feishu_runtime_outbound_send_waiters(
     state: &OpenClawPluginFeishuRuntimeState,
     error: String,
 ) -> usize {
-    let senders = {
+    {
         let mut guard = match state.0.lock() {
             Ok(guard) => guard,
             Err(_) => return 0,
         };
-        guard.status.last_event_at = Some(now_rfc3339());
-        guard.status.recent_logs.push(format!("[outbound] {error}"));
-        trim_recent_runtime_logs(&mut guard.status);
-        std::mem::take(&mut guard.pending_outbound_send_results)
-    };
-
-    let mut count = 0;
-    for (_request_id, sender) in senders {
-        let _ = sender.send(Err(error.clone()));
-        count += 1;
+        let store = &mut *guard;
+        let pending_requests = &mut store.pending_outbound_send_results;
+        let status = &mut store.status;
+        fail_pending_runtime_requests_with_status(
+            pending_requests,
+            error.clone(),
+            &mut status.last_event_at,
+            &mut status.recent_logs,
+            format!("[outbound] {error}"),
+            now_rfc3339(),
+            40,
+        )
     }
-    count
 }
 
 fn parse_openclaw_plugin_feishu_runtime_send_result_event(
     value: &serde_json::Value,
 ) -> Result<OpenClawPluginFeishuOutboundSendResult, String> {
-    let event = value
-        .get("event")
-        .and_then(|entry| entry.as_str())
-        .unwrap_or_default();
-    if event != "send_result" {
-        return Err(format!("unexpected outbound event: {event}"));
-    }
-    serde_json::from_value::<OpenClawPluginFeishuOutboundSendResult>(value.clone())
-        .map_err(|error| format!("invalid send_result event: {error}"))
+    parse_runtime_event(value, "send_result")
+        .map_err(|error| error.replace("unexpected runtime event", "unexpected outbound event"))
 }
 
 fn parse_openclaw_plugin_feishu_runtime_command_error_event(
     value: &serde_json::Value,
 ) -> Result<OpenClawPluginFeishuOutboundCommandErrorEvent, String> {
-    let event = value
-        .get("event")
-        .and_then(|entry| entry.as_str())
-        .unwrap_or_default();
-    if event != "command_error" {
-        return Err(format!("unexpected outbound event: {event}"));
-    }
-    serde_json::from_value::<OpenClawPluginFeishuOutboundCommandErrorEvent>(value.clone())
-        .map_err(|error| format!("invalid command_error event: {error}"))
+    parse_runtime_event(value, "command_error")
+        .map_err(|error| error.replace("unexpected runtime event", "unexpected outbound event"))
 }
 
 pub(crate) fn handle_openclaw_plugin_feishu_runtime_send_result_event(
@@ -335,31 +572,10 @@ pub(crate) fn send_openclaw_plugin_feishu_runtime_outbound_message_in_state(
     let payload_json = serde_json::to_string(&payload)
         .map_err(|error| format!("failed to serialize outbound send command: {error}"))?;
 
-    let stdin = {
-        let guard = state
-            .0
-            .lock()
-            .map_err(|_| "failed to lock feishu runtime state".to_string())?;
-        if !guard.status.running {
-            return Err("official feishu runtime is not running".to_string());
-        }
-        guard.stdin.clone().ok_or_else(|| {
-            "official feishu runtime is not accepting outbound commands".to_string()
-        })?
-    };
-
     let receiver =
         register_pending_feishu_runtime_outbound_send_waiter(state, &payload.request_id)?;
 
-    if let Err(error) = {
-        let mut stdin_guard = stdin
-            .lock()
-            .map_err(|_| "failed to lock feishu runtime stdin".to_string())?;
-        stdin_guard
-            .write_all(payload_json.as_bytes())
-            .and_then(|_| stdin_guard.write_all(b"\n"))
-            .and_then(|_| stdin_guard.flush())
-    } {
+    if let Err(error) = write_feishu_runtime_command_json_in_state(state, &payload_json) {
         let _ = fail_pending_feishu_runtime_outbound_send_waiters(
             state,
             format!("failed to write outbound command: {error}"),
@@ -371,20 +587,23 @@ pub(crate) fn send_openclaw_plugin_feishu_runtime_outbound_message_in_state(
         Ok(Ok(result)) => Ok(result),
         Ok(Err(error)) => Err(error),
         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-            let _ = {
-                if let Ok(mut guard) = state.0.lock() {
-                    guard
-                        .pending_outbound_send_results
-                        .remove(&payload.request_id);
-                    guard.status.recent_logs.push(format!(
+            if let Ok(mut guard) = state.0.lock() {
+                let store = &mut *guard;
+                let pending_requests = &mut store.pending_outbound_send_results;
+                let status = &mut store.status;
+                let _ = drop_pending_runtime_request_with_status(
+                    pending_requests,
+                    &payload.request_id,
+                    &mut status.last_event_at,
+                    &mut status.recent_logs,
+                    format!(
                         "[warn] runtime: outbound send timed out requestId={}",
                         payload.request_id
-                    ));
-                    trim_recent_runtime_logs(&mut guard.status);
-                    guard.status.last_event_at = Some(now_rfc3339());
-                }
-                Ok::<(), ()>(())
-            };
+                    ),
+                    now_rfc3339(),
+                    40,
+                );
+            }
             Err(format!(
                 "timed out waiting for outbound send_result for requestId {}",
                 payload.request_id
@@ -397,15 +616,48 @@ pub(crate) fn send_openclaw_plugin_feishu_runtime_outbound_message_in_state(
     }
 }
 
+pub(crate) fn send_openclaw_plugin_feishu_runtime_processing_stop_in_state(
+    state: &OpenClawPluginFeishuRuntimeState,
+    request: OpenClawPluginFeishuProcessingStopRequest,
+) -> Result<(), String> {
+    if let Ok(guard) = feishu_runtime_processing_stop_hook_slot().lock() {
+        if let Some(hook) = guard.as_ref() {
+            return hook(&request);
+        }
+    }
+    let payload = build_feishu_runtime_processing_stop_command_payload(&request)?;
+    let payload_json = serde_json::to_string(&payload)
+        .map_err(|error| format!("failed to serialize processing_stop command: {error}"))?;
+    write_feishu_runtime_command_json_in_state(state, &payload_json)
+}
+
+pub(crate) fn send_openclaw_plugin_feishu_runtime_lifecycle_event_in_state(
+    state: &OpenClawPluginFeishuRuntimeState,
+    request: OpenClawPluginFeishuLifecycleEventRequest,
+) -> Result<(), String> {
+    if let Ok(guard) = feishu_runtime_lifecycle_event_hook_slot().lock() {
+        if let Some(hook) = guard.as_ref() {
+            return hook(&request);
+        }
+    }
+    let payload = build_feishu_runtime_lifecycle_event_command_payload(&request)?;
+    let payload_json = serde_json::to_string(&payload)
+        .map_err(|error| format!("failed to serialize lifecycle_event command: {error}"))?;
+    write_feishu_runtime_command_json_in_state(state, &payload_json)
+}
+
 pub(crate) fn current_feishu_runtime_status(
     state: &OpenClawPluginFeishuRuntimeState,
 ) -> OpenClawPluginFeishuRuntimeStatus {
-    state
+    let mut status = state
         .0
         .lock()
         .expect("lock feishu runtime state")
         .status
-        .clone()
+        .clone();
+    status.latest_reply_completion =
+        project_latest_reply_completion(&status.recent_reply_lifecycle, status.last_event_at.clone());
+    status
 }
 
 pub(crate) fn handle_feishu_runtime_pairing_request_event(
@@ -473,111 +725,6 @@ pub(crate) fn handle_feishu_runtime_pairing_request_event(
     }
 }
 
-pub(crate) fn handle_openclaw_plugin_feishu_runtime_stdout_line(
-    pool: &SqlitePool,
-    state: &OpenClawPluginFeishuRuntimeState,
-    app: Option<&AppHandle>,
-    trimmed: &str,
-) {
-    if trimmed.is_empty() {
-        return;
-    }
-
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
-        return;
-    };
-
-    let event = value
-        .get("event")
-        .and_then(|entry| entry.as_str())
-        .unwrap_or_default();
-    if event == "send_result" {
-        let handled = handle_openclaw_plugin_feishu_runtime_send_result_event(state, &value);
-        if !handled {
-            let request_id = value
-                .get("requestId")
-                .and_then(|entry| entry.as_str())
-                .unwrap_or("unknown");
-            if let Ok(mut guard) = state.0.lock() {
-                guard.status.recent_logs.push(format!(
-                    "[warn] runtime: dropped send_result requestId={request_id}"
-                ));
-                trim_recent_runtime_logs(&mut guard.status);
-                guard.status.last_event_at = Some(now_rfc3339());
-            }
-        }
-        return;
-    }
-    if event == "command_error" {
-        let handled = handle_openclaw_plugin_feishu_runtime_command_error_event(state, &value);
-        if !handled {
-            let request_id = value
-                .get("requestId")
-                .and_then(|entry| entry.as_str())
-                .unwrap_or("unknown");
-            if let Ok(mut guard) = state.0.lock() {
-                guard.status.recent_logs.push(format!(
-                    "[warn] runtime: dropped command_error requestId={request_id}"
-                ));
-                trim_recent_runtime_logs(&mut guard.status);
-                guard.status.last_event_at = Some(now_rfc3339());
-            }
-        }
-        return;
-    }
-
-    if let Ok(mut guard) = state.0.lock() {
-        if event == "pairing_request" {
-            handle_feishu_runtime_pairing_request_event(pool, &mut guard.status, &value);
-        } else if event == "dispatch_request" {
-            match tauri::async_runtime::block_on(parse_feishu_runtime_dispatch_event_with_pool(
-                pool, &value,
-            )) {
-                Ok(inbound) => {
-                    if let Some(app_handle) = app.as_ref() {
-                        match tauri::async_runtime::block_on(
-                            dispatch_feishu_inbound_to_workclaw_with_pool_and_app(
-                                pool, app_handle, &inbound, None,
-                            ),
-                        ) {
-                            Ok(result) => {
-                                guard.status.last_error = None;
-                                guard.status.recent_logs.push(format!(
-                                    "[dispatch] feishu: accepted={} deduped={} thread={}",
-                                    result.accepted, result.deduped, inbound.thread_id
-                                ));
-                            }
-                            Err(error) => {
-                                guard.status.last_error = Some(format!(
-                                    "failed to bridge official feishu dispatch: {error}"
-                                ));
-                                guard.status.recent_logs.push(format!(
-                                    "[error] runtime: failed to bridge official feishu dispatch: {error}"
-                                ));
-                            }
-                        }
-                    } else {
-                        guard.status.recent_logs.push(
-                            "[warn] runtime: dispatch_request ignored because no app handle was available"
-                                .to_string(),
-                        );
-                    }
-                }
-                Err(error) => {
-                    guard.status.last_error =
-                        Some(format!("invalid official feishu dispatch event: {error}"));
-                    guard.status.recent_logs.push(format!(
-                        "[error] runtime: invalid official feishu dispatch event: {error}"
-                    ));
-                }
-            }
-            trim_recent_runtime_logs(&mut guard.status);
-        } else {
-            merge_feishu_runtime_status_event(&mut guard.status, &value);
-        }
-    }
-}
-
 async fn resolve_feishu_runtime_dispatch_thread_id_with_pool(
     pool: &SqlitePool,
     thread_id: &str,
@@ -590,10 +737,18 @@ async fn resolve_feishu_runtime_dispatch_thread_id_with_pool(
         return Err("dispatch_request missing threadId".to_string());
     }
 
-    let is_direct = matches!(chat_type.map(str::trim), Some("direct") | None);
-    let looks_like_sender_open_id = normalized_thread_id.starts_with("ou_");
-    if !is_direct || !looks_like_sender_open_id {
-        return Ok(normalized_thread_id.to_string());
+    let normalized_chat_type = chat_type.map(str::trim).filter(|value| !value.is_empty());
+    let needs_direct_mapping = matches!(normalized_chat_type, Some("direct") | None)
+        && normalized_thread_id.starts_with("ou_");
+    if !needs_direct_mapping {
+        return Ok(resolve_dispatch_thread_target(
+            normalized_thread_id,
+            None,
+            normalized_chat_type,
+            "ou_",
+            None,
+        )?
+        .thread_id);
     }
 
     let normalized_account_id = account_id
@@ -624,10 +779,14 @@ async fn resolve_feishu_runtime_dispatch_thread_id_with_pool(
     .await
     .map_err(|e| format!("failed to resolve feishu chat_id from pairing requests: {e}"))?;
 
-    Ok(row
-        .map(|(chat_id,)| chat_id)
-        .filter(|chat_id| !chat_id.trim().is_empty())
-        .unwrap_or_else(|| normalized_thread_id.to_string()))
+    Ok(resolve_dispatch_thread_target(
+        normalized_thread_id,
+        None,
+        normalized_chat_type,
+        "ou_",
+        row.as_ref().map(|(chat_id,)| chat_id.as_str()),
+    )?
+    .thread_id)
 }
 
 pub(crate) async fn parse_feishu_runtime_dispatch_event_with_pool(
@@ -682,29 +841,22 @@ pub(crate) async fn parse_feishu_runtime_dispatch_event_with_pool(
         .map(str::trim)
         .filter(|entry| !entry.is_empty())
         .map(str::to_string);
-    let thread_id = if matches!(chat_type.as_deref(), Some("direct") | None) {
-        if let Some(chat_id) = explicit_chat_id.clone() {
-            chat_id
-        } else {
-            resolve_feishu_runtime_dispatch_thread_id_with_pool(
-                pool,
-                raw_thread_id,
-                account_id.as_deref(),
-                sender_id.as_deref(),
-                chat_type.as_deref(),
-            )
-            .await?
-        }
-    } else {
-        resolve_feishu_runtime_dispatch_thread_id_with_pool(
-            pool,
-            raw_thread_id,
-            account_id.as_deref(),
-            sender_id.as_deref(),
-            chat_type.as_deref(),
-        )
-        .await?
-    };
+    let mapped_thread_id = resolve_feishu_runtime_dispatch_thread_id_with_pool(
+        pool,
+        raw_thread_id,
+        account_id.as_deref(),
+        sender_id.as_deref(),
+        chat_type.as_deref(),
+    )
+    .await?;
+    let thread_id = resolve_dispatch_thread_target(
+        raw_thread_id,
+        explicit_chat_id.as_deref(),
+        chat_type.as_deref(),
+        "ou_",
+        Some(mapped_thread_id.as_str()),
+    )?
+    .thread_id;
 
     Ok(ImEvent {
         channel: "feishu".to_string(),
@@ -854,6 +1006,8 @@ pub(crate) async fn start_openclaw_plugin_feishu_runtime_with_pool(
             pid: Some(pid),
             port: None,
             recent_logs: Vec::new(),
+            recent_reply_lifecycle: Vec::new(),
+            latest_reply_completion: None,
         };
     }
 
@@ -978,6 +1132,161 @@ pub(crate) async fn start_openclaw_plugin_feishu_runtime_with_pool(
     }
 
     Ok(current_feishu_runtime_status(state))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        classify_feishu_runtime_outbound_failure, infer_feishu_runtime_outbound_failure_kind,
+        merge_feishu_runtime_reply_lifecycle_event, project_latest_reply_completion,
+        FeishuRuntimeOutboundFailureKind,
+    };
+    use crate::commands::openclaw_plugins::im_host_contract::{
+        ImReplyDeliveryState, ImReplyLifecyclePhase,
+    };
+    use crate::commands::openclaw_plugins::{
+        OpenClawPluginFeishuReplyCompletionState, OpenClawPluginFeishuRuntimeStatus,
+    };
+
+    #[test]
+    fn infer_timeout_failure_kind() {
+        let kind = infer_feishu_runtime_outbound_failure_kind(
+            "timed out waiting for outbound send_result for requestId abc",
+        );
+        assert_eq!(kind, FeishuRuntimeOutboundFailureKind::Timeout);
+    }
+
+    #[test]
+    fn classify_partial_failure_when_chunks_already_delivered() {
+        let state = classify_feishu_runtime_outbound_failure(
+            1,
+            FeishuRuntimeOutboundFailureKind::Disconnected,
+        );
+        assert_eq!(state, ImReplyDeliveryState::FailedPartial);
+    }
+
+    #[test]
+    fn merge_reply_lifecycle_event_tracks_recent_events() {
+        let mut status = OpenClawPluginFeishuRuntimeStatus::default();
+        let value = serde_json::json!({
+            "event": "reply_lifecycle",
+            "logicalReplyId": "reply-1",
+            "phase": "processing_started",
+            "channel": "feishu",
+            "accountId": "default",
+            "threadId": "oc_chat_1",
+            "messageId": "om_1"
+        });
+
+        merge_feishu_runtime_reply_lifecycle_event(&mut status, &value)
+            .expect("merge lifecycle event");
+
+        assert_eq!(status.recent_reply_lifecycle.len(), 1);
+        assert_eq!(
+            status.recent_reply_lifecycle[0].phase,
+            ImReplyLifecyclePhase::ProcessingStarted
+        );
+        assert_eq!(
+            status.latest_reply_completion.as_ref().map(|entry| &entry.state),
+            Some(&OpenClawPluginFeishuReplyCompletionState::Running)
+        );
+    }
+
+    #[test]
+    fn reply_completion_projection_keeps_fully_complete_running_until_dispatch_idle() {
+        let events = vec![
+            crate::commands::im_host::ImReplyLifecycleEvent {
+                logical_reply_id: "reply-1".to_string(),
+                phase: ImReplyLifecyclePhase::FullyComplete,
+                channel: "feishu".to_string(),
+                account_id: Some("default".to_string()),
+                thread_id: Some("oc_chat_1".to_string()),
+                chat_id: None,
+                message_id: Some("om_1".to_string()),
+                queued_counts: None,
+            },
+            crate::commands::im_host::ImReplyLifecycleEvent {
+                logical_reply_id: "reply-1".to_string(),
+                phase: ImReplyLifecyclePhase::ProcessingStopped,
+                channel: "feishu".to_string(),
+                account_id: Some("default".to_string()),
+                thread_id: Some("oc_chat_1".to_string()),
+                chat_id: None,
+                message_id: Some("om_1".to_string()),
+                queued_counts: None,
+            },
+        ];
+
+        let projection =
+            project_latest_reply_completion(&events, Some("2026-04-19T00:00:00Z".to_string()))
+                .expect("projection");
+
+        assert_eq!(projection.phase, ImReplyLifecyclePhase::FullyComplete);
+        assert_eq!(
+            projection.state,
+            OpenClawPluginFeishuReplyCompletionState::Running
+        );
+    }
+
+    #[test]
+    fn reply_completion_projection_marks_dispatch_idle_as_completed() {
+        let events = vec![
+            crate::commands::im_host::ImReplyLifecycleEvent {
+                logical_reply_id: "reply-1".to_string(),
+                phase: ImReplyLifecyclePhase::FullyComplete,
+                channel: "feishu".to_string(),
+                account_id: Some("default".to_string()),
+                thread_id: Some("oc_chat_1".to_string()),
+                chat_id: None,
+                message_id: Some("om_1".to_string()),
+                queued_counts: None,
+            },
+            crate::commands::im_host::ImReplyLifecycleEvent {
+                logical_reply_id: "reply-1".to_string(),
+                phase: ImReplyLifecyclePhase::DispatchIdle,
+                channel: "feishu".to_string(),
+                account_id: Some("default".to_string()),
+                thread_id: Some("oc_chat_1".to_string()),
+                chat_id: None,
+                message_id: Some("om_1".to_string()),
+                queued_counts: None,
+            },
+        ];
+
+        let projection =
+            project_latest_reply_completion(&events, Some("2026-04-19T00:00:01Z".to_string()))
+                .expect("projection");
+
+        assert_eq!(projection.phase, ImReplyLifecyclePhase::DispatchIdle);
+        assert_eq!(
+            projection.state,
+            OpenClawPluginFeishuReplyCompletionState::Completed
+        );
+    }
+
+    #[test]
+    fn reply_completion_projection_marks_ask_user_as_awaiting_user() {
+        let events = vec![crate::commands::im_host::ImReplyLifecycleEvent {
+            logical_reply_id: "reply-ask".to_string(),
+            phase: ImReplyLifecyclePhase::AskUserRequested,
+            channel: "feishu".to_string(),
+            account_id: Some("default".to_string()),
+            thread_id: Some("oc_chat_ask".to_string()),
+            chat_id: None,
+            message_id: Some("om_ask".to_string()),
+            queued_counts: None,
+        }];
+
+        let projection =
+            project_latest_reply_completion(&events, Some("2026-04-19T00:01:00Z".to_string()))
+                .expect("projection");
+
+        assert_eq!(projection.phase, ImReplyLifecyclePhase::AskUserRequested);
+        assert_eq!(
+            projection.state,
+            OpenClawPluginFeishuReplyCompletionState::AwaitingUser
+        );
+    }
 }
 
 pub(crate) async fn maybe_restore_openclaw_plugin_feishu_runtime_with_pool(

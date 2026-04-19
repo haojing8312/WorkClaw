@@ -151,8 +151,9 @@ describe("plugin runtime", () => {
 
   it("captures dispatch requests from the official reply bridge", async () => {
     const runtime = createPluginRuntime({ config: {} });
+    const reply = runtime.channel.reply.createReplyDispatcherWithTyping();
 
-    await runtime.channel.reply.dispatchReplyFromConfig({
+    const dispatchResult = await runtime.channel.reply.dispatchReplyFromConfig({
       ctx: {
         AccountId: "default",
         SenderId: "ou_sender",
@@ -163,6 +164,12 @@ describe("plugin runtime", () => {
         To: "user:ou_sender",
         From: "feishu:ou_sender",
       },
+      dispatcher: reply.dispatcher,
+    });
+
+    expect(dispatchResult).toEqual({
+      queuedFinal: false,
+      counts: { final: 0 },
     });
 
     expect(runtime.system.dispatchRequests).toEqual([
@@ -175,6 +182,10 @@ describe("plugin runtime", () => {
         text: "你好",
         chatType: "direct",
       },
+    ]);
+    expect(runtime.system.replyLifecycleEvents.map((event) => event.phase)).toEqual([
+      "reply_started",
+      "processing_started",
     ]);
   });
 
@@ -202,7 +213,44 @@ describe("plugin runtime", () => {
       },
     });
 
+    result.markDispatchIdle();
+
     await expect(result.dispatcher.waitForIdle()).resolves.toBeUndefined();
+    expect(runtime.system.replyLifecycleEvents.map((event) => event.phase)).toEqual([
+      "final_chunk_queued",
+      "wait_for_idle",
+      "idle_reached",
+      "fully_complete",
+      "dispatch_idle",
+    ]);
+  });
+
+  it("treats dispatch_idle as the terminal lifecycle barrier after fully_complete", async () => {
+    const runtime = createPluginRuntime({ config: {} });
+    const result = runtime.channel.reply.createReplyDispatcherWithTyping();
+
+    await runtime.channel.reply.withReplyDispatcher({
+      dispatcher: result.dispatcher,
+      run: async () => {
+        result.dispatcher.sendFinalReply({ text: "ok" });
+      },
+    });
+
+    const phasesBeforeManualIdle = runtime.system.replyLifecycleEvents.map((event) => event.phase);
+    const waitIndex = phasesBeforeManualIdle.indexOf("wait_for_idle");
+    const idleReachedIndex = phasesBeforeManualIdle.indexOf("idle_reached");
+    const fullyCompleteIndex = phasesBeforeManualIdle.indexOf("fully_complete");
+    const dispatchIdleIndex = phasesBeforeManualIdle.indexOf("dispatch_idle");
+
+    expect(waitIndex).toBeGreaterThanOrEqual(0);
+    expect(idleReachedIndex).toBeGreaterThan(waitIndex);
+    expect(fullyCompleteIndex).toBeGreaterThan(idleReachedIndex);
+    expect(dispatchIdleIndex).toBeGreaterThan(fullyCompleteIndex);
+
+    result.markDispatchIdle();
+
+    expect(runtime.system.replyLifecycleEvents.map((event) => event.phase)).toEqual(phasesBeforeManualIdle);
+    expect(phasesBeforeManualIdle.filter((phase) => phase === "dispatch_idle")).toHaveLength(1);
   });
 
   it("routes outbound send commands through the official runtime fixture", async () => {
@@ -445,6 +493,436 @@ describe("plugin runtime", () => {
           messageId: "plugin_message_lived_1",
           sequence: 1,
         }),
+      });
+
+      child.kill();
+      await once(child, "exit");
+    } finally {
+      collector.close();
+      child.kill();
+    }
+  });
+
+  it("starts and stops the official processing reaction through the host command bridge", async () => {
+    const pluginRoot = await createTempPluginRoot();
+    await fs.writeFile(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({
+        type: "module",
+        openclaw: {
+          extensions: ["./index.js"],
+        },
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(pluginRoot, "index.js"),
+      [
+        "export async function addReactionFeishu({ messageId }) {",
+        "  return { reactionId: `typing_${messageId}` };",
+        "}",
+        "export async function removeReactionFeishu() {",
+        "  return { removed: true };",
+        "}",
+        "export default {",
+        "  register(api) {",
+        "    api.registerChannel({",
+        "      plugin: {",
+        "        id: 'feishu',",
+        "        config: {",
+        "          resolveAccount() {",
+        "            return { accountId: 'default', enabled: true, configured: true };",
+        "          },",
+        "        },",
+        "        outbound: {",
+        "          async sendText({ to, text, accountId }) {",
+        "            return { delivered: true, channel: 'feishu', accountId, target: to, text, chatId: `plugin:${to}`, messageId: 'plugin_processing_message_1' };",
+        "          },",
+        "        },",
+        "        gateway: {",
+        "          async startAccount({ runtime, setStatus, abortSignal }) {",
+        "            setStatus({ running: true, processingFixture: true });",
+        "            const reply = runtime.channel.reply.createReplyDispatcherWithTyping();",
+        "            await runtime.channel.reply.dispatchReplyFromConfig({",
+        "              ctx: {",
+        "                AccountId: 'default',",
+        "                SenderId: 'ou_sender_processing',",
+        "                MessageSid: 'om_processing_123',",
+        "                RawBody: '请处理一下',",
+        "                ChatType: 'direct',",
+        "                ChatId: 'oc_processing_chat_123',",
+        "                To: 'user:ou_sender_processing',",
+        "                From: 'feishu:ou_sender_processing',",
+        "              },",
+        "              dispatcher: reply.dispatcher,",
+        "            });",
+        "            await new Promise((resolve) => abortSignal.addEventListener('abort', resolve, { once: true }));",
+        "          },",
+        "        },",
+        "      },",
+        "    });",
+        "  },",
+        "};",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const child = spawn(
+      process.execPath,
+      [
+        path.join("scripts", "run-feishu-host.mjs"),
+        "--plugin-root",
+        pluginRoot,
+        "--fixture-name",
+        "runtime-processing-reaction-bridge",
+        "--account-id",
+        "default",
+      ],
+      {
+        cwd: pluginHostDir,
+        stdio: ["pipe", "pipe", "pipe"],
+      },
+    );
+
+    const collector = createEventCollector(child.stdout, child.stderr);
+    try {
+      await collector.waitFor(
+        (event) => event.event === "ready",
+        "expected ready event from processing reaction fixture",
+      );
+
+      const replyStarted = await collector.waitFor(
+        (event) => event.event === "reply_lifecycle" && event.phase === "reply_started",
+        "expected reply_started lifecycle event from processing reaction fixture",
+      );
+      expect(replyStarted).toMatchObject({
+        event: "reply_lifecycle",
+        phase: "reply_started",
+        accountId: "default",
+        messageId: "om_processing_123",
+      });
+
+      const processingStarted = await collector.waitFor(
+        (event) => event.event === "reply_lifecycle" && event.phase === "processing_started",
+        "expected processing_started lifecycle event from processing reaction fixture",
+      );
+      expect(processingStarted).toMatchObject({
+        event: "reply_lifecycle",
+        phase: "processing_started",
+        accountId: "default",
+        messageId: "om_processing_123",
+      });
+
+      const startTypingLog = await collector.waitFor(
+        (event) =>
+          event.event === "log" &&
+          event.scope === "processing" &&
+          String(event.message ?? "").includes("started typing reaction"),
+        "expected typing reaction start log",
+      );
+      expect(startTypingLog).toMatchObject({
+        event: "log",
+        level: "info",
+        scope: "processing",
+      });
+
+      child.stdin.write(
+        `${JSON.stringify({
+          requestId: "processing-stop-1",
+          command: "processing_stop",
+          accountId: "default",
+          messageId: "om_processing_123",
+          logicalReplyId: replyStarted.logicalReplyId,
+          finalState: "completed",
+        })}\n`,
+      );
+
+      const processingStopped = await collector.waitFor(
+        (event) => event.event === "reply_lifecycle" && event.phase === "processing_stopped",
+        "expected processing_stopped lifecycle event after processing stop",
+      );
+      expect(processingStopped).toMatchObject({
+        event: "reply_lifecycle",
+        phase: "processing_stopped",
+        finalState: "completed",
+      });
+      expect(
+        collector.events.filter(
+          (event) =>
+            event.event === "reply_lifecycle" &&
+            (event.phase === "fully_complete" || event.phase === "dispatch_idle"),
+        ),
+      ).toHaveLength(0);
+
+      const stopTypingLog = await collector.waitFor(
+        (event) =>
+          event.event === "log" &&
+          event.scope === "processing" &&
+          String(event.message ?? "").includes("stopped typing reaction"),
+        "expected typing reaction stop log",
+      );
+      expect(stopTypingLog).toMatchObject({
+        event: "log",
+        level: "info",
+        scope: "processing",
+      });
+
+      const processingResult = await collector.waitFor(
+        (event) => event.event === "processing_result" && event.requestId === "processing-stop-1",
+        "expected processing_result event after processing stop",
+      );
+      expect(processingResult).toMatchObject({
+        event: "processing_result",
+        requestId: "processing-stop-1",
+        command: "processing_stop",
+        accountId: "default",
+        messageId: "om_processing_123",
+        logicalReplyId: replyStarted.logicalReplyId,
+        finalState: "completed",
+      });
+
+      child.kill();
+      await once(child, "exit");
+    } finally {
+      collector.close();
+      child.kill();
+    }
+  });
+
+  it("emits custom lifecycle phases through the host command bridge", async () => {
+    const pluginRoot = await createTempPluginRoot();
+    await fs.writeFile(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({
+        type: "module",
+        openclaw: {
+          extensions: ["./index.js"],
+        },
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(pluginRoot, "index.js"),
+      [
+        "export default {",
+        "  register(api) {",
+        "    api.registerChannel({",
+        "      plugin: {",
+        "        id: 'feishu',",
+        "        config: {",
+        "          resolveAccount() {",
+        "            return { accountId: 'default', enabled: true, configured: true };",
+        "          },",
+        "        },",
+        "        outbound: {",
+        "          async sendText({ to, text, accountId }) {",
+        "            return { delivered: true, channel: 'feishu', accountId, target: to, text, chatId: `plugin:${to}`, messageId: 'plugin_custom_lifecycle_message_1' };",
+        "          },",
+        "        },",
+        "        gateway: {",
+        "          async startAccount({ setStatus, abortSignal }) {",
+        "            setStatus({ running: true, customLifecycleFixture: true });",
+        "            await new Promise((resolve) => abortSignal.addEventListener('abort', resolve, { once: true }));",
+        "          },",
+        "        },",
+        "      },",
+        "    });",
+        "  },",
+        "};",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const child = spawn(
+      process.execPath,
+      [
+        path.join("scripts", "run-feishu-host.mjs"),
+        "--plugin-root",
+        pluginRoot,
+        "--fixture-name",
+        "runtime-custom-lifecycle-bridge",
+        "--account-id",
+        "default",
+      ],
+      {
+        cwd: pluginHostDir,
+        stdio: ["pipe", "pipe", "pipe"],
+      },
+    );
+
+    const collector = createEventCollector(child.stdout, child.stderr);
+    try {
+      await collector.waitFor(
+        (event) => event.event === "ready",
+        "expected ready event from custom lifecycle fixture",
+      );
+
+      child.stdin.write(
+        `${JSON.stringify({
+          requestId: "lifecycle-1",
+          command: "lifecycle_event",
+          accountId: "default",
+          logicalReplyId: "reply_custom_1",
+          threadId: "oc_chat_custom_1",
+          messageId: "om_custom_1",
+          phase: "ask_user_requested",
+        })}\n`,
+      );
+
+      const lifecycleEvent = await collector.waitFor(
+        (event) => event.event === "reply_lifecycle" && event.phase === "ask_user_requested",
+        "expected ask_user_requested lifecycle event from custom lifecycle bridge",
+      );
+      expect(lifecycleEvent).toMatchObject({
+        event: "reply_lifecycle",
+        phase: "ask_user_requested",
+        logicalReplyId: "reply_custom_1",
+        accountId: "default",
+        threadId: "oc_chat_custom_1",
+        messageId: "om_custom_1",
+      });
+
+      const commandResult = await collector.waitFor(
+        (event) => event.event === "processing_result" && event.requestId === "lifecycle-1",
+        "expected processing_result event for custom lifecycle bridge",
+      );
+      expect(commandResult).toMatchObject({
+        event: "processing_result",
+        requestId: "lifecycle-1",
+        command: "lifecycle_event",
+        phase: "ask_user_requested",
+      });
+
+      child.stdin.write(
+        `${JSON.stringify({
+          requestId: "lifecycle-2",
+          command: "lifecycle_event",
+          accountId: "default",
+          logicalReplyId: "reply_custom_1",
+          threadId: "oc_chat_custom_1",
+          messageId: "om_custom_1",
+          phase: "failed",
+        })}\n`,
+      );
+
+      const failedEvent = await collector.waitFor(
+        (event) => event.event === "reply_lifecycle" && event.phase === "failed",
+        "expected failed lifecycle event from custom lifecycle bridge",
+      );
+      expect(failedEvent).toMatchObject({
+        event: "reply_lifecycle",
+        phase: "failed",
+        logicalReplyId: "reply_custom_1",
+      });
+
+      child.stdin.write(
+        `${JSON.stringify({
+          requestId: "lifecycle-3",
+          command: "lifecycle_event",
+          accountId: "default",
+          logicalReplyId: "reply_custom_1",
+          threadId: "oc_chat_custom_1",
+          messageId: "om_custom_1",
+          phase: "stopped",
+        })}\n`,
+      );
+
+      const stoppedEvent = await collector.waitFor(
+        (event) => event.event === "reply_lifecycle" && event.phase === "stopped",
+        "expected stopped lifecycle event from custom lifecycle bridge",
+      );
+      expect(stoppedEvent).toMatchObject({
+        event: "reply_lifecycle",
+        phase: "stopped",
+        logicalReplyId: "reply_custom_1",
+      });
+
+      child.stdin.write(
+        `${JSON.stringify({
+          requestId: "lifecycle-4",
+          command: "lifecycle_event",
+          accountId: "default",
+          logicalReplyId: "reply_custom_1",
+          threadId: "oc_chat_custom_1",
+          messageId: "om_custom_1",
+          phase: "ask_user_answered",
+        })}\n`,
+      );
+
+      const askUserAnsweredEvent = await collector.waitFor(
+        (event) => event.event === "reply_lifecycle" && event.phase === "ask_user_answered",
+        "expected ask_user_answered lifecycle event from custom lifecycle bridge",
+      );
+      expect(askUserAnsweredEvent).toMatchObject({
+        event: "reply_lifecycle",
+        phase: "ask_user_answered",
+        logicalReplyId: "reply_custom_1",
+      });
+
+      child.stdin.write(
+        `${JSON.stringify({
+          requestId: "lifecycle-5",
+          command: "lifecycle_event",
+          accountId: "default",
+          logicalReplyId: "reply_custom_1",
+          threadId: "oc_chat_custom_1",
+          messageId: "om_custom_1",
+          phase: "approval_resolved",
+        })}\n`,
+      );
+
+      const approvalResolvedEvent = await collector.waitFor(
+        (event) => event.event === "reply_lifecycle" && event.phase === "approval_resolved",
+        "expected approval_resolved lifecycle event from custom lifecycle bridge",
+      );
+      expect(approvalResolvedEvent).toMatchObject({
+        event: "reply_lifecycle",
+        phase: "approval_resolved",
+        logicalReplyId: "reply_custom_1",
+      });
+
+      child.stdin.write(
+        `${JSON.stringify({
+          requestId: "lifecycle-6",
+          command: "lifecycle_event",
+          accountId: "default",
+          logicalReplyId: "reply_custom_1",
+          threadId: "oc_chat_custom_1",
+          messageId: "om_custom_1",
+          phase: "interrupt_requested",
+        })}\n`,
+      );
+
+      const interruptRequestedEvent = await collector.waitFor(
+        (event) => event.event === "reply_lifecycle" && event.phase === "interrupt_requested",
+        "expected interrupt_requested lifecycle event from custom lifecycle bridge",
+      );
+      expect(interruptRequestedEvent).toMatchObject({
+        event: "reply_lifecycle",
+        phase: "interrupt_requested",
+        logicalReplyId: "reply_custom_1",
+      });
+
+      child.stdin.write(
+        `${JSON.stringify({
+          requestId: "lifecycle-7",
+          command: "lifecycle_event",
+          accountId: "default",
+          logicalReplyId: "reply_custom_1",
+          threadId: "oc_chat_custom_1",
+          messageId: "om_custom_1",
+          phase: "resumed",
+        })}\n`,
+      );
+
+      const resumedEvent = await collector.waitFor(
+        (event) => event.event === "reply_lifecycle" && event.phase === "resumed",
+        "expected resumed lifecycle event from custom lifecycle bridge",
+      );
+      expect(resumedEvent).toMatchObject({
+        event: "reply_lifecycle",
+        phase: "resumed",
+        logicalReplyId: "reply_custom_1",
       });
 
       child.kill();

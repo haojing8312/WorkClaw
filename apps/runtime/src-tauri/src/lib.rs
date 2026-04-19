@@ -1,11 +1,11 @@
 mod adapters;
-pub(crate) mod agent_catalog;
 pub mod agent;
+pub(crate) mod agent_catalog;
 pub(crate) mod agent_core;
 pub mod approval_bus;
 pub mod approval_rules;
-mod builtin_skills;
 mod branding_generated;
+mod builtin_skills;
 pub mod commands;
 mod db;
 mod diagnostics;
@@ -31,11 +31,13 @@ use agent::tools::new_responder;
 use agent::tools::search_providers::cache::SearchCache;
 use agent::{AgentExecutor, ToolRegistry};
 use approval_bus::ApprovalManager;
+use commands::channel_connectors::ChannelConnectorMonitorState;
 use commands::chat::{
-    ApprovalManagerState, AskUserState, CancelFlagState, PendingApprovalBridgeState,
-    SearchCacheState, ToolConfirmResponder, ToolConfirmState,
+    ApprovalManagerState, AskUserPendingSessionState, AskUserState, CancelFlagState,
+    PendingApprovalBridgeState, SearchCacheState, ToolConfirmResponder, ToolConfirmState,
 };
 use commands::feishu_gateway::FeishuEventRelayState;
+use commands::im_host::{ImChannelHostRuntimeState, record_im_channel_restore_report};
 use commands::openclaw_plugins::OpenClawPluginFeishuRuntimeState;
 use commands::skills::DbState;
 use diagnostics::{DiagnosticsState, ManagedDiagnosticsState};
@@ -115,6 +117,7 @@ fn initialize_runtime_state(
 
     let ask_user_responder = new_responder();
     app.manage(AskUserState(ask_user_responder));
+    app.manage(AskUserPendingSessionState(Arc::new(Mutex::new(None))));
     let tool_confirm_responder: ToolConfirmResponder =
         std::sync::Arc::new(std::sync::Mutex::new(None));
     app.manage(ToolConfirmState(tool_confirm_responder));
@@ -153,6 +156,9 @@ fn initialize_runtime_state(
 
     let feishu_relay_state = FeishuEventRelayState::default();
     app.manage(feishu_relay_state.clone());
+    let channel_connector_monitor_state = ChannelConnectorMonitorState::default();
+    app.manage(channel_connector_monitor_state.clone());
+    app.manage(ImChannelHostRuntimeState::default());
     app.manage(OpenClawPluginFeishuRuntimeState::default());
     app.manage(commands::openclaw_plugins::OpenClawLarkInstallerSessionState::default());
 
@@ -379,8 +385,9 @@ pub fn run() {
             }
         }))
         .setup(|app| {
-            let runtime_environment = runtime_environment::initialize_runtime_environment(app.handle())
-                .expect("failed to init runtime environment");
+            let runtime_environment =
+                runtime_environment::initialize_runtime_environment(app.handle())
+                    .expect("failed to init runtime environment");
             let runtime_environment = Arc::new(runtime_environment);
             app.manage(ManagedRuntimeEnvironment(Arc::clone(&runtime_environment)));
 
@@ -393,9 +400,9 @@ pub fn run() {
             app.manage(DiagnosticsStateHandle(Arc::clone(&diagnostics_state)));
             app.manage(ManagedDiagnosticsState(Arc::clone(&diagnostics_state)));
 
-            let pool = match tauri::async_runtime::block_on(
-                db::init_db_at_runtime_paths(&runtime_environment.paths),
-            ) {
+            let pool = match tauri::async_runtime::block_on(db::init_db_at_runtime_paths(
+                &runtime_environment.paths,
+            )) {
                 Ok(pool) => pool,
                 Err(error) => {
                     let _ = diagnostics::write_log_record(
@@ -409,7 +416,11 @@ pub fn run() {
                     panic!("failed to init db: {error}");
                 }
             };
-            write_startup_audit_snapshot(&diagnostics_state, &pool, &runtime_environment.paths.root);
+            write_startup_audit_snapshot(
+                &diagnostics_state,
+                &pool,
+                &runtime_environment.paths.root,
+            );
             app.manage(RuntimeAuditStateHandle {
                 diagnostics: Arc::clone(&diagnostics_state),
                 pool: pool.clone(),
@@ -426,7 +437,14 @@ pub fn run() {
             restore_saved_mcp_servers(pool.clone(), Arc::clone(&handles.registry));
             tauri::async_runtime::spawn({
                 let pool = pool.clone();
-                let runtime_state = app.state::<OpenClawPluginFeishuRuntimeState>().inner().clone();
+                let runtime_state = app
+                    .state::<OpenClawPluginFeishuRuntimeState>()
+                    .inner()
+                    .clone();
+                let channel_monitor_state =
+                    app.state::<ChannelConnectorMonitorState>().inner().clone();
+                let channel_host_runtime_state =
+                    app.state::<ImChannelHostRuntimeState>().inner().clone();
                 let app_handle = app.handle().clone();
                 let sidecar_manager = handles.sidecar_manager.clone();
                 async move {
@@ -436,12 +454,17 @@ pub fn run() {
                     {
                         let _ = commands::openclaw_plugins::ensure_openclaw_cli_shim(&shim_root);
                     }
-                    let _ = commands::openclaw_plugins::maybe_restore_openclaw_plugin_feishu_runtime_with_pool(
+                    if let Ok(report) = commands::im_host::restore_im_channels_with_pool(
                         &pool,
                         &runtime_state,
+                        channel_monitor_state,
+                        channel_host_runtime_state.clone(),
                         app_handle,
                     )
-                    .await;
+                    .await
+                    {
+                        let _ = record_im_channel_restore_report(&channel_host_runtime_state, report);
+                    }
                 }
             });
             tauri::async_runtime::spawn({
@@ -571,12 +594,20 @@ pub fn run() {
             commands::wecom_gateway::set_wecom_gateway_settings,
             commands::wecom_gateway::get_wecom_gateway_settings,
             commands::wecom_gateway::start_wecom_connector,
+            commands::wecom_gateway::stop_wecom_connector,
             commands::wecom_gateway::get_wecom_connector_status,
             commands::wecom_gateway::send_wecom_text_message,
             commands::channel_connectors::list_channel_connectors,
             commands::channel_connectors::get_channel_connector_diagnostics,
             commands::channel_connectors::ack_channel_events,
             commands::channel_connectors::replay_channel_events,
+            commands::channel_connectors::sync_channel_connector_events,
+            commands::channel_connectors::start_channel_connector_monitor,
+            commands::channel_connectors::stop_channel_connector_monitor,
+            commands::channel_connectors::get_channel_connector_monitor_status,
+            commands::im_host::channel_registry::list_im_channel_registry,
+            commands::im_host::channel_registry::get_im_channel_host_runtime_snapshot,
+            commands::im_host::channel_registry::set_im_channel_host_running,
             commands::openclaw_gateway::handle_openclaw_event,
             commands::openclaw_gateway::simulate_im_route,
             commands::im_gateway::handle_feishu_callback,
@@ -634,8 +665,8 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        should_surface_single_instance_activation, SingleInstanceActivationState,
-        SINGLE_INSTANCE_FOCUS_DEBOUNCE,
+        SINGLE_INSTANCE_FOCUS_DEBOUNCE, SingleInstanceActivationState,
+        should_surface_single_instance_activation,
     };
     use std::time::Instant;
 

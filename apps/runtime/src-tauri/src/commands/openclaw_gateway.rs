@@ -1,12 +1,15 @@
 use crate::commands::feishu_gateway::{call_sidecar_json, resolve_feishu_sidecar_base_url};
 use crate::commands::im_config::get_thread_role_config_with_pool;
-use crate::commands::im_gateway::{process_im_event, FeishuCallbackResult};
+use crate::commands::im_gateway::FeishuCallbackResult;
+use crate::commands::im_host::dispatch_im_inbound_to_workclaw_with_pool_and_app;
 use crate::commands::im_routing::list_im_routing_bindings_with_pool;
 use crate::commands::skills::DbState;
-use crate::im::runtime_bridge::{build_im_role_event_payload, ImRoleEventPayload};
+use crate::im::runtime_bridge::{
+    build_im_role_dispatch_request_for_channel, build_im_role_event_payload, ImRoleDispatchRequest,
+    ImRoleEventPayload,
+};
 use crate::im::types::{ImEvent, ImEventType};
 use sqlx::SqlitePool;
-use tauri::Emitter;
 use tauri::State;
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -215,6 +218,65 @@ pub async fn plan_role_events_for_openclaw(
         .collect())
 }
 
+pub async fn plan_role_dispatch_requests_for_openclaw(
+    pool: &SqlitePool,
+    event: &ImEvent,
+) -> Result<Vec<ImRoleDispatchRequest>, String> {
+    if event.event_type != ImEventType::MessageCreated
+        && event.event_type != ImEventType::MentionRole
+    {
+        return Ok(Vec::new());
+    }
+
+    let cfg = match get_thread_role_config_with_pool(pool, &event.thread_id).await {
+        Ok(c) => c,
+        Err(_) => return Ok(Vec::new()),
+    };
+
+    let roles: Vec<String> = if let Some(role_id) = event.role_id.clone() {
+        if cfg.roles.iter().any(|r| r == &role_id) {
+            vec![role_id]
+        } else {
+            Vec::new()
+        }
+    } else {
+        cfg.roles
+    };
+
+    let session_id = format!("im-{}", event.thread_id);
+    let user_text = event
+        .text
+        .clone()
+        .unwrap_or_else(|| "请基于当前上下文继续协作".to_string());
+    let agent_type = if cfg.scenario_template == "opportunity_review" {
+        "plan"
+    } else {
+        "general-purpose"
+    };
+    let source_channel = if event.channel.trim().is_empty() {
+        "app".to_string()
+    } else {
+        event.channel.trim().to_lowercase()
+    };
+
+    Ok(roles
+        .into_iter()
+        .map(|role_id| {
+            let mut req = build_im_role_dispatch_request_for_channel(
+                &session_id,
+                &event.thread_id,
+                &role_id,
+                &role_id,
+                &source_channel,
+                &format!("场景={}。用户输入：{}", cfg.scenario_template, user_text),
+                agent_type,
+            );
+            req.message_id = event.message_id.clone().unwrap_or_default();
+            req
+        })
+        .collect())
+}
+
 fn bindings_to_openclaw_payload(
     bindings: Vec<crate::commands::im_routing::ImRoutingBinding>,
 ) -> Vec<serde_json::Value> {
@@ -319,14 +381,7 @@ pub async fn handle_openclaw_event(
 ) -> Result<FeishuCallbackResult, String> {
     let event = parse_openclaw_payload(&payload)?;
     validate_openclaw_auth_with_pool(&db.0, auth_token).await?;
-    let result = process_im_event(&db.0, event.clone()).await?;
-    if !result.deduped {
-        let planned = plan_role_events_for_openclaw(&db.0, &event).await?;
-        for evt in planned {
-            let _ = app.emit("im-role-event", evt);
-        }
-    }
-    Ok(result)
+    dispatch_im_inbound_to_workclaw_with_pool_and_app(&db.0, &app, &event).await
 }
 
 #[cfg(test)]

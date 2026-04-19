@@ -157,6 +157,29 @@ pub struct OpenClawPluginChannelSnapshotResult {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenClawPluginFeishuReplyCompletionState {
+    Running,
+    WaitingForIdle,
+    IdleReached,
+    AwaitingUser,
+    AwaitingApproval,
+    Interrupted,
+    Completed,
+    Failed,
+    Stopped,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenClawPluginFeishuLatestReplyCompletion {
+    pub logical_reply_id: String,
+    pub phase: crate::commands::im_host::ImReplyLifecyclePhase,
+    pub state: OpenClawPluginFeishuReplyCompletionState,
+    pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct OpenClawPluginFeishuRuntimeStatus {
     pub plugin_id: String,
     pub account_id: String,
@@ -168,6 +191,10 @@ pub struct OpenClawPluginFeishuRuntimeStatus {
     pub pid: Option<u32>,
     pub port: Option<u16>,
     pub recent_logs: Vec<String>,
+    #[serde(default)]
+    pub recent_reply_lifecycle: Vec<crate::commands::im_host::ImReplyLifecycleEvent>,
+    #[serde(default)]
+    pub latest_reply_completion: Option<OpenClawPluginFeishuLatestReplyCompletion>,
 }
 
 impl Default for OpenClawPluginFeishuRuntimeStatus {
@@ -183,6 +210,8 @@ impl Default for OpenClawPluginFeishuRuntimeStatus {
             pid: None,
             port: None,
             recent_logs: Vec::new(),
+            recent_reply_lifecycle: Vec::new(),
+            latest_reply_completion: None,
         }
     }
 }

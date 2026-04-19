@@ -1,15 +1,21 @@
+use super::metadata_service::{
+    resolve_feishu_host_metadata_from_registry_with_pool, FeishuHostMetadata,
+};
 use super::send_feishu_text_message_with_pool;
 use super::types::FeishuPairingRequestRecord;
-use crate::commands::openclaw_plugins::get_openclaw_plugin_feishu_channel_snapshot_with_pool;
+use crate::commands::channel_connectors::ChannelConnectorMonitorState;
+use crate::commands::im_host::ImChannelHostRuntimeState;
+use crate::commands::openclaw_plugins::OpenClawPluginFeishuRuntimeState;
 use crate::im::types::ImEvent;
 use sqlx::SqlitePool;
+use tauri::AppHandle;
 use uuid::Uuid;
 
 pub(crate) fn resolve_feishu_pairing_account_id(
     event: &ImEvent,
-    snapshot: Option<&crate::commands::openclaw_plugins::OpenClawPluginChannelSnapshotResult>,
+    metadata: Option<&FeishuHostMetadata>,
 ) -> String {
-    if let Some(account_id) = snapshot
+    if let Some(account_id) = metadata
         .and_then(|value| super::select_feishu_channel_account_snapshot(value, event))
         .map(|account| account.account_id.trim())
         .filter(|value| !value.is_empty())
@@ -193,11 +199,10 @@ pub(crate) async fn maybe_create_feishu_pairing_request_with_pool(
     if !super::is_direct_feishu_chat(event) {
         return Ok(None);
     }
-    let snapshot =
-        get_openclaw_plugin_feishu_channel_snapshot_with_pool(pool, "openclaw-lark")
-            .await
-            .ok();
-    let account_id = resolve_feishu_pairing_account_id(event, snapshot.as_ref());
+    let metadata = super::metadata_service::resolve_feishu_host_metadata_with_pool(pool)
+        .await
+        .ok();
+    let account_id = resolve_feishu_pairing_account_id(event, metadata.as_ref());
     let Some(sender_id) = event
         .sender_id
         .as_deref()
@@ -207,9 +212,64 @@ pub(crate) async fn maybe_create_feishu_pairing_request_with_pool(
         return Ok(None);
     };
 
-    let (record, created) =
-        upsert_feishu_pairing_request_with_pool(pool, &account_id, sender_id, &event.thread_id, None)
-            .await?;
+    let (record, created) = upsert_feishu_pairing_request_with_pool(
+        pool,
+        &account_id,
+        sender_id,
+        &event.thread_id,
+        None,
+    )
+    .await?;
+    if created && !record.chat_id.trim().is_empty() {
+        let _ = send_feishu_text_message_with_pool(
+            pool,
+            &record.chat_id,
+            &build_feishu_pairing_request_text(&record),
+            None,
+        )
+        .await;
+    }
+    Ok(Some(record))
+}
+
+pub(crate) async fn maybe_create_feishu_pairing_request_from_registry_with_pool(
+    pool: &SqlitePool,
+    runtime_state: &OpenClawPluginFeishuRuntimeState,
+    channel_monitor_state: &ChannelConnectorMonitorState,
+    host_runtime_state: &ImChannelHostRuntimeState,
+    app: &AppHandle,
+    event: &ImEvent,
+) -> Result<Option<FeishuPairingRequestRecord>, String> {
+    if !super::is_direct_feishu_chat(event) {
+        return Ok(None);
+    }
+    let metadata = resolve_feishu_host_metadata_from_registry_with_pool(
+        pool,
+        runtime_state,
+        channel_monitor_state,
+        host_runtime_state,
+        app,
+    )
+    .await
+    .ok();
+    let account_id = resolve_feishu_pairing_account_id(event, metadata.as_ref());
+    let Some(sender_id) = event
+        .sender_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(None);
+    };
+
+    let (record, created) = upsert_feishu_pairing_request_with_pool(
+        pool,
+        &account_id,
+        sender_id,
+        &event.thread_id,
+        None,
+    )
+    .await?;
     if created && !record.chat_id.trim().is_empty() {
         let _ = send_feishu_text_message_with_pool(
             pool,

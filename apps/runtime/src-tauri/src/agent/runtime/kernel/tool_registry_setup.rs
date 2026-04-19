@@ -413,10 +413,16 @@ pub(crate) async fn setup_runtime_tool_registry(
         .register(Arc::new(CompactTool::new()));
 
     let ask_user_responder = params.app.state::<AskUserState>().0.clone();
+    let ask_user_pending_session = params
+        .app
+        .state::<crate::agent::runtime::AskUserPendingSessionState>()
+        .0
+        .clone();
     let ask_user_tool = AskUserTool::new(
         params.app.clone(),
         params.session_id.to_string(),
         ask_user_responder,
+        ask_user_pending_session,
     );
     params
         .agent_executor

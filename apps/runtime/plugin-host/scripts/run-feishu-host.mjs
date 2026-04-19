@@ -12,6 +12,19 @@ function emit(event, payload = {}) {
   process.stdout.write(`${JSON.stringify({ event, ...payload })}\n`);
 }
 
+function emitReplyLifecycle(lifecycle, phase, extra = {}) {
+  emit("reply_lifecycle", {
+    logicalReplyId: lifecycle.logicalReplyId,
+    phase,
+    channel: lifecycle.channel,
+    ...(lifecycle.accountId ? { accountId: lifecycle.accountId } : {}),
+    ...(lifecycle.threadId ? { threadId: lifecycle.threadId } : {}),
+    ...(lifecycle.chatId ? { chatId: lifecycle.chatId } : {}),
+    ...(lifecycle.messageId ? { messageId: lifecycle.messageId } : {}),
+    ...extra,
+  });
+}
+
 function stripPrefixedTarget(rawTarget, prefix) {
   const value = readString(rawTarget);
   if (!value) {
@@ -291,6 +304,10 @@ function normalizeCommandPayload(payload) {
     accountId: readString(payload.accountId) ?? readString(payload.account_id),
     target: readString(payload.target),
     threadId: readString(payload.threadId) ?? readString(payload.thread_id),
+    messageId: readString(payload.messageId) ?? readString(payload.message_id),
+    logicalReplyId: readString(payload.logicalReplyId) ?? readString(payload.logical_reply_id),
+    finalState: readString(payload.finalState) ?? readString(payload.final_state),
+    phase: readString(payload.phase),
     text: readString(payload.text),
     mode: readString(payload.mode),
   };
@@ -343,6 +360,20 @@ function resolveEffectiveAllowFrom(config, accountId) {
   return Array.from(new Set(merged));
 }
 
+function resolveTypingIndicatorEnabled(config, accountId) {
+  const feishu = resolveFeishuConfig(config);
+  const accounts = asRecord(feishu.accounts);
+  const accountKey = readString(accountId) ?? "default";
+  const account = asRecord(accounts?.[accountKey]) ?? {};
+  if (typeof account.typingIndicator === "boolean") {
+    return account.typingIndicator;
+  }
+  if (typeof feishu.typingIndicator === "boolean") {
+    return feishu.typingIndicator;
+  }
+  return true;
+}
+
 function createSessionKey(channel, peerKind, peerId, agentId) {
   const normalizedPeer = peerId.trim().toLowerCase() || "unknown";
   return `agent:${agentId}:${channel}:${peerKind}:${normalizedPeer}`;
@@ -362,6 +393,9 @@ function resolveAgentRoute(params) {
 
 function createReplyDispatcher() {
   let sendChain = Promise.resolve();
+  let waitEmitted = false;
+  let idleReachedEmitted = false;
+  let completeEmitted = false;
   const queuedCounts = {
     tool: 0,
     block: 0,
@@ -371,8 +405,17 @@ function createReplyDispatcher() {
   const enqueue = (kind) => {
     queuedCounts[kind] += 1;
     sendChain = sendChain.then(async () => undefined);
+    lifecycle?.record(
+      kind === "tool"
+        ? "tool_chunk_queued"
+        : kind === "block"
+          ? "block_chunk_queued"
+          : "final_chunk_queued",
+      { queuedCounts: { ...queuedCounts } },
+    );
     return true;
   };
+  let lifecycle = null;
 
   return {
     sendToolResult() {
@@ -385,13 +428,30 @@ function createReplyDispatcher() {
       return enqueue("final");
     },
     async waitForIdle() {
+      if (!waitEmitted) {
+        waitEmitted = true;
+        lifecycle?.record("wait_for_idle", { queuedCounts: { ...queuedCounts } });
+      }
       await sendChain;
+      if (!idleReachedEmitted) {
+        idleReachedEmitted = true;
+        lifecycle?.record("idle_reached", { queuedCounts: { ...queuedCounts } });
+      }
     },
     getQueuedCounts() {
       return { ...queuedCounts };
     },
     markComplete() {
-      return;
+      if (!completeEmitted) {
+        completeEmitted = true;
+        lifecycle?.record("fully_complete", { queuedCounts: { ...queuedCounts } });
+      }
+    },
+    setLifecycle(lifecycleMeta) {
+      lifecycle = lifecycleMeta;
+    },
+    getLifecycle() {
+      return lifecycle ? { ...lifecycle } : undefined;
     },
   };
 }
@@ -400,11 +460,19 @@ function generatePairingCode() {
   return Math.random().toString(36).slice(2, 10).toUpperCase();
 }
 
-function createPluginRuntime(config) {
+function createPluginRuntime(config, options = {}) {
   const records = [];
   const systemRecords = [];
   const pairingRequests = new Map();
   let outboundSendSequence = 0;
+  const processingReactions = asRecord(options.processingReactions) ?? {
+    async start() {
+      return false;
+    },
+    async stop() {
+      return false;
+    },
+  };
 
   function pushRecord(level, scope, args) {
     const message = stringifyLogArgs(args);
@@ -587,7 +655,12 @@ function createPluginRuntime(config) {
           return { ...ctx };
         },
         createReplyDispatcherWithTyping() {
+          const lifecycle = {
+            logicalReplyId: `reply_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
+            channel: "feishu",
+          };
           const dispatcher = createReplyDispatcher();
+          dispatcher.setLifecycle(lifecycle);
           return {
             dispatcher,
             replyOptions: {},
@@ -606,16 +679,84 @@ function createPluginRuntime(config) {
           try {
             return await params.run();
           } finally {
-            params.dispatcher.markComplete();
             try {
               await params.dispatcher.waitForIdle();
             } finally {
+              params.dispatcher.markComplete();
+              const lifecycle = params.dispatcher.getLifecycle?.() ?? {
+                logicalReplyId: `reply_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
+                channel: "feishu",
+              };
+              emitReplyLifecycle(lifecycle, "dispatch_idle", {
+                queuedCounts: params.dispatcher.getQueuedCounts?.() ?? { tool: 0, block: 0, final: 0 },
+              });
               await params.onSettled?.();
             }
           }
         },
         async dispatchReplyFromConfig(params) {
+          const dispatcher = params?.dispatcher;
+          const ctx = asRecord(params?.ctx) ?? {};
+          const chatId =
+            stripPrefixedTarget(ctx.To, "chat:") ??
+            readString(ctx.ChatId) ??
+            undefined;
+          const threadId = deriveDispatchThreadId(ctx);
+          const accountId = readString(ctx.AccountId) ?? "default";
+          const messageId = readString(ctx.MessageSid);
+          const lifecycle = dispatcher?.getLifecycle?.() ?? {
+            logicalReplyId: `reply_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
+            channel: "feishu",
+          };
+          dispatcher?.setLifecycle?.({
+            ...lifecycle,
+            accountId,
+            threadId,
+            ...(chatId ? { chatId } : {}),
+            ...(messageId ? { messageId } : {}),
+            record(phase, extra = {}) {
+              emitReplyLifecycle(
+                {
+                  logicalReplyId: lifecycle.logicalReplyId,
+                  channel: "feishu",
+                  accountId,
+                  threadId,
+                  ...(chatId ? { chatId } : {}),
+                  ...(messageId ? { messageId } : {}),
+                },
+                phase,
+                extra,
+              );
+            },
+          });
+          await processingReactions.start({
+            messageId,
+            accountId,
+          });
           emitDispatchRequest(params);
+          emitReplyLifecycle(
+            {
+              logicalReplyId: lifecycle.logicalReplyId,
+              channel: "feishu",
+              accountId,
+              threadId,
+              ...(chatId ? { chatId } : {}),
+              ...(messageId ? { messageId } : {}),
+            },
+            "reply_started",
+            { queuedCounts: dispatcher?.getQueuedCounts?.() ?? { tool: 0, block: 0, final: 0 } },
+          );
+          emitReplyLifecycle(
+            {
+              logicalReplyId: lifecycle.logicalReplyId,
+              channel: "feishu",
+              accountId,
+              threadId,
+              ...(chatId ? { chatId } : {}),
+              ...(messageId ? { messageId } : {}),
+            },
+            "processing_started",
+          );
           return { queuedFinal: false, counts: { final: 0 } };
         },
         async dispatchReplyWithBufferedBlockDispatcher() {
@@ -650,6 +791,116 @@ function createPluginRuntime(config) {
       throw new Error(`plugin runtime exit(${code})`);
     },
   };
+}
+
+function createProcessingReactionController(config, loadedModule) {
+  const addReaction = typeof loadedModule?.addReactionFeishu === "function" ? loadedModule.addReactionFeishu : null;
+  const removeReaction =
+    typeof loadedModule?.removeReactionFeishu === "function" ? loadedModule.removeReactionFeishu : null;
+  const activeIndicators = new Map();
+
+  async function start(params) {
+    const messageId = readString(params?.messageId);
+    const accountId = readString(params?.accountId) ?? "default";
+    if (!messageId || !resolveTypingIndicatorEnabled(config, accountId) || !addReaction) {
+      return false;
+    }
+    if (activeIndicators.has(messageId)) {
+      return true;
+    }
+    try {
+      const result = await addReaction({
+        cfg: config,
+        messageId,
+        emojiType: "Typing",
+        accountId,
+      });
+      activeIndicators.set(messageId, {
+        reactionId: result?.reactionId ?? null,
+        accountId,
+      });
+      emit("log", {
+        level: "info",
+        scope: "processing",
+        message: `started typing reaction messageId=${messageId}`,
+      });
+      return true;
+    } catch (error) {
+      emit("log", {
+        level: "warn",
+        scope: "processing",
+        message: `failed to start typing reaction messageId=${messageId}: ${error instanceof Error ? error.message : String(error)}`,
+      });
+      return false;
+    }
+  }
+
+  async function stop(params) {
+    const messageId = readString(params?.messageId);
+    const accountId = readString(params?.accountId) ?? "default";
+    if (!messageId) {
+      return false;
+    }
+    const state = activeIndicators.get(messageId);
+    activeIndicators.delete(messageId);
+    if (!state?.reactionId || !removeReaction) {
+      return false;
+    }
+    try {
+      await removeReaction({
+        cfg: config,
+        messageId,
+        reactionId: state.reactionId,
+        accountId: state.accountId ?? accountId,
+      });
+      emit("log", {
+        level: "info",
+        scope: "processing",
+        message: `stopped typing reaction messageId=${messageId}`,
+      });
+      return true;
+    } catch (error) {
+      emit("log", {
+        level: "warn",
+        scope: "processing",
+        message: `failed to stop typing reaction messageId=${messageId}: ${error instanceof Error ? error.message : String(error)}`,
+      });
+      return false;
+    }
+  }
+
+  return {
+    start,
+    stop,
+  };
+}
+
+function normalizeLifecyclePhase(value) {
+  const normalized = readString(value);
+  if (!normalized) {
+    return undefined;
+  }
+  const allowed = new Set([
+    "reply_started",
+    "processing_started",
+    "ask_user_requested",
+    "ask_user_answered",
+    "approval_requested",
+    "approval_resolved",
+    "interrupt_requested",
+    "resumed",
+    "failed",
+    "stopped",
+    "tool_chunk_queued",
+    "block_chunk_queued",
+    "final_chunk_queued",
+    "wait_for_idle",
+    "idle_reached",
+    "fully_complete",
+    "dispatch_idle",
+    "processing_stopped",
+  ]);
+  return allowed.has(normalized) ? normalized : undefined;
 }
 
 function createPluginApi(registry, { runtime, logger, config, registrationMode }) {
@@ -867,7 +1118,9 @@ async function main() {
   const registry = createPluginRegistry();
   const configSource = args.configFile.trim() ? fs.readFileSync(path.resolve(args.configFile), "utf8") : args.configJson;
   const config = configSource.trim() ? JSON.parse(configSource) : {};
-  const runtime = createPluginRuntime(config);
+  const loadedModule = await import(pathToFileURL(entryPath).href);
+  const processingReactions = createProcessingReactionController(config, loadedModule ?? null);
+  const runtime = createPluginRuntime(config, { processingReactions });
   const logger = runtime.logging.getChildLogger({ scope: "plugin-host-feishu-runtime" });
   const api = createPluginApi(registry, {
     runtime,
@@ -876,7 +1129,6 @@ async function main() {
     registrationMode: normalizeRegistrationMode(manifest.registrationMode),
   });
 
-  const loadedModule = await import(pathToFileURL(entryPath).href);
   const plugin = resolvePluginExport(loadedModule);
   if (typeof plugin.register !== "function") {
     throw new Error("plugin module must export a register(api) function");
@@ -969,6 +1221,79 @@ async function main() {
       });
       return;
     }
+    if (commandPayload.command === "processing_stop") {
+      if (!commandPayload.messageId) {
+        emit("command_error", {
+          requestId: commandPayload.requestId ?? null,
+          command: commandPayload.command,
+          error: "messageId is required",
+        });
+        return;
+      }
+
+      const accountId = commandPayload.accountId ?? args.accountId;
+      const logicalReplyId = commandPayload.logicalReplyId ?? `reply_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+      await processingReactions.stop({
+        messageId: commandPayload.messageId,
+        accountId,
+      });
+      emitReplyLifecycle(
+        {
+          logicalReplyId,
+          channel: "feishu",
+          accountId,
+          ...(commandPayload.threadId ? { threadId: commandPayload.threadId } : {}),
+          messageId: commandPayload.messageId,
+        },
+        "processing_stopped",
+        commandPayload.finalState ? { finalState: commandPayload.finalState } : {},
+      );
+      emit("processing_result", {
+        requestId: commandPayload.requestId ?? null,
+        command: commandPayload.command,
+        accountId,
+        messageId: commandPayload.messageId,
+        logicalReplyId,
+        ...(commandPayload.finalState ? { finalState: commandPayload.finalState } : {}),
+      });
+      return;
+    }
+
+    if (commandPayload.command === "lifecycle_event") {
+      const phase = normalizeLifecyclePhase(commandPayload.phase);
+      if (!phase) {
+        emit("command_error", {
+          requestId: commandPayload.requestId ?? null,
+          command: commandPayload.command,
+          error: "phase is required",
+        });
+        return;
+      }
+
+      const accountId = commandPayload.accountId ?? args.accountId;
+      const logicalReplyId =
+        commandPayload.logicalReplyId ?? `reply_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+      emitReplyLifecycle(
+        {
+          logicalReplyId,
+          channel: "feishu",
+          accountId,
+          ...(commandPayload.threadId ? { threadId: commandPayload.threadId } : {}),
+          ...(commandPayload.messageId ? { messageId: commandPayload.messageId } : {}),
+        },
+        phase,
+      );
+      emit("processing_result", {
+        requestId: commandPayload.requestId ?? null,
+        command: commandPayload.command,
+        accountId,
+        logicalReplyId,
+        ...(commandPayload.messageId ? { messageId: commandPayload.messageId } : {}),
+        phase,
+      });
+      return;
+    }
+
     if (commandPayload.command !== "send_message") {
       emit("command_error", {
         requestId: commandPayload.requestId ?? null,
