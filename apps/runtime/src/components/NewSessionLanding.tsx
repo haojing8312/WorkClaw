@@ -1,19 +1,7 @@
 import { ChangeEvent, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import {
-  createAttachmentId,
-  isImageFile,
-  isPdfFile,
-  isTextFile,
-  MAX_FILES,
-  MAX_IMAGE_FILES,
-  MAX_IMAGE_SIZE,
-  MAX_PDF_FILE_SIZE,
-  MAX_TEXT_FILE_SIZE,
-  readFileAsBase64,
-  readFileAsDataUrl,
-  readFileAsText,
-} from "../lib/chatAttachments";
+import { buildFileInputAccept, DEFAULT_ATTACHMENT_POLICY } from "../lib/attachmentPolicy";
+import { normalizePendingAttachmentsFromBrowserFiles } from "../lib/pendingAttachmentIntake";
 import { LandingSessionLaunchInput, PendingAttachment, SessionInfo } from "../types";
 
 interface Props {
@@ -28,7 +16,11 @@ interface Props {
   error?: string | null;
   onSelectSession: (id: string) => void;
   onCreateSessionWithInitialMessage: (input: LandingSessionLaunchInput) => void;
-  onCreateTeamEntrySession?: (input: { teamId: string; initialMessage: string }) => void;
+  onCreateTeamEntrySession?: (input: {
+    teamId: string;
+    initialMessage: string;
+    attachments?: PendingAttachment[];
+  }) => void;
   onPickWorkDir?: (currentWorkDir?: string) => Promise<string | null>;
   defaultWorkDir?: string;
 }
@@ -120,6 +112,7 @@ export function NewSessionLanding({
 }: Props) {
   const [input, setInput] = useState("");
   const [attachedFiles, setAttachedFiles] = useState<PendingAttachment[]>([]);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [selectedWorkDir, setSelectedWorkDir] = useState(defaultWorkDir.trim());
   const [selectedScenarioId, setSelectedScenarioId] = useState<string | null>(null);
   const [showFilledHint, setShowFilledHint] = useState(false);
@@ -151,82 +144,27 @@ export function NewSessionLanding({
     onCreateTeamEntrySession({
       teamId,
       initialMessage: input.trim(),
+      attachments: attachedFiles,
     });
   };
 
   const handleFileSelect = async (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files || []);
-    const currentImageCount = attachedFiles.filter((file) => file.kind === "image").length;
 
-    if (attachedFiles.length + files.length > MAX_FILES) {
-      alert(`最多只能上传 ${MAX_FILES} 个文件`);
-      event.target.value = "";
-      return;
-    }
-
-    const newFiles: PendingAttachment[] = [];
-    let nextImageCount = currentImageCount;
-
-    for (const file of files) {
-      if (isImageFile(file)) {
-        if (nextImageCount >= MAX_IMAGE_FILES) {
-          alert(`最多只能上传 ${MAX_IMAGE_FILES} 张图片`);
-          continue;
-        }
-        if (file.size > MAX_IMAGE_SIZE) {
-          alert(`图片 ${file.name} 超过 5MB 限制`);
-          continue;
-        }
-        const dataUrl = await readFileAsDataUrl(file);
-        newFiles.push({
-          id: createAttachmentId(),
-          kind: "image",
-          name: file.name,
-          mimeType: file.type || "image/png",
-          size: file.size,
-          data: dataUrl,
-          previewUrl: dataUrl,
-        });
-        nextImageCount += 1;
-        continue;
-      }
-
-      if (!isTextFile(file)) {
-        if (!isPdfFile(file)) {
-          alert(`暂不支持附件类型 ${file.name}`);
-          continue;
-        }
-        if (file.size > MAX_PDF_FILE_SIZE) {
-          alert(`PDF 文件 ${file.name} 超过 10MB 限制`);
-          continue;
-        }
-        const data = await readFileAsBase64(file);
-        newFiles.push({
-          id: createAttachmentId("landing-attachment"),
-          kind: "pdf-file",
-          name: file.name,
-          mimeType: file.type || "application/pdf",
-          size: file.size,
-          data,
-        });
-        continue;
-      }
-
-      const text = await readFileAsText(file);
-      const truncated = text.length > MAX_TEXT_FILE_SIZE;
-      newFiles.push({
-        id: createAttachmentId("landing-attachment"),
-        kind: "text-file",
-        name: file.name,
-        mimeType: file.type || "text/plain",
-        size: file.size,
-        text: truncated ? text.slice(0, MAX_TEXT_FILE_SIZE) : text,
-        truncated,
+    try {
+      const { accepted, rejectionMessage } = await normalizePendingAttachmentsFromBrowserFiles({
+        files,
+        existingAttachments: attachedFiles,
+        textOversizeMode: "truncate",
       });
-    }
 
-    if (newFiles.length > 0) {
-      setAttachedFiles((prev) => [...prev, ...newFiles]);
+      if (accepted.length > 0) {
+        setAttachedFiles((prev) => [...prev, ...accepted]);
+      }
+      setAttachmentError(rejectionMessage);
+    } catch (uploadError) {
+      console.error("处理落地页附件失败:", uploadError);
+      setAttachmentError("附件读取失败，请重试");
     }
 
     event.target.value = "";
@@ -292,6 +230,7 @@ export function NewSessionLanding({
             aria-label="添加附件"
             type="file"
             multiple
+            accept={buildFileInputAccept(DEFAULT_ATTACHMENT_POLICY)}
             className="hidden"
             onChange={handleFileSelect}
           />
@@ -318,6 +257,11 @@ export function NewSessionLanding({
             <div className="mt-2 text-xs text-[var(--sm-primary-strong)]">已填入场景示例，你可以继续修改后再开始任务</div>
           )}
           {error && <div className="mt-2 text-xs text-red-500">{error}</div>}
+          {attachmentError && (
+            <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              {attachmentError}
+            </div>
+          )}
           {attachedFiles.length > 0 && (
             <div className="mt-3 space-y-2">
               <div className="text-xs text-gray-500">已添加 {attachedFiles.length} 个附件</div>
@@ -329,7 +273,17 @@ export function NewSessionLanding({
                     title={file.name}
                   >
                     <span className="rounded-full bg-white/70 px-1.5 py-0.5 text-[10px] uppercase tracking-wide">
-                      {file.kind === "image" ? "IMG" : file.kind === "pdf-file" ? "PDF" : "TXT"}
+                      {file.kind === "image"
+                        ? "IMG"
+                        : file.kind === "audio"
+                          ? "AUD"
+                        : file.kind === "video"
+                            ? "VID"
+                            : file.kind === "pdf-file"
+                              ? "PDF"
+                              : file.kind === "document-file"
+                                ? "DOC"
+                              : "TXT"}
                     </span>
                     <span className="max-w-[220px] truncate">{file.name}</span>
                     <button

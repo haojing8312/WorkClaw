@@ -1,5 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ChatView } from "../ChatView";
+import { buildFileInputAccept, DEFAULT_ATTACHMENT_POLICY } from "../../lib/attachmentPolicy";
+import { toOptimisticDisplayPart } from "../../scenes/chat/useChatSendController";
 import type { ChatMessagePart, PendingAttachment, PersistedChatRuntimeState, SessionToolManifestEntry } from "../../types";
 import { resetChatStreamEventSubscriptionsForTest } from "../../lib/chat-stream-events";
 
@@ -26,11 +28,16 @@ it("defines structured attachment, message-part, and tool manifest frontend type
     text: "# hello",
   };
   const part: ChatMessagePart = {
-    type: "file_text",
-    name: attachment.name,
-    mimeType: attachment.mimeType,
-    size: attachment.size,
-    text: attachment.text,
+    type: "attachment",
+    attachment: {
+      id: attachment.id,
+      kind: "document",
+      sourceType: "browser_file",
+      name: attachment.name,
+      declaredMimeType: attachment.mimeType,
+      sizeBytes: attachment.size,
+      sourcePayload: attachment.text,
+    },
   };
   const manifestEntry: SessionToolManifestEntry = {
     name: "read_file",
@@ -57,8 +64,35 @@ it("defines structured attachment, message-part, and tool manifest frontend type
     delegationCards: [],
   };
 
-  expect(part.type).toBe("file_text");
+  expect(part.type).toBe("attachment");
+  expect(part.attachment.kind).toBe("document");
   expect(runtimeState.toolManifest[0]?.name).toBe("read_file");
+});
+
+it("keeps unsupported attachment inputs as attachment parts in the optimistic bridge", () => {
+  const part = toOptimisticDisplayPart({
+    type: "attachment",
+    attachment: {
+      id: "att-audio-1",
+      kind: "audio",
+      sourceType: "remote_url",
+      name: "call.mp3",
+      declaredMimeType: "audio/mpeg",
+      sourceUri: "https://example.com/call.mp3",
+    },
+  });
+
+  expect(part).toEqual({
+    type: "attachment",
+    attachment: {
+      id: "att-audio-1",
+      kind: "audio",
+      sourceType: "remote_url",
+      name: "call.mp3",
+      declaredMimeType: "audio/mpeg",
+      sourceUri: "https://example.com/call.mp3",
+    },
+  });
 });
 
 beforeEach(() => {
@@ -615,6 +649,7 @@ describe("ChatView side panel redesign", () => {
     renderEmptyChat();
 
     const fileInput = document.getElementById("file-upload") as HTMLInputElement;
+    expect(fileInput).toHaveAttribute("accept", buildFileInputAccept(DEFAULT_ATTACHMENT_POLICY));
     const imageFile = new File(["image-bytes"], "screen.png", { type: "image/png" });
     const textFile = new File(["console.log('hi')"], "debug.ts", { type: "text/plain" });
 
@@ -675,11 +710,11 @@ describe("ChatView side panel redesign", () => {
     renderEmptyChat();
 
     const fileInput = document.getElementById("file-upload") as HTMLInputElement;
-    const badFile = new File(["fake"], "clip.mp4", { type: "video/mp4" });
+    const badFile = new File(["fake"], "archive.zip", { type: "application/zip" });
     const largeFile = new File(["big"], "huge.txt", { type: "text/plain" });
     Object.defineProperty(largeFile, "size", {
       configurable: true,
-      value: 6 * 1024 * 1024,
+      value: 21 * 1024 * 1024,
     });
 
     fireEvent.change(fileInput, {
@@ -688,10 +723,11 @@ describe("ChatView side panel redesign", () => {
       },
     });
 
-    await waitFor(() => {
-      expect(window.alert).toHaveBeenCalled();
-    });
-    expect(screen.queryByText("clip.mp4")).not.toBeInTheDocument();
+    expect(
+      await screen.findByText("暂不支持附件类型 archive.zip；文档文件 huge.txt 超过 20MB 限制"),
+    ).toBeInTheDocument();
+    expect(window.alert).not.toHaveBeenCalled();
+    expect(screen.queryByText("archive.zip")).not.toBeInTheDocument();
     expect(screen.queryByText("huge.txt")).not.toBeInTheDocument();
   });
 
@@ -724,15 +760,24 @@ describe("ChatView side panel redesign", () => {
           parts: [
             { type: "text", text: "帮我一起分析这些附件" },
             expect.objectContaining({
-              type: "image",
-              name: "screen.png",
-              mimeType: "image/png",
+              type: "attachment",
+              attachment: expect.objectContaining({
+                kind: "image",
+                sourceType: "browser_file",
+                name: "screen.png",
+                declaredMimeType: "image/png",
+                sourcePayload: expect.stringContaining("base64,"),
+              }),
             }),
             expect.objectContaining({
-              type: "file_text",
-              name: "notes.md",
-              mimeType: "text/plain",
-              text: "hello",
+              type: "attachment",
+              attachment: expect.objectContaining({
+                kind: "document",
+                sourceType: "browser_file",
+                name: "notes.md",
+                declaredMimeType: "text/plain",
+                sourcePayload: "hello",
+              }),
             }),
           ],
         },
@@ -740,7 +785,7 @@ describe("ChatView side panel redesign", () => {
     });
   });
 
-  test("sends pdf attachments as pdf_file parts", async () => {
+  test("sends pdf attachments as attachment parts", async () => {
     renderEmptyChat();
 
     fireEvent.change(screen.getByPlaceholderText("输入消息，Shift+Enter 换行..."), {
@@ -766,9 +811,14 @@ describe("ChatView side panel redesign", () => {
           parts: [
             { type: "text", text: "请阅读这个 PDF" },
             expect.objectContaining({
-              type: "pdf_file",
-              name: "brief.pdf",
-              mimeType: "application/pdf",
+              type: "attachment",
+              attachment: expect.objectContaining({
+                kind: "document",
+                sourceType: "browser_file",
+                name: "brief.pdf",
+                declaredMimeType: "application/pdf",
+                sourcePayload: expect.any(String),
+              }),
             }),
           ],
         },
@@ -801,9 +851,13 @@ describe("ChatView side panel redesign", () => {
               text: "请结合这些图片描述主要内容，并提取可见文字。",
             },
             expect.objectContaining({
-              type: "image",
-              name: "screen.png",
-              mimeType: "image/png",
+              type: "attachment",
+              attachment: expect.objectContaining({
+                kind: "image",
+                sourceType: "browser_file",
+                name: "screen.png",
+                declaredMimeType: "image/png",
+              }),
             }),
           ],
         },
@@ -902,6 +956,343 @@ describe("ChatView side panel redesign", () => {
     expect(await screen.findByText("brief.pdf")).toBeInTheDocument();
     expect(screen.getByText("文本附件")).toBeInTheDocument();
     expect(screen.getByText("PDF 附件")).toBeInTheDocument();
+  });
+
+  test("renders attachment-platform parts from contentParts", async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_messages") {
+        return Promise.resolve([
+          {
+            id: "user-attachment-platform-history",
+            role: "user",
+            content: "请结合新附件协议分析",
+            contentParts: [
+              { type: "text", text: "请结合新附件协议分析" },
+              {
+                type: "attachment",
+                attachment: {
+                  id: "att-image-1",
+                  kind: "image",
+                  sourceType: "browser_file",
+                  name: "platform-screen.png",
+                  declaredMimeType: "image/png",
+                  sizeBytes: 12,
+                  sourcePayload: "data:image/png;base64,aGVsbG8=",
+                },
+              },
+              {
+                type: "attachment",
+                attachment: {
+                  id: "att-doc-1",
+                  kind: "document",
+                  sourceType: "browser_file",
+                  name: "platform-debug.ts",
+                  declaredMimeType: "text/plain",
+                  sizeBytes: 18,
+                  sourcePayload: "console.log('hi')",
+                },
+              },
+              {
+                type: "attachment",
+                attachment: {
+                  id: "att-pdf-1",
+                  kind: "document",
+                  sourceType: "browser_file",
+                  name: "platform-brief.pdf",
+                  declaredMimeType: "application/pdf",
+                  sizeBytes: 128,
+                  extractedText: "这是平台 PDF 内容",
+                },
+              },
+            ],
+            created_at: new Date().toISOString(),
+          },
+        ]);
+      }
+      if (command === "list_sessions") {
+        return Promise.resolve([
+          {
+            id: "session-side-panel-redesign",
+            work_dir: "E:\\workspace\\session-side-panel-redesign",
+          },
+        ]);
+      }
+      if (command === "get_sessions") return Promise.resolve([]);
+      return Promise.resolve(null);
+    });
+
+    renderChat();
+
+    expect(await screen.findByText("请结合新附件协议分析")).toBeInTheDocument();
+    expect(await screen.findByAltText("platform-screen.png")).toBeInTheDocument();
+    expect(await screen.findByText("platform-debug.ts")).toBeInTheDocument();
+    expect(await screen.findByText("platform-brief.pdf")).toBeInTheDocument();
+    expect(screen.getByText("文本附件")).toBeInTheDocument();
+    expect(screen.getByText("PDF 附件")).toBeInTheDocument();
+  });
+
+  test("does not mislabel unsupported attachment-platform parts as text or pdf content", async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_messages") {
+        return Promise.resolve([
+          {
+            id: "user-unsupported-attachment-platform-history",
+            role: "user",
+            content: "请查看这个附件",
+            contentParts: [
+              { type: "text", text: "请查看这个附件" },
+              {
+                type: "attachment",
+                attachment: {
+                  id: "att-audio-1",
+                  kind: "audio",
+                  sourceType: "remote_url",
+                  name: "call.mp3",
+                  declaredMimeType: "audio/mpeg",
+                  sourceUri: "https://example.com/call.mp3",
+                  transcript: "TRANSCRIPTION_REQUIRED",
+                  warnings: ["transcription_pending"],
+                },
+              },
+              {
+                type: "attachment",
+                attachment: {
+                  id: "att-video-1",
+                  kind: "video",
+                  sourceType: "remote_url",
+                  name: "demo.mp4",
+                  declaredMimeType: "video/mp4",
+                  sourceUri: "https://example.com/demo.mp4",
+                  summary: "SUMMARY_REQUIRED",
+                  warnings: ["summary_pending"],
+                },
+              },
+            ],
+            created_at: new Date().toISOString(),
+          },
+        ]);
+      }
+      if (command === "list_sessions") {
+        return Promise.resolve([
+          {
+            id: "session-side-panel-redesign",
+            work_dir: "E:\\workspace\\session-side-panel-redesign",
+          },
+        ]);
+      }
+      if (command === "get_sessions") return Promise.resolve([]);
+      return Promise.resolve(null);
+    });
+
+    renderChat();
+
+    expect(await screen.findByText("请查看这个附件")).toBeInTheDocument();
+    expect(await screen.findByText("call.mp3")).toBeInTheDocument();
+    expect(await screen.findByText("demo.mp4")).toBeInTheDocument();
+    expect(screen.getByText("音频附件 · 待转写")).toBeInTheDocument();
+    expect(screen.getByText("视频附件 · 待摘要")).toBeInTheDocument();
+    expect(screen.queryByText("附件暂不支持预览")).not.toBeInTheDocument();
+    expect(screen.queryByText("文本附件")).not.toBeInTheDocument();
+    expect(screen.queryByText("PDF 附件")).not.toBeInTheDocument();
+  });
+
+  test("renders binary document attachment-platform parts as pending document extraction", async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_messages") {
+        return Promise.resolve([
+          {
+            id: "user-binary-document-platform-history",
+            role: "user",
+            content: "请查看这个表格附件",
+            contentParts: [
+              { type: "text", text: "请查看这个表格附件" },
+              {
+                type: "attachment",
+                attachment: {
+                  id: "att-sheet-1",
+                  kind: "document",
+                  sourceType: "browser_file",
+                  name: "budget.xlsx",
+                  declaredMimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                  sizeBytes: 2048,
+                  summary: "EXTRACTION_REQUIRED",
+                  warnings: ["document_extraction_pending"],
+                },
+              },
+            ],
+            created_at: new Date().toISOString(),
+          },
+        ]);
+      }
+      if (command === "list_sessions") {
+        return Promise.resolve([
+          {
+            id: "session-side-panel-redesign",
+            work_dir: "E:\\workspace\\session-side-panel-redesign",
+          },
+        ]);
+      }
+      if (command === "get_sessions") return Promise.resolve([]);
+      return Promise.resolve(null);
+    });
+
+    renderChat();
+
+    expect(await screen.findByText("请查看这个表格附件")).toBeInTheDocument();
+    expect(await screen.findByText("budget.xlsx")).toBeInTheDocument();
+    expect(screen.getByText("文档附件 · 待提取")).toBeInTheDocument();
+    expect(screen.queryByText("附件暂不支持预览")).not.toBeInTheDocument();
+  });
+
+  test("renders explicit no-audio video attachment status", async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_messages") {
+        return Promise.resolve([
+          {
+            id: "user-video-no-audio-platform-history",
+            role: "user",
+            content: "请看这个没有音轨的视频",
+            contentParts: [
+              { type: "text", text: "请看这个没有音轨的视频" },
+              {
+                type: "attachment",
+                attachment: {
+                  id: "att-video-no-audio-1",
+                  kind: "video",
+                  sourceType: "browser_file",
+                  name: "silent.mp4",
+                  declaredMimeType: "video/mp4",
+                  sizeBytes: 2048,
+                  summary: "VIDEO_NO_AUDIO_TRACK",
+                  warnings: ["video_no_audio_track"],
+                },
+              },
+            ],
+            created_at: new Date().toISOString(),
+          },
+        ]);
+      }
+      if (command === "list_sessions") {
+        return Promise.resolve([
+          {
+            id: "session-side-panel-redesign",
+            work_dir: "E:\\workspace\\session-side-panel-redesign",
+          },
+        ]);
+      }
+      if (command === "get_sessions") return Promise.resolve([]);
+      return Promise.resolve(null);
+    });
+
+    renderChat();
+
+    expect(await screen.findByText("请看这个没有音轨的视频")).toBeInTheDocument();
+    expect(await screen.findByText("silent.mp4")).toBeInTheDocument();
+    expect(screen.getByText("视频附件 · 无音轨")).toBeInTheDocument();
+  });
+
+  test("renders completed audio and document attachment-platform parts with completed labels", async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_messages") {
+        return Promise.resolve([
+          {
+            id: "user-completed-attachment-platform-history",
+            role: "user",
+            content: "请查看已完成提取的附件",
+            contentParts: [
+              { type: "text", text: "请查看已完成提取的附件" },
+              {
+                type: "attachment",
+                attachment: {
+                  id: "att-audio-done-1",
+                  kind: "audio",
+                  sourceType: "browser_file",
+                  name: "memo.mp3",
+                  declaredMimeType: "audio/mpeg",
+                  transcript: "会议结论：本周发布顺延一天",
+                },
+              },
+              {
+                type: "attachment",
+                attachment: {
+                  id: "att-doc-done-1",
+                  kind: "document",
+                  sourceType: "browser_file",
+                  name: "brief.docx",
+                  declaredMimeType:
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                  summary: "提取完成：WorkClaw 附件设计说明",
+                },
+              },
+            ],
+            created_at: new Date().toISOString(),
+          },
+        ]);
+      }
+      if (command === "list_sessions") {
+        return Promise.resolve([
+          {
+            id: "session-side-panel-redesign",
+            work_dir: "E:\\workspace\\session-side-panel-redesign",
+          },
+        ]);
+      }
+      if (command === "get_sessions") return Promise.resolve([]);
+      return Promise.resolve(null);
+    });
+
+    renderChat();
+
+    expect(await screen.findByText("请查看已完成提取的附件")).toBeInTheDocument();
+    expect(await screen.findByText("memo.mp3")).toBeInTheDocument();
+    expect(await screen.findByText("brief.docx")).toBeInTheDocument();
+    expect(screen.getByText("音频附件 · 已转写")).toBeInTheDocument();
+    expect(screen.getByText("文档附件 · 已提取")).toBeInTheDocument();
+  });
+
+  test("renders completed video visual-summary attachment-platform parts with completed label", async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_messages") {
+        return Promise.resolve([
+          {
+            id: "user-completed-video-attachment-platform-history",
+            role: "user",
+            content: "请查看已完成画面摘要的视频",
+            contentParts: [
+              { type: "text", text: "请查看已完成画面摘要的视频" },
+              {
+                type: "attachment",
+                attachment: {
+                  id: "att-video-done-1",
+                  kind: "video",
+                  sourceType: "browser_file",
+                  name: "silent-vision.mp4",
+                  declaredMimeType: "video/mp4",
+                  summary: "视频画面摘要：会议室里两个人正在查看投影上的任务列表",
+                },
+              },
+            ],
+            created_at: new Date().toISOString(),
+          },
+        ]);
+      }
+      if (command === "list_sessions") {
+        return Promise.resolve([
+          {
+            id: "session-side-panel-redesign",
+            work_dir: "E:\\workspace\\session-side-panel-redesign",
+          },
+        ]);
+      }
+      if (command === "get_sessions") return Promise.resolve([]);
+      return Promise.resolve(null);
+    });
+
+    renderChat();
+
+    expect(await screen.findByText("请查看已完成画面摘要的视频")).toBeInTheDocument();
+    expect(await screen.findByText("silent-vision.mp4")).toBeInTheDocument();
+    expect(screen.getByText("视频附件 · 已摘要")).toBeInTheDocument();
   });
 
   test("renders task journey summary after transcript instead of before the first message", async () => {

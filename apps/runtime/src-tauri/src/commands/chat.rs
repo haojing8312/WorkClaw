@@ -1,10 +1,10 @@
-use super::chat_compaction;
 use super::chat_attachments;
+use super::chat_compaction;
 use super::chat_runtime_io as chat_io;
 use super::chat_session_io;
 use super::skills::DbState;
-use crate::agent::AgentExecutor;
 use crate::agent::runtime::{SessionAdmissionGateState, SessionRuntime};
+use crate::agent::AgentExecutor;
 use crate::approval_bus::ApprovalManager;
 use crate::diagnostics::{self, ManagedDiagnosticsState};
 use crate::runtime_environment::runtime_paths_from_app;
@@ -15,6 +15,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, State};
 
+pub use crate::agent::runtime::AskUserPendingSessionState;
 /// 全局 AskUser 响应通道（用于 answer_user_question command）
 pub use crate::agent::runtime::AskUserState;
 
@@ -58,10 +59,33 @@ pub struct SendMessageRequest {
 }
 
 #[derive(Debug, Clone, Deserialize, serde::Serialize)]
+pub struct AttachmentInput {
+    pub id: String,
+    pub kind: String,
+    #[serde(rename = "sourceType")]
+    pub source_type: String,
+    pub name: String,
+    #[serde(rename = "declaredMimeType", default)]
+    pub declared_mime_type: Option<String>,
+    #[serde(rename = "sizeBytes", default)]
+    pub size_bytes: Option<usize>,
+    #[serde(rename = "sourcePayload", default)]
+    pub source_payload: Option<String>,
+    #[serde(rename = "sourceUri", default)]
+    pub source_uri: Option<String>,
+    #[serde(rename = "extractedText", default)]
+    pub extracted_text: Option<String>,
+    #[serde(default)]
+    pub truncated: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
 #[serde(tag = "type")]
 pub enum SendMessagePart {
     #[serde(rename = "text")]
     Text { text: String },
+    #[serde(rename = "attachment")]
+    Attachment { attachment: AttachmentInput },
     #[serde(rename = "image")]
     Image {
         name: String,
@@ -107,17 +131,59 @@ impl SendMessageRequest {
         let image_count = self
             .parts
             .iter()
-            .filter(|part| matches!(part, SendMessagePart::Image { .. }))
+            .filter(|part| match part {
+                SendMessagePart::Image { .. } => true,
+                SendMessagePart::Attachment { attachment } => attachment.kind == "image",
+                _ => false,
+            })
             .count();
         let text_file_count = self
             .parts
             .iter()
-            .filter(|part| matches!(part, SendMessagePart::FileText { .. }))
+            .filter(|part| match part {
+                SendMessagePart::FileText { .. } => true,
+                SendMessagePart::Attachment { attachment } => {
+                    attachment.kind == "document" && attachment_is_text_document(attachment)
+                }
+                _ => false,
+            })
             .count();
         let pdf_file_count = self
             .parts
             .iter()
-            .filter(|part| matches!(part, SendMessagePart::PdfFile { .. }))
+            .filter(|part| match part {
+                SendMessagePart::PdfFile { .. } => true,
+                SendMessagePart::Attachment { attachment } => attachment_is_pdf(attachment),
+                _ => false,
+            })
+            .count();
+        let document_count = self
+            .parts
+            .iter()
+            .filter(|part| match part {
+                SendMessagePart::Attachment { attachment } => {
+                    attachment.kind == "document"
+                        && !attachment_is_pdf(attachment)
+                        && !attachment_is_text_document(attachment)
+                }
+                _ => false,
+            })
+            .count();
+        let audio_count = self
+            .parts
+            .iter()
+            .filter(|part| match part {
+                SendMessagePart::Attachment { attachment } => attachment.kind == "audio",
+                _ => false,
+            })
+            .count();
+        let video_count = self
+            .parts
+            .iter()
+            .filter(|part| match part {
+                SendMessagePart::Attachment { attachment } => attachment.kind == "video",
+                _ => false,
+            })
             .count();
         if image_count > 0 {
             summary_parts.push(format!("[图片 {} 张]", image_count));
@@ -128,12 +194,90 @@ impl SendMessageRequest {
         if pdf_file_count > 0 {
             summary_parts.push(format!("[PDF {} 个]", pdf_file_count));
         }
+        if document_count > 0 {
+            summary_parts.push(format!("[文档 {} 个]", document_count));
+        }
+        if audio_count > 0 {
+            summary_parts.push(format!("[音频 {} 个]", audio_count));
+        }
+        if video_count > 0 {
+            summary_parts.push(format!("[视频 {} 个]", video_count));
+        }
         summary_parts.join(" ")
     }
 
-    fn parts_as_json(&self) -> Result<Vec<Value>, String> {
-        chat_attachments::normalize_message_parts(&self.parts)
+}
+
+fn attachment_is_pdf(attachment: &AttachmentInput) -> bool {
+    attachment.declared_mime_type.as_deref() == Some("application/pdf")
+        || attachment.name.to_ascii_lowercase().ends_with(".pdf")
+}
+
+fn attachment_is_text_document(attachment: &AttachmentInput) -> bool {
+    if attachment.kind != "document" || attachment_is_pdf(attachment) {
+        return false;
     }
+
+    let mime = attachment
+        .declared_mime_type
+        .as_deref()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    if mime.starts_with("text/") {
+        return true;
+    }
+    if matches!(mime.as_str(), "application/json" | "text/csv") {
+        return true;
+    }
+
+    matches!(
+        attachment
+            .name
+            .rsplit('.')
+            .next()
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .as_str(),
+        "txt"
+            | "md"
+            | "json"
+            | "yaml"
+            | "yml"
+            | "xml"
+            | "csv"
+            | "tsv"
+            | "log"
+            | "ini"
+            | "conf"
+            | "env"
+            | "js"
+            | "jsx"
+            | "ts"
+            | "tsx"
+            | "py"
+            | "rs"
+            | "go"
+            | "java"
+            | "c"
+            | "cpp"
+            | "h"
+            | "cs"
+            | "sh"
+            | "ps1"
+            | "sql"
+    )
+}
+
+pub fn normalize_send_message_parts(parts: &[SendMessagePart]) -> Result<Vec<Value>, String> {
+    chat_attachments::normalize_message_parts(parts)
+}
+
+pub async fn normalize_send_message_parts_with_pool(
+    parts: &[SendMessagePart],
+    pool: &sqlx::SqlitePool,
+) -> Result<Vec<Value>, String> {
+    chat_attachments::normalize_message_parts_with_pool(parts, pool).await
 }
 
 #[tauri::command]
@@ -225,7 +369,7 @@ pub async fn send_message(
 ) -> Result<(), String> {
     let session_id = request.session_id.clone();
     let user_message = request.summary_text();
-    let user_message_parts = request.parts_as_json()?;
+    let user_message_parts = normalize_send_message_parts_with_pool(&request.parts, &db.0).await?;
 
     let admission_gate = app
         .try_state::<SessionAdmissionGateState>()
@@ -368,8 +512,8 @@ pub async fn send_message(
 mod tests {
     use super::build_group_orchestrator_report_preview;
     use crate::agent::runtime::SessionAdmissionConflict;
+    use crate::commands::chat::{AttachmentInput, SendMessagePart, SendMessageRequest};
     use crate::commands::chat_runtime_io;
-    use crate::commands::chat::SendMessagePart;
     use std::collections::HashMap;
     use std::path::Path;
 
@@ -462,6 +606,79 @@ mod tests {
         };
 
         assert!(request.summary_text().contains("[PDF 1 个]"));
+    }
+
+    #[test]
+    fn send_message_summary_text_counts_audio_and_video_attachments() {
+        let request = SendMessageRequest {
+            session_id: "session-1".to_string(),
+            parts: vec![
+                SendMessagePart::Text {
+                    text: "请处理这些媒体附件".to_string(),
+                },
+                SendMessagePart::Attachment {
+                    attachment: AttachmentInput {
+                        id: "att-audio-1".to_string(),
+                        kind: "audio".to_string(),
+                        source_type: "browser_file".to_string(),
+                        name: "memo.mp3".to_string(),
+                        declared_mime_type: Some("audio/mpeg".to_string()),
+                        size_bytes: Some(128),
+                        source_payload: Some("ZmFrZQ==".to_string()),
+                        source_uri: None,
+                        extracted_text: None,
+                        truncated: None,
+                    },
+                },
+                SendMessagePart::Attachment {
+                    attachment: AttachmentInput {
+                        id: "att-video-1".to_string(),
+                        kind: "video".to_string(),
+                        source_type: "browser_file".to_string(),
+                        name: "demo.mp4".to_string(),
+                        declared_mime_type: Some("video/mp4".to_string()),
+                        size_bytes: Some(256),
+                        source_payload: Some("ZmFrZV92aWRlbw==".to_string()),
+                        source_uri: None,
+                        extracted_text: None,
+                        truncated: None,
+                    },
+                },
+            ],
+            max_iterations: None,
+        };
+
+        let summary = request.summary_text();
+        assert!(summary.contains("[音频 1 个]"));
+        assert!(summary.contains("[视频 1 个]"));
+    }
+
+    #[test]
+    fn send_message_summary_text_counts_binary_document_attachments() {
+        let request = SendMessageRequest {
+            session_id: "session-1".to_string(),
+            parts: vec![SendMessagePart::Attachment {
+                attachment: AttachmentInput {
+                    id: "att-doc-1".to_string(),
+                    kind: "document".to_string(),
+                    source_type: "browser_file".to_string(),
+                    name: "budget.xlsx".to_string(),
+                    declared_mime_type: Some(
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                            .to_string(),
+                    ),
+                    size_bytes: Some(256),
+                    source_payload: None,
+                    source_uri: None,
+                    extracted_text: None,
+                    truncated: None,
+                },
+            }],
+            max_iterations: None,
+        };
+
+        let summary = request.summary_text();
+        assert!(summary.contains("[文档 1 个]"));
     }
 }
 

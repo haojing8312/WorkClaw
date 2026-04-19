@@ -157,6 +157,46 @@ vi.mock("../components/NewSessionLanding", () => ({
       >
         create-with-context
       </button>
+      <button
+        onClick={() =>
+          props.onCreateSessionWithInitialMessage({
+            initialMessage: "请总结这个无音轨视频的画面内容",
+            attachments: [
+              {
+                id: "attachment-video-1",
+                kind: "video",
+                name: "silent-demo.mp4",
+                mimeType: "video/mp4",
+                size: 4096,
+                data: "ZmFrZS12aWRlby1kYXRh",
+              },
+            ],
+            workDir: "D:\\code\\WorkClaw\\videos",
+          })
+        }
+      >
+        create-with-video-context
+      </button>
+      <button
+        onClick={() =>
+          props.onCreateTeamEntrySession?.({
+            teamId: "group-1",
+            initialMessage: "请团队结合附件推进",
+            attachments: [
+              {
+                id: "team-attachment-1",
+                kind: "text-file",
+                name: "团队需求.txt",
+                mimeType: "text/plain",
+                size: 10,
+                text: "team brief",
+              },
+            ],
+          })
+        }
+      >
+        create-team-entry-with-attachments
+      </button>
     </div>
   ),
 }));
@@ -207,6 +247,9 @@ describe("App session create flow", () => {
       if (command === "list_agent_employees") {
         return Promise.resolve([]);
       }
+      if (command === "list_employee_groups") {
+        return Promise.resolve([]);
+      }
       if (command === "get_runtime_preferences") {
         return Promise.resolve({
           operation_permission_mode: "standard",
@@ -255,6 +298,9 @@ describe("App session create flow", () => {
         return Promise.resolve([]);
       }
       if (command === "list_agent_employees") {
+        return Promise.resolve([]);
+      }
+      if (command === "list_employee_groups") {
         return Promise.resolve([]);
       }
       if (command === "get_runtime_preferences") {
@@ -326,6 +372,9 @@ describe("App session create flow", () => {
         return Promise.resolve([]);
       }
       if (command === "list_agent_employees") {
+        return Promise.resolve([]);
+      }
+      if (command === "list_employee_groups") {
         return Promise.resolve([]);
       }
       if (command === "get_runtime_preferences") {
@@ -470,6 +519,125 @@ describe("App session create flow", () => {
     });
     expect(screen.getByTestId("chat-initial-message")).toHaveTextContent("请结合附件处理当前目录");
     expect(screen.getByTestId("chat-work-dir")).toHaveTextContent("D:\\code\\WorkClaw");
+    expect(screen.getByTestId("chat-initial-attachments")).toHaveTextContent("1");
+  });
+
+  test("creates session with landing video attachment context and forwards it into chat view", async () => {
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "create-with-video-context" })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "create-with-video-context" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        "create_session",
+        expect.objectContaining({
+          workDir: "D:\\code\\WorkClaw\\videos",
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("chat-view")).toBeInTheDocument();
+    });
+    expect(screen.getByTestId("chat-initial-message")).toHaveTextContent(
+      "请总结这个无音轨视频的画面内容",
+    );
+    expect(screen.getByTestId("chat-work-dir")).toHaveTextContent("D:\\code\\WorkClaw\\videos");
+    expect(screen.getByTestId("chat-initial-attachments")).toHaveTextContent("1");
+  });
+
+  test("preserves team-entry attachments through coordinator state handoff into chat view", async () => {
+    invokeMock.mockImplementation((command: string, payload?: any) => {
+      if (command === "get_sessions") {
+        return Promise.resolve([]);
+      }
+      if (command === "list_employee_groups") {
+        return Promise.resolve([
+          {
+            id: "group-1",
+            name: "默认复杂任务团队",
+            coordinator_employee_id: "coordinator-1",
+            member_employee_ids: [],
+            member_count: 1,
+            template_id: "template-1",
+            entry_employee_id: "entry-1",
+            review_mode: "manual",
+            execution_mode: "standard",
+            visibility_mode: "private",
+            is_bootstrap_seeded: false,
+            config_json: "{}",
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          },
+        ]);
+      }
+      if (command === "list_agent_employees") {
+        return Promise.resolve([
+          {
+            id: "employee-db-1",
+            employee_id: "entry-1",
+            name: "团队入口员工",
+            role_id: "entry-1",
+            persona: "",
+            feishu_open_id: "",
+            feishu_app_id: "",
+            feishu_app_secret: "",
+            primary_skill_id: "builtin-general",
+            default_work_dir: "E:\\workspace\\team-entry",
+            openclaw_agent_id: "",
+            routing_priority: 0,
+            enabled_scopes: [],
+            enabled: true,
+            is_default: false,
+            skill_ids: [],
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          },
+        ]);
+      }
+      if (command === "get_runtime_preferences") {
+        return Promise.resolve({
+          operation_permission_mode: "standard",
+        });
+      }
+      if (command === "create_session") {
+        return Promise.resolve("session-team-entry-1");
+      }
+      return Promise.resolve(payload ?? null);
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "create-team-entry-with-attachments" })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "create-team-entry-with-attachments" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        "create_session",
+        expect.objectContaining({
+          skillId: "builtin-general",
+          modelId: "model-a",
+          workDir: "E:\\workspace\\team-entry",
+          employeeId: "entry-1",
+          title: "默认复杂任务团队",
+          sessionMode: "team_entry",
+          teamId: "group-1",
+          permissionMode: "standard",
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("chat-view")).toBeInTheDocument();
+    });
+    expect(screen.getByTestId("chat-initial-message")).toHaveTextContent("请团队结合附件推进");
     expect(screen.getByTestId("chat-initial-attachments")).toHaveTextContent("1");
   });
 

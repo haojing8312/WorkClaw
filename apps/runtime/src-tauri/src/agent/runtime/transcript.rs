@@ -16,6 +16,7 @@ impl RuntimeTranscript {
         }
         let mut combined_text_parts = Vec::new();
         let mut content_blocks = Vec::new();
+        let mut attachment_blocks = Vec::new();
 
         for part in parts {
             match part.get("type").and_then(Value::as_str).unwrap_or_default() {
@@ -60,12 +61,21 @@ impl RuntimeTranscript {
                         }));
                     }
                 }
+                "attachment" => {
+                    attachment_blocks.push(part.clone());
+                    content_blocks.push(part.clone());
+                }
                 _ => {}
             }
         }
 
         if let Some(file_context) = Self::build_attachment_context_text(parts) {
             combined_text_parts.push(file_context);
+        }
+        if let Some(attachment_context) =
+            Self::build_attachment_context_text_from_attachment_blocks(&attachment_blocks)
+        {
+            combined_text_parts.push(attachment_context);
         }
         let combined_text = combined_text_parts.join("\n\n").trim().to_string();
         if !combined_text.is_empty() {
@@ -447,6 +457,106 @@ impl RuntimeTranscript {
         }
     }
 
+    fn build_attachment_context_text_from_attachment_blocks(parts: &[Value]) -> Option<String> {
+        let mut blocks = Vec::new();
+        for part in parts {
+            let attachment = match part.get("attachment") {
+                Some(value) => value,
+                None => continue,
+            };
+            let name = attachment
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("attachment");
+            let kind = attachment
+                .get("kind")
+                .and_then(Value::as_str)
+                .unwrap_or("attachment");
+            let extracted_text = attachment
+                .get("extractedText")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty());
+            let transcript = attachment
+                .get("transcript")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty());
+            let summary = attachment
+                .get("summary")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty());
+            let warnings = attachment
+                .get("warnings")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .filter(|value| !value.is_empty());
+
+            let mut body_parts = Vec::new();
+            if let Some(text) = extracted_text {
+                body_parts.push(format!("提取文本：\n{text}"));
+            }
+            if let Some(text) = transcript {
+                let label = if text == "TRANSCRIPTION_REQUIRED" {
+                    "转写状态"
+                } else {
+                    "转写内容"
+                };
+                body_parts.push(format!("{label}：{text}"));
+            }
+            if let Some(text) = summary {
+                let pending_value = if kind == "document" {
+                    "EXTRACTION_REQUIRED"
+                } else {
+                    "SUMMARY_REQUIRED"
+                };
+                let label = if text == pending_value || Self::is_video_summary_status(text) {
+                    if kind == "document" {
+                        "提取状态"
+                    } else {
+                        "摘要状态"
+                    }
+                } else if kind == "document" {
+                    "提取内容"
+                } else {
+                    "摘要内容"
+                };
+                body_parts.push(format!("{label}：{text}"));
+            }
+            if let Some(text) = warnings {
+                body_parts.push(format!("警告：{text}"));
+            }
+
+            if body_parts.is_empty() {
+                continue;
+            }
+
+            blocks.push(format!(
+                "## 附件 {name} ({kind})\n{}",
+                body_parts.join("\n\n")
+            ));
+        }
+
+        if blocks.is_empty() {
+            None
+        } else {
+            Some(format!("附件上下文：\n{}", blocks.join("\n\n")))
+        }
+    }
+
+    fn is_video_summary_status(text: &str) -> bool {
+        matches!(
+            text,
+            "VIDEO_NO_AUDIO_TRACK"
+                | "VIDEO_AUDIO_EXTRACTION_UNAVAILABLE"
+                | "VIDEO_AUDIO_EXTRACTION_FAILED"
+        )
+    }
+
     fn extract_new_messages_after_reconstructed_history<'a>(
         final_messages: &'a [Value],
         reconstructed_history_len: usize,
@@ -482,6 +592,94 @@ mod tests {
         assert!(text.contains("brief.pdf"));
         assert!(text.contains("这是 PDF 正文"));
         assert!(text.contains("[内容已截断]"));
+    }
+
+    #[test]
+    fn build_current_turn_message_preserves_attachment_blocks_until_adapter_fallback() {
+        let message = RuntimeTranscript::build_current_turn_message(
+            "openai",
+            &[json!({
+                "type": "attachment",
+                "attachment": {
+                    "id": "att-1",
+                    "kind": "document",
+                    "name": "brief.pdf",
+                    "mimeType": "application/pdf",
+                    "sizeBytes": 120,
+                    "extractedText": "这是附件正文",
+                    "warnings": ["document_truncated"]
+                }
+            })],
+        )
+        .expect("message");
+
+        let content = message["content"].as_array().expect("content array");
+        assert_eq!(content[0]["type"].as_str(), Some("text"));
+        assert!(content[0]["text"].as_str().unwrap_or("").contains("附件上下文"));
+        assert_eq!(content[1]["type"].as_str(), Some("attachment"));
+        assert_eq!(
+            content[1]["attachment"]["kind"].as_str(),
+            Some("document")
+        );
+        assert_eq!(
+            content[1]["attachment"]["extractedText"].as_str(),
+            Some("这是附件正文")
+        );
+    }
+
+    #[test]
+    fn build_current_turn_message_uses_content_labels_for_completed_audio_and_document_attachments()
+    {
+        let message = RuntimeTranscript::build_current_turn_message(
+            "openai",
+            &[
+                json!({
+                    "type": "attachment",
+                    "attachment": {
+                        "id": "att-audio-1",
+                        "kind": "audio",
+                        "name": "memo.mp3",
+                        "transcript": "会议结论"
+                    }
+                }),
+                json!({
+                    "type": "attachment",
+                    "attachment": {
+                        "id": "att-doc-1",
+                        "kind": "document",
+                        "name": "brief.docx",
+                        "summary": "已提取文档内容"
+                    }
+                })
+            ],
+        )
+        .expect("message");
+
+        let text = message["content"][0]["text"].as_str().expect("text block");
+        assert!(text.contains("转写内容：会议结论"));
+        assert!(text.contains("提取内容：已提取文档内容"));
+    }
+
+    #[test]
+    fn build_current_turn_message_keeps_video_status_labels_for_explicit_video_fallback_states() {
+        let message = RuntimeTranscript::build_current_turn_message(
+            "openai",
+            &[json!({
+                "type": "attachment",
+                "attachment": {
+                    "id": "att-video-1",
+                    "kind": "video",
+                    "name": "silent.mp4",
+                    "summary": "VIDEO_NO_AUDIO_TRACK",
+                    "warnings": ["video_no_audio_track"]
+                }
+            })],
+        )
+        .expect("message");
+
+        let text = message["content"][0]["text"].as_str().expect("text block");
+        assert!(text.contains("摘要状态：VIDEO_NO_AUDIO_TRACK"));
+        assert!(text.contains("警告：video_no_audio_track"));
     }
 
     #[test]

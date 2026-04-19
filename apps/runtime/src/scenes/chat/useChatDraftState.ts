@@ -1,18 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
 
-import {
-  isImageFile,
-  isPdfFile,
-  isTextFile,
-  MAX_FILES,
-  MAX_IMAGE_FILES,
-  MAX_IMAGE_SIZE,
-  MAX_PDF_FILE_SIZE,
-  MAX_TEXT_FILE_SIZE,
-  readFileAsBase64,
-  readFileAsDataUrl,
-  readFileAsText,
-} from "../../lib/chatAttachments";
+import { normalizePendingAttachmentsFromBrowserFiles } from "../../lib/pendingAttachmentIntake";
 import type { PendingAttachment } from "../../types";
 
 type UseChatDraftStateArgs = {
@@ -63,76 +51,21 @@ export function useChatDraftState({
 
   const handleFileSelect = async (e: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
-    const currentImageCount = attachedFiles.filter((file) => file.kind === "image").length;
-
-    if (attachedFiles.length + files.length > MAX_FILES) {
-      alert(`最多只能上传 ${MAX_FILES} 个文件`);
-      e.target.value = "";
-      return;
-    }
-
-    const newFiles: PendingAttachment[] = [];
-    let nextImageCount = currentImageCount;
-    for (const file of files) {
-      if (isImageFile(file)) {
-        if (nextImageCount >= MAX_IMAGE_FILES) {
-          alert(`最多只能上传 ${MAX_IMAGE_FILES} 张图片`);
-          continue;
-        }
-        if (file.size > MAX_IMAGE_SIZE) {
-          alert(`图片 ${file.name} 超过 5MB 限制`);
-          continue;
-        }
-        const data = await readFileAsDataUrl(file);
-        newFiles.push({
-          id: crypto.randomUUID(),
-          kind: "image",
-          name: file.name,
-          mimeType: file.type,
-          size: file.size,
-          data,
-          previewUrl: data,
-        });
-        nextImageCount += 1;
-        continue;
-      }
-
-      if (!isTextFile(file)) {
-        if (!isPdfFile(file)) {
-          alert(`暂不支持附件类型 ${file.name}`);
-          continue;
-        }
-        if (file.size > MAX_PDF_FILE_SIZE) {
-          alert(`PDF 文件 ${file.name} 超过 10MB 限制`);
-          continue;
-        }
-        const data = await readFileAsBase64(file);
-        newFiles.push({
-          id: crypto.randomUUID(),
-          kind: "pdf-file",
-          name: file.name,
-          mimeType: file.type || "application/pdf",
-          size: file.size,
-          data,
-        });
-        continue;
-      }
-      if (file.size > MAX_TEXT_FILE_SIZE) {
-        alert(`文本文件 ${file.name} 超过 1MB 限制`);
-        continue;
-      }
-      const text = await readFileAsText(file);
-      newFiles.push({
-        id: crypto.randomUUID(),
-        kind: "text-file",
-        name: file.name,
-        mimeType: file.type || "text/plain",
-        size: file.size,
-        text,
+    try {
+      const { accepted, rejectionMessage } = await normalizePendingAttachmentsFromBrowserFiles({
+        files,
+        existingAttachments: attachedFiles,
+        textOversizeMode: "reject",
       });
-    }
 
-    setAttachedFiles((prev) => [...prev, ...newFiles]);
+      if (accepted.length > 0) {
+        setAttachedFiles((prev) => [...prev, ...accepted]);
+      }
+      setComposerError(rejectionMessage);
+    } catch (error) {
+      console.error("处理附件失败:", error);
+      setComposerError("附件读取失败，请重试");
+    }
     e.target.value = "";
   };
 

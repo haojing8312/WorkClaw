@@ -1,4 +1,5 @@
 use crate::agent::types::{LLMResponse, StreamDelta, ToolCall};
+use crate::adapters::attachment_support::openai_responses_attachment_support;
 use crate::model_transport::{ModelTransportKind, ResolvedModelTransport};
 use anyhow::{anyhow, Result};
 use futures_util::StreamExt;
@@ -109,6 +110,7 @@ fn normalize_message_text(content: &Value) -> Option<String> {
 }
 
 fn content_to_responses_parts(content: &Value) -> Vec<Value> {
+    let support = openai_responses_attachment_support();
     match content {
         Value::String(text) => {
             let trimmed = text.trim();
@@ -118,29 +120,208 @@ fn content_to_responses_parts(content: &Value) -> Vec<Value> {
                 vec![json!({ "type": "input_text", "text": trimmed })]
             }
         }
-        Value::Array(parts) => parts
-            .iter()
-            .filter_map(|part| match part.get("type").and_then(Value::as_str) {
-                Some("text") | Some("input_text") | Some("output_text") => {
-                    let text = part.get("text").and_then(Value::as_str)?.trim();
-                    (!text.is_empty()).then(|| json!({ "type": "input_text", "text": text }))
-                }
-                Some("image_url") => {
-                    let image_url = part
-                        .get("image_url")
-                        .and_then(|value| value.get("url"))
-                        .and_then(Value::as_str)?;
-                    Some(json!({
-                        "type": "input_image",
-                        "image_url": image_url,
-                    }))
-                }
-                Some("input_image") => Some(part.clone()),
-                _ => None,
-            })
-            .collect(),
+        Value::Array(parts) => {
+            let has_explicit_text = parts.iter().any(|part| {
+                matches!(
+                    part.get("type").and_then(Value::as_str),
+                    Some("text") | Some("input_text") | Some("output_text")
+                ) && part
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .map(|text| !text.trim().is_empty())
+                    .unwrap_or(false)
+            });
+
+            parts
+                .iter()
+                .filter_map(|part| match part.get("type").and_then(Value::as_str) {
+                    Some("text") | Some("input_text") | Some("output_text") => {
+                        let text = part.get("text").and_then(Value::as_str)?.trim();
+                        (!text.is_empty()).then(|| json!({ "type": "input_text", "text": text }))
+                    }
+                    Some("image_url") => {
+                        let image_url = part
+                            .get("image_url")
+                            .and_then(|value| value.get("url"))
+                            .and_then(Value::as_str)?;
+                        Some(json!({
+                            "type": "input_image",
+                            "image_url": image_url,
+                        }))
+                    }
+                    Some("input_image") => Some(part.clone()),
+                    Some("attachment") => {
+                        let attachment = part.get("attachment")?;
+                        let kind =
+                            attachment.get("kind").and_then(Value::as_str).unwrap_or_default();
+                        match kind {
+                            "image" if support.native_image => {
+                                let data = attachment
+                                    .get("data")
+                                    .or_else(|| attachment.get("value"))
+                                    .and_then(Value::as_str)?;
+                                let mime_type = attachment
+                                    .get("mimeType")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("image/png");
+                                let image_url = if data.starts_with("data:") {
+                                    data.to_string()
+                                } else {
+                                    format!("data:{mime_type};base64,{data}")
+                                };
+                                Some(json!({
+                                    "type": "input_image",
+                                    "image_url": image_url,
+                                }))
+                            }
+                            "document" if support.document_fallback && !has_explicit_text => {
+                                attachment_fallback_input_text(attachment)
+                            }
+                            "audio" if support.audio_fallback && !has_explicit_text => {
+                                attachment_fallback_input_text(attachment)
+                            }
+                            "video" if support.video_fallback && !has_explicit_text => {
+                                attachment_fallback_input_text(attachment)
+                            }
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                })
+                .collect()
+        }
         _ => Vec::new(),
     }
+}
+
+fn attachment_fallback_input_text(attachment: &Value) -> Option<Value> {
+    let name = attachment
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("attachment");
+    let kind = attachment
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or("attachment");
+    let extracted_text = attachment
+        .get("extractedText")
+        .and_then(Value::as_str)
+        .filter(|text| !text.trim().is_empty());
+    let transcript = attachment
+        .get("transcript")
+        .and_then(Value::as_str)
+        .filter(|text| !text.trim().is_empty());
+    let summary = attachment
+        .get("summary")
+        .and_then(Value::as_str)
+        .filter(|text| {
+            !text.trim().is_empty()
+                && (*text != "SUMMARY_REQUIRED" || is_video_summary_status(text))
+        });
+    let warnings = attachment
+        .get("warnings")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .filter(|text| !text.is_empty());
+
+    let mut body_parts = Vec::new();
+    if let Some(text) = extracted_text {
+        body_parts.push(format!("提取文本：\n{text}"));
+    }
+    if let Some(text) = transcript {
+        let label = if text == "TRANSCRIPTION_REQUIRED" {
+            "转写状态"
+        } else {
+            "转写内容"
+        };
+        body_parts.push(format!("{label}：{text}"));
+    }
+    if let Some(text) = summary {
+        let pending_value = if kind == "document" {
+            "EXTRACTION_REQUIRED"
+        } else {
+            "SUMMARY_REQUIRED"
+        };
+        let summary_label = if text == pending_value || is_video_summary_status(text) {
+            if kind == "document" {
+                "提取状态"
+            } else {
+                "摘要状态"
+            }
+        } else if kind == "document" {
+            "提取内容"
+        } else {
+            "摘要内容"
+        };
+        body_parts.push(format!("{summary_label}：{text}"));
+    }
+    if let Some(text) = warnings {
+        body_parts.push(format!("警告：{text}"));
+    }
+
+    if body_parts.is_empty() {
+        return None;
+    }
+
+    Some(json!({
+        "type": "input_text",
+        "text": format!("附件上下文：\n## 附件 {name} ({kind})\n{}", body_parts.join("\n\n")),
+    }))
+}
+
+fn validate_openai_responses_attachments(messages: &[Value]) -> Result<()> {
+    for message in messages {
+        let Some(parts) = message.get("content").and_then(Value::as_array) else {
+            continue;
+        };
+        for part in parts {
+            if part.get("type").and_then(Value::as_str) != Some("attachment") {
+                continue;
+            }
+            let Some(attachment) = part.get("attachment") else {
+                continue;
+            };
+            let kind = attachment
+                .get("kind")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if kind == "video" {
+                let summary = attachment
+                    .get("summary")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                if summary.is_empty()
+                    || summary == "SUMMARY_REQUIRED"
+                    || is_video_summary_status(summary)
+                {
+                    let name = attachment
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or("video");
+                    return Err(anyhow!(
+                        "OPENAI_ATTACHMENT_UNSUPPORTED: video attachment requires fallback path ({})",
+                        name
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn is_video_summary_status(text: &str) -> bool {
+    matches!(
+        text,
+        "VIDEO_NO_AUDIO_TRACK"
+            | "VIDEO_AUDIO_EXTRACTION_UNAVAILABLE"
+            | "VIDEO_AUDIO_EXTRACTION_FAILED"
+    )
 }
 
 fn convert_messages_to_responses_input(messages: &[Value]) -> Vec<Value> {
@@ -430,14 +611,15 @@ fn build_openai_responses_request_body(
     system_prompt: &str,
     messages: &[Value],
     tools: &[Value],
-) -> Value {
-    json!({
+) -> Result<Value> {
+    validate_openai_responses_attachments(messages)?;
+    Ok(json!({
         "model": model,
         "instructions": system_prompt,
         "input": convert_messages_to_responses_input(messages),
         "tools": openai_responses_tools_from_anthropic_defs(tools),
         "stream": true,
-    })
+    }))
 }
 
 fn build_openai_chat_completions_request_body(
@@ -1002,7 +1184,7 @@ pub async fn chat_stream_with_tools(
     let (url, body) = match transport.kind {
         ModelTransportKind::OpenAiResponses => (
             openai_responses_url(base_url),
-            build_openai_responses_request_body(model, system_prompt, &messages, &tools),
+            build_openai_responses_request_body(model, system_prompt, &messages, &tools)?,
         ),
         ModelTransportKind::OpenAiCompletions => (
             openai_chat_completions_url(base_url),
@@ -1149,6 +1331,145 @@ mod tests {
             LLMResponse::Text(text) => assert_eq!(text, "hello"),
             other => panic!("expected text response, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn openai_responses_adapter_maps_supported_image_attachment_to_input_image() {
+        let parts = content_to_responses_parts(&json!([
+            {
+                "type": "attachment",
+                "attachment": {
+                    "kind": "image",
+                    "name": "screen.png",
+                    "mimeType": "image/png",
+                    "data": "data:image/png;base64,AAA"
+                }
+            }
+        ]));
+
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0]["type"].as_str(), Some("input_image"));
+        assert_eq!(
+            parts[0]["image_url"].as_str(),
+            Some("data:image/png;base64,AAA")
+        );
+    }
+
+    #[test]
+    fn openai_responses_adapter_rejects_unsupported_video_attachment_explicitly() {
+        let messages = vec![json!({
+            "role": "user",
+            "content": [
+                {
+                    "type": "attachment",
+                    "attachment": {
+                        "kind": "video",
+                        "name": "demo.mp4",
+                        "summary": "SUMMARY_REQUIRED"
+                    }
+                }
+            ]
+        })];
+
+        let error = validate_openai_responses_attachments(&messages).expect_err("should reject");
+        assert!(error
+            .to_string()
+            .contains("OPENAI_ATTACHMENT_UNSUPPORTED: video attachment requires fallback path"));
+    }
+
+    #[test]
+    fn openai_responses_adapter_falls_back_document_attachment_to_input_text_without_companion_text()
+    {
+        let parts = content_to_responses_parts(&json!([
+            {
+                "type": "attachment",
+                "attachment": {
+                    "kind": "document",
+                    "name": "brief.pdf",
+                    "extractedText": "这是附件正文",
+                    "warnings": ["document_truncated"]
+                }
+            }
+        ]));
+
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0]["type"].as_str(), Some("input_text"));
+        let text = parts[0]["text"].as_str().expect("fallback text");
+        assert!(text.contains("附件上下文"));
+        assert!(text.contains("brief.pdf"));
+        assert!(text.contains("这是附件正文"));
+    }
+
+    #[test]
+    fn openai_responses_adapter_does_not_duplicate_attachment_fallback_when_companion_text_exists() {
+        let parts = content_to_responses_parts(&json!([
+            {
+                "type": "text",
+                "text": "附件上下文：\n## 附件 memo.mp3 (audio)\n转写状态：TRANSCRIPTION_REQUIRED"
+            },
+            {
+                "type": "attachment",
+                "attachment": {
+                    "kind": "audio",
+                    "name": "memo.mp3",
+                    "transcript": "TRANSCRIPTION_REQUIRED"
+                }
+            }
+        ]));
+
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0]["type"].as_str(), Some("input_text"));
+        assert!(parts[0]["text"]
+            .as_str()
+            .expect("text")
+            .contains("memo.mp3"));
+    }
+
+    #[test]
+    fn openai_responses_adapter_uses_content_labels_for_completed_audio_and_document_attachments() {
+        let parts = content_to_responses_parts(&json!([
+            {
+                "type": "attachment",
+                "attachment": {
+                    "kind": "audio",
+                    "name": "memo.mp3",
+                    "transcript": "会议结论"
+                }
+            },
+            {
+                "type": "attachment",
+                "attachment": {
+                    "kind": "document",
+                    "name": "brief.docx",
+                    "summary": "已提取文档内容"
+                }
+            }
+        ]));
+
+        assert_eq!(parts.len(), 1);
+        let text = parts[0]["text"].as_str().expect("text");
+        assert!(text.contains("转写内容：会议结论"));
+        assert!(text.contains("提取内容：已提取文档内容"));
+    }
+
+    #[test]
+    fn openai_responses_adapter_keeps_video_status_labels_for_explicit_video_fallback_states() {
+        let parts = content_to_responses_parts(&json!([
+            {
+                "type": "attachment",
+                "attachment": {
+                    "kind": "video",
+                    "name": "silent.mp4",
+                    "summary": "VIDEO_NO_AUDIO_TRACK",
+                    "warnings": ["video_no_audio_track"]
+                }
+            }
+        ]));
+
+        assert_eq!(parts.len(), 1);
+        let text = parts[0]["text"].as_str().expect("text");
+        assert!(text.contains("摘要状态：VIDEO_NO_AUDIO_TRACK"));
+        assert!(text.contains("警告：video_no_audio_track"));
     }
 
     #[test]

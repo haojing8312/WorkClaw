@@ -2,6 +2,23 @@
 
 Date: 2026-04-17
 
+## Update 2026-04-19
+
+Correction to the optimistic 2026-04-18 narrative above:
+
+- the current repo still does **not** contain the planned attachment-platform foundation files such as `attachmentPolicy.ts`, `attachmentDrafts.ts`, Rust attachment policy/validation/resolution modules, or `test_chat_attachment_platform.rs`
+- the current workspace still contains the legacy narrow attachment flow in:
+  - `apps/runtime/src/lib/chatAttachments.ts`
+  - `apps/runtime/src/scenes/chat/useChatDraftState.ts`
+  - `apps/runtime/src/components/NewSessionLanding.tsx`
+- the old P0/P1 plan file reflects the intended target architecture, not the actual landed state
+
+Authoritative remaining-work plan:
+
+- `docs/superpowers/plans/2026-04-19-workclaw-attachment-platform-remaining-implementation.md`
+
+Treat that new plan as the real execution baseline from this point onward.
+
 ## Update 2026-04-18
 
 This handoff is no longer at the "install blocked, implementation not started" stage.
@@ -52,6 +69,9 @@ Most recent attachment-platform-focused verification completed in this branch:
 - `cargo test --lib --no-run`
   - result: pass
   - coverage signal: runtime lib test target compiles after test drift fixes
+- `node scripts/run-cargo-isolated.mjs attachment-transcript -- test --manifest-path apps/runtime/src-tauri/Cargo.toml --lib --no-run`
+  - result: pass
+  - coverage signal: isolated Windows compile gate for transcript/OpenAI attachment work without shared target-dir contamination
 - `cargo test --test test_chat_repo`
   - result: pass
 - `cargo test --test test_skill_commands`
@@ -67,6 +87,7 @@ Current remaining blockers are no longer attachment-platform compile errors. The
 
 - repo-wide Rust warnings and unrelated integration-test drift in other surfaces
 - targeted `cargo test --lib <filter>` execution aborting in this environment with Windows `STATUS_ENTRYPOINT_NOT_FOUND (0xc0000139)` even after the lib test target compiles successfully
+- isolated `--no-run` compilation remains workable on this machine even when direct libtest execution does not; prefer `node scripts/run-cargo-isolated.mjs <label> -- test --manifest-path apps/runtime/src-tauri/Cargo.toml --lib --no-run` for narrow Rust compile verification
 - this `0xc0000139` issue is older than the current attachment work: the older `runtime_lib-21590eb8de04bfe6.exe` unit-test harness reproduces the same startup failure, while integration-test executables and `runtime.exe` start normally
 - the older handoff sections below are now historical context, not the current branch state
 

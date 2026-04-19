@@ -2,7 +2,7 @@ import { useCallback } from "react";
 
 import type { Dispatch, MutableRefObject, RefObject, SetStateAction } from "react";
 
-import type { ChatMessagePart, PendingAttachment, SendMessageRequest, Message } from "../../types";
+import type { AttachmentInput, ChatMessagePart, PendingAttachment, SendMessageRequest, Message } from "../../types";
 import { getModelErrorDisplay, inferModelErrorKindFromMessage } from "../../lib/model-error-display";
 import { sendMessage } from "../../services/chat/chatSessionService";
 
@@ -30,49 +30,158 @@ type UseChatSendControllerArgs = {
 
 export function buildDefaultAttachmentPrompt(attachments: PendingAttachment[]): string {
   const hasImage = attachments.some((file) => file.kind === "image");
-  const hasDocument = attachments.some((file) => file.kind === "text-file" || file.kind === "pdf-file");
+  const hasDocument = attachments.some(
+    (file) => file.kind === "text-file" || file.kind === "pdf-file" || file.kind === "document-file",
+  );
+  const hasAudio = attachments.some((file) => file.kind === "audio");
+  const hasVideo = attachments.some((file) => file.kind === "video");
   if (hasImage && hasDocument) {
     return "请结合这些图片和文档附件一起分析，并给出结论。";
+  }
+  if (hasImage && (hasAudio || hasVideo)) {
+    return "请结合这些图片和音视频附件一起分析，并给出结论。";
   }
   if (hasImage) {
     return "请结合这些图片描述主要内容，并提取可见文字。";
   }
+  if (hasAudio || hasVideo) {
+    return "请结合这些音频和视频附件总结关键信息，并说明当前仍需补充的处理步骤。";
+  }
   return "请阅读这些文档附件并总结关键信息。";
+}
+
+function toAttachmentInput(file: PendingAttachment): AttachmentInput {
+  if (file.kind === "image") {
+    return {
+      id: file.id,
+      kind: "image",
+      sourceType: "browser_file",
+      name: file.name,
+      declaredMimeType: file.mimeType,
+      sizeBytes: file.size,
+      sourcePayload: file.data,
+    };
+  }
+  if (file.kind === "audio" || file.kind === "video") {
+    return {
+      id: file.id,
+      kind: file.kind,
+      sourceType: "browser_file",
+      name: file.name,
+      declaredMimeType: file.mimeType,
+      sizeBytes: file.size,
+      sourcePayload: file.data,
+    };
+  }
+  if (file.kind === "document-file") {
+    return {
+      id: file.id,
+      kind: "document",
+      sourceType: "browser_file",
+      name: file.name,
+      declaredMimeType: file.mimeType,
+      sizeBytes: file.size,
+      sourcePayload: file.data,
+      summary: file.summary,
+      warnings: file.warnings,
+    };
+  }
+  if (file.kind === "pdf-file") {
+    return {
+      id: file.id,
+      kind: "document",
+      sourceType: "browser_file",
+      name: file.name,
+      declaredMimeType: file.mimeType,
+      sizeBytes: file.size,
+      sourcePayload: file.data,
+      extractedText: file.extractedText,
+      truncated: file.truncated,
+    };
+  }
+  return {
+    id: file.id,
+    kind: "document",
+    sourceType: "browser_file",
+    name: file.name,
+    declaredMimeType: file.mimeType,
+    sizeBytes: file.size,
+    sourcePayload: file.text,
+    truncated: file.truncated,
+  };
+}
+
+function isPdfAttachment(attachment: AttachmentInput): boolean {
+  return (
+    attachment.declaredMimeType === "application/pdf" ||
+    attachment.name.toLowerCase().endsWith(".pdf")
+  );
+}
+
+export function getAttachmentPhaseOneDisplayKind(
+  attachment: AttachmentInput,
+): "image" | "pdf" | "text" | "unsupported" {
+  if (attachment.sourceType !== "browser_file") {
+    return "unsupported";
+  }
+  if (attachment.kind === "image") {
+    return attachment.sourcePayload ? "image" : "unsupported";
+  }
+  if (attachment.kind !== "document") {
+    return "unsupported";
+  }
+  if (!attachment.sourcePayload && !attachment.extractedText) {
+    return "unsupported";
+  }
+  return isPdfAttachment(attachment) ? "pdf" : "text";
+}
+
+export function toOptimisticDisplayPart(part: ChatMessagePart): ChatMessagePart {
+  if (part.type !== "attachment") {
+    return part;
+  }
+
+  const { attachment } = part;
+  switch (getAttachmentPhaseOneDisplayKind(attachment)) {
+    case "image":
+      return {
+        type: "image",
+        name: attachment.name,
+        mimeType: attachment.declaredMimeType ?? "application/octet-stream",
+        size: attachment.sizeBytes ?? 0,
+        data: attachment.sourcePayload ?? "",
+      };
+    case "pdf":
+      return {
+        type: "pdf_file",
+        name: attachment.name,
+        mimeType: attachment.declaredMimeType ?? "application/pdf",
+        size: attachment.sizeBytes ?? 0,
+        data: attachment.sourcePayload,
+        extractedText: attachment.extractedText,
+        truncated: attachment.truncated,
+      };
+    case "text":
+      return {
+        type: "file_text",
+        name: attachment.name,
+        mimeType: attachment.declaredMimeType ?? "text/plain",
+        size: attachment.sizeBytes ?? 0,
+        text: attachment.sourcePayload ?? attachment.extractedText ?? "",
+        truncated: attachment.truncated,
+      };
+    default:
+      return part;
+  }
 }
 
 export function buildMessageParts(message: string, attachments: PendingAttachment[]): ChatMessagePart[] {
   const normalizedMessage = message.trim() || buildDefaultAttachmentPrompt(attachments);
   const parts: ChatMessagePart[] = [{ type: "text", text: normalizedMessage }];
   attachments.forEach((file) => {
-    if (file.kind === "image") {
-      parts.push({
-        type: "image",
-        name: file.name,
-        mimeType: file.mimeType,
-        size: file.size,
-        data: file.data,
-      });
-      return;
-    }
     parts.push({
-      ...(file.kind === "pdf-file"
-        ? {
-            type: "pdf_file" as const,
-            name: file.name,
-            mimeType: file.mimeType,
-            size: file.size,
-            data: file.data,
-            extractedText: file.extractedText,
-            truncated: file.truncated,
-          }
-        : {
-            type: "file_text" as const,
-            name: file.name,
-            mimeType: file.mimeType,
-            size: file.size,
-            text: file.text,
-            truncated: file.truncated,
-          }),
+      type: "attachment",
+      attachment: toAttachmentInput(file),
     });
   });
   return parts;
@@ -83,6 +192,19 @@ function buildOptimisticUserContent(parts: ChatMessagePart[]): string {
     .map((part) => {
       if (part.type === "text") {
         return part.text;
+      }
+      if (part.type === "attachment") {
+        const displayKind = getAttachmentPhaseOneDisplayKind(part.attachment);
+        if (displayKind === "image") {
+          return `[图片: ${part.attachment.name}]`;
+        }
+        if (displayKind === "pdf") {
+          return `[PDF: ${part.attachment.name}]`;
+        }
+        if (displayKind === "text") {
+          return `[文件: ${part.attachment.name}]`;
+        }
+        return `[附件: ${part.attachment.name}]`;
       }
       if (part.type === "image") {
         return `[图片: ${part.name}]`;
@@ -180,7 +302,7 @@ export function useChatSendController({
         {
           role: "user",
           content: optimisticContent,
-          contentParts: continuationRequest.parts,
+          contentParts: continuationRequest.parts.map(toOptimisticDisplayPart),
           created_at: new Date().toISOString(),
         },
       ]);

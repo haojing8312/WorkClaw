@@ -467,6 +467,31 @@ export interface OpenClawPluginFeishuRuntimeStatus {
   pid?: number | null;
   port?: number | null;
   recent_logs?: string[];
+  recent_reply_lifecycle?: {
+    logicalReplyId: string;
+    phase: string;
+    channel: string;
+    accountId?: string | null;
+    threadId?: string | null;
+    chatId?: string | null;
+    messageId?: string | null;
+    queuedCounts?: unknown;
+  }[];
+  latest_reply_completion?: {
+    logicalReplyId: string;
+    phase: string;
+    state:
+      | "running"
+      | "waiting_for_idle"
+      | "idle_reached"
+      | "awaiting_user"
+      | "awaiting_approval"
+      | "interrupted"
+      | "completed"
+      | "failed"
+      | "stopped";
+    updatedAt?: string | null;
+  } | null;
 }
 
 export interface FeishuPluginEnvironmentStatus {
@@ -517,6 +542,7 @@ export interface OpenClawLarkInstallerSessionStatus {
 
 export interface WecomConnectorStatus {
   running: boolean;
+  state: string;
   started_at?: string | null;
   last_error?: string | null;
   reconnect_attempts: number;
@@ -560,6 +586,79 @@ export interface ChannelConnectorDiagnostics {
   status: string;
   health: ChannelConnectorHealth;
   replay: ChannelConnectorReplayStats;
+}
+
+export interface ChannelConnectorMonitorStatus {
+  running: boolean;
+  generation: number;
+  interval_ms: number;
+  limit: number;
+  total_synced: number;
+  monitored_instance_id?: string | null;
+  ack_status?: string | null;
+  last_synced_at?: string | null;
+  last_error?: string | null;
+}
+
+export interface ImChannelRestoreEntry {
+  channel: string;
+  host_kind: string;
+  should_restore: boolean;
+  restored: boolean;
+  monitor_restored: boolean;
+  detail: string;
+  error?: string | null;
+}
+
+export interface ImChannelRestoreReport {
+  feishu_runtime_restored: boolean;
+  wecom_connector_restored: boolean;
+  wecom_monitor_restored: boolean;
+  entries: ImChannelRestoreEntry[];
+}
+
+export interface ImChannelHostActionRecord {
+  channel: string;
+  action: string;
+  desired_running: boolean;
+  ok: boolean;
+  detail: string;
+  error?: string | null;
+  source: string;
+  occurred_at: string;
+}
+
+export interface ImChannelHostRuntimeSnapshot {
+  last_restore_report?: ImChannelRestoreReport | null;
+  recent_actions: ImChannelHostActionRecord[];
+}
+
+export type ImChannelHostKind = "openclaw_plugin" | "connector";
+
+export type ImChannelRegistryStatus =
+  | "running"
+  | "ready"
+  | "degraded"
+  | "stopped"
+  | "not_configured";
+
+export interface ImChannelRegistryEntry {
+  channel: string;
+  display_name: string;
+  host_kind: ImChannelHostKind;
+  status: ImChannelRegistryStatus;
+  summary: string;
+  detail: string;
+  capabilities: string[];
+  instance_id?: string | null;
+  last_error?: string | null;
+  plugin_host?: OpenClawPluginChannelHost | null;
+  runtime_status?: OpenClawPluginFeishuRuntimeStatus | WecomConnectorStatus | null;
+  diagnostics?: ChannelConnectorDiagnostics | null;
+  monitor_status?: ChannelConnectorMonitorStatus | null;
+  connector_settings?: Record<string, string> | null;
+  automation_status?: ImChannelRestoreEntry | null;
+  recent_action?: ImChannelHostActionRecord | null;
 }
 
 export interface OpenClawPluginChannelHost {
@@ -964,6 +1063,79 @@ export interface RuntimePreferences {
   operation_permission_mode: "standard" | "full_access" | string;
 }
 
+export type AttachmentDraftKind = "image" | "audio" | "video" | "document";
+
+export type AttachmentDraftSourceType =
+  | "browser_file"
+  | "local_path"
+  | "file_url"
+  | "remote_url"
+  | "data_url"
+  | "base64";
+
+export interface AttachmentDraftInputBase {
+  sourceType: AttachmentDraftSourceType;
+}
+
+export interface BrowserFileAttachmentDraftInput extends AttachmentDraftInputBase {
+  sourceType: "browser_file";
+  file: Pick<File, "name" | "type" | "size">;
+}
+
+export type AttachmentDraftNonBrowserInput = AttachmentDraftInputBase & {
+  sourceType: Exclude<AttachmentDraftSourceType, "browser_file">;
+};
+
+export type AttachmentDraftInput = BrowserFileAttachmentDraftInput | AttachmentDraftNonBrowserInput;
+
+export interface AttachmentDraft {
+  sourceType: AttachmentDraftSourceType;
+  kind: AttachmentDraftKind;
+  name: string;
+  mimeType: string;
+  size: number;
+}
+
+export type AttachmentDraftRejectionReason =
+  | "unsupported_source_type"
+  | "unrecognized_file_type"
+  | "kind_disabled"
+  | "size_exceeded"
+  | "kind_limit_exceeded"
+  | "batch_limit_exceeded";
+
+export interface AttachmentDraftRejection {
+  input: AttachmentDraftInput;
+  reason: AttachmentDraftRejectionReason;
+  kind?: AttachmentDraftKind;
+  message: string;
+}
+
+export interface AttachmentDraftNormalizationResult {
+  accepted: AttachmentDraft[];
+  rejected: AttachmentDraftRejection[];
+}
+
+export type AttachmentKind = AttachmentDraftKind;
+
+export type AttachmentSourceType = AttachmentDraftSourceType;
+
+export interface AttachmentInput {
+  id: string;
+  kind: AttachmentKind;
+  sourceType: AttachmentSourceType;
+  name: string;
+  declaredMimeType?: string;
+  sizeBytes?: number;
+  sourcePayload?: string;
+  sourceUri?: string;
+  extractedText?: string;
+  transcript?: string;
+  summary?: string;
+  warnings?: string[];
+  truncated?: boolean;
+}
+
 export type PendingAttachment =
   | {
       id: string;
@@ -985,6 +1157,32 @@ export type PendingAttachment =
     }
   | {
       id: string;
+      kind: "audio";
+      name: string;
+      mimeType: string;
+      size: number;
+      data: string;
+    }
+  | {
+      id: string;
+      kind: "video";
+      name: string;
+      mimeType: string;
+      size: number;
+      data: string;
+    }
+  | {
+      id: string;
+      kind: "document-file";
+      name: string;
+      mimeType: string;
+      size: number;
+      data: string;
+      summary?: string;
+      warnings?: string[];
+    }
+  | {
+      id: string;
       kind: "pdf-file";
       name: string;
       mimeType: string;
@@ -1002,6 +1200,7 @@ export interface LandingSessionLaunchInput {
 
 export type ChatMessagePart =
   | { type: "text"; text: string }
+  | { type: "attachment"; attachment: AttachmentInput }
   | {
       type: "image";
       name: string;

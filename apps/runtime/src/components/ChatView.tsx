@@ -53,7 +53,11 @@ import {
 } from "../services/chat/chatApprovalService";
 import { useChatSessionController, type PendingApprovalView } from "../scenes/chat/useChatSessionController";
 import { useChatCollaborationController } from "../scenes/chat/useChatCollaborationController";
-import { buildMessageParts, useChatSendController } from "../scenes/chat/useChatSendController";
+import {
+  buildMessageParts,
+  getAttachmentPhaseOneDisplayKind,
+  useChatSendController,
+} from "../scenes/chat/useChatSendController";
 import {
   getModelErrorDisplay,
   inferModelErrorKindFromMessage,
@@ -442,6 +446,82 @@ export function ChatView({
   resolvingApprovalSnapshotRef.current = resolvingApprovalId;
 
   const renderUserContentParts = (parts: ChatMessagePart[]) => {
+    const describeAttachmentCard = (
+      part: Exclude<ChatMessagePart, { type: "text" | "image" | "file_text" | "pdf_file" }>,
+    ): { label: string; detail?: string } => {
+      const attachmentDisplayKind = getAttachmentPhaseOneDisplayKind(part.attachment);
+      const warnings = part.attachment.warnings ?? [];
+      if (attachmentDisplayKind === "pdf") {
+        return {
+          label: "PDF 附件",
+          detail: part.attachment.truncated ? "已截断" : undefined,
+        };
+      }
+      if (attachmentDisplayKind === "text") {
+        return {
+          label: "文本附件",
+          detail: part.attachment.truncated ? "已截断" : undefined,
+        };
+      }
+      if (part.attachment.kind === "audio") {
+        const transcriptPending =
+          part.attachment.transcript === "TRANSCRIPTION_REQUIRED" ||
+          warnings.includes("transcription_pending");
+        return {
+          label: "音频附件",
+          detail: transcriptPending ? "待转写" : "已转写",
+        };
+      }
+      if (part.attachment.kind === "video") {
+        if (
+          part.attachment.summary === "VIDEO_NO_AUDIO_TRACK" ||
+          warnings.includes("video_no_audio_track")
+        ) {
+          return {
+            label: "视频附件",
+            detail: "无音轨",
+          };
+        }
+        if (
+          part.attachment.summary === "VIDEO_AUDIO_EXTRACTION_UNAVAILABLE" ||
+          warnings.includes("video_audio_extraction_unavailable")
+        ) {
+          return {
+            label: "视频附件",
+            detail: "缺少转写环境",
+          };
+        }
+        if (
+          part.attachment.summary === "VIDEO_AUDIO_EXTRACTION_FAILED" ||
+          warnings.includes("video_audio_extraction_failed")
+        ) {
+          return {
+            label: "视频附件",
+            detail: "提取失败",
+          };
+        }
+        const summaryPending =
+          part.attachment.summary === "SUMMARY_REQUIRED" ||
+          warnings.includes("summary_pending");
+        return {
+          label: "视频附件",
+          detail: summaryPending ? "待摘要" : "已摘要",
+        };
+      }
+      if (part.attachment.kind === "document") {
+        const extractionPending =
+          part.attachment.summary === "EXTRACTION_REQUIRED" ||
+          warnings.includes("document_extraction_pending");
+        return {
+          label: "文档附件",
+          detail: extractionPending ? "待提取" : "已提取",
+        };
+      }
+      return {
+        label: "附件暂不支持预览",
+      };
+    };
+
     const textParts = parts.filter((part): part is Extract<ChatMessagePart, { type: "text" }> => part.type === "text");
     const attachmentParts = parts.filter((part) => part.type !== "text");
     return (
@@ -453,32 +533,61 @@ export function ChatView({
         ))}
         {attachmentParts.length > 0 && (
           <div className="space-y-2">
-            {attachmentParts.map((part, index) =>
-              part.type === "image" ? (
+            {attachmentParts.map((part, index) => {
+              if (part.type === "image") {
+                return (
+                  <div
+                    key={`attachment-${part.name}-${index}`}
+                    className="rounded-xl border border-white/20 bg-white/10 p-2"
+                  >
+                    <img
+                      src={part.data}
+                      alt={part.name}
+                      className="max-h-56 w-full rounded-lg object-cover"
+                    />
+                    <div className="mt-2 text-xs opacity-90">{part.name}</div>
+                  </div>
+                );
+              }
+
+              if (part.type === "attachment" && getAttachmentPhaseOneDisplayKind(part.attachment) === "image") {
+                return (
+                  <div
+                    key={`attachment-${part.attachment.name}-${index}`}
+                    className="rounded-xl border border-white/20 bg-white/10 p-2"
+                  >
+                    <img
+                      src={part.attachment.sourcePayload || ""}
+                      alt={part.attachment.name}
+                      className="max-h-56 w-full rounded-lg object-cover"
+                    />
+                    <div className="mt-2 text-xs opacity-90">{part.attachment.name}</div>
+                  </div>
+                );
+              }
+
+              const attachmentName = part.type === "attachment" ? part.attachment.name : part.name;
+              const attachmentMeta =
+                part.type === "attachment"
+                  ? describeAttachmentCard(part)
+                  : {
+                      label: part.type === "pdf_file" ? "PDF 附件" : "文本附件",
+                      detail: part.truncated ? "已截断" : undefined,
+                    };
+
+              return (
                 <div
-                  key={`attachment-${part.name}-${index}`}
-                  className="rounded-xl border border-white/20 bg-white/10 p-2"
-                >
-                  <img
-                    src={part.data}
-                    alt={part.name}
-                    className="max-h-56 w-full rounded-lg object-cover"
-                  />
-                  <div className="mt-2 text-xs opacity-90">{part.name}</div>
-                </div>
-              ) : (
-                <div
-                  key={`attachment-${part.name}-${index}`}
+                  key={`attachment-${attachmentName}-${index}`}
                   className="rounded-xl border border-white/20 bg-white/10 p-3 text-xs"
                 >
-                  <div className="font-medium">{part.name}</div>
+                  <div className="font-medium">{attachmentName}</div>
                   <div className="mt-1 opacity-80">
-                    {part.type === "pdf_file" ? "PDF 附件" : "文本附件"}
-                    {part.truncated ? " · 已截断" : ""}
+                    {attachmentMeta.label}
+                    {attachmentMeta.detail ? ` · ${attachmentMeta.detail}` : ""}
                   </div>
                 </div>
-              ),
-            )}
+              );
+            })}
           </div>
         )}
       </div>
@@ -569,7 +678,7 @@ export function ChatView({
 
   async function handleCancel() {
     try {
-      await cancelAgent();
+      await cancelAgent(sessionId);
     } catch (e) {
       console.error("取消任务失败:", e);
     }

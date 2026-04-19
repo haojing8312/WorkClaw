@@ -158,6 +158,90 @@ pub(crate) fn render_user_content_parts(content_json: &str) -> Option<String> {
                     "[PDF 附件] {name} ({mime_type})\n```text\n{text}\n```{note}"
                 ));
             }
+            "attachment" => {
+                let attachment = match part.get("attachment") {
+                    Some(value) => value,
+                    None => continue,
+                };
+                let name = attachment
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("attachment");
+                let kind = attachment
+                    .get("kind")
+                    .and_then(Value::as_str)
+                    .unwrap_or("attachment");
+                let mime_type = attachment
+                    .get("mimeType")
+                    .and_then(Value::as_str)
+                    .unwrap_or("application/octet-stream");
+                let transcript = attachment
+                    .get("transcript")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.trim().is_empty());
+                let summary = attachment
+                    .get("summary")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.trim().is_empty());
+                let warnings = attachment
+                    .get("warnings")
+                    .and_then(Value::as_array)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    })
+                    .filter(|value| !value.is_empty());
+
+                let mut body_parts = Vec::new();
+                if let Some(value) = transcript {
+                    let label = if value == "TRANSCRIPTION_REQUIRED" {
+                        "转写状态"
+                    } else {
+                        "转写内容"
+                    };
+                    body_parts.push(format!("{label}：{value}"));
+                }
+                if let Some(value) = summary {
+                    let pending_value = if kind == "document" {
+                        "EXTRACTION_REQUIRED"
+                    } else {
+                        "SUMMARY_REQUIRED"
+                    };
+                    let label = if value == pending_value || is_video_summary_status(value) {
+                        if kind == "document" {
+                            "提取状态"
+                        } else {
+                            "摘要状态"
+                        }
+                    } else if kind == "document" {
+                        "提取内容"
+                    } else {
+                        "摘要内容"
+                    };
+                    body_parts.push(format!("{label}：{value}"));
+                }
+                if let Some(value) = warnings {
+                    body_parts.push(format!("警告：{value}"));
+                }
+
+                let attachment_label = if kind == "document" {
+                    "文档附件"
+                } else {
+                    "附件"
+                };
+
+                if body_parts.is_empty() {
+                    sections.push(format!("[{attachment_label}] {name} ({kind}, {mime_type})"));
+                } else {
+                    sections.push(format!(
+                        "[{attachment_label}] {name} ({kind}, {mime_type})\n{}",
+                        body_parts.join("\n")
+                    ));
+                }
+            }
             _ => {}
         }
     }
@@ -167,6 +251,15 @@ pub(crate) fn render_user_content_parts(content_json: &str) -> Option<String> {
     } else {
         Some(sections.join("\n\n"))
     }
+}
+
+fn is_video_summary_status(text: &str) -> bool {
+    matches!(
+        text,
+        "VIDEO_NO_AUDIO_TRACK"
+            | "VIDEO_AUDIO_EXTRACTION_UNAVAILABLE"
+            | "VIDEO_AUDIO_EXTRACTION_FAILED"
+    )
 }
 
 #[cfg(test)]
@@ -225,5 +318,109 @@ mod tests {
         assert!(rendered.contains("[PDF 附件] brief.pdf (application/pdf)"));
         assert!(rendered.contains("这是 PDF 正文"));
         assert!(rendered.contains("[内容已截断]"));
+    }
+
+    #[test]
+    fn render_user_content_parts_formats_unified_audio_video_and_document_attachments() {
+        let rendered = render_user_content_parts(
+            &serde_json::to_string(&json!([
+                {
+                    "type": "attachment",
+                    "attachment": {
+                        "name": "memo.mp3",
+                        "kind": "audio",
+                        "mimeType": "audio/mpeg",
+                        "transcript": "TRANSCRIPTION_REQUIRED",
+                        "warnings": ["transcription_pending"]
+                    }
+                },
+                {
+                    "type": "attachment",
+                    "attachment": {
+                        "name": "demo.mp4",
+                        "kind": "video",
+                        "mimeType": "video/mp4",
+                        "summary": "SUMMARY_REQUIRED",
+                        "warnings": ["summary_pending"]
+                    }
+                },
+                {
+                    "type": "attachment",
+                    "attachment": {
+                        "name": "budget.xlsx",
+                        "kind": "document",
+                        "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        "summary": "EXTRACTION_REQUIRED",
+                        "warnings": ["document_extraction_pending"]
+                    }
+                }
+            ]))
+            .expect("serialize content parts"),
+        )
+        .expect("render content parts");
+
+        assert!(rendered.contains("[附件] memo.mp3 (audio, audio/mpeg)"));
+        assert!(rendered.contains("转写状态：TRANSCRIPTION_REQUIRED"));
+        assert!(rendered.contains("警告：transcription_pending"));
+        assert!(rendered.contains("[附件] demo.mp4 (video, video/mp4)"));
+        assert!(rendered.contains("摘要状态：SUMMARY_REQUIRED"));
+        assert!(rendered.contains("警告：summary_pending"));
+        assert!(rendered.contains("[文档附件] budget.xlsx (document, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet)"));
+        assert!(rendered.contains("提取状态：EXTRACTION_REQUIRED"));
+        assert!(rendered.contains("警告：document_extraction_pending"));
+    }
+
+    #[test]
+    fn render_user_content_parts_formats_completed_audio_and_document_attachments() {
+        let rendered = render_user_content_parts(
+            &serde_json::to_string(&json!([
+                {
+                    "type": "attachment",
+                    "attachment": {
+                        "name": "memo.mp3",
+                        "kind": "audio",
+                        "mimeType": "audio/mpeg",
+                        "transcript": "会议结论：本周发布顺延一天"
+                    }
+                },
+                {
+                    "type": "attachment",
+                    "attachment": {
+                        "name": "brief.docx",
+                        "kind": "document",
+                        "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        "summary": "提取完成：WorkClaw 附件设计说明"
+                    }
+                }
+            ]))
+            .expect("serialize content parts"),
+        )
+        .expect("render content parts");
+
+        assert!(rendered.contains("转写内容：会议结论：本周发布顺延一天"));
+        assert!(rendered.contains("提取内容：提取完成：WorkClaw 附件设计说明"));
+    }
+
+    #[test]
+    fn render_user_content_parts_keeps_video_status_labels_for_explicit_video_fallback_states() {
+        let rendered = render_user_content_parts(
+            &serde_json::to_string(&json!([
+                {
+                    "type": "attachment",
+                    "attachment": {
+                        "name": "silent.mp4",
+                        "kind": "video",
+                        "mimeType": "video/mp4",
+                        "summary": "VIDEO_NO_AUDIO_TRACK",
+                        "warnings": ["video_no_audio_track"]
+                    }
+                }
+            ]))
+            .expect("serialize content parts"),
+        )
+        .expect("render content parts");
+
+        assert!(rendered.contains("摘要状态：VIDEO_NO_AUDIO_TRACK"));
+        assert!(rendered.contains("警告：video_no_audio_track"));
     }
 }

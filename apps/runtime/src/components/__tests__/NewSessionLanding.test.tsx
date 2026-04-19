@@ -1,5 +1,10 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { NewSessionLanding } from "../NewSessionLanding";
+import {
+  buildFileInputAccept,
+  DEFAULT_ATTACHMENT_POLICY,
+  MAX_TEXT_PREVIEW_CHARS,
+} from "../../lib/attachmentPolicy";
 import type { SessionInfo } from "../../types";
 
 function makeSession(id: string, title: string, createdAt?: Date): SessionInfo {
@@ -215,7 +220,7 @@ describe("NewSessionLanding", () => {
     });
   });
 
-  test("renders explicit team entry section and dispatches chosen team", () => {
+  test("renders explicit team entry section and dispatches chosen team", async () => {
     const onCreateTeamEntrySession = vi.fn();
     render(
       <NewSessionLanding
@@ -238,6 +243,14 @@ describe("NewSessionLanding", () => {
     fireEvent.change(screen.getByPlaceholderText("先描述你要完成什么任务..."), {
       target: { value: "请安排一份调研和执行计划" },
     });
+    fireEvent.change(screen.getByLabelText("添加附件"), {
+      target: {
+        files: [new File(["hello"], "team-brief.txt", { type: "text/plain" })],
+      },
+    });
+    await waitFor(() => {
+      expect(screen.getByText("已添加 1 个附件")).toBeInTheDocument();
+    });
 
     expect(screen.getByText("团队协作入口")).toBeInTheDocument();
     expect(screen.getByText("默认复杂任务团队")).toBeInTheDocument();
@@ -249,6 +262,14 @@ describe("NewSessionLanding", () => {
     expect(onCreateTeamEntrySession).toHaveBeenCalledWith({
       teamId: "group-1",
       initialMessage: "请安排一份调研和执行计划",
+      attachments: [
+        expect.objectContaining({
+          kind: "text-file",
+          name: "team-brief.txt",
+          mimeType: "text/plain",
+          text: "hello",
+        }),
+      ],
     });
   });
 
@@ -263,9 +284,131 @@ describe("NewSessionLanding", () => {
       />
     );
 
-    expect(screen.getByLabelText("添加附件")).toBeInTheDocument();
+    expect(screen.getByLabelText("添加附件")).toHaveAttribute(
+      "accept",
+      buildFileInputAccept(DEFAULT_ATTACHMENT_POLICY),
+    );
     expect(screen.getByTestId("landing-attachment-trigger")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "选择工作目录" })).toBeInTheDocument();
+  });
+
+  test("accepts oversized text attachments by truncating content for landing compatibility", async () => {
+    const onCreate = vi.fn();
+    render(
+      <NewSessionLanding
+        sessions={[]}
+        teams={[]}
+        creating={false}
+        onSelectSession={() => {}}
+        onCreateSessionWithInitialMessage={onCreate}
+      />
+    );
+
+    const input = screen.getByLabelText("添加附件") as HTMLInputElement;
+    const longText = "a".repeat(MAX_TEXT_PREVIEW_CHARS + 32);
+    const largeTextFile = new File([longText], "huge.txt", { type: "text/plain" });
+
+    fireEvent.change(input, {
+      target: {
+        files: [largeTextFile],
+      },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("已添加 1 个附件")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "开始任务" }));
+
+    expect(onCreate).toHaveBeenCalledWith({
+      initialMessage: "",
+      attachments: [
+        expect.objectContaining({
+          kind: "text-file",
+          name: "huge.txt",
+          mimeType: "text/plain",
+          size: largeTextFile.size,
+          truncated: true,
+          text: longText.slice(0, MAX_TEXT_PREVIEW_CHARS),
+        }),
+      ],
+      workDir: "",
+    });
+  });
+
+  test("shows inline attachment rejection without calling alert", async () => {
+    const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => {});
+    render(
+      <NewSessionLanding
+        sessions={[]}
+        teams={[]}
+        creating={false}
+        onSelectSession={() => {}}
+        onCreateSessionWithInitialMessage={() => {}}
+      />
+    );
+
+    const input = screen.getByLabelText("添加附件") as HTMLInputElement;
+    const badFile = new File(["fake"], "archive.zip", { type: "application/zip" });
+
+    fireEvent.change(input, {
+      target: {
+        files: [badFile],
+      },
+    });
+
+    expect(await screen.findByText("暂不支持附件类型 archive.zip")).toBeInTheDocument();
+    expect(alertSpy).not.toHaveBeenCalled();
+    expect(screen.queryByText("已添加 1 个附件")).not.toBeInTheDocument();
+    alertSpy.mockRestore();
+  });
+
+  test("accepts audio and video attachments and includes them in submit payload", async () => {
+    const onCreate = vi.fn();
+    render(
+      <NewSessionLanding
+        sessions={[]}
+        teams={[]}
+        creating={false}
+        onSelectSession={() => {}}
+        onCreateSessionWithInitialMessage={onCreate}
+      />
+    );
+
+    const input = screen.getByLabelText("添加附件") as HTMLInputElement;
+    const audioFile = new File(["voice"], "meeting.mp3", { type: "audio/mpeg" });
+    const videoFile = new File(["video"], "demo.mp4", { type: "video/mp4" });
+
+    fireEvent.change(input, { target: { files: [audioFile, videoFile] } });
+
+    await waitFor(() => {
+      expect(screen.getByText("已添加 2 个附件")).toBeInTheDocument();
+      expect(screen.getByText("meeting.mp3")).toBeInTheDocument();
+      expect(screen.getByText("demo.mp4")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "开始任务" }));
+
+    expect(onCreate).toHaveBeenCalledWith({
+      initialMessage: "",
+      attachments: [
+        expect.objectContaining({
+          kind: "audio",
+          name: "meeting.mp3",
+          mimeType: "audio/mpeg",
+          size: audioFile.size,
+          data: expect.any(String),
+        }),
+        expect.objectContaining({
+          kind: "video",
+          name: "demo.mp4",
+          mimeType: "video/mp4",
+          size: videoFile.size,
+          data: expect.any(String),
+        }),
+      ],
+      workDir: "",
+    });
   });
 
   test("shows the default workdir path with chat-like truncation and preserves full path in title", () => {
@@ -387,6 +530,45 @@ describe("NewSessionLanding", () => {
           kind: "pdf-file",
           name: "方案.pdf",
           mimeType: "application/pdf",
+        }),
+      ],
+      workDir: "",
+    });
+  });
+
+  test("accepts binary office document attachments and includes them in submit payload", async () => {
+    const onCreate = vi.fn();
+    render(
+      <NewSessionLanding
+        sessions={[]}
+        teams={[]}
+        creating={false}
+        onSelectSession={() => {}}
+        onCreateSessionWithInitialMessage={onCreate}
+      />
+    );
+
+    const input = screen.getByLabelText("添加附件") as HTMLInputElement;
+    const file = new File(["sheet"], "预算.xlsx", {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+    fireEvent.change(input, { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(screen.getByText("已添加 1 个附件")).toBeInTheDocument();
+      expect(screen.getByText("预算.xlsx")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "开始任务" }));
+
+    expect(onCreate).toHaveBeenCalledWith({
+      initialMessage: "",
+      attachments: [
+        expect.objectContaining({
+          kind: "document-file",
+          name: "预算.xlsx",
+          mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          summary: "EXTRACTION_REQUIRED",
         }),
       ],
       workDir: "",
