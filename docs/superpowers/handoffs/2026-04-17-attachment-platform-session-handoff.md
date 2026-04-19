@@ -8,6 +8,12 @@ This handoff is now historical context rather than an active execution baseline.
 
 The attachment-platform line and its follow-on IM host alignment work have been implemented, split, verified, and committed in the main repo history.
 
+As of the latest 2026-04-19 closeout docs, the recommended final Phase 3 status is:
+
+- `Phase 3 complete with known Windows runtime_lib libtest caveat`
+
+That caveat is environmental rather than architectural. On the current main Windows development path, execution-level verification is complete and repeatable.
+
 ### Landed commit sequence
 
 - `e73e311` `feat(attachments): build unified attachment platform`
@@ -18,6 +24,10 @@ The attachment-platform line and its follow-on IM host alignment work have been 
 - `760d90e` `chore(im-host): add phase 3 verification runner`
 - `749277d` `test(im-host): cover unified WeCom reply dispatch`
 - `d02012e` `test(im-host): add windows-safe phase 3 regressions`
+- `b9c19a0` `docs(handoff): close out attachment platform session`
+- `3d60de3` `docs(im-host): tighten phase 3 closeout evidence`
+- `5a805b8` `docs(im-host): add phase 3 final status draft`
+- `cb46bc2` `docs(im-host): prefill phase 3 verification result`
 
 ### What is now true
 
@@ -30,6 +40,7 @@ The attachment-platform line and its follow-on IM host alignment work have been 
   - `pnpm test:im-host-windows-regression`
 - full repo-level Phase 3 verification now runs on the current Windows machine:
   - `pnpm verify:openclaw-im-host:phase3`
+- the final closeout docs now explicitly say the main delivery path is done, with only a known Windows `runtime_lib` libtest caveat left for supplementary proof
 
 ### Most relevant verification that actually passed
 
@@ -38,6 +49,7 @@ The attachment-platform line and its follow-on IM host alignment work have been 
 - `pnpm test:rust-fast`
 - `pnpm test:im-host-windows-regression`
 - `pnpm verify:openclaw-im-host:phase3`
+- `pnpm --dir apps/runtime exec vitest run ./plugin-host/src/runtime.test.ts`
 
 ### Remaining truth
 
@@ -47,6 +59,17 @@ The attachment-platform line and its follow-on IM host alignment work have been 
   - `docs/architecture/openclaw-im-host/06-phase-3-acceptance-summary.md`
   - `docs/architecture/openclaw-im-host/07-phase-3-external-verification-runbook.md`
   - `docs/architecture/openclaw-im-host/08-phase-3-external-verification-result-template.md`
+  - `docs/architecture/openclaw-im-host/09-phase-3-closeout-checklist.md`
+  - `docs/architecture/openclaw-im-host/10-phase-3-final-status-draft.md`
+
+### Recommended handoff wording from this point on
+
+Use this summary when referring to the status of this work:
+
+- the attachment-platform objective is complete in repo history
+- the IM host Phase 3 objective is complete in the main Windows delivery path
+- the current best final label is `Phase 3 complete with known Windows runtime_lib libtest caveat`
+- the only meaningful follow-up is supplementary proof on a machine where the legacy `cargo test --lib ...` route is stable
 
 ## Update 2026-04-19
 
