@@ -21,8 +21,11 @@ export function FeishuAdvancedSettingsForm({
   onSaveFeishuAdvancedSettings,
 }: FeishuAdvancedSettingsFormProps) {
   return (
-    <details className="rounded-lg border border-gray-200 bg-white p-4">
-      <summary className="cursor-pointer text-sm font-medium text-gray-900">高级设置</summary>
+    <details
+      className="rounded-lg border border-gray-200 bg-white p-4"
+      data-testid="feishu-advanced-settings-form"
+    >
+      <summary className="cursor-pointer text-sm font-medium text-gray-900">飞书高级配置</summary>
       <div className="mt-2 text-xs text-gray-500">这里可以调整消息格式、接待规则和其他进阶选项。默认设置通常已经够用。</div>
       <div className="mt-3 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs text-amber-800">
         建议先完成接入和接待配置，再按需调整这里的参数；不确定时保持默认值通常更稳妥。

@@ -73,6 +73,14 @@ function installInvokeMock(overrides: Record<string, InvokeOverride> = {}) {
         sidecar_base_url: "",
       });
     }
+    if (command === "get_wecom_gateway_settings") {
+      return Promise.resolve({
+        corp_id: "ww-test-corp",
+        agent_id: "1000001",
+        agent_secret: "wecom-secret",
+        sidecar_base_url: "",
+      });
+    }
     if (command === "get_openclaw_plugin_feishu_advanced_settings") {
       return Promise.resolve({
         groups_json: '{\n  "oc_demo": {\n    "enabled": true,\n    "requireMention": true\n  }\n}',
@@ -174,20 +182,6 @@ function installInvokeMock(overrides: Record<string, InvokeOverride> = {}) {
         queued_events: 0,
       });
     }
-    if (command === "get_openclaw_plugin_feishu_runtime_status") {
-      return Promise.resolve({
-        plugin_id: "openclaw-lark",
-        account_id: "default",
-        running: false,
-        started_at: null,
-        last_stop_at: null,
-        last_event_at: null,
-        last_error: null,
-        pid: null,
-        port: null,
-        recent_logs: [],
-      });
-    }
     if (command === "get_openclaw_lark_installer_session_status") {
       return Promise.resolve({
         running: false,
@@ -254,55 +248,90 @@ function installInvokeMock(overrides: Record<string, InvokeOverride> = {}) {
         },
       ]);
     }
-    if (command === "list_openclaw_plugin_channel_hosts") {
+    if (command === "list_im_channel_registry") {
       return Promise.resolve([
         {
-          plugin_id: "openclaw-lark",
-          npm_spec: "@larksuite/openclaw-lark",
-          version: "2026.3.17",
           channel: "feishu",
           display_name: "Feishu",
+          host_kind: "openclaw_plugin",
+          status: "stopped",
+          summary: "飞书渠道由 OpenClaw 官方插件宿主提供，WorkClaw 只负责路由、会话与回复生命周期。",
+          detail: "插件版本 2026.3.17 · 账号 default · 运行时未启动",
           capabilities: ["media", "reactions", "threads", "outbound", "pairing"],
-          reload_config_prefixes: ["channels.feishu"],
-          target_hint: "<chatId|user:openId|chat:chatId>",
-          docs_path: "/channels/feishu",
-          status: "ready",
-          error: null,
+          instance_id: "default",
+          last_error: null,
+          plugin_host: {
+            plugin_id: "openclaw-lark",
+            npm_spec: "@larksuite/openclaw-lark",
+            version: "2026.3.17",
+            channel: "feishu",
+            display_name: "Feishu",
+            capabilities: ["media", "reactions", "threads", "outbound", "pairing"],
+            reload_config_prefixes: ["channels.feishu"],
+            target_hint: "<chatId|user:openId|chat:chatId>",
+            docs_path: "/channels/feishu",
+            status: "ready",
+            error: null,
+          },
+          runtime_status: {
+            plugin_id: "openclaw-lark",
+            account_id: "default",
+            running: false,
+            started_at: null,
+            last_stop_at: null,
+            last_event_at: null,
+            last_error: null,
+            pid: null,
+            port: null,
+            recent_logs: [],
+          },
+          diagnostics: null,
+          monitor_status: null,
+          connector_settings: null,
+          automation_status: {
+            channel: "feishu",
+            host_kind: "openclaw_plugin",
+            should_restore: false,
+            restored: false,
+            monitor_restored: false,
+            detail: "Feishu runtime did not meet auto-restore conditions",
+            error: null,
+          },
+          recent_action: null,
+        },
+        {
+          channel: "wecom",
+          display_name: "企业微信连接器",
+          host_kind: "connector",
+          status: "not_configured",
+          summary: "企业微信渠道将复用与 OpenClaw 兼容的 connector host 形态接入。",
+          detail: "未配置凭据",
+          capabilities: ["receive_text", "send_text", "group_route", "direct_route"],
+          instance_id: null,
+          last_error: null,
+          plugin_host: null,
+          runtime_status: null,
+          diagnostics: null,
+          monitor_status: null,
+          connector_settings: {
+            corp_id: "ww-test-corp",
+            agent_id: "1000001",
+            agent_secret: "wecom-secret",
+            sidecar_base_url: "",
+          },
+          automation_status: {
+            channel: "wecom",
+            host_kind: "connector",
+            should_restore: false,
+            restored: false,
+            monitor_restored: false,
+            detail:
+              "WeCom connector skipped auto-restore because credentials or enabled bindings are missing",
+            error: null,
+          },
+          recent_action: null,
         },
       ]);
-    }
-    if (command === "get_openclaw_plugin_feishu_channel_snapshot") {
-      return Promise.resolve({
-        pluginRoot: "D:/plugins/openclaw-lark",
-        preparedRoot: "D:/runtime/.workclaw-plugin-host-fixtures/openclaw-lark",
-        manifest: {},
-        entryPath: "D:/plugins/openclaw-lark/index.js",
-        snapshot: {
-          channelId: "feishu",
-          defaultAccountId: "default",
-          accountIds: ["default"],
-          accounts: [
-            {
-              accountId: "default",
-              account: {
-                accountId: "default",
-                enabled: true,
-                configured: true,
-              },
-              describedAccount: {
-                accountId: "default",
-                enabled: true,
-                configured: true,
-              },
-              allowFrom: [],
-              warnings: [],
-            },
-          ],
-          reloadConfigPrefixes: ["channels.feishu"],
-          targetHint: "<chatId|user:openId|chat:chatId>",
-        },
-        logRecordCount: 1,
-      });
     }
     if (command === "list_feishu_pairing_requests") {
       return Promise.resolve([
@@ -364,6 +393,65 @@ function installInvokeMock(overrides: Record<string, InvokeOverride> = {}) {
       }
       return Promise.resolve(null);
     }
+    if (command === "get_channel_connector_monitor_status") {
+      return Promise.resolve({
+        running: false,
+        generation: 0,
+        interval_ms: 1500,
+        limit: 50,
+        total_synced: 0,
+        monitored_instance_id: null,
+        ack_status: null,
+        last_synced_at: null,
+        last_error: null,
+      });
+    }
+    if (command === "set_im_channel_host_running") {
+      return Promise.resolve({
+        channel: payload?.channel || "wecom",
+        display_name: payload?.channel === "feishu" ? "Feishu" : "企业微信连接器",
+        host_kind: payload?.channel === "feishu" ? "openclaw_plugin" : "connector",
+        status: payload?.desiredRunning ? "running" : "stopped",
+        summary:
+          payload?.channel === "feishu"
+            ? "飞书渠道由 OpenClaw 官方插件宿主提供，WorkClaw 只负责路由、会话与回复生命周期。"
+            : "通过 sidecar channel connector 接入企业微信，再由 WorkClaw 统一路由与回复。",
+        detail:
+          payload?.channel === "feishu"
+            ? "插件版本 2026.3.17 · 账号 default · 运行时已启动"
+            : "凭据已配置 · wecom:wecom-main · 后台同步 28 条",
+        capabilities:
+          payload?.channel === "feishu"
+            ? ["media", "reactions", "threads", "outbound", "pairing"]
+            : ["receive_text", "send_text", "group_route", "direct_route"],
+        instance_id: payload?.channel === "feishu" ? "default" : "wecom:wecom-main",
+        last_error: null,
+        plugin_host: null,
+        runtime_status: null,
+        diagnostics: null,
+        monitor_status: null,
+        connector_settings: null,
+        automation_status: {
+          channel: payload?.channel || "wecom",
+          host_kind: payload?.channel === "feishu" ? "openclaw_plugin" : "connector",
+          should_restore: false,
+          restored: Boolean(payload?.desiredRunning),
+          monitor_restored: false,
+          detail: `host state updated for ${payload?.channel || "wecom"}`,
+          error: null,
+        },
+        recent_action: {
+          channel: payload?.channel || "wecom",
+          action: payload?.desiredRunning ? "set_running" : "set_stopped",
+          desired_running: Boolean(payload?.desiredRunning),
+          ok: true,
+          detail: `host state updated for ${payload?.channel || "wecom"}`,
+          error: null,
+          source: "settings-ui",
+          occurred_at: "2026-04-14T09:00:00Z",
+        },
+      });
+    }
     return Promise.resolve(null);
   });
 }
@@ -398,7 +486,106 @@ describe("SettingsView connector visibility", () => {
     expect(screen.queryByPlaceholderText("飞书事件订阅 Verification Token")).not.toBeInTheDocument();
     expect(screen.queryByPlaceholderText("飞书事件订阅 Encrypt Key")).not.toBeInTheDocument();
     expect(within(screen.getByTestId("feishu-onboarding-step")).getByRole("button", { name: "启动连接" })).toBeInTheDocument();
-    expect(screen.getByText("高级设置与控制台")).toBeInTheDocument();
+    expect(screen.getByText("飞书接入控制台")).toBeInTheDocument();
+  });
+
+  test("shows the unified channel registry overview above feishu-specific onboarding", async () => {
+    installInvokeMock({
+      list_im_channel_registry: async () => [
+        {
+          channel: "feishu",
+          display_name: "Feishu",
+          host_kind: "openclaw_plugin",
+          status: "stopped",
+          summary: "飞书渠道由 OpenClaw 官方插件宿主提供，WorkClaw 只负责路由、会话与回复生命周期。",
+          detail: "插件版本 2026.3.17 · 账号 default · 运行时未启动",
+          capabilities: ["media", "reactions", "threads", "outbound", "pairing"],
+          instance_id: "default",
+          last_error: null,
+          plugin_host: null,
+          runtime_status: null,
+          diagnostics: null,
+          monitor_status: null,
+          connector_settings: null,
+        },
+        {
+          channel: "wecom",
+          display_name: "企业微信连接器",
+          host_kind: "connector",
+          status: "running",
+          summary: "通过 sidecar channel connector 接入企业微信，再由 WorkClaw 统一路由与回复。",
+          detail: "凭据已配置 · wecom:wecom-main · 后台同步 28 条",
+          capabilities: ["receive_text", "send_text", "group_route", "direct_route"],
+          instance_id: "wecom:wecom-main",
+          last_error: null,
+          plugin_host: null,
+          runtime_status: {
+            running: true,
+            state: "running",
+            started_at: "2026-03-24T23:00:00Z",
+            last_error: null,
+            reconnect_attempts: 0,
+            queue_depth: 2,
+            instance_id: "wecom:wecom-main",
+          },
+          diagnostics: {
+            connector: {
+              channel: "wecom",
+              display_name: "企业微信连接器",
+              capabilities: ["receive_text", "send_text", "group_route", "direct_route"],
+            },
+            status: "connected",
+            health: {
+              adapter_name: "wecom",
+              instance_id: "wecom:wecom-main",
+              state: "running",
+              last_ok_at: "2026-03-24T23:06:00Z",
+              last_error: null,
+              reconnect_attempts: 0,
+              queue_depth: 2,
+              issue: null,
+            },
+            replay: {
+              retained_events: 3,
+              acked_events: 18,
+            },
+          },
+          monitor_status: {
+            running: true,
+            generation: 1,
+            interval_ms: 1500,
+            limit: 50,
+            total_synced: 28,
+            monitored_instance_id: "wecom:wecom-main",
+            ack_status: "processed",
+            last_synced_at: "2026-03-24T23:06:00Z",
+            last_error: null,
+          },
+          connector_settings: {
+            corp_id: "ww-test-corp",
+            agent_id: "1000001",
+            agent_secret: "wecom-secret",
+            sidecar_base_url: "",
+          },
+        },
+      ],
+    });
+
+    render(<SettingsView onClose={() => {}} initialTab="feishu" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("channel-registry-section")).toBeInTheDocument();
+    });
+
+    expect(screen.getByText("渠道宿主总览")).toBeInTheDocument();
+    expect(screen.getByTestId("channel-registry-card-feishu")).toBeInTheDocument();
+    expect(screen.getByTestId("channel-registry-card-wecom")).toBeInTheDocument();
+    expect(screen.getByText("OpenClaw 插件宿主")).toBeInTheDocument();
+    expect(screen.getByText("Connector 宿主")).toBeInTheDocument();
+    expect(screen.getByTestId("connector-panel-wecom")).toBeInTheDocument();
+    expect(screen.getByTestId("connector-diagnostics-panel-wecom")).toBeInTheDocument();
+    expect(screen.getByText("企业微信宿主详情")).toBeInTheDocument();
+    expect(screen.getByText("后台同步运行中：累计 28 条，轮询 1500ms / 50 条。")).toBeInTheDocument();
   });
 
   test("surfaces the host Node.js minimum version requirement when the detected version is too old", async () => {
@@ -461,11 +648,8 @@ describe("SettingsView connector visibility", () => {
 
     expect(screen.getByText("飞书连接")).toBeInTheDocument();
 
-    const initialHostLoads = invokeMock.mock.calls.filter(
-      ([command]) => command === "list_openclaw_plugin_channel_hosts",
-    ).length;
-    const initialSnapshotLoads = invokeMock.mock.calls.filter(
-      ([command]) => command === "get_openclaw_plugin_feishu_channel_snapshot",
+    const initialRegistryLoads = invokeMock.mock.calls.filter(
+      ([command]) => command === "list_im_channel_registry",
     ).length;
 
     await act(async () => {
@@ -473,17 +657,11 @@ describe("SettingsView connector visibility", () => {
     });
 
     expect(
-      invokeMock.mock.calls.filter(([command]) => command === "list_openclaw_plugin_channel_hosts")
-        .length,
-    ).toBeGreaterThan(initialHostLoads);
-    expect(
-      invokeMock.mock.calls.filter(
-        ([command]) => command === "get_openclaw_plugin_feishu_channel_snapshot",
-      ).length,
-    ).toBeGreaterThan(initialSnapshotLoads);
+      invokeMock.mock.calls.filter(([command]) => command === "list_im_channel_registry").length,
+    ).toBeGreaterThan(initialRegistryLoads);
     expect(
       invokeMock.mock.calls.some(
-        ([command]) => command === "start_openclaw_plugin_feishu_runtime",
+        ([command]) => command === "set_im_channel_host_running",
       ),
     ).toBe(false);
   }, 15000);
@@ -497,7 +675,7 @@ describe("SettingsView connector visibility", () => {
 
     expect(
       invokeMock.mock.calls.some(
-        ([command]) => command === "start_openclaw_plugin_feishu_runtime",
+        ([command]) => command === "set_im_channel_host_running",
       ),
     ).toBe(false);
   });
@@ -517,13 +695,13 @@ describe("SettingsView connector visibility", () => {
     const initialEnvironmentLoads = invokeMock.mock.calls.filter(
       ([command]) => command === "get_feishu_plugin_environment_status",
     ).length;
-    const initialRuntimeStatusLoads = invokeMock.mock.calls.filter(
-      ([command]) => command === "get_openclaw_plugin_feishu_runtime_status",
+    const initialRegistryLoads = invokeMock.mock.calls.filter(
+      ([command]) => command === "list_im_channel_registry",
     ).length;
 
     expect(initialProgressLoads).toBe(1);
     expect(initialEnvironmentLoads).toBe(0);
-    expect(initialRuntimeStatusLoads).toBe(1);
+    expect(initialRegistryLoads).toBe(3);
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(15_000);
@@ -538,10 +716,8 @@ describe("SettingsView connector visibility", () => {
       ).length,
     ).toBe(initialEnvironmentLoads);
     expect(
-      invokeMock.mock.calls.filter(
-        ([command]) => command === "get_openclaw_plugin_feishu_runtime_status",
-      ).length,
-    ).toBeGreaterThan(initialRuntimeStatusLoads);
+      invokeMock.mock.calls.filter(([command]) => command === "list_im_channel_registry").length,
+    ).toBeGreaterThan(initialRegistryLoads);
   }, 15000);
 
   test("stops feishu background polling after leaving the feishu tab", async () => {
@@ -555,14 +731,11 @@ describe("SettingsView connector visibility", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "模型连接" }));
 
-    const hostLoadsBefore = invokeMock.mock.calls.filter(
-      ([command]) => command === "list_openclaw_plugin_channel_hosts",
+    const registryLoadsBefore = invokeMock.mock.calls.filter(
+      ([command]) => command === "list_im_channel_registry",
     ).length;
     const progressLoadsBefore = invokeMock.mock.calls.filter(
       ([command]) => command === "get_feishu_setup_progress",
-    ).length;
-    const runtimeLoadsBefore = invokeMock.mock.calls.filter(
-      ([command]) => command === "get_openclaw_plugin_feishu_runtime_status",
     ).length;
 
     await act(async () => {
@@ -570,14 +743,11 @@ describe("SettingsView connector visibility", () => {
     });
 
     expect(
-      invokeMock.mock.calls.filter(([command]) => command === "list_openclaw_plugin_channel_hosts").length,
-    ).toBe(hostLoadsBefore);
+      invokeMock.mock.calls.filter(([command]) => command === "list_im_channel_registry").length,
+    ).toBe(registryLoadsBefore);
     expect(
       invokeMock.mock.calls.filter(([command]) => command === "get_feishu_setup_progress").length,
     ).toBe(progressLoadsBefore);
-    expect(
-      invokeMock.mock.calls.filter(([command]) => command === "get_openclaw_plugin_feishu_runtime_status").length,
-    ).toBe(runtimeLoadsBefore);
   }, 15000);
 
   test("renders one primary onboarding step at a time", async () => {
@@ -703,14 +873,14 @@ describe("SettingsView connector visibility", () => {
     render(<SettingsView onClose={() => {}} initialTab="feishu" />);
 
     await waitFor(() => {
-      expect(screen.getByText("高级设置与控制台")).toBeInTheDocument();
+      expect(screen.getByText("飞书接入控制台")).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByText("高级设置与控制台"));
+    fireEvent.click(screen.getByText("飞书接入控制台"));
 
     await waitFor(() => {
-      expect(screen.getByText("连接详情")).toBeInTheDocument();
-      expect(screen.getByText("高级设置")).toBeInTheDocument();
+      expect(screen.queryByText("连接详情")).not.toBeInTheDocument();
+      expect(screen.getByText("飞书高级配置")).toBeInTheDocument();
     });
   });
 
@@ -718,10 +888,10 @@ describe("SettingsView connector visibility", () => {
     render(<SettingsView onClose={() => {}} initialTab="feishu" />);
 
     await waitFor(() => {
-      expect(screen.getByText("高级设置与控制台")).toBeInTheDocument();
+      expect(screen.getByText("飞书接入控制台")).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByText("高级设置与控制台"));
+    fireEvent.click(screen.getByText("飞书接入控制台"));
 
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "新建机器人向导（高级）" })).toBeInTheDocument();
@@ -836,7 +1006,7 @@ describe("SettingsView connector visibility", () => {
       expect(screen.getByTestId("feishu-onboarding-state")).toHaveTextContent("绑定已有机器人");
     });
 
-    fireEvent.click(screen.getByText("高级设置与控制台"));
+    fireEvent.click(screen.getByText("飞书接入控制台"));
 
     await waitFor(() => {
       expect(screen.getByText("App ID")).toBeInTheDocument();
@@ -883,7 +1053,7 @@ describe("SettingsView connector visibility", () => {
     const onboardingStep = await screen.findByTestId("feishu-onboarding-step");
 
     fireEvent.click(within(onboardingStep).getByRole("button", { name: "绑定已有机器人" }));
-    fireEvent.click(screen.getByText("高级设置与控制台"));
+    fireEvent.click(screen.getByText("飞书接入控制台"));
 
     await waitFor(() => {
       expect(screen.getByPlaceholderText("cli_xxx")).toBeInTheDocument();
@@ -1092,7 +1262,7 @@ describe("SettingsView connector visibility", () => {
         scoped_routing_count: 0,
         summary_state: "awaiting_auth",
       }),
-      start_openclaw_plugin_feishu_runtime: async () => {
+      set_im_channel_host_running: async () => {
         throw "runtime failed";
       },
     });
@@ -1183,7 +1353,26 @@ describe("SettingsView connector visibility", () => {
         scoped_routing_count: 0,
         summary_state: "awaiting_auth",
       }),
-      list_openclaw_plugin_channel_hosts: async () => [],
+      list_im_channel_registry: async () => [
+        {
+          channel: "feishu",
+          display_name: "Feishu",
+          host_kind: "openclaw_plugin",
+          status: "missing",
+          summary: "飞书渠道由 OpenClaw 官方插件宿主提供，WorkClaw 只负责路由、会话与回复生命周期。",
+          detail: "尚未安装官方插件",
+          capabilities: ["media", "reactions", "threads", "outbound", "pairing"],
+          instance_id: "default",
+          last_error: null,
+          plugin_host: null,
+          runtime_status: null,
+          diagnostics: null,
+          monitor_status: null,
+          connector_settings: null,
+          automation_status: null,
+          recent_action: null,
+        },
+      ],
       install_openclaw_plugin_from_npm: async () => {
         throw new Error("npm offline");
       },
@@ -1224,7 +1413,7 @@ describe("SettingsView connector visibility", () => {
         scoped_routing_count: 0,
         summary_state: "awaiting_auth",
       }),
-      start_openclaw_plugin_feishu_runtime: async () => {
+      set_im_channel_host_running: async () => {
         throw new Error("runtime boom");
       },
     });
@@ -1236,9 +1425,9 @@ describe("SettingsView connector visibility", () => {
     fireEvent.click(within(onboardingStep).getByRole("button", { name: "启动连接" }));
 
     await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith("start_openclaw_plugin_feishu_runtime", {
-        pluginId: "openclaw-lark",
-        accountId: null,
+      expect(invokeMock).toHaveBeenCalledWith("set_im_channel_host_running", {
+        channel: "feishu",
+        desiredRunning: true,
       });
       expect(within(onboardingStep).getByText("安装并启动飞书连接失败: Error: runtime boom")).toBeInTheDocument();
       expect(screen.getAllByText("安装并启动飞书连接失败: Error: runtime boom")).toHaveLength(1);
@@ -1303,10 +1492,10 @@ describe("SettingsView connector visibility", () => {
     render(<SettingsView onClose={() => {}} initialTab="feishu" />);
 
     await waitFor(() => {
-      expect(screen.getByText("高级设置与控制台")).toBeInTheDocument();
+      expect(screen.getByText("飞书接入控制台")).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByText("高级设置与控制台"));
+    fireEvent.click(screen.getByText("飞书接入控制台"));
 
     await waitFor(() => {
       expect(screen.getByText("消息与展示")).toBeInTheDocument();
@@ -1316,24 +1505,347 @@ describe("SettingsView connector visibility", () => {
     });
   });
 
-  test("shows condensed connection diagnostics before raw logs", async () => {
+  test("shows feishu host diagnostics in the channel registry", async () => {
     render(<SettingsView onClose={() => {}} initialTab="feishu" />);
 
     await waitFor(() => {
-      expect(screen.getByText("高级设置与控制台")).toBeInTheDocument();
+      expect(screen.getByText("飞书宿主详情")).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByText("高级设置与控制台"));
-    fireEvent.click(screen.getByText("连接详情"));
+    fireEvent.click(screen.getByText("飞书宿主详情"));
 
     await waitFor(() => {
-      expect(screen.getByText("这里展示当前连接是否正常、最近一次事件，以及排查问题时最有用的诊断摘要。")).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "复制诊断摘要" })).toBeInTheDocument();
-      expect(screen.getByText("原始日志（最近 3 条）")).toBeInTheDocument();
+      const panel = screen.getByTestId("feishu-host-details-panel");
+      expect(screen.getByText("这里展示飞书 OpenClaw 插件宿主的运行状态、最近一次事件、最近回复状态与宿主日志，方便排查接入问题。")).toBeInTheDocument();
+      expect(within(panel).getByRole("button", { name: "刷新宿主状态" })).toBeInTheDocument();
+      expect(within(panel).getByRole("button", { name: "启动宿主" })).toBeInTheDocument();
+      expect(within(panel).getByText("最近自动恢复")).toBeInTheDocument();
+      expect(within(panel).getByText("宿主日志（最近 3 条）")).toBeInTheDocument();
     });
   });
 
-  test("shows pending pairing approvals as a normal connection detail state", async () => {
+  test("shows wecom host diagnostics in the channel registry", async () => {
+    installInvokeMock({
+      list_im_channel_registry: async () => [
+        {
+          channel: "feishu",
+          display_name: "Feishu",
+          host_kind: "openclaw_plugin",
+          status: "stopped",
+          summary: "飞书渠道由 OpenClaw 官方插件宿主提供，WorkClaw 只负责路由、会话与回复生命周期。",
+          detail: "插件版本 2026.3.17 · 账号 default · 运行时未启动",
+          capabilities: ["media", "reactions", "threads", "outbound", "pairing"],
+          instance_id: "default",
+          last_error: null,
+          plugin_host: null,
+          runtime_status: null,
+          diagnostics: null,
+          monitor_status: null,
+          connector_settings: null,
+        },
+        {
+          channel: "wecom",
+          display_name: "企业微信连接器",
+          host_kind: "connector",
+          status: "running",
+          summary: "通过 sidecar channel connector 接入企业微信，再由 WorkClaw 统一路由与回复。",
+          detail: "凭据已配置 · wecom:wecom-main · 后台同步 28 条",
+          capabilities: ["receive_text", "send_text", "group_route", "direct_route"],
+          instance_id: "wecom:wecom-main",
+          last_error: null,
+          plugin_host: null,
+          runtime_status: {
+            running: true,
+            state: "running",
+            started_at: "2026-03-24T23:00:00Z",
+            last_error: null,
+            reconnect_attempts: 0,
+            queue_depth: 2,
+            instance_id: "wecom:wecom-main",
+          },
+          diagnostics: {
+            connector: {
+              channel: "wecom",
+              display_name: "企业微信连接器",
+              capabilities: ["receive_text", "send_text", "group_route", "direct_route"],
+            },
+            status: "connected",
+            health: {
+              adapter_name: "wecom",
+              instance_id: "wecom:wecom-main",
+              state: "running",
+              last_ok_at: "2026-03-24T23:06:00Z",
+              last_error: null,
+              reconnect_attempts: 0,
+              queue_depth: 2,
+              issue: null,
+            },
+            replay: {
+              retained_events: 3,
+              acked_events: 18,
+            },
+          },
+          monitor_status: {
+            running: true,
+            generation: 1,
+            interval_ms: 1500,
+            limit: 50,
+            total_synced: 28,
+            monitored_instance_id: "wecom:wecom-main",
+            ack_status: "processed",
+            last_synced_at: "2026-03-24T23:06:00Z",
+            last_error: null,
+          },
+          connector_settings: {
+            corp_id: "ww-test-corp",
+            agent_id: "1000001",
+            agent_secret: "wecom-secret",
+            sidecar_base_url: "",
+          },
+        },
+      ],
+    });
+
+    render(<SettingsView onClose={() => {}} initialTab="feishu" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("企业微信宿主详情")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText("企业微信宿主详情"));
+
+    await waitFor(() => {
+      expect(screen.getByText("这里展示企业微信 connector 宿主的运行状态、后台监控与重连信息，方便和飞书一样统一排查渠道接入问题。")).toBeInTheDocument();
+      expect(screen.getByText("后台监控")).toBeInTheDocument();
+      expect(screen.getByText("重连次数")).toBeInTheDocument();
+      expect(screen.getByText("运行中 · 已同步 28 条 · 轮询 1500ms / 50 条")).toBeInTheDocument();
+      const panel = screen.getByTestId("wecom-host-details-panel");
+      expect(within(panel).getByRole("button", { name: "停止宿主" })).toBeInTheDocument();
+      expect(within(panel).getByText("最近自动恢复")).toBeInTheDocument();
+    });
+  });
+
+  test("uses the unified channel host command to stop wecom from host details", async () => {
+    installInvokeMock({
+      list_im_channel_registry: async () => [
+        {
+          channel: "feishu",
+          display_name: "Feishu",
+          host_kind: "openclaw_plugin",
+          status: "stopped",
+          summary: "飞书渠道由 OpenClaw 官方插件宿主提供，WorkClaw 只负责路由、会话与回复生命周期。",
+          detail: "插件版本 2026.3.17 · 账号 default · 运行时未启动",
+          capabilities: ["media", "reactions", "threads", "outbound", "pairing"],
+          instance_id: "default",
+          last_error: null,
+          plugin_host: null,
+          runtime_status: null,
+          diagnostics: null,
+          monitor_status: null,
+          connector_settings: null,
+        },
+        {
+          channel: "wecom",
+          display_name: "企业微信连接器",
+          host_kind: "connector",
+          status: "running",
+          summary: "通过 sidecar channel connector 接入企业微信，再由 WorkClaw 统一路由与回复。",
+          detail: "凭据已配置 · wecom:wecom-main · 后台同步 28 条",
+          capabilities: ["receive_text", "send_text", "group_route", "direct_route"],
+          instance_id: "wecom:wecom-main",
+          last_error: null,
+          plugin_host: null,
+          runtime_status: {
+            running: true,
+            state: "running",
+            started_at: "2026-03-24T23:00:00Z",
+            last_error: null,
+            reconnect_attempts: 0,
+            queue_depth: 2,
+            instance_id: "wecom:wecom-main",
+          },
+          diagnostics: null,
+          monitor_status: {
+            running: true,
+            generation: 1,
+            interval_ms: 1500,
+            limit: 50,
+            total_synced: 28,
+            monitored_instance_id: "wecom:wecom-main",
+            ack_status: "processed",
+            last_synced_at: "2026-03-24T23:06:00Z",
+            last_error: null,
+          },
+          connector_settings: {
+            corp_id: "ww-test-corp",
+            agent_id: "1000001",
+            agent_secret: "wecom-secret",
+            sidecar_base_url: "",
+          },
+        },
+      ],
+    });
+
+    render(<SettingsView onClose={() => {}} initialTab="feishu" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("企业微信宿主详情")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText("企业微信宿主详情"));
+    const panel = await screen.findByTestId("wecom-host-details-panel");
+    fireEvent.click(within(panel).getByRole("button", { name: "停止宿主" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("set_im_channel_host_running", {
+        channel: "wecom",
+        desiredRunning: false,
+      });
+    });
+  });
+
+  test("uses the unified channel host command to start wecom from host details", async () => {
+    installInvokeMock({
+      list_im_channel_registry: async () => [
+        {
+          channel: "feishu",
+          display_name: "Feishu",
+          host_kind: "openclaw_plugin",
+          status: "stopped",
+          summary: "飞书渠道由 OpenClaw 官方插件宿主提供，WorkClaw 只负责路由、会话与回复生命周期。",
+          detail: "插件版本 2026.3.17 · 账号 default · 运行时未启动",
+          capabilities: ["media", "reactions", "threads", "outbound", "pairing"],
+          instance_id: "default",
+          last_error: null,
+          plugin_host: null,
+          runtime_status: null,
+          diagnostics: null,
+          monitor_status: null,
+          connector_settings: null,
+        },
+        {
+          channel: "wecom",
+          display_name: "企业微信连接器",
+          host_kind: "connector",
+          status: "stopped",
+          summary: "通过 sidecar channel connector 接入企业微信，再由 WorkClaw 统一路由与回复。",
+          detail: "凭据已配置 · wecom:wecom-main",
+          capabilities: ["receive_text", "send_text", "group_route", "direct_route"],
+          instance_id: "wecom:wecom-main",
+          last_error: null,
+          plugin_host: null,
+          runtime_status: {
+            running: false,
+            state: "stopped",
+            started_at: null,
+            last_error: null,
+            reconnect_attempts: 0,
+            queue_depth: 0,
+            instance_id: "wecom:wecom-main",
+          },
+          diagnostics: null,
+          monitor_status: {
+            running: false,
+            generation: 1,
+            interval_ms: 1500,
+            limit: 50,
+            total_synced: 28,
+            monitored_instance_id: "wecom:wecom-main",
+            ack_status: "processed",
+            last_synced_at: "2026-03-24T23:06:00Z",
+            last_error: null,
+          },
+          connector_settings: {
+            corp_id: "ww-test-corp",
+            agent_id: "1000001",
+            agent_secret: "wecom-secret",
+            sidecar_base_url: "",
+          },
+        },
+      ],
+    });
+
+    render(<SettingsView onClose={() => {}} initialTab="feishu" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("企业微信宿主详情")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText("企业微信宿主详情"));
+    const panel = await screen.findByTestId("wecom-host-details-panel");
+    fireEvent.click(within(panel).getByRole("button", { name: "启动宿主" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("set_im_channel_host_running", {
+        channel: "wecom",
+        desiredRunning: true,
+      });
+    });
+  });
+
+  test("shows connector monitor summary in the channel registry when background sync is running", async () => {
+    installInvokeMock({
+      list_im_channel_registry: async () => [
+        {
+          channel: "feishu",
+          display_name: "Feishu",
+          host_kind: "openclaw_plugin",
+          status: "stopped",
+          summary: "飞书渠道由 OpenClaw 官方插件宿主提供，WorkClaw 只负责路由、会话与回复生命周期。",
+          detail: "插件版本 2026.3.17 · 账号 default · 运行时未启动",
+          capabilities: ["media", "reactions", "threads", "outbound", "pairing"],
+          instance_id: "default",
+          last_error: null,
+          plugin_host: null,
+          runtime_status: null,
+          diagnostics: null,
+          monitor_status: null,
+          connector_settings: null,
+        },
+        {
+          channel: "wecom",
+          display_name: "企业微信连接器",
+          host_kind: "connector",
+          status: "running",
+          summary: "通过 sidecar channel connector 接入企业微信，再由 WorkClaw 统一路由与回复。",
+          detail: "凭据已配置 · wecom:wecom-main · 后台同步 28 条",
+          capabilities: ["receive_text", "send_text", "group_route", "direct_route"],
+          instance_id: "wecom:wecom-main",
+          last_error: null,
+          plugin_host: null,
+          runtime_status: null,
+          diagnostics: null,
+          monitor_status: {
+            running: true,
+            generation: 3,
+            interval_ms: 1500,
+            limit: 50,
+            total_synced: 28,
+            monitored_instance_id: "wecom:wecom-main",
+            ack_status: "processed",
+            last_synced_at: "2026-04-14T06:40:00Z",
+            last_error: null,
+          },
+          connector_settings: {
+            corp_id: "ww-test-corp",
+            agent_id: "1000001",
+            agent_secret: "wecom-secret",
+            sidecar_base_url: "",
+          },
+        },
+      ],
+    });
+
+    render(<SettingsView onClose={() => {}} initialTab="feishu" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("channel-registry-card-wecom")).toBeInTheDocument();
+    });
+
+    expect(screen.getByText("后台同步运行中：累计 28 条，轮询 1500ms / 50 条。")).toBeInTheDocument();
+  });
+
+  test("shows pending pairing approvals as a normal setup summary state", async () => {
     installInvokeMock({
       get_feishu_setup_progress: async () => ({
         environment: {
@@ -1356,21 +1868,52 @@ describe("SettingsView connector visibility", () => {
         scoped_routing_count: 0,
         summary_state: "awaiting_pairing_approval",
       }),
-      get_openclaw_plugin_feishu_runtime_status: async () => ({
-        plugin_id: "openclaw-lark",
-        account_id: "default",
-        running: true,
-        started_at: "2026-03-24T23:00:00Z",
-        last_stop_at: null,
-        last_event_at: "2026-03-24T23:06:00Z",
-        last_error: null,
-        pid: 4321,
-        port: 3100,
-        recent_logs: [
-          "[info] runtime: feishu[default]: sender ou_4866 not paired, creating pairing request",
-          "[pairing] feishu: created request 5a776683-bb67-48ac-86bf-7029a5057823 for ou_4866 code=6X4ZN54W",
-        ],
-      }),
+      list_im_channel_registry: async () => [
+        {
+          channel: "feishu",
+          display_name: "Feishu",
+          host_kind: "openclaw_plugin",
+          status: "running",
+          summary: "通过 OpenClaw 官方飞书插件接收与回复消息。",
+          detail: "插件版本 2026.3.25 · 账号 default · 运行时已启动",
+          capabilities: ["media", "reactions", "threads", "outbound", "pairing"],
+          instance_id: "default",
+          last_error: null,
+          plugin_host: {
+            plugin_id: "openclaw-lark",
+            npm_spec: "@larksuite/openclaw-lark",
+            version: "2026.3.25",
+            channel: "feishu",
+            display_name: "Feishu",
+            capabilities: ["media", "reactions", "threads", "outbound", "pairing"],
+            reload_config_prefixes: ["channels.feishu"],
+            target_hint: "<chatId|user:openId|chat:chatId>",
+            docs_path: "/channels/feishu",
+            status: "ready",
+            error: null,
+          },
+          runtime_status: {
+            plugin_id: "openclaw-lark",
+            account_id: "default",
+            running: true,
+            started_at: "2026-03-24T23:00:00Z",
+            last_stop_at: null,
+            last_event_at: "2026-03-24T23:06:00Z",
+            last_error: null,
+            pid: 4321,
+            port: 3100,
+            recent_logs: [
+              "[info] runtime: feishu[default]: sender ou_4866 not paired, creating pairing request",
+              "[pairing] feishu: created request 5a776683-bb67-48ac-86bf-7029a5057823 for ou_4866 code=6X4ZN54W",
+            ],
+          },
+          diagnostics: null,
+          monitor_status: null,
+          connector_settings: null,
+          automation_status: null,
+          recent_action: null,
+        },
+      ],
       list_feishu_pairing_requests: async () => [
         {
           id: "pairing-pending-1",
@@ -1391,14 +1934,8 @@ describe("SettingsView connector visibility", () => {
     render(<SettingsView onClose={() => {}} initialTab="feishu" />);
 
     await waitFor(() => {
-      expect(screen.getByText("高级设置与控制台")).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByText("高级设置与控制台"));
-    fireEvent.click(screen.getByText("连接详情"));
-
-    await waitFor(() => {
-      expect(screen.getAllByText("连接正常，但有新的接入请求等待批准。").length).toBeGreaterThan(0);
+      expect(screen.getByText("飞书里已有新的接入请求，WorkClaw 还需要你批准")).toBeInTheDocument();
+      expect(screen.getByText("机器人已经返回 pairing code。请在这里批准这次接入请求，批准后它才能真正开始收发消息。")).toBeInTheDocument();
     });
   });
 

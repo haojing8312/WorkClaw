@@ -151,7 +151,7 @@ function resolveFeishuOnboardingStepDisplay(step: FeishuOnboardingStep): FeishuO
     case "existing_robot":
       return {
         title: "绑定已有机器人",
-        body: "先在这里确认你已有机器人的信息，再到高级控制台保存完整配置。",
+        body: "先在这里确认你已有机器人的信息，再到飞书接入控制台保存完整配置。",
       };
     case "plugin":
       return {

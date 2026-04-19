@@ -1,14 +1,14 @@
 import type {
+  ImChannelRegistryEntry,
   OpenClawPluginChannelHost,
   OpenClawPluginFeishuRuntimeStatus,
 } from "../../../types";
+import { loadImChannelRegistry } from "../channels/channelRegistryService";
 import type { FeishuSettingsControllerActionDeps } from "./feishuSettingsControllerActionTypes";
 import {
   loadFeishuAdvancedSettings as loadFeishuAdvancedSettingsFromService,
   loadFeishuGatewaySettings as loadFeishuGatewaySettingsFromService,
   loadFeishuPairingRequests as loadFeishuPairingRequestsFromService,
-  loadFeishuPluginChannelHosts as loadFeishuPluginChannelHostsFromService,
-  loadFeishuPluginChannelSnapshot as loadFeishuPluginChannelSnapshotFromService,
   normalizeFeishuAdvancedSettings,
   normalizeFeishuGatewaySettings,
 } from "./feishuSettingsService";
@@ -21,6 +21,15 @@ function normalizeFeishuHosts(hosts: OpenClawPluginChannelHost[]) {
       host.npm_spec === "@larksuite/openclaw-lark" ||
       host.display_name.toLowerCase().includes("feishu") ||
       host.display_name.toLowerCase().includes("lark"),
+  );
+}
+
+function extractFeishuHostsFromRegistry(entries: ImChannelRegistryEntry[]) {
+  return normalizeFeishuHosts(
+    entries
+      .filter((entry) => entry.channel === "feishu")
+      .map((entry) => entry.plugin_host)
+      .filter((host): host is OpenClawPluginChannelHost => Boolean(host)),
   );
 }
 
@@ -39,20 +48,20 @@ export function createFeishuSettingsControllerLoaders(deps: FeishuSettingsContro
   }
 
   async function loadConnectorPlatformData() {
-    const [hostsResult, pairingResult] = await Promise.allSettled([
-      loadFeishuPluginChannelHostsFromService(),
+    const [registryResult, pairingResult] = await Promise.allSettled([
+      loadImChannelRegistry(),
       loadFeishuPairingRequestsFromService(),
     ]);
 
     const normalizedHosts =
-      hostsResult.status === "fulfilled"
-        ? normalizeFeishuHosts(Array.isArray(hostsResult.value) ? hostsResult.value : [])
+      registryResult.status === "fulfilled"
+        ? extractFeishuHostsFromRegistry(Array.isArray(registryResult.value) ? registryResult.value : [])
         : [];
-    if (hostsResult.status !== "fulfilled") {
-      console.warn("加载官方插件宿主失败:", hostsResult.reason);
+    if (registryResult.status !== "fulfilled") {
+      console.warn("加载飞书渠道宿主总览失败:", registryResult.reason);
     }
     deps.setPluginChannelHosts(normalizedHosts);
-    deps.setPluginChannelHostsError(hostsResult.status === "fulfilled" ? "" : "官方插件状态暂时不可用");
+    deps.setPluginChannelHostsError(registryResult.status === "fulfilled" ? "" : "飞书宿主状态暂时不可用");
 
     if (pairingResult.status !== "fulfilled") {
       console.warn("加载飞书配对请求失败:", pairingResult.reason);
@@ -61,27 +70,6 @@ export function createFeishuSettingsControllerLoaders(deps: FeishuSettingsContro
       pairingResult.status === "fulfilled" && Array.isArray(pairingResult.value) ? pairingResult.value : [],
     );
     deps.setFeishuPairingRequestsError(pairingResult.status === "fulfilled" ? "" : "配对记录加载失败");
-
-    if (normalizedHosts.length === 0) {
-      deps.setPluginChannelSnapshots({});
-      deps.setPluginChannelSnapshotsError("");
-      return;
-    }
-
-    const snapshotResults = await Promise.allSettled(
-      normalizedHosts.map((host) => loadFeishuPluginChannelSnapshotFromService(host.plugin_id)),
-    );
-    const nextSnapshots: Record<string, Awaited<ReturnType<typeof loadFeishuPluginChannelSnapshotFromService>>> = {};
-    for (const result of snapshotResults) {
-      if (result.status !== "fulfilled") {
-        continue;
-      }
-      nextSnapshots[result.value.snapshot.channelId || result.value.entryPath] = result.value;
-    }
-    deps.setPluginChannelSnapshots(nextSnapshots);
-    deps.setPluginChannelSnapshotsError(
-      snapshotResults.some((result) => result.status !== "fulfilled") ? "部分账号快照暂时不可用" : "",
-    );
   }
 
   function applyOfficialFeishuRuntimeStatus(

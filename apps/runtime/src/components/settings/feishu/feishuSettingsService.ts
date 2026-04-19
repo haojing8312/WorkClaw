@@ -5,11 +5,8 @@ import type {
   FeishuSetupProgress,
   OpenClawLarkInstallerMode,
   OpenClawLarkInstallerSessionStatus,
-  OpenClawPluginChannelHost,
-  OpenClawPluginChannelSnapshotResult,
   OpenClawPluginFeishuAdvancedSettings,
   OpenClawPluginFeishuCredentialProbeResult,
-  OpenClawPluginFeishuRuntimeStatus,
   OpenClawPluginInstallRecord,
 } from "../../../types";
 
@@ -99,27 +96,13 @@ export function loadFeishuSetupProgress() {
   return invoke<FeishuSetupProgress | null>("get_feishu_setup_progress");
 }
 
-export function loadFeishuRuntimeStatus() {
-  return invoke<OpenClawPluginFeishuRuntimeStatus>("get_openclaw_plugin_feishu_runtime_status");
-}
-
 export function loadFeishuInstallerSessionStatus() {
   return invoke<OpenClawLarkInstallerSessionStatus | null>("get_openclaw_lark_installer_session_status");
-}
-
-export function loadFeishuPluginChannelHosts() {
-  return invoke<OpenClawPluginChannelHost[]>("list_openclaw_plugin_channel_hosts");
 }
 
 export function loadFeishuPairingRequests() {
   return invoke<FeishuPairingRequestRecord[]>("list_feishu_pairing_requests", {
     status: null,
-  });
-}
-
-export function loadFeishuPluginChannelSnapshot(pluginId: string) {
-  return invoke<OpenClawPluginChannelSnapshotResult>("get_openclaw_plugin_feishu_channel_snapshot", {
-    pluginId,
   });
 }
 
@@ -157,13 +140,6 @@ export function sendFeishuInstallerInput(input: string) {
 
 export function stopFeishuInstallerSession() {
   return invoke<OpenClawLarkInstallerSessionStatus | null>("stop_openclaw_lark_installer_session");
-}
-
-export function startFeishuRuntime(pluginId: string, accountId: string | null) {
-  return invoke<OpenClawPluginFeishuRuntimeStatus | null>("start_openclaw_plugin_feishu_runtime", {
-    pluginId,
-    accountId,
-  });
 }
 
 export function approveFeishuPairingRequest(requestId: string) {

@@ -11,19 +11,24 @@ vi.mock("@tauri-apps/api/core", () => ({
 function installInvokeMock() {
   invokeMock.mockReset();
   invokeMock.mockImplementation((command: string) => {
-    if (command === "get_openclaw_plugin_feishu_runtime_status") {
-      return Promise.resolve({
-        plugin_id: "openclaw-lark",
-        account_id: "default",
-        running: true,
-        started_at: "2026-03-24T12:00:00Z",
-        last_stop_at: null,
-        last_event_at: "2026-03-24T12:00:01Z",
-        last_error: null,
-        pid: 1234,
-        port: 5174,
-        recent_logs: [],
-      });
+    if (command === "list_im_channel_registry") {
+      return Promise.resolve([
+        {
+          channel: "feishu",
+          runtime_status: {
+            plugin_id: "openclaw-lark",
+            account_id: "default",
+            running: true,
+            started_at: "2026-03-24T12:00:00Z",
+            last_stop_at: null,
+            last_event_at: "2026-03-24T12:00:01Z",
+            last_error: null,
+            pid: 1234,
+            port: 5174,
+            recent_logs: [],
+          },
+        },
+      ]);
     }
     return Promise.resolve(null);
   });
@@ -44,6 +49,6 @@ describe("useFeishuRuntimeStatusController", () => {
     });
 
     expect(result.current.officialFeishuRuntimeStatus?.running).toBe(true);
-    expect(invokeMock).toHaveBeenCalledWith("get_openclaw_plugin_feishu_runtime_status");
+    expect(invokeMock).toHaveBeenCalledWith("list_im_channel_registry");
   });
 });

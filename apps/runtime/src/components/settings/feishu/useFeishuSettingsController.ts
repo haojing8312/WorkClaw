@@ -4,7 +4,6 @@ import type {
   FeishuPairingRequestRecord,
   OpenClawLarkInstallerMode,
   OpenClawPluginChannelHost,
-  OpenClawPluginChannelSnapshotResult,
   OpenClawPluginFeishuAdvancedSettings,
   OpenClawPluginFeishuCredentialProbeResult,
 } from "../../../types";
@@ -29,10 +28,7 @@ export function useFeishuSettingsController({
   const [feishuAdvancedSettings, setFeishuAdvancedSettings] =
     useState<OpenClawPluginFeishuAdvancedSettings>(DEFAULT_FEISHU_ADVANCED_SETTINGS);
   const [pluginChannelHosts, setPluginChannelHosts] = useState<OpenClawPluginChannelHost[]>([]);
-  const [pluginChannelSnapshots, setPluginChannelSnapshots] =
-    useState<Record<string, OpenClawPluginChannelSnapshotResult>>({});
   const [, setPluginChannelHostsError] = useState("");
-  const [, setPluginChannelSnapshotsError] = useState("");
   const {
     officialFeishuRuntimeStatus,
     setOfficialFeishuRuntimeStatus,
@@ -98,9 +94,7 @@ export function useFeishuSettingsController({
     setFeishuConnectorSettings,
     setFeishuAdvancedSettings,
     setPluginChannelHosts,
-    setPluginChannelSnapshots,
     setPluginChannelHostsError,
-    setPluginChannelSnapshotsError,
     setValidatingFeishuCredentials,
     setFeishuCredentialProbe,
     setFeishuInstallerSession,
@@ -193,7 +187,6 @@ export function useFeishuSettingsController({
     feishuConnectorSettings,
     feishuAdvancedSettings,
     pluginChannelHosts,
-    pluginChannelSnapshots,
     feishuEnvironmentStatus,
     feishuSetupProgress,
     officialFeishuRuntimeStatus,
@@ -263,8 +256,7 @@ export function useFeishuSettingsController({
           },
           pluginVersion:
             feishuSetupProgress?.plugin_version || viewModel.primaryPluginChannelHost?.version || "未识别",
-          defaultAccountId:
-            viewModel.primaryPluginChannelSnapshot?.snapshot.defaultAccountId || "未识别",
+          defaultAccountId: officialFeishuRuntimeStatus?.account_id || "未识别",
           authApproved: feishuSetupProgress?.auth_status === "approved",
           defaultRoutingEmployeeName: feishuSetupProgress?.default_routing_employee_name || "未设置",
           scopedRoutingCount: feishuSetupProgress?.scoped_routing_count ?? 0,

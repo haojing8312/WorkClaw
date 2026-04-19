@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 import { type SettingsTabName } from "../SettingsTabNav";
 import {
-  loadFeishuRuntimeStatus as loadFeishuRuntimeStatusFromService,
-} from "./feishuSettingsService";
-import type {
-  OpenClawPluginFeishuRuntimeStatus,
-} from "../../../types";
+  extractFeishuRegistryEntry,
+  extractFeishuRuntimeStatusFromEntry,
+  loadImChannelRegistry,
+} from "../channels/channelRegistryService";
+import type { OpenClawPluginFeishuRuntimeStatus } from "../../../types";
 
 interface UseFeishuRuntimeStatusControllerOptions {
   activeTab: SettingsTabName;
@@ -19,8 +19,10 @@ export function useFeishuRuntimeStatusController({
 
   async function loadConnectorStatuses() {
     try {
-      const runtimeStatus = await loadFeishuRuntimeStatusFromService();
-      setOfficialFeishuRuntimeStatus(runtimeStatus);
+      const entries = await loadImChannelRegistry();
+      setOfficialFeishuRuntimeStatus(
+        extractFeishuRuntimeStatusFromEntry(extractFeishuRegistryEntry(entries)),
+      );
     } catch (error) {
       console.warn("加载渠道连接器状态失败:", error);
       setOfficialFeishuRuntimeStatus(null);

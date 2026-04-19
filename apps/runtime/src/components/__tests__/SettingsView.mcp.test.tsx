@@ -86,9 +86,8 @@ function installDefaultInvokeMock() {
         runtime_last_error: null,
       });
     }
-    if (command === "list_openclaw_plugin_channel_hosts") return Promise.resolve([]);
     if (command === "list_feishu_pairing_requests") return Promise.resolve([]);
-    if (command === "get_openclaw_plugin_feishu_runtime_status") return Promise.resolve(null);
+    if (command === "list_im_channel_registry") return Promise.resolve([]);
     if (command === "list_mcp_servers") return Promise.resolve([...mcpServers]);
     if (command === "add_mcp_server") {
       const { name, command: cmd, args, env } = payload as {

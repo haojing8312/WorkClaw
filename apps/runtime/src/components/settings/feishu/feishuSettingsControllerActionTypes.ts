@@ -6,7 +6,6 @@ import type {
   OpenClawLarkInstallerMode,
   OpenClawLarkInstallerSessionStatus,
   OpenClawPluginChannelHost,
-  OpenClawPluginChannelSnapshotResult,
   OpenClawPluginFeishuAdvancedSettings,
   OpenClawPluginFeishuCredentialProbeResult,
   OpenClawPluginFeishuRuntimeStatus,
@@ -23,9 +22,7 @@ export interface FeishuSettingsControllerActionDeps {
   setFeishuConnectorSettings: SetState<FeishuGatewaySettings>;
   setFeishuAdvancedSettings: SetState<OpenClawPluginFeishuAdvancedSettings>;
   setPluginChannelHosts: SetState<OpenClawPluginChannelHost[]>;
-  setPluginChannelSnapshots: SetState<Record<string, OpenClawPluginChannelSnapshotResult>>;
   setPluginChannelHostsError: SetState<string>;
-  setPluginChannelSnapshotsError: SetState<string>;
   setValidatingFeishuCredentials: SetState<boolean>;
   setFeishuCredentialProbe: SetState<OpenClawPluginFeishuCredentialProbeResult | null>;
   setFeishuInstallerSession: SetState<OpenClawLarkInstallerSessionStatus>;

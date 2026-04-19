@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { reportFrontendDiagnostic } from "../diagnostics";
-import type { ImRoleDispatchRequest, Message } from "../types";
+import type { ImRoleDispatchRequest } from "../types";
 
 type ImBridgeSessionContext = {
   threadId: string;
@@ -14,8 +14,6 @@ type ImBridgeSessionContext = {
   streamSentCount: number;
   waitingForAnswer: boolean;
   streamFlushTimer: ReturnType<typeof setTimeout> | null;
-  fallbackReplyTimer: ReturnType<typeof setTimeout> | null;
-  fallbackReplyAttempts: number;
   lastStreamFlushAt: number;
   streamFlushInFlight: boolean;
 };
@@ -66,14 +64,9 @@ export function useImBridgeIntegration(options: {
     }
     const seen = new Set<string>();
     const sessionContexts = new Map<string, ImBridgeSessionContext>();
-    const feishuRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
     const outboundImDedup = new Map<string, number>();
     const STREAM_CHUNK_SIZE = 120;
     const STREAM_FLUSH_INTERVAL_MS = 1200;
-    const FEISHU_RETRY_DELAYS_MS = [1000, 3000, 8000];
-    const FEISHU_MAX_ATTEMPTS = FEISHU_RETRY_DELAYS_MS.length;
-    const FEISHU_FALLBACK_POLL_INTERVAL_MS = 1200;
-    const FEISHU_FALLBACK_MAX_POLLS = 4;
     const IM_OUTBOUND_DEDUP_WINDOW_MS = 2500;
     const sanitizeInboundPrompt = (raw: string): string =>
       raw
@@ -120,68 +113,6 @@ export function useImBridgeIntegration(options: {
       return false;
     };
 
-    const clearFeishuRetryTimer = (key: string) => {
-      const timer = feishuRetryTimers.get(key);
-      if (timer) {
-        clearTimeout(timer);
-      }
-      feishuRetryTimers.delete(key);
-    };
-
-    const clearImFallbackReplyTimer = (sessionId: string) => {
-      const ctx = sessionContexts.get(sessionId);
-      if (!ctx?.fallbackReplyTimer) return;
-      clearTimeout(ctx.fallbackReplyTimer);
-      ctx.fallbackReplyTimer = null;
-    };
-
-    const scheduleFallbackReplyPoll = (sessionId: string, delayMs = FEISHU_FALLBACK_POLL_INTERVAL_MS) => {
-      const ctx = sessionContexts.get(sessionId);
-      if (!ctx || ctx.fallbackReplyTimer) return;
-      ctx.fallbackReplyTimer = setTimeout(() => {
-        const current = sessionContexts.get(sessionId);
-        if (!current) return;
-        current.fallbackReplyTimer = null;
-        void (async () => {
-          current.fallbackReplyAttempts += 1;
-          try {
-            const messages = await invoke<Message[]>("get_messages", {
-              sessionId,
-            });
-            const latestAssistant = [...messages]
-              .reverse()
-              .find((message) => message.role === "assistant" && message.content?.trim().length > 0);
-            if (latestAssistant) {
-              await sendTextToImThread(
-                current.sourceChannel,
-                current.threadId,
-                formatFeishuRoleMessage(current.roleName, latestAssistant.content.slice(0, 1800)),
-              );
-              current.streamSentCount += 1;
-              current.fallbackReplyAttempts = 0;
-              return;
-            }
-          } catch (error) {
-            console.error("轮询 IM 最终答复失败:", error);
-          }
-
-          if (current.fallbackReplyAttempts < FEISHU_FALLBACK_MAX_POLLS) {
-            scheduleFallbackReplyPoll(sessionId);
-          }
-        })();
-      }, Math.max(20, delayMs));
-    };
-
-    const invokeFeishuSend = async (threadId: string, text: string) => {
-      await invoke("send_feishu_text_message", {
-        chatId: threadId,
-        text,
-        appId: null,
-        appSecret: null,
-        sidecarBaseUrl: null,
-      });
-    };
-
     const invokeWecomSend = async (threadId: string, text: string) => {
       await invoke("send_wecom_text_message", {
         conversation_id: threadId,
@@ -190,51 +121,10 @@ export function useImBridgeIntegration(options: {
       });
     };
 
-    const scheduleFeishuRetry = (threadId: string, text: string, attempt: number, lastError: unknown) => {
-      const key = buildChannelRetryKey("feishu", threadId, text);
-      if (attempt > FEISHU_MAX_ATTEMPTS) {
-        clearFeishuRetryTimer(key);
-        console.error(
-          "飞书消息转发失败，已降级为仅桌面可见",
-          threadId,
-          extractErrorMessage(lastError, "unknown error"),
-        );
-        return;
-      }
-      if (feishuRetryTimers.has(key)) return;
-      const delay =
-        FEISHU_RETRY_DELAYS_MS[Math.max(0, attempt - 2)] ??
-        FEISHU_RETRY_DELAYS_MS[FEISHU_RETRY_DELAYS_MS.length - 1];
-      const timer = setTimeout(() => {
-        feishuRetryTimers.delete(key);
-        void (async () => {
-          try {
-            await invokeFeishuSend(threadId, text);
-          } catch (error) {
-            scheduleFeishuRetry(threadId, text, attempt + 1, error);
-          }
-        })();
-      }, delay);
-      feishuRetryTimers.set(key, timer);
-    };
-
-    const sendTextToFeishu = async (threadId: string, text: string) => {
-      const chatId = threadId.trim();
-      const messageText = text.trim().slice(0, 1800);
-      if (!chatId || !messageText) return;
-      const key = buildChannelRetryKey("feishu", chatId, messageText);
-      clearFeishuRetryTimer(key);
-      try {
-        await invokeFeishuSend(chatId, messageText);
-      } catch (error) {
-        scheduleFeishuRetry(chatId, messageText, 2, error);
-      }
-    };
-
     const sendTextToImThread = async (sourceChannel: string, threadId: string, text: string) => {
       const normalizedChannel = (sourceChannel || "app").trim().toLowerCase();
       const targetThreadId = threadId.trim();
-      const messageText = text.trim().slice(0, 1800);
+      const messageText = text.trim();
       if (!targetThreadId || !messageText) return;
       if (shouldSuppressOutboundDuplicate(normalizedChannel, targetThreadId, messageText)) {
         return;
@@ -242,14 +132,7 @@ export function useImBridgeIntegration(options: {
 
       if (normalizedChannel === "wecom") {
         await invokeWecomSend(targetThreadId, messageText);
-        return;
       }
-
-      if (normalizedChannel !== "feishu") {
-        return;
-      }
-
-      await sendTextToFeishu(targetThreadId, messageText);
     };
 
     const flushImStream = async (sessionId: string, options?: { force?: boolean }) => {
@@ -325,8 +208,6 @@ export function useImBridgeIntegration(options: {
         streamSentCount: 0,
         waitingForAnswer: existing?.waitingForAnswer ?? false,
         streamFlushTimer: existing?.streamFlushTimer ?? null,
-        fallbackReplyTimer: existing?.fallbackReplyTimer ?? null,
-        fallbackReplyAttempts: existing?.fallbackReplyAttempts ?? 0,
         lastStreamFlushAt: existing?.lastStreamFlushAt ?? 0,
         streamFlushInFlight: existing?.streamFlushInFlight ?? false,
       };
@@ -350,13 +231,7 @@ export function useImBridgeIntegration(options: {
           });
         }
         refreshSessionListRef.current?.();
-
         await flushImStream(payload.session_id, { force: true });
-        if ((ctx.sourceChannel || "").trim().toLowerCase() === "feishu" && ctx.streamSentCount === 0) {
-          ctx.fallbackReplyAttempts = 0;
-          clearImFallbackReplyTimer(payload.session_id);
-          scheduleFallbackReplyPoll(payload.session_id);
-        }
       } catch (error) {
         console.error("IM 分发执行失败:", error);
         void reportFrontendDiagnostic({
@@ -381,12 +256,8 @@ export function useImBridgeIntegration(options: {
       if (!ctx) return;
       const normalizedChannel = (ctx.sourceChannel || "").trim().toLowerCase();
       if (normalizedChannel === "feishu") {
-        if (payload.done && ctx.streamSentCount === 0 && !ctx.fallbackReplyTimer) {
-          scheduleFallbackReplyPoll(payload.session_id, 20);
-        }
         return;
       }
-      clearImFallbackReplyTimer(payload.session_id);
       if (payload.done) {
         void flushImStream(payload.session_id, { force: true });
         return;
@@ -421,9 +292,13 @@ export function useImBridgeIntegration(options: {
       const ctx = sessionContexts.get(payload.session_id);
       if (!ctx) return;
       ctx.waitingForAnswer = true;
-      const optionsText = payload.options?.length ? `\n可选项：${payload.options.join(" / ")}` : "";
       void (async () => {
         await flushImStream(payload.session_id, { force: true });
+        const normalizedChannel = (ctx.sourceChannel || "").trim().toLowerCase();
+        if (normalizedChannel === "feishu") {
+          return;
+        }
+        const optionsText = payload.options?.length ? `\n可选项：${payload.options.join(" / ")}` : "";
         await sendTextToImThread(
           ctx.sourceChannel,
           ctx.threadId,
@@ -441,13 +316,7 @@ export function useImBridgeIntegration(options: {
           clearTimeout(ctx.streamFlushTimer);
           ctx.streamFlushTimer = null;
         }
-        if (ctx.fallbackReplyTimer) {
-          clearTimeout(ctx.fallbackReplyTimer);
-          ctx.fallbackReplyTimer = null;
-        }
       });
-      feishuRetryTimers.forEach((timer) => clearTimeout(timer));
-      feishuRetryTimers.clear();
       unlistenDispatchPromise.then((fn) => fn());
       unlistenStreamPromise.then((fn) => fn());
       unlistenAskUserPromise.then((fn) => fn());

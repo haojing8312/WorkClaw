@@ -147,7 +147,7 @@ describe("App feishu IM bridge", () => {
     invokeMock.mockImplementation((command: string) => defaultInvokeImpl(command));
   });
 
-  test("forwards ask_user to Feishu and routes follow-up message into answer_user_question", async () => {
+  test("keeps Feishu ask_user delivery on the host side and routes follow-up into answer_user_question", async () => {
     render(<App />);
 
     const dispatchPayload = {
@@ -182,14 +182,21 @@ describe("App feishu IM bridge", () => {
     });
 
     await waitFor(() => {
-      expect(
-        invokeMock.mock.calls.some(
-          ([cmd, payload]) =>
-            cmd === "send_feishu_text_message" &&
-            String(payload?.text ?? "").includes("请选择方案"),
-        ),
-      ).toBe(true);
+      expect(invokeMock).toHaveBeenCalledWith("send_message", {
+        request: {
+          sessionId: "session-im-1",
+          parts: [{ type: "text", text: "请先拆解任务" }],
+        },
+      });
     });
+
+    expect(
+      invokeMock.mock.calls.some(
+        ([cmd, payload]) =>
+          cmd === "send_feishu_text_message" &&
+          String(payload?.text ?? "").includes("请选择方案"),
+      ),
+    ).toBe(false);
 
     await act(async () => {
       emit("im-role-dispatch-request", {
@@ -462,25 +469,8 @@ describe("App feishu IM bridge", () => {
     expect(delayedStreamCalls.length).toBeGreaterThanOrEqual(2);
   });
 
-  test("forwards only the final Feishu reply when stream tokens arrive before fallback polling", async () => {
+  test("does not forward final Feishu replies from the UI layer", async () => {
     vi.useFakeTimers();
-    let getMessagesCalls = 0;
-    invokeMock.mockImplementation((command: string) => {
-      if (command === "get_messages") {
-        getMessagesCalls += 1;
-        if (getMessagesCalls < 2) {
-          return Promise.resolve([]);
-        }
-        return Promise.resolve([
-          {
-            role: "assistant",
-            content: "已收到。",
-            created_at: new Date(Date.now() + 1000).toISOString(),
-          },
-        ]);
-      }
-      return defaultInvokeImpl(command);
-    });
     render(<App />);
 
     await act(async () => {
@@ -523,7 +513,7 @@ describe("App feishu IM bridge", () => {
         String(payload?.chatId ?? "") === "chat-feishu-no-duplicate" &&
         String(payload?.text ?? "").includes("已收到。"),
     );
-    expect(calls).toHaveLength(1);
+    expect(calls).toHaveLength(0);
     vi.useRealTimers();
   });
 
@@ -573,26 +563,8 @@ describe("App feishu IM bridge", () => {
     vi.useRealTimers();
   });
 
-  test("polls for a delayed assistant reply and forwards it to Feishu", async () => {
+  test("does not poll delayed assistant replies for Feishu in the UI layer", async () => {
     vi.useFakeTimers();
-    let getMessagesCalls = 0;
-    invokeMock.mockImplementation((command: string) => {
-      if (command === "get_messages") {
-        getMessagesCalls += 1;
-        if (getMessagesCalls < 3) {
-          return Promise.resolve([]);
-        }
-        return Promise.resolve([
-          {
-            role: "assistant",
-            content: "延迟到达的最终答复",
-            created_at: new Date(Date.now() + 1000).toISOString(),
-          },
-        ]);
-      }
-      return defaultInvokeImpl(command);
-    });
-
     render(<App />);
 
     await act(async () => {
@@ -619,7 +591,7 @@ describe("App feishu IM bridge", () => {
           String(payload?.chatId ?? "") === "chat-feishu-delayed-fallback" &&
           String(payload?.text ?? "").includes("延迟到达的最终答复"),
       ),
-    ).toBe(true);
+    ).toBe(false);
 
     vi.useRealTimers();
   }, 10000);
@@ -664,14 +636,21 @@ describe("App feishu IM bridge", () => {
     });
 
     await waitFor(() => {
-      expect(
-        listFeishuTextCalls().some(
-          (payload) =>
-            String(payload?.chatId ?? "") === dispatchPayload.thread_id &&
-            String(payload?.text ?? "").includes("需求澄清"),
-        ),
-      ).toBe(true);
+      expect(invokeMock).toHaveBeenCalledWith("send_message", {
+        request: {
+          sessionId: dispatchPayload.session_id,
+          parts: [{ type: "text", text: "请先分析并分派开发团队" }],
+        },
+      });
     });
+
+    expect(
+      listFeishuTextCalls().some(
+        (payload) =>
+          String(payload?.chatId ?? "") === dispatchPayload.thread_id &&
+          String(payload?.text ?? "").includes("需求澄清"),
+      ),
+    ).toBe(false);
 
     await act(async () => {
       emit("im-role-dispatch-request", {
@@ -766,29 +745,15 @@ describe("App feishu IM bridge", () => {
     });
   });
 
-  test("retries Feishu delivery after transient failure", async () => {
+  test("does not retry Feishu final delivery from the UI layer", async () => {
     vi.useFakeTimers();
-    let failCount = 0;
     invokeMock.mockImplementation((command: string, payload: any) => {
-      if (command === "get_messages") {
-        return Promise.resolve([
-          {
-            role: "assistant",
-            content: "重试消息".repeat(40),
-            created_at: new Date(Date.now() + 1000).toISOString(),
-          },
-        ]);
-      }
       if (
         command === "send_feishu_text_message" &&
         String(payload?.chatId ?? "") === "chat-feishu-retry" &&
         String(payload?.text ?? "").includes("重试消息")
       ) {
-        if (failCount < 2) {
-          failCount += 1;
-          return Promise.reject(new Error("network timeout"));
-        }
-        return Promise.resolve("om_reply_retry_ok");
+        return Promise.reject(new Error("network timeout"));
       }
       return defaultInvokeImpl(command);
     });
@@ -828,17 +793,7 @@ describe("App feishu IM bridge", () => {
     });
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(1300);
-      await Promise.resolve();
-    });
-
-    await act(async () => {
-      vi.advanceTimersByTime(1100);
-      await Promise.resolve();
-    });
-
-    await act(async () => {
-      vi.advanceTimersByTime(3100);
+      await vi.advanceTimersByTimeAsync(5600);
       await Promise.resolve();
     });
 
@@ -847,22 +802,13 @@ describe("App feishu IM bridge", () => {
         String(payload?.chatId ?? "") === "chat-feishu-retry" &&
         String(payload?.text ?? "").includes("重试消息"),
     );
-    expect(calls.length).toBeGreaterThanOrEqual(3);
+    expect(calls.length).toBe(0);
     vi.useRealTimers();
   });
 
-  test("stops retrying after max attempts when Feishu delivery keeps failing", async () => {
+  test("does not keep retrying Feishu final delivery from the UI layer", async () => {
     vi.useFakeTimers();
     invokeMock.mockImplementation((command: string, payload: any) => {
-      if (command === "get_messages") {
-        return Promise.resolve([
-          {
-            role: "assistant",
-            content: "降级消息".repeat(40),
-            created_at: new Date(Date.now() + 1000).toISOString(),
-          },
-        ]);
-      }
       if (
         command === "send_feishu_text_message" &&
         String(payload?.chatId ?? "") === "chat-feishu-degrade" &&
@@ -908,15 +854,7 @@ describe("App feishu IM bridge", () => {
     });
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(1300);
-      await Promise.resolve();
-    });
-    await act(async () => {
-      vi.advanceTimersByTime(3100);
-      await Promise.resolve();
-    });
-    await act(async () => {
-      vi.advanceTimersByTime(9100);
+      await vi.advanceTimersByTimeAsync(13000);
       await Promise.resolve();
     });
 
@@ -925,7 +863,7 @@ describe("App feishu IM bridge", () => {
         String(payload?.chatId ?? "") === "chat-feishu-degrade" &&
         String(payload?.text ?? "").includes("降级消息"),
     );
-    expect(degradeCalls.length).toBe(3);
+    expect(degradeCalls.length).toBe(0);
     vi.useRealTimers();
   });
 

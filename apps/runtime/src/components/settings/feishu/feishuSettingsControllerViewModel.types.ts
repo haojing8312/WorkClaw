@@ -6,7 +6,6 @@ import type {
   OpenClawLarkInstallerMode,
   OpenClawLarkInstallerSessionStatus,
   OpenClawPluginChannelHost,
-  OpenClawPluginChannelSnapshotResult,
   OpenClawPluginFeishuAdvancedSettings,
   OpenClawPluginFeishuCredentialProbeResult,
   OpenClawPluginFeishuRuntimeStatus,
@@ -37,7 +36,6 @@ export interface FeishuSettingsControllerViewModelInput {
   feishuConnectorSettings: FeishuGatewaySettings;
   feishuAdvancedSettings: OpenClawPluginFeishuAdvancedSettings;
   pluginChannelHosts: OpenClawPluginChannelHost[];
-  pluginChannelSnapshots: Record<string, OpenClawPluginChannelSnapshotResult>;
   feishuEnvironmentStatus: FeishuPluginEnvironmentStatus | null;
   feishuSetupProgress: FeishuSetupProgress | null;
   officialFeishuRuntimeStatus: OpenClawPluginFeishuRuntimeStatus | null;

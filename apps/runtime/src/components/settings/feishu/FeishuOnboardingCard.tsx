@@ -243,7 +243,7 @@ export function FeishuOnboardingCard(props: FeishuOnboardingCardProps) {
             <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
               <div className="space-y-1">
                 <div className="text-sm font-medium text-gray-900">{feishuInstallerFlowLabel}正在这里继续</div>
-                <div className="text-xs text-gray-600">不用再往下翻到高级控制台。扫码、等待结果和下一步提示都会先显示在这里。</div>
+                <div className="text-xs text-gray-600">不用再往下翻到飞书接入控制台。扫码、等待结果和下一步提示都会先显示在这里。</div>
               </div>
               <div className="rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1 text-[11px] font-medium text-indigo-700">
                 {feishuInstallerBusy && feishuInstallerStartingMode ? "正在启动" : feishuInstallerSession.running ? "向导运行中" : "向导已结束"}

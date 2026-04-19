@@ -242,30 +242,11 @@ export function buildFeishuAdvancedConsoleSectionProps(input: {
 
 export function buildFeishuAdvancedSectionProps(input: {
   source: FeishuSettingsControllerViewModelInput;
-  feishuConnectionDetailSummary: string;
-  feishuConnectorStatusLabel: string;
-  pluginVersionLabel: string;
-  currentAccountLabel: string;
-  pendingFeishuPairingCount: number;
-  lastEventAtLabel: string;
-  recentIssueLabel: string;
-  runtimeLogsLabel: string;
 }) {
   return {
-    connectionDetailSummary: input.feishuConnectionDetailSummary,
     feishuAdvancedSettings: input.source.feishuAdvancedSettings,
     onUpdateFeishuAdvancedSettings: input.source.actions.updateFeishuAdvancedSettings,
-    connectionStatusLabel: input.feishuConnectorStatusLabel,
-    pluginVersionLabel: input.pluginVersionLabel,
-    currentAccountLabel: input.currentAccountLabel,
-    pendingPairingCount: input.pendingFeishuPairingCount,
-    lastEventAtLabel: input.lastEventAtLabel,
-    recentIssueLabel: input.recentIssueLabel,
-    runtimeLogsLabel: input.runtimeLogsLabel,
-    retryingFeishuConnector: input.source.retryingFeishuConnector,
     savingFeishuAdvancedSettings: input.source.savingFeishuAdvancedSettings,
-    onRefreshFeishuSetup: input.source.actions.handleRefreshFeishuSetup,
     onSaveFeishuAdvancedSettings: input.source.actions.handleSaveFeishuAdvancedSettings,
-    onCopyDiagnostics: input.source.actions.handleCopyFeishuDiagnostics,
   } satisfies FeishuAdvancedSectionProps;
 }

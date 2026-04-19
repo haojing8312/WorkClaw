@@ -4,6 +4,7 @@ import { CapabilityRoutingSection } from "./settings/CapabilityRoutingSection";
 import { DesktopSettingsSection } from "./settings/desktop/DesktopSettingsSection";
 import { FeishuSettingsTab } from "./settings/feishu/FeishuSettingsTab";
 import { useFeishuSettingsController } from "./settings/feishu/useFeishuSettingsController";
+import { useChannelRegistryController } from "./settings/channels/useChannelRegistryController";
 import { McpSettingsSection } from "./settings/mcp/McpSettingsSection";
 import { ModelsSettingsSection } from "./settings/models/ModelsSettingsSection";
 import { RoutingSettingsSection } from "./settings/routing/RoutingSettingsSection";
@@ -112,6 +113,7 @@ export function SettingsView({
       advancedSectionProps,
     },
   } = useFeishuSettingsController({ activeTab });
+  const channelRegistryController = useChannelRegistryController({ activeTab });
 
   const feishuSettingsSectionProps = {
     ...settingsSectionProps,
@@ -267,6 +269,15 @@ export function SettingsView({
       {activeTab === "feishu" && (
         <FeishuSettingsTab
           onOpenEmployees={onOpenEmployees}
+          channelRegistrySectionProps={{
+            entries: channelRegistryController.entries,
+            loading: channelRegistryController.loading,
+            error: channelRegistryController.error,
+            feishuHostPanel: channelRegistryController.feishuHostPanel,
+            wecomHostPanel: channelRegistryController.wecomHostPanel,
+            wecomPanel: channelRegistryController.wecomPanel,
+            onRefresh: channelRegistryController.refresh,
+          }}
           settingsSectionProps={feishuSettingsSectionProps}
           advancedConsoleSectionProps={advancedConsoleSectionProps}
           advancedSectionProps={advancedSectionProps}

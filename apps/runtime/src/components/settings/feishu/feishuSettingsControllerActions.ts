@@ -29,10 +29,6 @@ export function createFeishuSettingsControllerActions(deps: FeishuSettingsContro
     applyOfficialFeishuRuntimeStatus,
   } = createFeishuSettingsControllerLoaders(deps);
 
-  function getPrimaryFeishuPluginId() {
-    return deps.pluginChannelHosts.find((host) => host.channel === "feishu")?.plugin_id || "openclaw-lark";
-  }
-
   function maybeInstallOfficialPlugin() {
     if (!deps.pluginChannelHosts.some((host) => host.status === "ready") && !deps.feishuSetupProgress?.plugin_installed) {
       return installOpenClawLarkPluginFromService();
@@ -50,7 +46,6 @@ export function createFeishuSettingsControllerActions(deps: FeishuSettingsContro
     handleRetryFeishuConnector,
     handleInstallAndStartFeishuConnector,
   } = createFeishuSettingsControllerRuntimeActions(deps, {
-    getPrimaryFeishuPluginId,
     maybeInstallOfficialPlugin,
     refreshFeishuSetupData,
     applyOfficialFeishuRuntimeStatus,

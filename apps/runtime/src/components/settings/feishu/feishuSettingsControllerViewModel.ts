@@ -27,10 +27,6 @@ import type { FeishuSettingsControllerViewModelInput } from "./feishuSettingsCon
 export function buildFeishuSettingsControllerViewModel(input: FeishuSettingsControllerViewModelInput) {
   const primaryPluginChannelHost =
     input.pluginChannelHosts.find((host) => host.channel === "feishu") ?? input.pluginChannelHosts[0] ?? null;
-  const primaryPluginChannelSnapshot =
-    (primaryPluginChannelHost ? input.pluginChannelSnapshots[primaryPluginChannelHost.channel] : null) ??
-    Object.values(input.pluginChannelSnapshots)[0] ??
-    null;
   const hasInstalledOfficialFeishuPlugin =
     input.pluginChannelHosts.length > 0 || input.feishuSetupProgress?.plugin_installed === true;
   const runtimeRunning =
@@ -169,20 +165,11 @@ export function buildFeishuSettingsControllerViewModel(input: FeishuSettingsCont
 
   const advancedSectionProps = buildFeishuAdvancedSectionProps({
     source: input,
-    feishuConnectionDetailSummary,
-    feishuConnectorStatusLabel: feishuConnectorStatus.label,
-    pluginVersionLabel: input.feishuSetupProgress?.plugin_version || primaryPluginChannelHost?.version || "未识别",
-    currentAccountLabel: primaryPluginChannelSnapshot?.snapshot.defaultAccountId || "未识别",
-    pendingFeishuPairingCount,
-    lastEventAtLabel: formatCompactDateTime(input.officialFeishuRuntimeStatus?.last_event_at),
-    recentIssueLabel: summarizeConnectorIssue(feishuConnectorStatus.error),
-    runtimeLogsLabel: summarizeOfficialFeishuRuntimeLogs(input.officialFeishuRuntimeStatus),
   });
 
   return {
     pendingFeishuPairingCount,
     primaryPluginChannelHost,
-    primaryPluginChannelSnapshot,
     hasInstalledOfficialFeishuPlugin,
     sections: {
       settingsSectionProps,

@@ -49,22 +49,25 @@ function installInvokeMock(options?: { installerRunning?: boolean }) {
         dynamic_agent_creation_max_agents: "",
       });
     }
-    if (command === "get_openclaw_plugin_feishu_runtime_status") {
-      return Promise.resolve({
-        plugin_id: "openclaw-lark",
-        account_id: "default",
-        running: false,
-        started_at: null,
-        last_stop_at: null,
-        last_event_at: null,
-        last_error: null,
-        pid: null,
-        port: null,
-        recent_logs: [],
-      });
-    }
-    if (command === "list_openclaw_plugin_channel_hosts") {
-      return Promise.resolve([]);
+    if (command === "list_im_channel_registry") {
+      return Promise.resolve([
+        {
+          channel: "feishu",
+          runtime_status: {
+            plugin_id: "openclaw-lark",
+            account_id: "default",
+            running: false,
+            started_at: null,
+            last_stop_at: null,
+            last_event_at: null,
+            last_error: null,
+            pid: null,
+            port: null,
+            recent_logs: [],
+          },
+          plugin_host: null,
+        },
+      ]);
     }
     if (command === "get_feishu_plugin_environment_status") {
       return Promise.resolve({
@@ -171,13 +174,9 @@ describe("useFeishuSettingsController", () => {
 
     expect(invokeMock).toHaveBeenCalledWith("get_feishu_gateway_settings");
     expect(invokeMock).toHaveBeenCalledWith("get_openclaw_plugin_feishu_advanced_settings");
-    expect(invokeMock).toHaveBeenCalledWith("list_openclaw_plugin_channel_hosts");
+    expect(invokeMock).toHaveBeenCalledWith("list_im_channel_registry");
     expect(invokeMock).toHaveBeenCalledWith("list_feishu_pairing_requests", { status: null });
-    expect(
-      invokeMock.mock.calls.filter(
-        ([command]) => command === "get_openclaw_plugin_feishu_runtime_status",
-      ).length,
-    ).toBe(1);
+    expect(invokeMock.mock.calls.filter(([command]) => command === "list_im_channel_registry").length).toBe(2);
   });
 
   test("keeps refreshing runtime status and platform data while staying on the Feishu tab", async () => {
@@ -190,9 +189,8 @@ describe("useFeishuSettingsController", () => {
     });
 
     const runtimeStatusCount = invokeMock.mock.calls.filter(
-      ([command]) => command === "get_openclaw_plugin_feishu_runtime_status",
+      ([command]) => command === "list_im_channel_registry",
     ).length;
-    const hostCount = invokeMock.mock.calls.filter(([command]) => command === "list_openclaw_plugin_channel_hosts").length;
     const pairingCount = invokeMock.mock.calls.filter(([command]) => command === "list_feishu_pairing_requests").length;
 
     await act(async () => {
@@ -200,11 +198,8 @@ describe("useFeishuSettingsController", () => {
     });
 
     expect(
-      invokeMock.mock.calls.filter(([command]) => command === "get_openclaw_plugin_feishu_runtime_status").length,
+      invokeMock.mock.calls.filter(([command]) => command === "list_im_channel_registry").length,
     ).toBeGreaterThan(runtimeStatusCount);
-    expect(
-      invokeMock.mock.calls.filter(([command]) => command === "list_openclaw_plugin_channel_hosts").length,
-    ).toBeGreaterThan(hostCount);
     expect(
       invokeMock.mock.calls.filter(([command]) => command === "list_feishu_pairing_requests").length,
     ).toBeGreaterThan(pairingCount);

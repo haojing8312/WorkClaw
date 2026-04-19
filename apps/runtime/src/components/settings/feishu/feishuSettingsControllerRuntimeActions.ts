@@ -1,18 +1,23 @@
-import type { OpenClawLarkInstallerMode } from "../../../types";
+import type {
+  OpenClawLarkInstallerMode,
+  OpenClawPluginFeishuRuntimeStatus,
+} from "../../../types";
 import { DEFAULT_FEISHU_INSTALLER_SESSION } from "./useFeishuInstallerSessionController";
+import {
+  extractFeishuRuntimeStatusFromEntry,
+  setImChannelHostRunning,
+} from "../channels/channelRegistryService";
 import {
   saveFeishuGatewaySettings as saveFeishuGatewaySettingsFromService,
   startFeishuInstallerSession as startFeishuInstallerSessionFromService,
-  startFeishuRuntime as startFeishuRuntimeFromService,
 } from "./feishuSettingsService";
 import type { FeishuSettingsControllerActionDeps } from "./feishuSettingsControllerActionTypes";
 
 interface FeishuSettingsControllerRuntimeActionHelpers {
-  getPrimaryFeishuPluginId: () => string;
   maybeInstallOfficialPlugin: () => Promise<unknown> | null;
   refreshFeishuSetupData: () => Promise<void>;
   applyOfficialFeishuRuntimeStatus: (
-    status: Awaited<ReturnType<typeof startFeishuRuntimeFromService>>,
+    status: OpenClawPluginFeishuRuntimeStatus | null | undefined,
     options?: { showStartErrorNotice?: boolean },
   ) => void;
 }
@@ -55,9 +60,12 @@ export function createFeishuSettingsControllerRuntimeActions(
     deps.setFeishuConnectorNotice("");
     deps.setFeishuConnectorError("");
     try {
-      const runtimeStatus = await startFeishuRuntimeFromService(helpers.getPrimaryFeishuPluginId(), null);
+      const registryEntry = await setImChannelHostRunning("feishu", true);
+      const runtimeStatus = extractFeishuRuntimeStatusFromEntry(registryEntry);
       if (runtimeStatus) {
-        helpers.applyOfficialFeishuRuntimeStatus(runtimeStatus, { showStartErrorNotice: true });
+        helpers.applyOfficialFeishuRuntimeStatus(runtimeStatus, {
+          showStartErrorNotice: true,
+        });
       } else {
         await deps.loadConnectorStatuses();
       }
@@ -90,7 +98,8 @@ export function createFeishuSettingsControllerRuntimeActions(
         await installPromise;
       }
 
-      const runtimeStatus = await startFeishuRuntimeFromService(helpers.getPrimaryFeishuPluginId(), null);
+      const registryEntry = await setImChannelHostRunning("feishu", true);
+      const runtimeStatus = extractFeishuRuntimeStatusFromEntry(registryEntry);
       if (runtimeStatus) {
         helpers.applyOfficialFeishuRuntimeStatus(runtimeStatus, { showStartErrorNotice: true });
       }

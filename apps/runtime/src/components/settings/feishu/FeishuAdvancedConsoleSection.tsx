@@ -9,7 +9,7 @@ export type { FeishuAdvancedConsoleSectionProps } from "./FeishuAdvancedConsoleS
 export function FeishuAdvancedConsoleSection(props: FeishuAdvancedConsoleSectionProps) {
   return (
     <details className="rounded-lg border border-gray-200 bg-white p-4">
-      <summary className="cursor-pointer text-sm font-medium text-gray-900">高级设置与控制台</summary>
+      <summary className="cursor-pointer text-sm font-medium text-gray-900">飞书接入控制台</summary>
       <div className="mt-4 space-y-3">
         <FeishuEnvironmentPanel
           feishuEnvironmentStatus={props.feishuEnvironmentStatus}
