@@ -14,10 +14,10 @@ import {
   TEXT_FILE_EXTENSIONS as TEXT_FILE_EXTENSIONS_LIST,
 } from "./attachmentPolicy";
 
-const IMAGE_EXTENSIONS = new Set(IMAGE_EXTENSIONS_LIST);
-const TEXT_FILE_EXTENSIONS = new Set(TEXT_FILE_EXTENSIONS_LIST);
-const PDF_EXTENSIONS = new Set(PDF_EXTENSIONS_LIST);
-const BINARY_DOCUMENT_EXTENSIONS = new Set(BINARY_DOCUMENT_EXTENSIONS_LIST);
+const IMAGE_EXTENSIONS: ReadonlySet<string> = new Set(IMAGE_EXTENSIONS_LIST);
+const TEXT_FILE_EXTENSIONS: ReadonlySet<string> = new Set(TEXT_FILE_EXTENSIONS_LIST);
+const PDF_EXTENSIONS: ReadonlySet<string> = new Set(PDF_EXTENSIONS_LIST);
+const BINARY_DOCUMENT_EXTENSIONS: ReadonlySet<string> = new Set(BINARY_DOCUMENT_EXTENSIONS_LIST);
 
 export function getFileExtension(fileName: string): string {
   return fileName.split(".").pop()?.toLowerCase() ?? "";
