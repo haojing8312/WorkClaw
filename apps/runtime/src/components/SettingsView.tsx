@@ -31,7 +31,7 @@ interface Props {
 
 const ROUTING_CAPABILITIES = [
   { label: "对话 Chat", value: "chat" },
-  { label: "视觉 Vision", value: "vision" },
+  { label: "图片理解 Vision", value: "vision" },
   { label: "生图 Image", value: "image_gen" },
   { label: "语音转写 STT", value: "audio_stt" },
   { label: "语音合成 TTS", value: "audio_tts" },
@@ -130,6 +130,10 @@ export function SettingsView({
 
   const inputCls = "sm-input w-full text-sm py-1.5";
   const labelCls = "sm-field-label";
+  const visibleCapabilityProviders =
+    selectedCapability === "vision"
+      ? providers.filter((provider) => Boolean(models.find((model) => model.id === provider.id)?.supports_vision))
+      : providers;
 
   function handleCapabilityChange(capability: string) {
     setSelectedCapability(capability);
@@ -137,9 +141,25 @@ export function SettingsView({
     loadRouteTemplates(capability);
   }
 
-  function handlePrimaryProviderChange(providerId: string) {
-    setChatRoutingPolicy((state) => ({ ...state, primary_provider_id: providerId }));
-    void loadChatPrimaryModels(providerId, selectedCapability);
+  async function handlePrimaryProviderChange(providerId: string) {
+    const availableModels = await loadChatPrimaryModels(providerId, selectedCapability);
+    const configuredModelName = models.find((model) => model.id === providerId)?.model_name?.trim() ?? "";
+    const candidateModels = configuredModelName
+      ? [configuredModelName, ...availableModels.filter((model) => model !== configuredModelName)]
+      : availableModels;
+    setChatRoutingPolicy((state) => {
+      const shouldAutoSelectModel =
+        !providerId ||
+        candidateModels.length === 0
+          ? false
+          : !state.primary_model || !candidateModels.includes(state.primary_model);
+
+      return {
+        ...state,
+        primary_provider_id: providerId,
+        primary_model: shouldAutoSelectModel ? candidateModels[0] ?? "" : state.primary_model,
+      };
+    });
   }
 
   function handleApplyRecommendedDefaults() {
@@ -179,13 +199,19 @@ export function SettingsView({
             showDevModelSetupTools={showDevModelSetupTools}
             onDevResetFirstUseOnboarding={onDevResetFirstUseOnboarding}
             onDevOpenQuickModelSetup={onDevOpenQuickModelSetup}
+            onOpenAdvancedRouting={() => {
+              setSelectedCapability("vision");
+              void loadCapabilityRoutingPolicy("vision");
+              void loadRouteTemplates("vision");
+              setActiveTab("capabilities");
+            }}
           />
         </div>
       )}
 
       <DesktopSettingsSection models={models} visible={activeTab === "desktop"} />
 
-      {SHOW_CAPABILITY_ROUTING_SETTINGS && activeTab === "capabilities" && (
+      {activeTab === "capabilities" && (
         <CapabilityRoutingSection
           capabilities={ROUTING_CAPABILITIES}
           chatFallbackRows={chatFallbackRows}
@@ -195,7 +221,7 @@ export function SettingsView({
           labelCls={labelCls}
           policyError={policyError}
           policySaveState={policySaveState}
-          providers={providers}
+          providers={visibleCapabilityProviders}
           routeTemplates={routeTemplates}
           selectedCapability={selectedCapability}
           selectedRouteTemplateId={selectedRouteTemplateId}

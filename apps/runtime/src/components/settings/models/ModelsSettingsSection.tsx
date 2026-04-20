@@ -12,6 +12,7 @@ import {
   resolveModelProviderForEdit,
   saveModelConfig,
   setDefaultModel,
+  syncCapabilityRouteToConnection,
   syncConnectionToRouting,
   syncModelConnections,
   testModelConnection,
@@ -43,6 +44,7 @@ interface ModelsSettingsSectionProps {
   showDevModelSetupTools?: boolean;
   onDevResetFirstUseOnboarding?: () => void;
   onDevOpenQuickModelSetup?: () => void;
+  onOpenAdvancedRouting?: () => void;
 }
 
 export function ModelsSettingsSection({
@@ -53,9 +55,13 @@ export function ModelsSettingsSection({
   showDevModelSetupTools = false,
   onDevResetFirstUseOnboarding,
   onDevOpenQuickModelSetup,
+  onOpenAdvancedRouting,
 }: ModelsSettingsSectionProps) {
   const [selectedModelProviderId, setSelectedModelProviderId] = useState(DEFAULT_MODEL_PROVIDER_ID);
-  const [form, setForm] = useState<ModelFormState>(getDefaultModelForm());
+  const [form, setForm] = useState<ModelFormState>(() => ({
+    ...getDefaultModelForm(),
+    is_default: models.length === 0,
+  }));
   const [error, setError] = useState("");
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<Awaited<ReturnType<typeof testModelConnection>> | null>(null);
@@ -78,6 +84,21 @@ export function ModelsSettingsSection({
     return () => window.clearTimeout(timer);
   }, [modelSaveMessage]);
 
+  useEffect(() => {
+    if (editingModelId) return;
+    const defaultForm = getDefaultModelForm(selectedModelProviderId);
+    const isPristineForm =
+      form.name === defaultForm.name &&
+      form.api_format === defaultForm.api_format &&
+      form.base_url === defaultForm.base_url &&
+      form.model_name === defaultForm.model_name &&
+      form.api_key === "";
+    if (!isPristineForm) return;
+    const nextIsDefault = models.length === 0;
+    if (form.is_default === nextIsDefault) return;
+    setForm((current) => ({ ...current, is_default: nextIsDefault }));
+  }, [editingModelId, form, models.length, selectedModelProviderId]);
+
   async function refreshModelData() {
     try {
       const list = await listModelConfigs();
@@ -95,7 +116,10 @@ export function ModelsSettingsSection({
   function resetModelForm(providerId = DEFAULT_MODEL_PROVIDER_ID) {
     const nextForm = getDefaultModelForm(providerId);
     setSelectedModelProviderId(providerId);
-    setForm(nextForm);
+    setForm({
+      ...nextForm,
+      is_default: models.length === 0,
+    });
     setModelSuggestions(getModelProviderCatalogItem(providerId).models);
     setEditingModelId(null);
     setShowApiKey(false);
@@ -115,6 +139,8 @@ export function ModelsSettingsSection({
           base_url: model.base_url,
           model_name: model.model_name,
           api_key: apiKey,
+          is_default: Boolean(model.is_default),
+          supports_vision: Boolean(model.supports_vision),
         });
         setSelectedModelProviderId(provider.id);
         setEditingModelId(model.id);
@@ -134,6 +160,7 @@ export function ModelsSettingsSection({
       ...current,
       ...getDefaultModelForm(preset.id),
       api_key: current.api_key,
+      is_default: current.is_default,
     }));
     setSelectedModelProviderId(preset.id);
     setModelSuggestions(preset.models);
@@ -153,8 +180,7 @@ export function ModelsSettingsSection({
     setModelSaveMessage("");
     try {
       const isCreateMode = !editingModelId;
-      const nextModelDefault =
-        editingModelId ? models.find((item) => item.id === editingModelId)?.is_default ?? false : models.length === 0;
+      const nextModelDefault = form.is_default || models.length === 0;
       const savedModelId = await saveModelConfig({
         id: editingModelId || undefined,
         isDefault: nextModelDefault,
@@ -169,13 +195,28 @@ export function ModelsSettingsSection({
           base_url: form.base_url.trim(),
           model_name: form.model_name.trim(),
           is_default: isCreateMode ? true : nextModelDefault,
+          supports_vision: form.supports_vision,
         },
         form.api_key.trim(),
         preferredProviderKey,
       );
-      if (isCreateMode) {
+      if (form.supports_vision) {
+        await syncCapabilityRouteToConnection("vision", {
+          id: savedModelId,
+          name: form.name.trim(),
+          api_format: form.api_format,
+          base_url: form.base_url.trim(),
+          model_name: form.model_name.trim(),
+          is_default: isCreateMode ? true : nextModelDefault,
+          supports_vision: true,
+        });
+      }
+      if (isCreateMode && nextModelDefault) {
         await setDefaultModel(savedModelId);
         setModelSaveMessage("已保存，并切换为默认模型");
+      } else if (!isCreateMode && nextModelDefault) {
+        await setDefaultModel(savedModelId);
+        setModelSaveMessage("已保存，并设为默认模型");
       } else {
         setModelSaveMessage("已保存");
       }
@@ -238,6 +279,9 @@ export function ModelsSettingsSection({
                   <span className="font-medium text-gray-800">{model.name}</span>
                   {model.is_default && (
                     <span className="text-[10px] bg-blue-500 text-white px-1.5 py-0.5 rounded">默认</span>
+                  )}
+                  {model.supports_vision && (
+                    <span className="text-[10px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded">图片理解</span>
                   )}
                 </div>
                 <div className="text-xs text-gray-400 mt-0.5 truncate">
@@ -329,6 +373,49 @@ export function ModelsSettingsSection({
               ))}
             </datalist>
           )}
+        </div>
+        <label className="flex items-start gap-3 rounded-xl border border-gray-200 bg-gray-50 px-3 py-3 text-sm text-gray-700">
+          <input
+            data-testid="settings-model-provider-is-default"
+            type="checkbox"
+            className="mt-0.5"
+            checked={form.is_default}
+            onChange={(event) => setForm({ ...form, is_default: event.target.checked })}
+          />
+          <span>
+            <span className="block font-medium text-gray-800">设为默认对话模型</span>
+            <span className="mt-1 block text-xs leading-5 text-gray-500">
+              普通文字对话会优先使用这个模型。建议只保留一个默认对话模型。
+            </span>
+          </span>
+        </label>
+        <label className="flex items-start gap-3 rounded-xl border border-gray-200 bg-gray-50 px-3 py-3 text-sm text-gray-700">
+          <input
+            data-testid="settings-model-provider-supports-vision"
+            type="checkbox"
+            className="mt-0.5"
+            checked={form.supports_vision}
+            onChange={(event) => setForm({ ...form, supports_vision: event.target.checked })}
+          />
+          <span>
+            <span className="block font-medium text-gray-800">用于图片理解</span>
+            <span className="mt-1 block text-xs leading-5 text-gray-500">
+              勾选后，保存时会自动同步为当前默认的“图片理解”模型，用于图片、截图和视觉类请求。
+            </span>
+          </span>
+        </label>
+        <div className="flex items-center justify-between rounded-xl border border-dashed border-gray-200 bg-white px-3 py-2 text-xs text-gray-500">
+          <span>普通用户一般只需要在这里配置模型用途；超时、回退链等细项放在高级配置里。</span>
+          {onOpenAdvancedRouting ? (
+            <button
+              type="button"
+              onClick={onOpenAdvancedRouting}
+              className="sm-btn rounded-lg border border-gray-200 bg-gray-50 px-3 py-1 text-xs text-gray-700 hover:bg-gray-100"
+              aria-label="高级配置：图片理解路由"
+            >
+              高级配置：图片理解路由
+            </button>
+          ) : null}
         </div>
         <div className="rounded-2xl border border-gray-200 bg-gray-50 px-4 py-4">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">

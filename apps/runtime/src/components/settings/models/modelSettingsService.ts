@@ -17,6 +17,8 @@ export interface ModelFormState {
   base_url: string;
   model_name: string;
   api_key: string;
+  is_default: boolean;
+  supports_vision: boolean;
 }
 
 export interface SaveModelDraft {
@@ -25,11 +27,56 @@ export interface SaveModelDraft {
   form: ModelFormState;
 }
 
+export function getCapabilityRecommendedDefaults(capability: string): { timeout_ms: number; retry_count: number } {
+  switch (capability) {
+    case "vision":
+      return { timeout_ms: 90000, retry_count: 1 };
+    case "image_gen":
+      return { timeout_ms: 120000, retry_count: 1 };
+    case "audio_stt":
+      return { timeout_ms: 90000, retry_count: 1 };
+    case "audio_tts":
+      return { timeout_ms: 60000, retry_count: 1 };
+    default:
+      return { timeout_ms: 60000, retry_count: 1 };
+  }
+}
+
+export async function syncCapabilityRouteToConnection(capability: string, model: ModelConfig) {
+  const defaults = getCapabilityRecommendedDefaults(capability);
+  let existingPolicy: {
+    fallback_chain_json?: string;
+    timeout_ms?: number;
+    retry_count?: number;
+    enabled?: boolean;
+  } | null = null;
+
+  try {
+    existingPolicy = await invoke("get_capability_routing_policy", { capability });
+  } catch {
+    existingPolicy = null;
+  }
+
+  await invoke("set_capability_routing_policy", {
+    policy: {
+      capability,
+      primary_provider_id: model.id,
+      primary_model: model.model_name,
+      fallback_chain_json: existingPolicy?.fallback_chain_json ?? "[]",
+      timeout_ms: existingPolicy?.timeout_ms ?? defaults.timeout_ms,
+      retry_count: existingPolicy?.retry_count ?? defaults.retry_count,
+      enabled: existingPolicy?.enabled ?? true,
+    },
+  });
+}
+
 export function getDefaultModelForm(providerId = DEFAULT_MODEL_PROVIDER_ID): ModelFormState {
   const provider = getModelProviderCatalogItem(providerId);
   return {
     ...buildModelFormFromCatalogItem(provider),
     api_key: "",
+    is_default: false,
+    supports_vision: false,
   };
 }
 
@@ -118,6 +165,7 @@ export async function saveModelConfig(draft: SaveModelDraft) {
       base_url: draft.form.base_url.trim(),
       model_name: draft.form.model_name.trim(),
       is_default: draft.isDefault,
+      supports_vision: draft.form.supports_vision,
     },
     apiKey: draft.form.api_key.trim(),
   });
@@ -133,6 +181,7 @@ export async function testModelConnection(form: ModelFormState) {
       base_url: form.base_url.trim(),
       model_name: form.model_name.trim(),
       is_default: false,
+      supports_vision: form.supports_vision,
     },
     apiKey: form.api_key.trim(),
   });

@@ -100,4 +100,16 @@ describe("useSettingsController", () => {
       capability: "vision",
     });
   });
+
+  test("loadChatPrimaryModels returns the available models for the selected provider and capability", async () => {
+    const { result } = renderHook(() => useSettingsController());
+
+    let models: string[] = [];
+    await act(async () => {
+      models = await result.current.loadChatPrimaryModels("provider-1", "vision");
+    });
+
+    expect(models).toEqual(["vision-model", "fallback-model"]);
+    expect(result.current.chatPrimaryModels).toEqual(["vision-model", "fallback-model"]);
+  });
 });
