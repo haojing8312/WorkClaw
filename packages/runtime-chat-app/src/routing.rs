@@ -86,6 +86,9 @@ pub fn classify_model_route_error(error_message: &str) -> ModelRouteErrorKind {
     if lower.contains("rate limit")
         || lower.contains("too many requests")
         || lower.contains("429")
+        || lower.contains("529")
+        || lower.contains("overloaded_error")
+        || lower.contains("high traffic detected")
         || lower.contains("quota")
     {
         return ModelRouteErrorKind::RateLimit;

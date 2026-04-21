@@ -10,6 +10,12 @@ fn classifies_route_errors_and_retry_policy() {
         ModelRouteErrorKind::RateLimit
     );
     assert_eq!(
+        classify_model_route_error(
+            r#"{"type":"error","error":{"type":"overloaded_error","message":"High traffic detected. (2064) (529)"}}"#
+        ),
+        ModelRouteErrorKind::RateLimit
+    );
+    assert_eq!(
         classify_model_route_error("connection timed out"),
         ModelRouteErrorKind::Timeout
     );

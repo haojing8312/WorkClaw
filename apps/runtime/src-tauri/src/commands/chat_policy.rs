@@ -168,6 +168,9 @@ pub(crate) fn classify_model_route_error(error_message: &str) -> ModelRouteError
     if lower.contains("rate limit")
         || lower.contains("too many requests")
         || lower.contains("429")
+        || lower.contains("529")
+        || lower.contains("overloaded_error")
+        || lower.contains("high traffic detected")
         || lower.contains("quota")
     {
         return ModelRouteErrorKind::RateLimit;
@@ -440,12 +443,17 @@ mod tests {
     #[test]
     fn classify_model_route_error_detects_retryable_kinds() {
         let rate = classify_model_route_error("429 Too Many Requests");
+        let overloaded = classify_model_route_error(
+            r#"{"type":"error","error":{"type":"overloaded_error","message":"High traffic detected. (2064) (529)"}}"#,
+        );
         let timeout = classify_model_route_error("request timeout while calling provider");
         let network = classify_model_route_error("network connection reset");
         assert_eq!(rate, ModelRouteErrorKind::RateLimit);
+        assert_eq!(overloaded, ModelRouteErrorKind::RateLimit);
         assert_eq!(timeout, ModelRouteErrorKind::Timeout);
         assert_eq!(network, ModelRouteErrorKind::Network);
         assert!(should_retry_same_candidate(rate));
+        assert!(should_retry_same_candidate(overloaded));
         assert!(should_retry_same_candidate(timeout));
         assert!(should_retry_same_candidate(network));
     }

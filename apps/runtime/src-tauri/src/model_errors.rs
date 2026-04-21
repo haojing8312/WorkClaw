@@ -53,6 +53,9 @@ pub(crate) fn normalize_model_error(raw_message: &str) -> NormalizedModelError {
     } else if lower.contains("rate limit")
         || lower.contains("too many requests")
         || lower.contains("429")
+        || lower.contains("529")
+        || lower.contains("overloaded_error")
+        || lower.contains("high traffic detected")
         || lower.contains("quota")
     {
         ModelErrorKind::RateLimit
@@ -211,6 +214,13 @@ mod tests {
         let raw = r#"{"type":"error","error":{"type":"api_error","message":"unknown error, 794 (1000)"},"request_id":"0619614fa6873d3861ed0c9dfe062551"}"#;
         let result = normalize_model_error(raw);
         assert_eq!(result.kind, ModelErrorKind::Network);
+    }
+
+    #[test]
+    fn normalize_model_error_treats_minimax_529_overloaded_as_rate_limit() {
+        let raw = r#"{"type":"error","error":{"type":"overloaded_error","message":"High traffic detected. For a more stable experience, upgrade to our Plus plan and use the highspeed model. (2064) (529)"},"request_id":"063620c00704398bce2eaa17b0537c68"}"#;
+        let result = normalize_model_error(raw);
+        assert_eq!(result.kind, ModelErrorKind::RateLimit);
     }
 
     #[test]

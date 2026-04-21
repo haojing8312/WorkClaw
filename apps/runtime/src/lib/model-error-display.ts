@@ -118,6 +118,9 @@ export function inferModelErrorKindFromMessage(rawMessage: string): ModelErrorKi
     lower.includes("rate limit") ||
     lower.includes("too many requests") ||
     lower.includes("429") ||
+    lower.includes("529") ||
+    lower.includes("overloaded_error") ||
+    lower.includes("high traffic detected") ||
     lower.includes("quota")
   ) {
     return "rate_limit";

@@ -59,6 +59,10 @@ import {
   useChatSendController,
 } from "../scenes/chat/useChatSendController";
 import {
+  normalizeClawhubCommandLookupKey,
+  parseClawhubInstallCommand,
+} from "../scenes/chat/localChatCommands";
+import {
   getModelErrorDisplay,
   inferModelErrorKindFromMessage,
   isModelErrorKind,
@@ -181,6 +185,44 @@ export function ChatView({
     const prefix = "DUPLICATE_SKILL_NAME:";
     if (!message.includes(prefix)) return null;
     return message.split(prefix)[1]?.trim() || null;
+  };
+  const buildClawhubToolStreamItem = (
+    toolName: "clawhub_search" | "clawhub_recommend",
+    query: string,
+    items: Array<{
+      name: string;
+      slug: string;
+      description: string;
+      stars: number;
+      github_url?: string | null;
+      source_url?: string | null;
+    }>,
+  ): StreamItem => ({
+    type: "tool_call",
+    toolCall: {
+      id: `local-${toolName}-${Date.now()}`,
+      name: toolName,
+      input: { query },
+      output: JSON.stringify({
+        source: "clawhub",
+        query,
+        items,
+      }),
+      status: "completed",
+    },
+  });
+  const isExactClawhubCandidateMatch = (
+    query: string,
+    candidate: { name: string; slug: string },
+  ) => {
+    const normalizedQuery = normalizeClawhubCommandLookupKey(query);
+    if (!normalizedQuery) {
+      return false;
+    }
+    return (
+      normalizeClawhubCommandLookupKey(candidate.slug) === normalizedQuery ||
+      normalizeClawhubCommandLookupKey(candidate.name) === normalizedQuery
+    );
   };
   const initialRuntimeState = clonePersistedChatRuntimeState(persistedRuntimeState);
   const [expandedRunDetailIds, setExpandedRunDetailIds] = useState<string[]>([]);
@@ -633,6 +675,114 @@ export function ChatView({
     },
   });
 
+  const handleLocalSendRequest = async (request: SendMessageRequest) => {
+    if (
+      request.parts.length !== 1 ||
+      request.parts[0]?.type !== "text" ||
+      attachedFiles.length > 0
+    ) {
+      return false;
+    }
+
+    const rawText = request.parts[0].text;
+    const installCommand = parseClawhubInstallCommand(rawText);
+    if (!installCommand) {
+      return false;
+    }
+
+    setInstallError(null);
+    const createdAt = new Date().toISOString();
+    try {
+      const searchItems = await invoke<Array<{
+        name: string;
+        slug: string;
+        description: string;
+        stars: number;
+        github_url?: string | null;
+        source_url?: string | null;
+      }>>("search_clawhub_skills", {
+        query: installCommand.query,
+        page: 1,
+        limit: 10,
+      });
+
+      let toolName: "clawhub_search" | "clawhub_recommend" = "clawhub_search";
+      let toolItems = Array.isArray(searchItems) ? searchItems : [];
+      if (toolItems.length === 0) {
+        toolName = "clawhub_recommend";
+        const recommendItems = await invoke<Array<{
+          name: string;
+          slug: string;
+          description: string;
+          stars: number;
+          github_url?: string | null;
+          source_url?: string | null;
+        }>>("recommend_clawhub_skills", {
+          query: installCommand.query,
+          limit: 5,
+        });
+        toolItems = Array.isArray(recommendItems) ? recommendItems : [];
+      }
+
+      const exactMatches = toolItems.filter((item) =>
+        isExactClawhubCandidateMatch(installCommand.query, item),
+      );
+      if (exactMatches.length === 1) {
+        const target = exactMatches[0];
+        const result = await invoke<{ manifest?: { id?: string | null } | null }>(
+          "install_clawhub_skill",
+          {
+            slug: target.slug,
+            githubUrl: target.github_url ?? target.source_url ?? null,
+          },
+        );
+        const installedSkillId = result?.manifest?.id?.trim();
+        if (installedSkillId) {
+          await onSkillInstalled?.(installedSkillId);
+        }
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "assistant",
+            content: `已安装技能「${target.name}」。`,
+            created_at: createdAt,
+            streamItems: [buildClawhubToolStreamItem(toolName, installCommand.query, toolItems)],
+          },
+        ]);
+        return true;
+      }
+
+      const content =
+        toolItems.length > 0
+          ? `已在 ClawHub 找到与「${installCommand.query}」相关的技能候选，请从下方卡片确认安装。`
+          : `没有在 ClawHub 找到可直接安装的技能「${installCommand.query}」。你可以换个关键词，或先在技能库里搜索更通用的词。`;
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content,
+          created_at: createdAt,
+          streamItems: [buildClawhubToolStreamItem(toolName, installCommand.query, toolItems)],
+        },
+      ]);
+    } catch (error) {
+      const duplicateName = parseDuplicateSkillName(error);
+      const content = duplicateName
+        ? `技能名称冲突：已存在「${duplicateName}」，请先重命名后再安装。`
+        : `执行本地 ClawHub 安装命令失败：${String(error ?? "未知错误")}`;
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content,
+          created_at: createdAt,
+        },
+      ]);
+    }
+
+    return true;
+  };
+
   const {
     sendContent,
     handleSend,
@@ -656,6 +806,7 @@ export function ChatView({
     scrollRegionRef,
     shouldGrantContinuationBudget,
     continuationBudgetIncrement: CONTINUE_BUDGET_INCREMENT,
+    handleLocalSendRequest,
   });
 
   useEffect(() => {

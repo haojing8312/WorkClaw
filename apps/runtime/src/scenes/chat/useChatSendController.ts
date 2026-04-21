@@ -26,6 +26,7 @@ type UseChatSendControllerArgs = {
   scrollRegionRef: RefObject<HTMLDivElement>;
   shouldGrantContinuationBudget: (request: SendMessageRequest) => boolean;
   continuationBudgetIncrement: number;
+  handleLocalSendRequest?: (request: SendMessageRequest) => Promise<boolean>;
 };
 
 export function buildDefaultAttachmentPrompt(attachments: PendingAttachment[]): string {
@@ -266,6 +267,7 @@ export function useChatSendController({
   scrollRegionRef,
   shouldGrantContinuationBudget,
   continuationBudgetIncrement,
+  handleLocalSendRequest,
 }: UseChatSendControllerArgs) {
   const sendContent = useCallback(
     async (request: SendMessageRequest | string) => {
@@ -306,6 +308,9 @@ export function useChatSendController({
           created_at: new Date().toISOString(),
         },
       ]);
+      if (handleLocalSendRequest && (await handleLocalSendRequest(continuationRequest))) {
+        return;
+      }
       prepareForSend();
       try {
         await sendMessage(continuationRequest);
@@ -351,6 +356,7 @@ export function useChatSendController({
       setMessages,
       shouldGrantContinuationBudget,
       streaming,
+      handleLocalSendRequest,
     ],
   );
 

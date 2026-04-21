@@ -41,6 +41,11 @@ describe("getModelErrorDisplay", () => {
   test.each([
     ["billing", '{"error":{"message":"insufficient_quota","code":"insufficient_quota"}}', "billing"],
     ["rate limit", '{"error":{"message":"429 Too Many Requests","type":"rate_limit_error"}}', "rate_limit"],
+    [
+      "minimax overloaded",
+      '{"type":"error","error":{"type":"overloaded_error","message":"High traffic detected. For a more stable experience, upgrade to our Plus plan and use the highspeed model. (2064) (529)"}}',
+      "rate_limit",
+    ],
     ["timeout", "upstream request timed out after 30s", "timeout"],
     ["network", "error sending request for url (https://provider.example/v1/chat/completions)", "network"],
   ])("infers %s model errors from raw transport messages", (_label, raw, expected) => {
