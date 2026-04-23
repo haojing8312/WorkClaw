@@ -5,6 +5,7 @@ use super::super::repo::{
 };
 use super::super::{AgentEmployee, UpsertAgentEmployeeInput};
 use crate::commands::runtime_preferences::resolve_default_work_dir_with_pool;
+use crate::im::resolve_agent_id;
 use sqlx::SqlitePool;
 use std::path::PathBuf;
 use uuid::Uuid;
@@ -28,21 +29,10 @@ pub(crate) fn resolve_employee_agent_id(
     role_id: &str,
     openclaw_agent_id: &str,
 ) -> String {
-    let openclaw_agent_id = openclaw_agent_id.trim();
-    if !openclaw_agent_id.is_empty() {
-        return openclaw_agent_id.to_string();
-    }
-    let employee_id = employee_id.trim();
-    if !employee_id.is_empty() {
-        return employee_id.to_string();
-    }
-    role_id.trim().to_string()
+    resolve_agent_id(openclaw_agent_id, employee_id, role_id)
 }
 
-pub(super) fn build_agent_employee(
-    row: AgentEmployeeRow,
-    skill_ids: Vec<String>,
-) -> AgentEmployee {
+pub(super) fn build_agent_employee(row: AgentEmployeeRow, skill_ids: Vec<String>) -> AgentEmployee {
     let enabled_scopes = serde_json::from_str::<Vec<String>>(&row.enabled_scopes_json)
         .unwrap_or_else(|_| vec!["app".to_string()]);
     let employee_id = if row.employee_id.trim().is_empty() {
@@ -87,6 +77,27 @@ pub(crate) async fn list_agent_employees_with_pool(
     Ok(result)
 }
 
+pub(crate) async fn resolve_agent_employee_for_agent_id_with_pool(
+    pool: &SqlitePool,
+    agent_id: &str,
+) -> Result<Option<AgentEmployee>, String> {
+    let normalized_agent_id = agent_id.trim();
+    if normalized_agent_id.is_empty() {
+        return Ok(None);
+    }
+
+    let rows = list_agent_employee_rows(pool).await?;
+    for row in rows {
+        let skill_ids = list_skill_ids_for_employee(pool, &row.id).await?;
+        let employee = build_agent_employee(row, skill_ids);
+        if employee.agent_id() == normalized_agent_id {
+            return Ok(Some(employee));
+        }
+    }
+
+    Ok(None)
+}
+
 pub(crate) async fn upsert_agent_employee_with_pool(
     pool: &SqlitePool,
     input: UpsertAgentEmployeeInput,
@@ -105,7 +116,10 @@ pub(crate) async fn upsert_agent_employee_with_pool(
         return Err("employee employee_id is required".to_string());
     };
 
-    let id = input.id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
+    let id = input
+        .id
+        .clone()
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
     if let Some(existing_id) = find_employee_db_id_by_employee_id(pool, &employee_id).await? {
         if existing_id != id {
             return Err("employee employee_id already exists".to_string());

@@ -5,8 +5,8 @@ use runtime_lib::commands::employee_agents::{
     resolve_agent_session_dispatches_for_event_with_pool, upsert_agent_employee_with_pool,
     UpsertAgentEmployeeInput,
 };
-use runtime_lib::im::types::{ImEvent, ImEventType};
 use runtime_lib::im::resolve_agent_session_dispatches_with_pool;
+use runtime_lib::im::types::{ImEvent, ImEventType};
 
 #[tokio::test]
 async fn different_threads_do_not_reuse_existing_session() {
@@ -479,6 +479,94 @@ async fn agent_session_runtime_resolves_dispatches_through_binding_entrypoint() 
 }
 
 #[tokio::test]
+async fn route_decision_agent_remains_authoritative_when_employee_wrapper_would_pick_another_agent()
+{
+    let (pool, _tmp) = helpers::setup_test_db().await;
+
+    helpers::seed_default_model_config(&pool).await;
+
+    upsert_agent_employee_with_pool(
+        &pool,
+        UpsertAgentEmployeeInput {
+            id: None,
+            employee_id: "main".to_string(),
+            name: "主员工".to_string(),
+            role_id: "main".to_string(),
+            persona: "".to_string(),
+            feishu_open_id: "ou_main".to_string(),
+            feishu_app_id: "".to_string(),
+            feishu_app_secret: "".to_string(),
+            primary_skill_id: "builtin-general".to_string(),
+            default_work_dir: "".to_string(),
+            openclaw_agent_id: "agent-main".to_string(),
+            routing_priority: 100,
+            enabled_scopes: vec!["feishu".to_string()],
+            enabled: true,
+            is_default: true,
+            skill_ids: vec![],
+        },
+    )
+    .await
+    .expect("upsert main");
+
+    upsert_agent_employee_with_pool(
+        &pool,
+        UpsertAgentEmployeeInput {
+            id: None,
+            employee_id: "dev_team".to_string(),
+            name: "开发团队".to_string(),
+            role_id: "dev_team".to_string(),
+            persona: "".to_string(),
+            feishu_open_id: "ou_dev_team".to_string(),
+            feishu_app_id: "".to_string(),
+            feishu_app_secret: "".to_string(),
+            primary_skill_id: "builtin-general".to_string(),
+            default_work_dir: "".to_string(),
+            openclaw_agent_id: "agent-dev".to_string(),
+            routing_priority: 90,
+            enabled_scopes: vec!["feishu".to_string()],
+            enabled: true,
+            is_default: false,
+            skill_ids: vec![],
+        },
+    )
+    .await
+    .expect("upsert dev team");
+
+    let dispatches = resolve_agent_session_dispatches_for_event_with_pool(
+        &pool,
+        &ImEvent {
+            channel: "feishu".to_string(),
+            event_type: ImEventType::MessageCreated,
+            thread_id: "chat-runtime-authority".to_string(),
+            event_id: Some("evt-runtime-authority-1".to_string()),
+            message_id: Some("msg-runtime-authority-1".to_string()),
+            text: Some("@开发团队 请先看一下".to_string()),
+            role_id: Some("ou_dev_team".to_string()),
+            account_id: None,
+            tenant_id: Some("tenant-a".to_string()),
+            sender_id: None,
+            chat_type: Some("group".to_string()),
+            conversation_id: Some("feishu:tenant-a:group:chat-runtime-authority".to_string()),
+            base_conversation_id: Some("feishu:tenant-a:group:chat-runtime-authority".to_string()),
+            parent_conversation_candidates: Vec::new(),
+            conversation_scope: Some("peer".to_string()),
+        },
+        Some(&serde_json::json!({
+            "agentId": "agent-main",
+            "sessionKey": "feishu:tenant-a:agent-main",
+            "matchedBy": "openclaw",
+        })),
+    )
+    .await
+    .expect("resolve dispatches");
+
+    assert_eq!(dispatches.len(), 1);
+    assert_eq!(dispatches[0].agent_id, "agent-main");
+    assert_eq!(dispatches[0].route_agent_id, "agent-main");
+}
+
+#[tokio::test]
 async fn employee_wrappers_match_agent_first_session_views() {
     let (pool, _tmp) = helpers::setup_test_db().await;
 
@@ -873,7 +961,9 @@ async fn migrated_blank_channel_same_id_conversation_rows_still_block_legacy_thr
             tenant_id: Some("tenant-a".to_string()),
             sender_id: None,
             chat_type: Some("group".to_string()),
-            conversation_id: Some("feishu:tenant-a:group:chat-migrated:topic:om_root_2".to_string()),
+            conversation_id: Some(
+                "feishu:tenant-a:group:chat-migrated:topic:om_root_2".to_string(),
+            ),
             base_conversation_id: Some("chat-migrated".to_string()),
             parent_conversation_candidates: vec!["chat-migrated".to_string()],
             conversation_scope: Some("topic".to_string()),

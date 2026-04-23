@@ -3,6 +3,11 @@ use crate::employee_runtime_adapter::employee_adapter::{
     build_group_run_execute_targets, build_team_runtime_view,
 };
 use crate::im::types::ImEvent;
+use crate::im::{
+    link_inbound_event_to_agent_session_with_pool as link_inbound_event_to_agent_session_binding_with_pool,
+    list_ensured_agent_sessions_for_event_with_pool, AgentInboundDispatchSession,
+    EnsuredAgentSession,
+};
 use serde_json::Value;
 use sqlx::{Row, SqlitePool};
 use tauri::State;
@@ -14,7 +19,7 @@ mod group_run_entry;
 #[path = "employee_agents/memory_commands.rs"]
 mod memory_commands;
 #[path = "employee_agents/repo.rs"]
-mod repo;
+pub(crate) mod repo;
 #[path = "employee_agents/service.rs"]
 mod service;
 #[path = "employee_agents/tauri_commands.rs"]
@@ -502,7 +507,14 @@ pub async fn ensure_employee_sessions_for_event_with_pool(
     service::ensure_employee_sessions_for_event_with_pool(pool, event).await
 }
 
-fn build_route_session_key(event: &ImEvent, employee: &AgentEmployee) -> String {
+pub async fn ensure_agent_sessions_for_event_with_pool(
+    pool: &SqlitePool,
+    event: &ImEvent,
+) -> Result<Vec<EnsuredAgentSession>, String> {
+    list_ensured_agent_sessions_for_event_with_pool(pool, event).await
+}
+
+pub(crate) fn build_route_session_key(event: &ImEvent, employee: &AgentEmployee) -> String {
     let channel = event.channel.trim().to_lowercase();
     let tenant = event
         .tenant_id
@@ -515,15 +527,22 @@ fn build_route_session_key(event: &ImEvent, employee: &AgentEmployee) -> String 
     } else {
         employee.openclaw_agent_id.trim().to_lowercase()
     };
+    let conversation = event
+        .conversation_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| event.thread_id.trim());
     format!(
-        "{}:{}:{}",
+        "{}:{}:{}:{}",
         if channel.is_empty() {
             "app"
         } else {
             channel.as_str()
         },
         tenant,
-        agent_id
+        agent_id,
+        conversation
     )
 }
 
@@ -536,12 +555,36 @@ pub async fn link_inbound_event_to_session_with_pool(
     service::link_inbound_event_to_session_with_pool(pool, event, employee_id, session_id).await
 }
 
+pub async fn link_inbound_event_to_agent_session_with_pool(
+    pool: &SqlitePool,
+    event: &ImEvent,
+    agent_id: &str,
+    session_id: &str,
+) -> Result<(), String> {
+    link_inbound_event_to_agent_session_binding_with_pool(pool, event, agent_id, session_id).await
+}
+
 pub async fn bridge_inbound_event_to_employee_sessions_with_pool(
     pool: &SqlitePool,
     event: &ImEvent,
     route_decision: Option<&Value>,
 ) -> Result<Vec<EmployeeInboundDispatchSession>, String> {
     service::bridge_inbound_event_to_employee_sessions_with_pool(pool, event, route_decision).await
+}
+
+pub async fn resolve_agent_session_dispatches_for_event_with_pool(
+    pool: &SqlitePool,
+    event: &ImEvent,
+    route_decision: Option<&Value>,
+) -> Result<Vec<AgentInboundDispatchSession>, String> {
+    service::bridge_inbound_event_to_employee_sessions_with_pool(pool, event, route_decision)
+        .await
+        .map(|dispatches| {
+            dispatches
+                .into_iter()
+                .map(AgentInboundDispatchSession::from)
+                .collect()
+        })
 }
 
 #[tauri::command]
@@ -776,6 +819,10 @@ mod tests {
             tenant_id: Some("tenant-wecom".to_string()),
             sender_id: None,
             chat_type: Some("group".to_string()),
+            conversation_id: Some("wecom:tenant-wecom:group:wecom-room-1".to_string()),
+            base_conversation_id: Some("wecom:tenant-wecom:group:wecom-room-1".to_string()),
+            parent_conversation_candidates: Vec::new(),
+            conversation_scope: Some("peer".to_string()),
         };
         assert!(super::im_binding_matches_event(&binding, &wecom_event));
 
@@ -821,11 +868,15 @@ mod tests {
             tenant_id: Some("tenant-wecom".to_string()),
             sender_id: None,
             chat_type: Some("group".to_string()),
+            conversation_id: Some("wecom:tenant-wecom:group:wecom-room-1".to_string()),
+            base_conversation_id: Some("wecom:tenant-wecom:group:wecom-room-1".to_string()),
+            parent_conversation_candidates: Vec::new(),
+            conversation_scope: Some("peer".to_string()),
         };
 
         assert_eq!(
             super::build_route_session_key(&wecom_event, &employee),
-            "wecom:tenant-wecom:main-agent"
+            "wecom:tenant-wecom:main-agent:wecom:tenant-wecom:group:wecom-room-1"
         );
     }
 
@@ -864,11 +915,15 @@ mod tests {
             tenant_id: None,
             sender_id: None,
             chat_type: None,
+            conversation_id: None,
+            base_conversation_id: None,
+            parent_conversation_candidates: Vec::new(),
+            conversation_scope: None,
         };
 
         assert_eq!(
             super::build_route_session_key(&app_event, &employee),
-            "app:default:main-agent"
+            "app:default:main-agent:room-1"
         );
     }
 

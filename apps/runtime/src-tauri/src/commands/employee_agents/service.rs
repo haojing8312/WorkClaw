@@ -1,7 +1,7 @@
 use super::repo::{
-    find_group_run_execute_step_context, insert_group_run_event, mark_group_run_executing,
-    mark_group_run_failed, mark_group_run_step_completed, mark_group_run_step_dispatched,
-    mark_group_run_step_failed, clear_group_run_execute_waiting_state,
+    clear_group_run_execute_waiting_state, find_group_run_execute_step_context,
+    insert_group_run_event, mark_group_run_executing, mark_group_run_failed,
+    mark_group_run_step_completed, mark_group_run_step_dispatched, mark_group_run_step_failed,
 };
 use sqlx::SqlitePool;
 
@@ -32,38 +32,37 @@ mod group_run_progress_service;
 #[path = "group_run_execution_service.rs"]
 mod group_run_execution_service;
 
-pub(crate) use profile_service::{
-    delete_agent_employee_with_pool, list_agent_employees_with_pool,
-    normalize_enabled_scopes_for_storage, resolve_employee_agent_id,
-    upsert_agent_employee_with_pool,
-};
 pub(crate) use feishu_service::save_feishu_employee_association_with_pool;
-pub(crate) use routing_service::{
-    resolve_target_employees_for_event, resolve_team_entry_employee_for_event_with_pool,
+pub(crate) use group_run_action_service::{
+    reassign_group_run_step_with_pool, retry_employee_group_run_failed_steps_with_pool,
+    review_group_run_step_with_pool,
 };
-pub(crate) use session_service::{
-    bridge_inbound_event_to_employee_sessions_with_pool,
-    ensure_employee_sessions_for_event_with_pool, link_inbound_event_to_session_with_pool,
+pub(super) use group_run_execution_service::{
+    ensure_group_step_session_with_pool, execute_group_step_in_employee_context_with_pool,
+    start_employee_group_run_internal_with_pool,
+};
+pub(super) use group_run_progress_service::{
+    list_pending_execute_steps_for_continue, load_group_run_continue_state,
+    maybe_finalize_group_run_with_pool, maybe_mark_group_run_waiting_review,
 };
 pub(crate) use group_run_service::{
     cancel_employee_group_run_with_pool, pause_employee_group_run_with_pool,
     resume_employee_group_run_with_pool,
 };
 pub(crate) use group_run_snapshot_service::{
-    get_employee_group_run_snapshot_by_run_id_with_pool,
-    get_employee_group_run_snapshot_with_pool,
+    get_employee_group_run_snapshot_by_run_id_with_pool, get_employee_group_run_snapshot_with_pool,
 };
-pub(crate) use group_run_action_service::{
-    reassign_group_run_step_with_pool, retry_employee_group_run_failed_steps_with_pool,
-    review_group_run_step_with_pool,
+pub(crate) use profile_service::{
+    delete_agent_employee_with_pool, list_agent_employees_with_pool,
+    normalize_enabled_scopes_for_storage, resolve_agent_employee_for_agent_id_with_pool,
+    resolve_employee_agent_id, upsert_agent_employee_with_pool,
 };
-pub(super) use group_run_progress_service::{
-    list_pending_execute_steps_for_continue, load_group_run_continue_state,
-    maybe_finalize_group_run_with_pool, maybe_mark_group_run_waiting_review,
+pub(crate) use routing_service::{
+    resolve_target_employees_for_event, resolve_team_entry_employee_for_event_with_pool,
 };
-pub(super) use group_run_execution_service::{
-    ensure_group_step_session_with_pool, execute_group_step_in_employee_context_with_pool,
-    start_employee_group_run_internal_with_pool,
+pub(crate) use session_service::{
+    bridge_inbound_event_to_employee_sessions_with_pool,
+    ensure_employee_sessions_for_event_with_pool, link_inbound_event_to_session_with_pool,
 };
 
 pub(super) async fn load_group_run_execute_step_context(
@@ -178,7 +177,8 @@ pub(super) async fn mark_group_run_step_completed_with_pool(
 ) -> Result<(), String> {
     let output_summary = output.chars().take(120).collect::<String>();
     let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
-    mark_group_run_step_completed(&mut tx, step_id, output, &output_summary, session_id, now).await?;
+    mark_group_run_step_completed(&mut tx, step_id, output, &output_summary, session_id, now)
+        .await?;
     insert_group_run_event(
         &mut tx,
         run_id,
@@ -206,15 +206,15 @@ mod tests {
     use super::super::repo::AgentEmployeeRow;
     use super::super::SaveFeishuEmployeeAssociationInput;
     use super::feishu_service::save_feishu_employee_association_with_pool;
-    use super::profile_service::build_agent_employee;
-    use super::routing_service::resolve_target_employees_for_event;
-    use super::session_service::ensure_employee_sessions_for_event_with_pool;
-    use super::group_run_service::resume_employee_group_run_with_pool;
-    use super::group_run_snapshot_service::get_group_run_session_id_with_pool;
     use super::group_run_action_service::{
         reassign_group_run_step_with_pool, retry_employee_group_run_failed_steps_with_pool,
         review_group_run_step_with_pool,
     };
+    use super::group_run_service::resume_employee_group_run_with_pool;
+    use super::group_run_snapshot_service::get_group_run_session_id_with_pool;
+    use super::profile_service::build_agent_employee;
+    use super::routing_service::resolve_target_employees_for_event;
+    use super::session_service::ensure_employee_sessions_for_event_with_pool;
     use crate::im::types::{ImEvent, ImEventType};
     use sqlx::SqlitePool;
 
@@ -244,11 +244,41 @@ mod tests {
         );
 
         assert_eq!(employee.employee_id, "planner");
+        assert_eq!(employee.agent_id(), "planner");
         assert_eq!(employee.enabled_scopes, vec!["app".to_string()]);
         assert_eq!(
             employee.skill_ids,
             vec!["skill-a".to_string(), "skill-b".to_string()]
         );
+    }
+
+    #[test]
+    fn agent_employee_prefers_agent_id_but_keeps_employee_alias_compatible() {
+        let employee = build_agent_employee(
+            AgentEmployeeRow {
+                id: "emp-2".to_string(),
+                employee_id: "legacy-employee".to_string(),
+                name: "Ops".to_string(),
+                role_id: "ops".to_string(),
+                persona: "Handles operations".to_string(),
+                feishu_open_id: String::new(),
+                feishu_app_id: String::new(),
+                feishu_app_secret: String::new(),
+                primary_skill_id: "builtin-general".to_string(),
+                default_work_dir: "D:/work".to_string(),
+                openclaw_agent_id: "agent-ops".to_string(),
+                routing_priority: 100,
+                enabled_scopes_json: "[\"app\"]".to_string(),
+                enabled: true,
+                is_default: false,
+                created_at: "2026-03-23T00:00:00Z".to_string(),
+                updated_at: "2026-03-23T00:00:00Z".to_string(),
+            },
+            Vec::new(),
+        );
+
+        assert_eq!(employee.employee_id, "legacy-employee");
+        assert_eq!(employee.agent_id(), "agent-ops");
     }
 
     #[tokio::test]
@@ -321,8 +351,20 @@ mod tests {
         .expect("create agent_employee_skills");
 
         for (id, employee_id, name, role_id, is_default) in [
-            ("emp-default", "default-worker", "Default Worker", "default-role", 1_i64),
-            ("emp-target", "target-worker", "Target Worker", "target-role", 0_i64),
+            (
+                "emp-default",
+                "default-worker",
+                "Default Worker",
+                "default-role",
+                1_i64,
+            ),
+            (
+                "emp-target",
+                "target-worker",
+                "Target Worker",
+                "target-role",
+                0_i64,
+            ),
         ] {
             sqlx::query(
                 r#"
@@ -370,6 +412,10 @@ mod tests {
                 tenant_id: None,
                 sender_id: None,
                 chat_type: None,
+                conversation_id: None,
+                base_conversation_id: None,
+                parent_conversation_candidates: Vec::new(),
+                conversation_scope: None,
             },
         )
         .await
@@ -450,6 +496,10 @@ mod tests {
                 tenant_id: None,
                 sender_id: None,
                 chat_type: None,
+                conversation_id: None,
+                base_conversation_id: None,
+                parent_conversation_candidates: Vec::new(),
+                conversation_scope: None,
             },
         )
         .await

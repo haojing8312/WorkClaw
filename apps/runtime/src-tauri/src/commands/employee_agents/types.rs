@@ -1,3 +1,5 @@
+use crate::im::resolve_agent_id;
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct AgentEmployee {
     pub id: String,
@@ -18,6 +20,12 @@ pub struct AgentEmployee {
     pub skill_ids: Vec<String>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+impl AgentEmployee {
+    pub fn agent_id(&self) -> String {
+        resolve_agent_id(&self.openclaw_agent_id, &self.employee_id, &self.role_id)
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -42,6 +50,12 @@ pub struct UpsertAgentEmployeeInput {
     pub skill_ids: Vec<String>,
 }
 
+impl UpsertAgentEmployeeInput {
+    pub fn agent_id(&self) -> String {
+        resolve_agent_id(&self.openclaw_agent_id, &self.employee_id, &self.role_id)
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct SaveFeishuEmployeeAssociationInput {
     pub employee_db_id: String,
@@ -57,6 +71,7 @@ fn default_routing_priority() -> i64 {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+// Legacy compatibility view over the new agent-first IM session binding.
 pub struct EnsuredEmployeeSession {
     pub employee_id: String,
     pub role_id: String,
@@ -65,7 +80,30 @@ pub struct EnsuredEmployeeSession {
     pub created: bool,
 }
 
+impl EnsuredEmployeeSession {
+    pub fn agent_id(&self) -> &str {
+        self.employee_id.as_str()
+    }
+
+    pub fn agent_name(&self) -> &str {
+        self.employee_name.as_str()
+    }
+}
+
+impl From<crate::im::EnsuredAgentSession> for EnsuredEmployeeSession {
+    fn from(value: crate::im::EnsuredAgentSession) -> Self {
+        Self {
+            employee_id: value.agent_id,
+            role_id: value.role_id,
+            employee_name: value.agent_name,
+            session_id: value.session_id,
+            created: value.created,
+        }
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+// Legacy compatibility view over the new agent-first inbound dispatch shape.
 pub struct EmployeeInboundDispatchSession {
     pub session_id: String,
     pub thread_id: String,
@@ -77,6 +115,50 @@ pub struct EmployeeInboundDispatchSession {
     pub matched_by: String,
     pub prompt: String,
     pub message_id: String,
+}
+
+impl EmployeeInboundDispatchSession {
+    pub fn agent_id(&self) -> &str {
+        self.employee_id.as_str()
+    }
+
+    pub fn agent_name(&self) -> &str {
+        self.employee_name.as_str()
+    }
+}
+
+impl From<crate::im::AgentInboundDispatchSession> for EmployeeInboundDispatchSession {
+    fn from(value: crate::im::AgentInboundDispatchSession) -> Self {
+        Self {
+            session_id: value.session_id,
+            thread_id: value.thread_id,
+            employee_id: value.agent_id,
+            role_id: value.role_id,
+            employee_name: value.agent_name,
+            route_agent_id: value.route_agent_id,
+            route_session_key: value.route_session_key,
+            matched_by: value.matched_by,
+            prompt: value.prompt,
+            message_id: value.message_id,
+        }
+    }
+}
+
+impl From<EmployeeInboundDispatchSession> for crate::im::AgentInboundDispatchSession {
+    fn from(value: EmployeeInboundDispatchSession) -> Self {
+        Self {
+            session_id: value.session_id,
+            thread_id: value.thread_id,
+            agent_id: value.employee_id,
+            role_id: value.role_id,
+            agent_name: value.employee_name,
+            route_agent_id: value.route_agent_id,
+            route_session_key: value.route_session_key,
+            matched_by: value.matched_by,
+            prompt: value.prompt,
+            message_id: value.message_id,
+        }
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
