@@ -1,6 +1,6 @@
-mod helpers;
 #[path = "../src/db/migrations.rs"]
 mod db_migrations;
+mod helpers;
 
 use runtime_lib::im::{
     find_agent_conversation_binding, find_agent_conversation_binding_for_candidates,
@@ -55,8 +55,8 @@ async fn legacy_thread_only_db_gains_conversation_binding_tables() {
 }
 
 #[tokio::test]
-async fn legacy_migration_creates_channel_delivery_route_channel_account_index_and_normalizes_blank_peer_id()
-{
+async fn legacy_migration_creates_channel_delivery_route_channel_account_index_and_normalizes_blank_peer_id(
+) {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .connect("sqlite::memory:")

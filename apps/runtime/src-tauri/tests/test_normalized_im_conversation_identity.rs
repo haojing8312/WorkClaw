@@ -85,6 +85,35 @@ fn normalized_wecom_event_derives_topic_from_routing_context_topic() {
 }
 
 #[test]
+fn normalized_event_backfills_missing_topic_scope_metadata_from_conversation_id() {
+    let event = parse_normalized_im_event_value(&serde_json::json!({
+        "channel": "wecom",
+        "workspace_id": "corp-1",
+        "account_id": "agent-1",
+        "thread_id": "room-1",
+        "message_id": "msg-3",
+        "sender_id": "user-1",
+        "chat_type": "group",
+        "conversation_id": "wecom:agent-1:group:room-1:topic:topic-99"
+    }))
+    .expect("parse normalized event with partial metadata");
+
+    assert_eq!(
+        event.conversation_id.as_deref(),
+        Some("wecom:agent-1:group:room-1:topic:topic-99")
+    );
+    assert_eq!(
+        event.base_conversation_id.as_deref(),
+        Some("wecom:agent-1:group:room-1")
+    );
+    assert_eq!(
+        event.parent_conversation_candidates,
+        vec!["wecom:agent-1:group:room-1".to_string()]
+    );
+    assert_eq!(event.conversation_scope.as_deref(), Some("topic"));
+}
+
+#[test]
 fn shared_identity_core_degrades_incomplete_surfaces_to_narrower_stable_scopes() {
     let mut surface = ImConversationSurface {
         channel: "wecom".to_string(),

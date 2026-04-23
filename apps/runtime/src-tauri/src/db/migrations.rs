@@ -45,9 +45,10 @@ pub(super) async fn apply_legacy_migrations(pool: &SqlitePool) -> Result<()> {
     let _ = sqlx::query("ALTER TABLE sessions ADD COLUMN employee_id TEXT NOT NULL DEFAULT ''")
         .execute(pool)
         .await;
-    let _ = sqlx::query("ALTER TABLE sessions ADD COLUMN session_mode TEXT NOT NULL DEFAULT 'general'")
-        .execute(pool)
-        .await;
+    let _ =
+        sqlx::query("ALTER TABLE sessions ADD COLUMN session_mode TEXT NOT NULL DEFAULT 'general'")
+            .execute(pool)
+            .await;
     let _ = sqlx::query("ALTER TABLE sessions ADD COLUMN team_id TEXT NOT NULL DEFAULT ''")
         .execute(pool)
         .await;
@@ -85,11 +86,10 @@ pub(super) async fn apply_legacy_migrations(pool: &SqlitePool) -> Result<()> {
     )
     .execute(pool)
     .await;
-    let _ = sqlx::query(
-        "ALTER TABLE agent_employees ADD COLUMN employee_id TEXT NOT NULL DEFAULT ''",
-    )
-    .execute(pool)
-    .await;
+    let _ =
+        sqlx::query("ALTER TABLE agent_employees ADD COLUMN employee_id TEXT NOT NULL DEFAULT ''")
+            .execute(pool)
+            .await;
     let _ = sqlx::query(
         "UPDATE agent_employees SET employee_id = role_id WHERE TRIM(employee_id) = ''",
     )
@@ -144,9 +144,10 @@ pub(super) async fn apply_legacy_migrations(pool: &SqlitePool) -> Result<()> {
     )
     .execute(pool)
     .await;
-    let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_group_runs_group_id ON group_runs(group_id)")
-        .execute(pool)
-        .await;
+    let _ =
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_group_runs_group_id ON group_runs(group_id)")
+            .execute(pool)
+            .await;
     let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_group_runs_state ON group_runs(state)")
         .execute(pool)
         .await;
@@ -166,9 +167,10 @@ pub(super) async fn apply_legacy_migrations(pool: &SqlitePool) -> Result<()> {
     .execute(pool)
     .await;
 
-    let _ = sqlx::query("ALTER TABLE employee_groups ADD COLUMN template_id TEXT NOT NULL DEFAULT ''")
-        .execute(pool)
-        .await;
+    let _ =
+        sqlx::query("ALTER TABLE employee_groups ADD COLUMN template_id TEXT NOT NULL DEFAULT ''")
+            .execute(pool)
+            .await;
     let _ = sqlx::query(
         "ALTER TABLE employee_groups ADD COLUMN entry_employee_id TEXT NOT NULL DEFAULT ''",
     )
@@ -200,24 +202,29 @@ pub(super) async fn apply_legacy_migrations(pool: &SqlitePool) -> Result<()> {
     .execute(pool)
     .await;
 
-    let _ = sqlx::query("ALTER TABLE group_runs ADD COLUMN current_phase TEXT NOT NULL DEFAULT 'plan'")
-        .execute(pool)
-        .await;
-    let _ = sqlx::query("ALTER TABLE group_runs ADD COLUMN entry_session_id TEXT NOT NULL DEFAULT ''")
-        .execute(pool)
-        .await;
-    let _ = sqlx::query("ALTER TABLE group_runs ADD COLUMN main_employee_id TEXT NOT NULL DEFAULT ''")
-        .execute(pool)
-        .await;
-    let _ = sqlx::query("ALTER TABLE group_runs ADD COLUMN review_round INTEGER NOT NULL DEFAULT 0")
-        .execute(pool)
-        .await;
+    let _ =
+        sqlx::query("ALTER TABLE group_runs ADD COLUMN current_phase TEXT NOT NULL DEFAULT 'plan'")
+            .execute(pool)
+            .await;
+    let _ =
+        sqlx::query("ALTER TABLE group_runs ADD COLUMN entry_session_id TEXT NOT NULL DEFAULT ''")
+            .execute(pool)
+            .await;
+    let _ =
+        sqlx::query("ALTER TABLE group_runs ADD COLUMN main_employee_id TEXT NOT NULL DEFAULT ''")
+            .execute(pool)
+            .await;
+    let _ =
+        sqlx::query("ALTER TABLE group_runs ADD COLUMN review_round INTEGER NOT NULL DEFAULT 0")
+            .execute(pool)
+            .await;
     let _ = sqlx::query("ALTER TABLE group_runs ADD COLUMN status_reason TEXT NOT NULL DEFAULT ''")
         .execute(pool)
         .await;
-    let _ = sqlx::query("ALTER TABLE group_runs ADD COLUMN template_version TEXT NOT NULL DEFAULT ''")
-        .execute(pool)
-        .await;
+    let _ =
+        sqlx::query("ALTER TABLE group_runs ADD COLUMN template_version TEXT NOT NULL DEFAULT ''")
+            .execute(pool)
+            .await;
     let _ = sqlx::query(
         "ALTER TABLE group_runs ADD COLUMN waiting_for_employee_id TEXT NOT NULL DEFAULT ''",
     )
@@ -252,12 +259,14 @@ pub(super) async fn apply_legacy_migrations(pool: &SqlitePool) -> Result<()> {
     )
     .execute(pool)
     .await;
-    let _ = sqlx::query("ALTER TABLE group_run_steps ADD COLUMN attempt_no INTEGER NOT NULL DEFAULT 0")
-        .execute(pool)
-        .await;
-    let _ = sqlx::query("ALTER TABLE group_run_steps ADD COLUMN session_id TEXT NOT NULL DEFAULT ''")
-        .execute(pool)
-        .await;
+    let _ =
+        sqlx::query("ALTER TABLE group_run_steps ADD COLUMN attempt_no INTEGER NOT NULL DEFAULT 0")
+            .execute(pool)
+            .await;
+    let _ =
+        sqlx::query("ALTER TABLE group_run_steps ADD COLUMN session_id TEXT NOT NULL DEFAULT ''")
+            .execute(pool)
+            .await;
     let _ = sqlx::query(
         "ALTER TABLE group_run_steps ADD COLUMN dispatch_source_employee_id TEXT NOT NULL DEFAULT ''",
     )
@@ -532,7 +541,9 @@ pub(super) async fn backfill_authority_binding_tables(pool: &SqlitePool) -> Resu
     Ok(())
 }
 
-pub(super) async fn ensure_im_thread_sessions_conversation_columns(pool: &SqlitePool) -> Result<()> {
+pub(super) async fn ensure_im_thread_sessions_conversation_columns(
+    pool: &SqlitePool,
+) -> Result<()> {
     ensure_im_thread_sessions_channel_column(pool).await?;
 
     let _ = sqlx::query(
@@ -558,24 +569,22 @@ pub(super) async fn ensure_im_thread_sessions_conversation_columns(pool: &Sqlite
     let _ = sqlx::query("ALTER TABLE im_thread_sessions ADD COLUMN scope TEXT NOT NULL DEFAULT ''")
         .execute(pool)
         .await;
-    let _ = sqlx::query(
-        "ALTER TABLE im_thread_sessions ADD COLUMN peer_kind TEXT NOT NULL DEFAULT ''",
-    )
-    .execute(pool)
-    .await;
-    let _ = sqlx::query("ALTER TABLE im_thread_sessions ADD COLUMN peer_id TEXT NOT NULL DEFAULT ''")
-        .execute(pool)
-        .await;
-    let _ = sqlx::query(
-        "ALTER TABLE im_thread_sessions ADD COLUMN topic_id TEXT NOT NULL DEFAULT ''",
-    )
-    .execute(pool)
-    .await;
-    let _ = sqlx::query(
-        "ALTER TABLE im_thread_sessions ADD COLUMN sender_id TEXT NOT NULL DEFAULT ''",
-    )
-    .execute(pool)
-    .await;
+    let _ =
+        sqlx::query("ALTER TABLE im_thread_sessions ADD COLUMN peer_kind TEXT NOT NULL DEFAULT ''")
+            .execute(pool)
+            .await;
+    let _ =
+        sqlx::query("ALTER TABLE im_thread_sessions ADD COLUMN peer_id TEXT NOT NULL DEFAULT ''")
+            .execute(pool)
+            .await;
+    let _ =
+        sqlx::query("ALTER TABLE im_thread_sessions ADD COLUMN topic_id TEXT NOT NULL DEFAULT ''")
+            .execute(pool)
+            .await;
+    let _ =
+        sqlx::query("ALTER TABLE im_thread_sessions ADD COLUMN sender_id TEXT NOT NULL DEFAULT ''")
+            .execute(pool)
+            .await;
 
     Ok(())
 }
@@ -589,9 +598,10 @@ pub(super) async fn ensure_im_thread_sessions_channel_column(pool: &SqlitePool) 
         return Ok(());
     }
 
-    let _ = sqlx::query("ALTER TABLE im_thread_sessions ADD COLUMN channel TEXT NOT NULL DEFAULT ''")
-        .execute(pool)
-        .await;
+    let _ =
+        sqlx::query("ALTER TABLE im_thread_sessions ADD COLUMN channel TEXT NOT NULL DEFAULT ''")
+            .execute(pool)
+            .await;
 
     Ok(())
 }

@@ -13,7 +13,9 @@ use schema::apply_current_schema;
 use seed::seed_runtime_defaults;
 
 #[cfg(test)]
-use migrations::ensure_im_thread_sessions_channel_column;
+use migrations::{
+    apply_legacy_migrations_for_test, ensure_im_thread_sessions_channel_column,
+};
 #[cfg(test)]
 use seed::{build_builtin_manifest_json, sync_builtin_skills_with_root};
 
@@ -188,5 +190,83 @@ mod tests {
                 .expect("load im_thread_sessions columns");
 
         assert!(columns.iter().any(|name| name == "channel"));
+    }
+
+    #[tokio::test]
+    async fn im_thread_sessions_legacy_schema_is_upgraded_with_conversation_columns() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("create sqlite memory pool");
+
+        sqlx::query(
+            "CREATE TABLE im_thread_sessions (
+                thread_id TEXT NOT NULL,
+                employee_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                route_session_key TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (thread_id, employee_id)
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create legacy im_thread_sessions table");
+
+        apply_legacy_migrations_for_test(&pool)
+            .await
+            .expect("migrate legacy im_thread_sessions schema");
+
+        let columns: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_table_info('im_thread_sessions')")
+                .fetch_all(&pool)
+                .await
+                .expect("load im_thread_sessions columns");
+
+        assert!(columns.iter().any(|name| name == "conversation_id"));
+        assert!(columns.iter().any(|name| name == "base_conversation_id"));
+        assert!(columns
+            .iter()
+            .any(|name| name == "parent_conversation_candidates_json"));
+        assert!(columns.iter().any(|name| name == "scope"));
+    }
+
+    #[tokio::test]
+    async fn legacy_schema_creates_im_conversation_sessions_table() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("create sqlite memory pool");
+
+        sqlx::query(
+            "CREATE TABLE im_thread_sessions (
+                thread_id TEXT NOT NULL,
+                employee_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                route_session_key TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (thread_id, employee_id)
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create legacy im_thread_sessions table");
+
+        apply_legacy_migrations_for_test(&pool)
+            .await
+            .expect("apply legacy migrations");
+
+        let tables: Vec<String> = sqlx::query_scalar(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'im_conversation_sessions'",
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("query conversation session table");
+
+        assert_eq!(tables, vec!["im_conversation_sessions".to_string()]);
     }
 }

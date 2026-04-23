@@ -135,7 +135,9 @@ pub(crate) async fn find_conversation_session_record(
     .map_err(|e| e.to_string())?;
 
     Ok(row.map(|record| ConversationSessionRecord {
-        session_id: record.try_get(0).expect("conversation session record session_id"),
+        session_id: record
+            .try_get(0)
+            .expect("conversation session record session_id"),
         session_exists: record
             .try_get::<i64, _>(1)
             .expect("conversation session record session_exists")
@@ -148,8 +150,7 @@ pub(crate) async fn find_thread_session_record(
     thread_id: &str,
     employee_db_id: &str,
 ) -> Result<Option<ThreadSessionRecord>, String> {
-    if authoritative_conversation_sessions_exist_for_thread(pool, thread_id, employee_db_id)
-        .await?
+    if authoritative_conversation_sessions_exist_for_thread(pool, thread_id, employee_db_id).await?
     {
         return Ok(None);
     }
