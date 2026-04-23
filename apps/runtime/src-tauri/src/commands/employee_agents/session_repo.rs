@@ -9,7 +9,6 @@ pub(crate) struct ThreadSessionRecord {
 pub(crate) struct ConversationSessionRecord {
     pub session_id: String,
     pub session_exists: bool,
-    pub thread_id: String,
 }
 
 pub(crate) struct SessionSeedInput<'a> {
@@ -123,7 +122,6 @@ pub(crate) async fn find_conversation_session_record(
 
     let row = sqlx::query(
         "SELECT cs.session_id,
-                COALESCE(cs.thread_id, ''),
                 CASE WHEN s.id IS NULL THEN 0 ELSE 1 END AS session_exists
          FROM im_conversation_sessions cs
          LEFT JOIN sessions s ON s.id = cs.session_id
@@ -138,9 +136,8 @@ pub(crate) async fn find_conversation_session_record(
 
     Ok(row.map(|record| ConversationSessionRecord {
         session_id: record.try_get(0).expect("conversation session record session_id"),
-        thread_id: record.try_get(1).expect("conversation session record thread_id"),
         session_exists: record
-            .try_get::<i64, _>(2)
+            .try_get::<i64, _>(1)
             .expect("conversation session record session_exists")
             != 0,
     }))

@@ -1,7 +1,19 @@
 use anyhow::Result;
 use sqlx::SqlitePool;
 
+async fn im_thread_sessions_exists(pool: &SqlitePool) -> Result<bool> {
+    let table_names: Vec<String> = sqlx::query_scalar(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'im_thread_sessions'",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(!table_names.is_empty())
+}
+
 pub(super) async fn apply_legacy_migrations(pool: &SqlitePool) -> Result<()> {
+    let has_im_thread_sessions = im_thread_sessions_exists(pool).await?;
+
     let _ = sqlx::query(
         "ALTER TABLE im_routing_bindings ADD COLUMN connector_meta_json TEXT NOT NULL DEFAULT '{}'",
     )
@@ -100,24 +112,28 @@ pub(super) async fn apply_legacy_migrations(pool: &SqlitePool) -> Result<()> {
     .execute(pool)
     .await;
     ensure_agent_conversation_binding_tables(pool).await?;
-    ensure_im_thread_sessions_conversation_columns(pool).await?;
+    if has_im_thread_sessions {
+        ensure_im_thread_sessions_conversation_columns(pool).await?;
+    }
     ensure_im_conversation_sessions_table(pool).await?;
     backfill_authority_binding_tables(pool).await?;
-    let _ = sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_im_thread_sessions_route_key ON im_thread_sessions(route_session_key)",
-    )
-    .execute(pool)
-    .await;
-    let _ = sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_im_thread_sessions_conversation_id ON im_thread_sessions(conversation_id)",
-    )
-    .execute(pool)
-    .await;
-    let _ = sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_im_thread_sessions_channel_account_conversation ON im_thread_sessions(channel, account_id, conversation_id)",
-    )
-    .execute(pool)
-    .await;
+    if has_im_thread_sessions {
+        let _ = sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_im_thread_sessions_route_key ON im_thread_sessions(route_session_key)",
+        )
+        .execute(pool)
+        .await;
+        let _ = sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_im_thread_sessions_conversation_id ON im_thread_sessions(conversation_id)",
+        )
+        .execute(pool)
+        .await;
+        let _ = sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_im_thread_sessions_channel_account_conversation ON im_thread_sessions(channel, account_id, conversation_id)",
+        )
+        .execute(pool)
+        .await;
+    }
     let _ = sqlx::query(
         "CREATE INDEX IF NOT EXISTS idx_employee_groups_coordinator ON employee_groups(coordinator_employee_id)",
     )
@@ -267,7 +283,7 @@ pub(super) async fn apply_legacy_migrations(pool: &SqlitePool) -> Result<()> {
 }
 
 pub(super) async fn ensure_agent_conversation_binding_tables(pool: &SqlitePool) -> Result<()> {
-    let _ = sqlx::query(
+    sqlx::query(
         "CREATE TABLE IF NOT EXISTS agent_conversation_bindings (
             conversation_id TEXT NOT NULL,
             channel TEXT NOT NULL,
@@ -288,20 +304,20 @@ pub(super) async fn ensure_agent_conversation_binding_tables(pool: &SqlitePool) 
         )",
     )
     .execute(pool)
-    .await;
+    .await?;
 
-    let _ = sqlx::query(
+    sqlx::query(
         "CREATE INDEX IF NOT EXISTS idx_agent_conversation_bindings_session_key ON agent_conversation_bindings(session_key)",
     )
     .execute(pool)
-    .await;
-    let _ = sqlx::query(
+    .await?;
+    sqlx::query(
         "CREATE INDEX IF NOT EXISTS idx_agent_conversation_bindings_channel_account ON agent_conversation_bindings(channel, account_id)",
     )
     .execute(pool)
-    .await;
+    .await?;
 
-    let _ = sqlx::query(
+    sqlx::query(
         "CREATE TABLE IF NOT EXISTS channel_delivery_routes (
             session_key TEXT NOT NULL PRIMARY KEY,
             channel TEXT NOT NULL,
@@ -312,19 +328,24 @@ pub(super) async fn ensure_agent_conversation_binding_tables(pool: &SqlitePool) 
         )",
     )
     .execute(pool)
-    .await;
+    .await?;
 
-    let _ = sqlx::query(
+    sqlx::query(
         "CREATE INDEX IF NOT EXISTS idx_channel_delivery_routes_conversation ON channel_delivery_routes(conversation_id)",
     )
     .execute(pool)
-    .await;
+    .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_channel_delivery_routes_channel_account ON channel_delivery_routes(channel, account_id)",
+    )
+    .execute(pool)
+    .await?;
 
     Ok(())
 }
 
 pub(super) async fn ensure_im_conversation_sessions_table(pool: &SqlitePool) -> Result<()> {
-    let _ = sqlx::query(
+    sqlx::query(
         "CREATE TABLE IF NOT EXISTS im_conversation_sessions (
             conversation_id TEXT NOT NULL,
             employee_id TEXT NOT NULL,
@@ -346,26 +367,27 @@ pub(super) async fn ensure_im_conversation_sessions_table(pool: &SqlitePool) -> 
         )",
     )
     .execute(pool)
-    .await;
+    .await?;
 
-    let _ = sqlx::query(
+    sqlx::query(
         "CREATE INDEX IF NOT EXISTS idx_im_conversation_sessions_session_id ON im_conversation_sessions(session_id)",
     )
     .execute(pool)
-    .await;
-    let _ = sqlx::query(
+    .await?;
+    sqlx::query(
         "CREATE INDEX IF NOT EXISTS idx_im_conversation_sessions_thread_id ON im_conversation_sessions(thread_id)",
     )
     .execute(pool)
-    .await;
-    let _ = sqlx::query(
+    .await?;
+    sqlx::query(
         "CREATE INDEX IF NOT EXISTS idx_im_conversation_sessions_channel_account ON im_conversation_sessions(channel, account_id)",
     )
     .execute(pool)
-    .await;
+    .await?;
 
-    let _ = sqlx::query(
-        "INSERT INTO im_conversation_sessions (
+    if im_thread_sessions_exists(pool).await? {
+        sqlx::query(
+            "INSERT INTO im_conversation_sessions (
             conversation_id,
             employee_id,
             thread_id,
@@ -397,7 +419,7 @@ pub(super) async fn ensure_im_conversation_sessions_table(pool: &SqlitePool) -> 
             COALESCE(parent_conversation_candidates_json, '[]'),
             COALESCE(scope, ''),
             COALESCE(peer_kind, ''),
-            COALESCE(peer_id, thread_id),
+            COALESCE(NULLIF(TRIM(peer_id), ''), thread_id),
             COALESCE(topic_id, ''),
             COALESCE(sender_id, '')
         FROM im_thread_sessions
@@ -416,15 +438,16 @@ pub(super) async fn ensure_im_conversation_sessions_table(pool: &SqlitePool) -> 
             peer_id = excluded.peer_id,
             topic_id = excluded.topic_id,
             sender_id = excluded.sender_id",
-    )
-    .execute(pool)
-    .await;
+        )
+        .execute(pool)
+        .await?;
+    }
 
     Ok(())
 }
 
 pub(super) async fn backfill_authority_binding_tables(pool: &SqlitePool) -> Result<()> {
-    let _ = sqlx::query(
+    sqlx::query(
         "INSERT INTO agent_conversation_bindings (
             conversation_id,
             channel,
@@ -476,9 +499,9 @@ pub(super) async fn backfill_authority_binding_tables(pool: &SqlitePool) -> Resu
             updated_at = excluded.updated_at",
     )
     .execute(pool)
-    .await;
+    .await?;
 
-    let _ = sqlx::query(
+    sqlx::query(
         "INSERT INTO channel_delivery_routes (
             session_key,
             channel,
@@ -504,7 +527,7 @@ pub(super) async fn backfill_authority_binding_tables(pool: &SqlitePool) -> Resu
             updated_at = excluded.updated_at",
     )
     .execute(pool)
-    .await;
+    .await?;
 
     Ok(())
 }
