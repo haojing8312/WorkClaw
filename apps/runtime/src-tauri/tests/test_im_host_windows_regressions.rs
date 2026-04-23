@@ -344,6 +344,45 @@ fn feishu_bridge_payload_falls_back_from_blank_account_id_to_tenant_id() {
     assert_eq!(event.conversation_scope.as_deref(), Some("peer"));
 }
 
+#[test]
+fn feishu_bridge_payload_falls_back_to_sender_id_for_sparse_account_inputs() {
+    let payload = serde_json::to_string(&ImEvent {
+        channel: "feishu".to_string(),
+        event_type: ImEventType::MessageCreated,
+        thread_id: "oc_sparse_account_bridge".to_string(),
+        event_id: Some("evt_sparse_account_bridge".to_string()),
+        message_id: Some("om_sparse_account_bridge".to_string()),
+        text: Some("继续这个仅 sender 的桥接情况".to_string()),
+        role_id: None,
+        account_id: Some("   ".to_string()),
+        tenant_id: None,
+        sender_id: Some("ou_sparse_sender_bridge".to_string()),
+        chat_type: Some("group".to_string()),
+        conversation_id: None,
+        base_conversation_id: None,
+        parent_conversation_candidates: Vec::new(),
+        conversation_scope: None,
+    })
+    .expect("serialize sparse-account bridge payload");
+
+    let parsed = parse_feishu_payload(&payload).expect("parse sparse-account bridge payload");
+    let ParsedFeishuPayload::Event(event) = parsed else {
+        panic!("expected feishu event");
+    };
+
+    assert_eq!(event.tenant_id.as_deref(), Some("ou_sparse_sender_bridge"));
+    assert_eq!(
+        event.conversation_id.as_deref(),
+        Some("feishu:ou_sparse_sender_bridge:group:oc_sparse_account_bridge")
+    );
+    assert_eq!(
+        event.base_conversation_id.as_deref(),
+        Some("feishu:ou_sparse_sender_bridge:group:oc_sparse_account_bridge")
+    );
+    assert!(event.parent_conversation_candidates.is_empty());
+    assert_eq!(event.conversation_scope.as_deref(), Some("peer"));
+}
+
 #[tokio::test]
 async fn wecom_unified_host_regressions_run_in_windows_safe_target() {
     let (pool, _tmp) = helpers::setup_test_db().await;

@@ -36,6 +36,29 @@ fn normalized_non_empty(value: Option<&str>) -> Option<String> {
         .map(str::to_string)
 }
 
+fn normalized_tenant_id_for_channel(
+    channel: &str,
+    tenant_id: Option<&str>,
+    sender_id: Option<&str>,
+) -> Option<String> {
+    let tenant_id = normalized_non_empty(tenant_id);
+    if channel.trim() == "feishu" {
+        tenant_id.or_else(|| normalized_non_empty(sender_id))
+    } else {
+        tenant_id
+    }
+}
+
+fn normalized_account_id_for_channel(
+    channel: &str,
+    account_id: Option<&str>,
+    tenant_id: Option<&str>,
+    sender_id: Option<&str>,
+) -> Option<String> {
+    normalized_non_empty(account_id)
+        .or_else(|| normalized_tenant_id_for_channel(channel, tenant_id, sender_id))
+}
+
 fn optional_string_list(value: Option<&serde_json::Value>) -> Vec<String> {
     value
         .and_then(serde_json::Value::as_array)
@@ -112,6 +135,9 @@ fn build_event_conversation_metadata(
     conversation_id: Option<&str>,
     conversation_scope: Option<&str>,
 ) -> (String, String, Vec<String>, String) {
+    let normalized_tenant_id = normalized_tenant_id_for_channel(channel, tenant_id, sender_id);
+    let normalized_account_id =
+        normalized_account_id_for_channel(channel, account_id, tenant_id, sender_id);
     let (inferred_scope, inferred_topic_id, inferred_sender_id) =
         inferred_scope_and_parts_from_conversation_id(conversation_id);
     let scope = parse_conversation_scope(conversation_scope)
@@ -131,10 +157,8 @@ fn build_event_conversation_metadata(
     let peer_kind = infer_peer_kind(chat_type);
     let surface = ImConversationSurface {
         channel: channel.trim().to_string(),
-        account_id: normalized_non_empty(account_id)
-            .or_else(|| normalized_non_empty(tenant_id))
-            .unwrap_or_else(|| "default".to_string()),
-        tenant_id: normalized_non_empty(tenant_id),
+        account_id: normalized_account_id.unwrap_or_else(|| "default".to_string()),
+        tenant_id: normalized_tenant_id,
         peer_kind,
         peer_id: thread_id.trim().to_string(),
         topic_id: topic_id
@@ -220,6 +244,14 @@ fn build_normalized_event_conversation_metadata(
 }
 
 pub(crate) fn project_im_event_conversation_metadata(event: &ImEvent) -> ImEvent {
+    let mut projected = event.clone();
+    projected.account_id = normalized_non_empty(event.account_id.as_deref());
+    projected.tenant_id = normalized_tenant_id_for_channel(
+        &event.channel,
+        event.tenant_id.as_deref(),
+        event.sender_id.as_deref(),
+    );
+
     let needs_projection = event
         .conversation_id
         .as_deref()
@@ -240,15 +272,15 @@ pub(crate) fn project_im_event_conversation_metadata(event: &ImEvent) -> ImEvent
             .filter(|value| !value.is_empty())
             .is_none();
     if !needs_projection {
-        return event.clone();
+        return projected;
     }
 
     let (conversation_id, base_conversation_id, parent_conversation_candidates, conversation_scope) =
         build_event_conversation_metadata(
             &event.channel,
             &event.thread_id,
-            event.account_id.as_deref(),
-            event.tenant_id.as_deref(),
+            projected.account_id.as_deref(),
+            projected.tenant_id.as_deref(),
             event.sender_id.as_deref(),
             event.chat_type.as_deref(),
             event.message_id.as_deref(),
@@ -257,7 +289,6 @@ pub(crate) fn project_im_event_conversation_metadata(event: &ImEvent) -> ImEvent
             event.conversation_scope.as_deref(),
         );
 
-    let mut projected = event.clone();
     projected.conversation_id.get_or_insert(conversation_id);
     projected
         .base_conversation_id
@@ -298,9 +329,11 @@ pub fn parse_normalized_im_event_value(value: &serde_json::Value) -> Result<ImEv
             .map(str::to_string)
     });
     let account_id = optional_non_empty_string(value.get("account_id"));
-    let tenant_id = optional_non_empty_string(value.get("workspace_id"))
-        .or_else(|| optional_non_empty_string(value.get("tenant_id")));
     let sender_id = optional_non_empty_string(value.get("sender_id"));
+    let raw_tenant_id = optional_non_empty_string(value.get("workspace_id"))
+        .or_else(|| optional_non_empty_string(value.get("tenant_id")));
+    let tenant_id =
+        normalized_tenant_id_for_channel(&channel, raw_tenant_id.as_deref(), sender_id.as_deref());
     let message_id = optional_non_empty_string(value.get("message_id"));
     let event_id = optional_non_empty_string(value.get("event_id")).or_else(|| message_id.clone());
     let mut conversation_id = optional_non_empty_string(value.get("conversation_id"));
@@ -718,6 +751,43 @@ mod tests {
         assert_eq!(
             event.base_conversation_id.as_deref(),
             Some("feishu:tenant-fast-path:group:oc_blank_account_fast_path")
+        );
+        assert!(event.parent_conversation_candidates.is_empty());
+        assert_eq!(event.conversation_scope.as_deref(), Some("peer"));
+    }
+
+    #[test]
+    fn project_im_event_conversation_metadata_falls_back_to_sender_id_for_feishu_sparse_account() {
+        let event = super::project_im_event_conversation_metadata(&ImEvent {
+            channel: "feishu".to_string(),
+            event_type: ImEventType::MessageCreated,
+            thread_id: "oc_sender_fallback_fast_path".to_string(),
+            event_id: Some("evt_sender_fallback_fast_path".to_string()),
+            message_id: Some("om_sender_fallback_fast_path".to_string()),
+            text: Some("继续这个飞书兜底情况".to_string()),
+            role_id: None,
+            account_id: Some("   ".to_string()),
+            tenant_id: None,
+            sender_id: Some("ou_sender_fallback_fast_path".to_string()),
+            chat_type: Some("group".to_string()),
+            conversation_id: None,
+            base_conversation_id: None,
+            parent_conversation_candidates: Vec::new(),
+            conversation_scope: None,
+        });
+
+        assert_eq!(event.account_id, None);
+        assert_eq!(
+            event.tenant_id.as_deref(),
+            Some("ou_sender_fallback_fast_path")
+        );
+        assert_eq!(
+            event.conversation_id.as_deref(),
+            Some("feishu:ou_sender_fallback_fast_path:group:oc_sender_fallback_fast_path")
+        );
+        assert_eq!(
+            event.base_conversation_id.as_deref(),
+            Some("feishu:ou_sender_fallback_fast_path:group:oc_sender_fallback_fast_path")
         );
         assert!(event.parent_conversation_candidates.is_empty());
         assert_eq!(event.conversation_scope.as_deref(), Some("peer"));

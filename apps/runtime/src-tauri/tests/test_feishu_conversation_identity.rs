@@ -204,3 +204,94 @@ fn feishu_blank_account_falls_back_to_tenant_like_normalized_bridge_contract() {
         normalized_event.conversation_scope
     );
 }
+
+#[test]
+fn feishu_sparse_account_contract_matches_across_raw_normalized_and_direct_event_paths() {
+    let raw_payload = serde_json::json!({
+        "header": {
+            "event_id": "evt_sparse_account_1",
+            "event_type": "im.message.receive_v1"
+        },
+        "event": {
+            "message": {
+                "message_id": "om_sparse_account_1",
+                "chat_id": "oc_sparse_account_1",
+                "chat_type": "group",
+                "content": "{\"text\":\"继续这个仅 sender 的情况\"}"
+            },
+            "sender": {
+                "sender_id": {
+                    "open_id": "ou_sparse_sender"
+                }
+            }
+        }
+    });
+    let raw_event =
+        match parse_feishu_payload(&raw_payload.to_string()).expect("parse raw feishu payload") {
+            ParsedFeishuPayload::Event(event) => event,
+            ParsedFeishuPayload::Challenge(_) => panic!("expected raw event"),
+        };
+
+    let normalized_event = parse_normalized_im_event_value(&serde_json::json!({
+        "channel": "feishu",
+        "account_id": "   ",
+        "thread_id": "oc_sparse_account_1",
+        "message_id": "om_sparse_account_1",
+        "sender_id": "ou_sparse_sender",
+        "chat_type": "group",
+        "text": "继续这个仅 sender 的情况"
+    }))
+    .expect("parse normalized sparse-account event");
+
+    let direct_payload = serde_json::json!({
+        "channel": "feishu",
+        "event_type": "message.created",
+        "thread_id": "oc_sparse_account_1",
+        "event_id": "evt_sparse_account_direct",
+        "message_id": "om_sparse_account_1",
+        "text": "继续这个仅 sender 的情况",
+        "account_id": "   ",
+        "sender_id": "ou_sparse_sender",
+        "chat_type": "group"
+    });
+    let direct_event = match parse_feishu_payload(&direct_payload.to_string())
+        .expect("parse direct fast-path event")
+    {
+        ParsedFeishuPayload::Event(event) => event,
+        ParsedFeishuPayload::Challenge(_) => panic!("expected direct event"),
+    };
+
+    assert_eq!(raw_event.tenant_id.as_deref(), Some("ou_sparse_sender"));
+    assert_eq!(
+        normalized_event.tenant_id.as_deref(),
+        Some("ou_sparse_sender")
+    );
+    assert_eq!(direct_event.tenant_id.as_deref(), Some("ou_sparse_sender"));
+
+    assert_eq!(raw_event.conversation_id, normalized_event.conversation_id);
+    assert_eq!(raw_event.conversation_id, direct_event.conversation_id);
+    assert_eq!(
+        raw_event.base_conversation_id,
+        normalized_event.base_conversation_id
+    );
+    assert_eq!(
+        raw_event.base_conversation_id,
+        direct_event.base_conversation_id
+    );
+    assert_eq!(
+        raw_event.parent_conversation_candidates,
+        normalized_event.parent_conversation_candidates
+    );
+    assert_eq!(
+        raw_event.parent_conversation_candidates,
+        direct_event.parent_conversation_candidates
+    );
+    assert_eq!(
+        raw_event.conversation_scope,
+        normalized_event.conversation_scope
+    );
+    assert_eq!(
+        raw_event.conversation_scope,
+        direct_event.conversation_scope
+    );
+}
