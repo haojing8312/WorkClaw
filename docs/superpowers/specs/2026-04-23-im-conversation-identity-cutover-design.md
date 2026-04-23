@@ -41,6 +41,14 @@ conversation identity rather than raw thread heuristics.
 - Redesigning sidecar adapter payload formats beyond what is needed to carry
   normalized conversation metadata
 
+## Deferred
+
+This cutover does not modify `agent/compactor.rs` or the long-context retention
+model.
+
+Compaction redesign must be handled in a separate spec after
+conversation/session binding is stable.
+
 ## Current State
 
 The current in-flight changes already introduce the first pieces of the new

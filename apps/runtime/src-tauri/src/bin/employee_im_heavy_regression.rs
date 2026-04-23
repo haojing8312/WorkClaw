@@ -10,7 +10,7 @@ use runtime_lib::commands::employee_agents::test_support::{
     list_employee_groups_with_pool, maybe_handle_team_entry_session_message_with_pool,
 };
 use runtime_lib::commands::employee_agents::{
-    ensure_employee_sessions_for_event_with_pool, link_inbound_event_to_session_with_pool,
+    ensure_agent_sessions_for_event_with_pool, link_inbound_event_to_agent_session_with_pool,
     list_agent_employees_with_pool, resolve_target_employees_for_event,
     upsert_agent_employee_with_pool, CloneEmployeeGroupTemplateInput, CreateEmployeeGroupInput,
     CreateEmployeeTeamInput, UpsertAgentEmployeeInput,
@@ -329,7 +329,7 @@ async fn scenario_employee_config_and_im_session_mapping() -> Result<RegressionC
     let (pool, _tmp) = test_helpers::setup_test_db().await;
     seed_model(&pool, "https://example.com").await?;
 
-    let employee_id = seed_employee(
+    let _employee_row_id = seed_employee(
         &pool,
         "project_manager",
         "项目经理智能体",
@@ -360,13 +360,17 @@ async fn scenario_employee_config_and_im_session_mapping() -> Result<RegressionC
         tenant_id: Some("tenant-a".to_string()),
         sender_id: None,
         chat_type: None,
+        conversation_id: Some("feishu:tenant-a:group:chat_001".to_string()),
+        base_conversation_id: Some("feishu:tenant-a:group:chat_001".to_string()),
+        parent_conversation_candidates: Vec::new(),
+        conversation_scope: Some("peer".to_string()),
     };
 
-    let sessions = ensure_employee_sessions_for_event_with_pool(&pool, &event)
+    let sessions = ensure_agent_sessions_for_event_with_pool(&pool, &event)
         .await
-        .map_err(|error| anyhow!("ensure employee sessions: {error}"))?;
-    if sessions.len() != 1 || sessions[0].employee_id != employee_id {
-        return Err(anyhow!("unexpected ensured employee sessions"));
+        .map_err(|error| anyhow!("ensure agent sessions: {error}"))?;
+    if sessions.len() != 1 || sessions[0].agent_id != "project_manager" {
+        return Err(anyhow!("unexpected ensured agent sessions"));
     }
 
     let (skill_id, work_dir, permission_mode): (String, String, String) =
@@ -382,10 +386,10 @@ async fn scenario_employee_config_and_im_session_mapping() -> Result<RegressionC
         return Err(anyhow!("ensured session config mismatch"));
     }
 
-    link_inbound_event_to_session_with_pool(
+    link_inbound_event_to_agent_session_with_pool(
         &pool,
         &event,
-        &sessions[0].employee_id,
+        &sessions[0].agent_id,
         &sessions[0].session_id,
     )
     .await
@@ -449,6 +453,10 @@ async fn scenario_group_message_text_mention_routes_target() -> Result<Regressio
             tenant_id: None,
             sender_id: None,
             chat_type: None,
+            conversation_id: Some("feishu:default:group:chat_group_text_mention".to_string()),
+            base_conversation_id: Some("feishu:default:group:chat_group_text_mention".to_string()),
+            parent_conversation_candidates: Vec::new(),
+            conversation_scope: Some("peer".to_string()),
         },
     )
     .await
@@ -468,7 +476,7 @@ async fn scenario_team_entry_binding_prefers_entry_employee() -> Result<Regressi
     let (pool, _tmp) = test_helpers::setup_test_db().await;
     seed_model(&pool, "https://example.com").await?;
 
-    let main_id = seed_employee(
+    let _main_row_id = seed_employee(
         &pool,
         "main",
         "主员工",
@@ -479,7 +487,7 @@ async fn scenario_team_entry_binding_prefers_entry_employee() -> Result<Regressi
         "ou_main",
     )
     .await?;
-    let taizi_id = seed_employee(
+    let _taizi_row_id = seed_employee(
         &pool,
         "taizi",
         "太子",
@@ -541,16 +549,17 @@ async fn scenario_team_entry_binding_prefers_entry_employee() -> Result<Regressi
         tenant_id: Some("tenant-a".to_string()),
         sender_id: None,
         chat_type: None,
+        conversation_id: Some("feishu:tenant-a:group:chat_team_001".to_string()),
+        base_conversation_id: Some("feishu:tenant-a:group:chat_team_001".to_string()),
+        parent_conversation_candidates: Vec::new(),
+        conversation_scope: Some("peer".to_string()),
     };
 
-    let sessions = ensure_employee_sessions_for_event_with_pool(&pool, &event)
+    let sessions = ensure_agent_sessions_for_event_with_pool(&pool, &event)
         .await
-        .map_err(|error| anyhow!("ensure employee sessions: {error}"))?;
+        .map_err(|error| anyhow!("ensure agent sessions: {error}"))?;
 
-    if sessions.len() != 1
-        || sessions[0].employee_id != taizi_id
-        || sessions[0].employee_id == main_id
-    {
+    if sessions.len() != 1 || sessions[0].agent_id != "taizi" || sessions[0].agent_id == "main" {
         return Err(anyhow!("team entry binding did not prefer entry employee"));
     }
 
