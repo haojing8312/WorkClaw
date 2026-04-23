@@ -57,7 +57,7 @@ async fn employee_config_and_im_session_mapping_work() {
     .await
     .expect("seed model config");
 
-    let employee_id = upsert_agent_employee_with_pool(
+    let employee_db_id = upsert_agent_employee_with_pool(
         &pool,
         UpsertAgentEmployeeInput {
             id: None,
@@ -100,7 +100,8 @@ async fn employee_config_and_im_session_mapping_work() {
         .await
         .expect("ensure agent sessions");
     assert_eq!(sessions.len(), 1);
-    assert_eq!(sessions[0].agent_id, employee_id);
+    assert_eq!(employees[0].id, employee_db_id);
+    assert_eq!(sessions[0].agent_id, "project_manager");
 
     let (skill_id, work_dir, permission_mode): (String, String, String) =
         sqlx::query_as("SELECT skill_id, work_dir, permission_mode FROM sessions WHERE id = ?")
@@ -573,7 +574,7 @@ async fn wecom_event_prefers_wecom_scoped_employee_and_creates_session() {
         .await
         .expect("ensure wecom sessions");
     assert_eq!(sessions.len(), 1);
-    assert_eq!(sessions[0].employee_id, wecom_employee_id);
+    assert_eq!(sessions[0].employee_id, "wecom_sales");
 
     let (work_dir,): (String,) = sqlx::query_as("SELECT work_dir FROM sessions WHERE id = ?")
         .bind(&sessions[0].session_id)
@@ -772,8 +773,8 @@ async fn ensure_employee_sessions_for_event_prefers_team_entry_employee_when_bin
         .expect("ensure agent sessions");
 
     assert_eq!(sessions.len(), 1);
-    assert_eq!(sessions[0].agent_id, taizi_id);
-    assert_ne!(sessions[0].agent_id, main_id);
+    assert_eq!(sessions[0].agent_id, "taizi");
+    assert_ne!(sessions[0].agent_id, "main");
 
     let (session_employee_id,): (String,) =
         sqlx::query_as("SELECT employee_id FROM sessions WHERE id = ?")
