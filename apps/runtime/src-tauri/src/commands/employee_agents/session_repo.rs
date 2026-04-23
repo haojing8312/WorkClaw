@@ -101,11 +101,7 @@ async fn authoritative_conversation_sessions_exist_for_thread(
     let count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*)
          FROM im_conversation_sessions
-         WHERE thread_id = ? AND employee_id = ?
-           AND (
-                TRIM(COALESCE(channel, '')) <> ''
-                OR TRIM(COALESCE(conversation_id, '')) <> TRIM(COALESCE(thread_id, ''))
-           )",
+         WHERE thread_id = ? AND employee_id = ?",
     )
     .bind(thread_id)
     .bind(employee_db_id)

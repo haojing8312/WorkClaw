@@ -735,6 +735,179 @@ async fn conversation_rows_beat_blank_legacy_thread_rows_on_same_thread() {
 }
 
 #[tokio::test]
+async fn migrated_blank_channel_same_id_conversation_rows_still_block_legacy_thread_fallback() {
+    let (pool, _tmp) = helpers::setup_test_db().await;
+    helpers::seed_default_model_config(&pool).await;
+
+    let employee_db_id = upsert_agent_employee_with_pool(
+        &pool,
+        UpsertAgentEmployeeInput {
+            id: None,
+            employee_id: "main".to_string(),
+            name: "主员工".to_string(),
+            role_id: "main".to_string(),
+            persona: "".to_string(),
+            feishu_open_id: "".to_string(),
+            feishu_app_id: "".to_string(),
+            feishu_app_secret: "".to_string(),
+            primary_skill_id: "builtin-general".to_string(),
+            default_work_dir: "".to_string(),
+            openclaw_agent_id: "main".to_string(),
+            routing_priority: 100,
+            enabled_scopes: vec!["feishu".to_string()],
+            enabled: true,
+            is_default: true,
+            skill_ids: vec![],
+        },
+    )
+    .await
+    .expect("upsert employee");
+
+    for session_id in [
+        "legacy-session",
+        "migrated-conversation-session",
+        "new-conversation-session",
+    ] {
+        sqlx::query(
+            "INSERT INTO sessions (
+                id, skill_id, title, created_at, model_id, permission_mode, work_dir, employee_id, session_mode, team_id
+             )
+             VALUES (?, 'builtin-general', ?, '2026-04-22T00:00:00Z', 'm1', 'standard', '', 'main', 'general', '')",
+        )
+        .bind(session_id)
+        .bind(format!("session {session_id}"))
+        .execute(&pool)
+        .await
+        .expect("seed session");
+    }
+
+    sqlx::query(
+        "INSERT INTO im_thread_sessions (
+            thread_id,
+            employee_id,
+            session_id,
+            route_session_key,
+            created_at,
+            updated_at,
+            channel,
+            account_id,
+            conversation_id,
+            base_conversation_id,
+            parent_conversation_candidates_json,
+            scope,
+            peer_kind,
+            peer_id,
+            topic_id,
+            sender_id
+         )
+         VALUES (
+            'chat-migrated',
+            ?,
+            'legacy-session',
+            '',
+            '2026-04-22T00:00:00Z',
+            '2026-04-22T00:00:01Z',
+            '',
+            '',
+            '',
+            '',
+            '[]',
+            '',
+            '',
+            '',
+            '',
+            ''
+         )",
+    )
+    .bind(&employee_db_id)
+    .execute(&pool)
+    .await
+    .expect("seed legacy thread row");
+
+    sqlx::query(
+        "INSERT INTO im_conversation_sessions (
+            conversation_id,
+            employee_id,
+            thread_id,
+            session_id,
+            route_session_key,
+            created_at,
+            updated_at,
+            channel,
+            account_id,
+            base_conversation_id,
+            parent_conversation_candidates_json,
+            scope,
+            peer_kind,
+            peer_id,
+            topic_id,
+            sender_id
+         )
+         VALUES (
+            'chat-migrated',
+            ?,
+            'chat-migrated',
+            'migrated-conversation-session',
+            '',
+            '2026-04-22T00:00:00Z',
+            '2026-04-22T00:00:01Z',
+            '',
+            '',
+            'chat-migrated',
+            '[]',
+            '',
+            '',
+            'chat-migrated',
+            '',
+            ''
+         )",
+    )
+    .bind(&employee_db_id)
+    .execute(&pool)
+    .await
+    .expect("seed migrated conversation row");
+
+    let ensured = ensure_employee_sessions_for_event_with_pool(
+        &pool,
+        &ImEvent {
+            channel: "feishu".to_string(),
+            event_type: ImEventType::MessageCreated,
+            thread_id: "chat-migrated".to_string(),
+            event_id: Some("evt-migrated".to_string()),
+            message_id: Some("msg-migrated".to_string()),
+            text: Some("migrated blank channel row".to_string()),
+            role_id: None,
+            account_id: None,
+            tenant_id: Some("tenant-a".to_string()),
+            sender_id: None,
+            chat_type: Some("group".to_string()),
+            conversation_id: Some("feishu:tenant-a:group:chat-migrated:topic:om_root_2".to_string()),
+            base_conversation_id: Some("chat-migrated".to_string()),
+            parent_conversation_candidates: vec!["chat-migrated".to_string()],
+            conversation_scope: Some("topic".to_string()),
+        },
+    )
+    .await
+    .expect("ensure migrated conversation session");
+
+    assert_eq!(ensured.len(), 1);
+    assert!(ensured[0].created);
+    assert_ne!(ensured[0].session_id, "legacy-session");
+    assert_ne!(ensured[0].session_id, "migrated-conversation-session");
+
+    let (count,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*)
+         FROM im_conversation_sessions
+         WHERE thread_id = 'chat-migrated' AND employee_id = ?",
+    )
+    .bind(&employee_db_id)
+    .fetch_one(&pool)
+    .await
+    .expect("count migrated thread conversation mappings");
+    assert_eq!(count, 2);
+}
+
+#[tokio::test]
 async fn legacy_thread_only_db_gains_conversation_binding_tables() {
     let (pool, _tmp) = helpers::setup_legacy_thread_only_db().await;
 
