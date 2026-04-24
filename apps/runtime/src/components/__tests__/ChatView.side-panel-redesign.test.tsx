@@ -731,6 +731,31 @@ describe("ChatView side panel redesign", () => {
     expect(screen.queryByText("huge.txt")).not.toBeInTheDocument();
   });
 
+  test("rejects image batches that exceed the total payload budget", async () => {
+    renderEmptyChat();
+
+    const fileInput = document.getElementById("file-upload") as HTMLInputElement;
+    const imageFiles = ["first.png", "second.png", "third.png"].map((name) => {
+      const file = new File(["image-bytes"], name, { type: "image/png" });
+      Object.defineProperty(file, "size", {
+        configurable: true,
+        value: 4 * 1024 * 1024,
+      });
+      return file;
+    });
+
+    fireEvent.change(fileInput, {
+      target: {
+        files: imageFiles,
+      },
+    });
+
+    expect(await screen.findByText("图片附件总大小超过 10MB 限制")).toBeInTheDocument();
+    expect(screen.getByText("first.png")).toBeInTheDocument();
+    expect(screen.getByText("second.png")).toBeInTheDocument();
+    expect(screen.queryByText("third.png")).not.toBeInTheDocument();
+  });
+
   test("sends text plus mixed attachment parts in user order", async () => {
     renderEmptyChat();
 
