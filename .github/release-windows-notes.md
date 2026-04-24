@@ -1,36 +1,32 @@
-## WorkClaw Windows Release
+## BifClaw Windows Release
 
-- Release scope: changes from `v0.5.10` to the current `v0.6.0` tag target.
+- Release scope: changes from `v0.6.0` to the current `v0.6.1` tag target.
 
 ## Highlights
 
 - 中文:
-  - 新增统一附件平台，聊天场景下的附件处理与扩展能力更完整。
-  - 抽取共享 `im_host` 运行时，统一了飞书与企业微信消息收发相关的主机能力与回复链路。
-  - 对齐渠道注册表与会话启动流程，设置页中的 IM 渠道配置与运行时行为保持一致。
-  - 修复 Windows 桌面发布链路中的关键构建问题，恢复主分支本地打包与安装包生成能力。
-  - 补强 IM host 回归验证与发布校验，提升桌面版本发布稳定性。
+  - 修复 IM 长对话下的会话绑定与复用问题，减少飞书和企业微信场景里的串会话与答非所问。
+  - 补强 Feishu 和 WeCom 的 conversation-aware routing，让路由、回复和会话恢复链路更稳定。
+  - 新增 WeCom topic 归一化与入站样本清洗工具，方便继续做渠道回归和问题定位。
+  - 改进本地技能命令别名、聊天流式表现和部分模型错误处理，提升日常桌面使用稳定性。
+  - 本次本地 Windows 打包产物使用 `BifClaw` 品牌名称。
 
 - English:
-  - Added a unified attachment platform to make chat attachment handling and extension flows more complete.
-  - Extracted a shared `im_host` runtime to align the host capabilities and reply flow used by Feishu and WeCom messaging.
-  - Aligned the channel registry with session launch flows so IM channel settings now match runtime behavior more consistently.
-  - Fixed the key Windows desktop release build issues and restored local packaging and installer generation on `main`.
-  - Strengthened IM host regressions and release verification to improve desktop release stability.
+  - Fixed IM session binding and reuse issues in long conversations to reduce cross-thread context mix-ups in Feishu and WeCom flows.
+  - Strengthened conversation-aware routing across Feishu and WeCom so routing, replies, and session recovery stay more stable.
+  - Added WeCom topic normalization and inbound sample sanitizing tooling to support ongoing channel regressions and troubleshooting.
+  - Improved local skill command aliases, chat streaming behavior, and parts of model error handling for day-to-day desktop stability.
+  - This local Windows package is branded as `BifClaw`.
 
 ## Notable Changes
 
 - Messaging and channel alignment:
-  - Unified the shared IM host runtime used by Feishu and WeCom flows.
-  - Brought channel registry and session launch behavior onto the same runtime contract.
-
-- Attachment platform:
-  - Shipped the unified attachment platform for chat workflows.
-  - Reduced drift between attachment handling branches and follow-up release verification.
+  - Completed the IM conversation identity cutover for Feishu and WeCom routing paths.
+  - Reduced incorrect session reuse in long-running chat threads.
 
 - Desktop and release hardening:
-  - Restored frontend build compatibility and desktop packaging on `main`.
-  - Added stronger IM host regression coverage for the Windows release path.
+  - Added stronger IM host, employee-agent, and conversation-mapping regression coverage.
+  - Produced the local desktop package with the `BifClaw` brand assets.
 
 - Recommended download: `*-setup.exe` for direct install.
 - Enterprise deployment: `*.msi` for IT-managed installation and manual upgrades.
@@ -42,7 +38,7 @@
 
 ## Verification Checklist
 
-- Frontend build and Windows desktop packaging were verified for the `v0.6.0` release target.
-- Release version files and release notes were validated against the `v0.6.0` tag target.
+- Frontend build and Windows desktop packaging were verified for the `v0.6.1` release target.
+- Release version files and release notes were validated against the `v0.6.1` tag target.
 - Local Windows packaging is re-run as part of this release flow.
 - Release tag matches desktop app version.

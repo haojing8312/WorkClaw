@@ -100,15 +100,15 @@ test("apply-brand generates the bifclaw frontend and Tauri outputs", () => {
   assert.ok(existsSync(tauriConfigOutputPath), "Expected tauri.conf.json to be written");
   assert.ok(existsSync(tauriIconOutputPath), "Expected Tauri icon output to be written");
   assert.ok(existsSync(rustBrandingOutputPath), "Expected Rust branding output to be written");
-  assert.match(brandingOutput, /"productName": "bifclaw"/);
+  assert.match(brandingOutput, /"productName": "BifClaw"/);
   assert.match(brandingOutput, /"localStoragePrefix": "bifclaw"/);
   assert.match(rustBrandingOutput, /pub const BRAND_KEY: &str = "bifclaw";/);
   assert.match(rustBrandingOutput, /pub const BUNDLE_IDENTIFIER: &str = "dev\.bifclaw\.runtime";/);
   assert.match(rustBrandingOutput, /pub const DEFAULT_RUNTIME_ROOT_DIR_NAME: &str = "\.bifclaw";/);
-  assert.equal(tauriConfig.productName, "bifclaw");
+  assert.equal(tauriConfig.productName, "BifClaw");
   assert.equal(tauriConfig.identifier, "dev.bifclaw.runtime");
   assert.equal(tauriConfig.version, runtimePackage.version);
-  assert.equal(tauriConfig.app.windows[0].title, "bifclaw");
+  assert.equal(tauriConfig.app.windows[0].title, "BifClaw");
   assert.equal(tauriConfig.bundle.windows.nsis.headerImage, "icons/installer/nsis-header.bmp");
 });
 
@@ -133,8 +133,8 @@ test("apply-brand CLI honors WORKCLAW_BRAND from the environment", () => {
 
   const brandingOutput = readFileSync(brandingOutputPath, "utf8");
   const tauriConfig = JSON.parse(readFileSync(tauriConfigOutputPath, "utf8"));
-  assert.match(brandingOutput, /"productName": "bifclaw"/);
-  assert.equal(tauriConfig.productName, "bifclaw");
+  assert.match(brandingOutput, /"productName": "BifClaw"/);
+  assert.equal(tauriConfig.productName, "BifClaw");
   assert.equal(tauriConfig.identifier, "dev.bifclaw.runtime");
 });
 
@@ -159,7 +159,7 @@ test("apply-brand CLI falls back to branding/brand-selection.json when no overri
   assert.match(result.stdout, /Applied brand "bifclaw"/);
 
   const tauriConfig = JSON.parse(readFileSync(tauriConfigOutputPath, "utf8"));
-  assert.equal(tauriConfig.productName, "bifclaw");
+  assert.equal(tauriConfig.productName, "BifClaw");
 });
 
 test("apply-brand CLI --brand overrides branding/brand-selection.json", () => {
@@ -183,5 +183,5 @@ test("apply-brand CLI --brand overrides branding/brand-selection.json", () => {
   assert.match(result.stdout, /Applied brand "bifclaw"/);
 
   const tauriConfig = JSON.parse(readFileSync(tauriConfigOutputPath, "utf8"));
-  assert.equal(tauriConfig.productName, "bifclaw");
+  assert.equal(tauriConfig.productName, "BifClaw");
 });

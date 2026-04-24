@@ -1,10 +1,10 @@
 {
   "brandKey": "bifclaw",
-  "productName": "bifclaw",
-  "desktopTitle": "bifclaw",
+  "productName": "BifClaw",
+  "desktopTitle": "BifClaw",
   "bundleIdentifier": "dev.bifclaw.runtime",
-  "publisher": "bifclaw",
-  "exeName": "bifclaw",
+  "publisher": "BifClaw",
+  "exeName": "BifClaw",
   "localStoragePrefix": "bifclaw",
   "protocolScheme": "bifclaw",
   "assetsDir": "./assets"

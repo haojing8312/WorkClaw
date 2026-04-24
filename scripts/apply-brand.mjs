@@ -181,8 +181,13 @@ function runPnpmOrThrow(args, cwd) {
   runOrThrow(runner.command, [...runner.args, ...args], cwd);
 }
 
+function toCliPath(filePath) {
+  return process.platform === "win32" ? filePath.replaceAll("\\", "/") : filePath;
+}
+
 function generateTauriIcons({ projectRoot, sourceIconPath, outputDir }) {
-  const tempOutputDir = mkdtempSync(path.join(os.tmpdir(), "workclaw-brand-icons-"));
+  const tempWorkspaceDir = mkdtempSync(path.join(os.tmpdir(), "workclaw-brand-icons-"));
+  const tempOutputDir = path.join(tempWorkspaceDir, "icons");
 
   try {
     runPnpmOrThrow(
@@ -191,15 +196,15 @@ function generateTauriIcons({ projectRoot, sourceIconPath, outputDir }) {
         "apps/runtime",
         "tauri",
         "icon",
-        sourceIconPath,
+        toCliPath(sourceIconPath),
         "--output",
-        tempOutputDir,
+        toCliPath(tempOutputDir),
       ],
       projectRoot,
     );
     copyDirectoryContents(tempOutputDir, outputDir);
   } finally {
-    rmSync(tempOutputDir, { recursive: true, force: true });
+    rmSync(tempWorkspaceDir, { recursive: true, force: true });
   }
 }
 

@@ -13,14 +13,14 @@ export type BrandingConfig = {
 };
 
 export const BRANDING: BrandingConfig = {
-  "brandKey": "workclaw",
-  "productName": "WorkClaw",
-  "desktopTitle": "WorkClaw",
-  "bundleIdentifier": "dev.workclaw.runtime",
-  "publisher": "WorkClaw",
-  "exeName": "WorkClaw",
-  "localStoragePrefix": "workclaw",
-  "protocolScheme": "workclaw",
+  "brandKey": "bifclaw",
+  "productName": "BifClaw",
+  "desktopTitle": "BifClaw",
+  "bundleIdentifier": "dev.bifclaw.runtime",
+  "publisher": "BifClaw",
+  "exeName": "BifClaw",
+  "localStoragePrefix": "bifclaw",
+  "protocolScheme": "bifclaw",
   "assetsDir": "./assets"
 } as const;
 
