@@ -68,6 +68,11 @@ test("tauri hooks use the local wrapper instead of invoking pnpm directly", () =
 
   const tauriHookScript = readFileSync(tauriHookScriptPath, "utf8");
   assert.match(tauriHookScript, /resolvePnpmRunner/, "Expected local Tauri hook wrapper to resolve pnpm robustly");
+  assert.match(
+    tauriHookScript,
+    /endsWith\("\.cmd"\)/,
+    "Expected local Tauri hook wrapper to invoke Windows pnpm.cmd through a shell",
+  );
 });
 
 test("runtime E2E web server uses the local wrapper instead of invoking pnpm directly", () => {

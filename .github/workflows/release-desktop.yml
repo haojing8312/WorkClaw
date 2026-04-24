@@ -18,13 +18,13 @@ jobs:
         include:
           - name: windows-x64
             platform: windows-latest
-            tauri_args: --bundles nsis
+            tauri_args: --bundles nsis -- --bin runtime
           - name: linux-x64-deb
             platform: ubuntu-22.04
-            tauri_args: --bundles deb
+            tauri_args: --bundles deb -- --bin runtime
           - name: linux-arm64-deb
             platform: ubuntu-22.04-arm
-            tauri_args: --bundles deb
+            tauri_args: --bundles deb -- --bin runtime
 
     steps:
       - name: Checkout

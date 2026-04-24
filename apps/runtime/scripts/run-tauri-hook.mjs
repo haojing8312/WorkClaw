@@ -33,6 +33,7 @@ function runOrThrow(command, args, { cwd, env }) {
       env,
       stdio: "inherit",
       windowsHide: false,
+      shell: process.platform === "win32" && command.toLowerCase().endsWith(".cmd"),
     },
   );
 

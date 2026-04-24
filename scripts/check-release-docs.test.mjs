@@ -65,4 +65,5 @@ test("release workflow builds Windows and Linux deb packages", () => {
   assert.match(workflow, /ubuntu-22\.04-arm/, "Expected workflow to build Linux arm64 packages");
   assert.match(workflow, /--bundles nsis/, "Expected workflow to request Windows NSIS bundles");
   assert.match(workflow, /--bundles deb/, "Expected workflow to request Linux deb bundles");
+  assert.match(workflow, /--bin runtime/, "Expected workflow to package only the runtime binary");
 });
