@@ -11,6 +11,8 @@ export interface WecomInboundEvent {
   event_type: string;
   conversation_type: "direct" | "group";
   conversation_id: string;
+  topic_id?: string | null;
+  root_id?: string | null;
   message_id: string;
   sender_id: string;
   sender_name: string | null;

@@ -10,7 +10,8 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "test": "node scripts/run-tests.mjs"
+    "test": "node scripts/run-tests.mjs",
+    "sanitize:wecom-captures": "node scripts/sanitize-wecom-captures.mjs"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.0",

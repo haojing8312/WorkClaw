@@ -10,6 +10,7 @@ import type {
 } from "../types.js";
 import { classifyConnectorIssue } from "../types.js";
 import { normalizeWecomEvent } from "./normalize.js";
+import { recordWecomInboundSample } from "./recording.js";
 import type { WecomAdapterHealthSnapshot, WecomInboundEvent } from "./types.js";
 
 interface WecomInstanceState {
@@ -184,9 +185,19 @@ export class WecomChannelAdapter implements ChannelAdapter {
 
   async drainEvents(instanceId: string, limit: number) {
     const instance = this.getInstance(instanceId);
-    return this.runtime
-      .drain(instance.connectorId, limit)
-      .map((event) => normalizeWecomEvent(event));
+    const inboundEvents = this.runtime.drain(instance.connectorId, limit);
+    const normalizedEvents = await Promise.all(
+      inboundEvents.map(async (event) => {
+        const normalizedEvent = normalizeWecomEvent(event);
+        try {
+          await recordWecomInboundSample(event, normalizedEvent);
+        } catch {
+          // Local sample capture is best-effort and must not break message delivery.
+        }
+        return normalizedEvent;
+      }),
+    );
+    return normalizedEvents;
   }
 
   async sendMessage(instanceId: string, req: SendMessageRequest): Promise<SendMessageResult> {

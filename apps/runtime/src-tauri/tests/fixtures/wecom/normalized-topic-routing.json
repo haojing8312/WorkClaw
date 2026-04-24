@@ -1,0 +1,19 @@
+{
+  "channel": "wecom",
+  "workspace_id": "corp-1",
+  "account_id": "agent-1",
+  "thread_id": "room-1",
+  "message_id": "msg-3",
+  "sender_id": "user-1",
+  "text": "hello topic routing",
+  "routing_context": {
+    "peer": {
+      "kind": "group",
+      "id": "room-1"
+    },
+    "topic": {
+      "kind": "topic",
+      "id": "topic-from-routing"
+    }
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "connector_id": "connector-wecom-1",
+  "corp_id": "corp-123",
+  "agent_id": "1000002",
+  "event_type": "message.receive",
+  "conversation_type": "group",
+  "conversation_id": "room-001",
+  "topic_id": "topic-42",
+  "root_id": "root-42",
+  "message_id": "msg-001",
+  "sender_id": "zhangsan",
+  "sender_name": "张三",
+  "text": "请联系项目经理",
+  "mentions": [
+    {
+      "type": "user",
+      "id": "project_manager",
+      "name": "项目经理"
+    }
+  ],
+  "occurred_at": "2026-03-10T00:00:05Z",
+  "reply_target": "room-001",
+  "raw_payload": {
+    "msgtype": "text",
+    "topic_id": "topic-42",
+    "root_id": "root-42"
+  }
+}

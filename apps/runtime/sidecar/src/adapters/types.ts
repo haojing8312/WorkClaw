@@ -39,6 +39,7 @@ export interface IdentityLink {
 
 export interface RoutingContext {
   peer: RoutingContextPeer;
+  topic?: RoutingContextPeer | null;
   parent_peer: RoutingContextPeer | null;
   guild_id: string | null;
   team_id: string | null;
@@ -57,6 +58,9 @@ export interface NormalizedImEvent {
   workspace_id: string;
   account_id: string;
   thread_id: string;
+  chat_type?: string;
+  topic_id?: string | null;
+  root_id?: string | null;
   message_id: string;
   sender_id: string;
   sender_name: string | null;
