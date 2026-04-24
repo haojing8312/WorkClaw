@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 
 use super::chat::AttachmentInput;
 use super::chat_attachment_policy::{
-    attachment_is_pdf, attachment_is_text_document, attachment_size_limit_bytes,
-    AttachmentCapabilityPolicy, AttachmentPolicy,
+    AttachmentCapabilityPolicy, AttachmentPolicy, attachment_is_pdf, attachment_is_text_document,
+    attachment_size_limit_bytes,
 };
 
 pub fn validate_attachment_input(
@@ -66,6 +66,7 @@ pub fn validate_attachment_inputs(
         *counts.entry(attachment.kind.as_str()).or_insert(0) += 1;
         validate_attachment_input(policy, attachment)?;
     }
+    validate_total_image_payload_size(policy, attachments)?;
 
     validate_kind_count(
         "image",
@@ -79,6 +80,7 @@ pub fn validate_attachment_inputs(
             enabled: policy.document.enabled,
             max_attachments: policy.document.max_attachments,
             max_bytes: policy.document.max_text_bytes,
+            max_total_bytes: policy.document.max_text_bytes * policy.document.max_attachments,
             allow_sources: policy.document.allow_sources,
             fallback_behavior: policy.document.fallback_behavior,
         },
@@ -94,6 +96,29 @@ pub fn validate_attachment_inputs(
         &policy.video,
     )?;
 
+    Ok(())
+}
+
+fn validate_total_image_payload_size(
+    policy: &AttachmentPolicy,
+    attachments: &[AttachmentInput],
+) -> Result<(), String> {
+    let mut total_bytes = 0usize;
+    for attachment in attachments
+        .iter()
+        .filter(|attachment| attachment.kind == "image")
+    {
+        let Some(size_bytes) = resolve_effective_size_bytes(attachment)? else {
+            continue;
+        };
+        total_bytes = total_bytes.saturating_add(size_bytes);
+        if total_bytes > policy.image.max_total_bytes {
+            return Err(format!(
+                "图片附件总大小 {total_bytes} 超过 {} 字节限制",
+                policy.image.max_total_bytes
+            ));
+        }
+    }
     Ok(())
 }
 

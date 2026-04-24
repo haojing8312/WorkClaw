@@ -205,6 +205,22 @@ function getKindLimit(policy: AttachmentPolicy, kind: AttachmentDraftKind): numb
   return policy.kinds[kind]?.maxCount;
 }
 
+function getKindTotalSizeLimit(policy: AttachmentPolicy, kind: AttachmentDraftKind): number | undefined {
+  return policy.kinds[kind]?.maxTotalSizeBytes;
+}
+
+function formatMegabyteLimit(bytes: number): string {
+  const megabytes = bytes / (1024 * 1024);
+  return Number.isInteger(megabytes) ? `${megabytes}MB` : `${megabytes.toFixed(1)}MB`;
+}
+
+function formatKindTotalSizeLabel(kind: AttachmentDraftKind): string {
+  if (kind === "image") {
+    return "图片附件";
+  }
+  return `${kind} 附件`;
+}
+
 function isBrowserFileAttachmentDraftInput(input: AttachmentDraftInput): input is BrowserFileAttachmentDraftInput {
   return input.sourceType === "browser_file" && "file" in input;
 }
@@ -216,6 +232,7 @@ export function normalizeBrowserFileAttachmentDrafts(
   const accepted: AttachmentDraft[] = [];
   const rejected: AttachmentDraftRejection[] = [];
   const kindCounts = new Map<AttachmentDraftKind, number>();
+  const kindTotalSizes = new Map<AttachmentDraftKind, number>();
 
   for (const input of inputs) {
     if (!isBrowserFileAttachmentDraftInput(input)) {
@@ -266,6 +283,20 @@ export function normalizeBrowserFileAttachmentDrafts(
       continue;
     }
 
+    const kindTotalSizeLimit = getKindTotalSizeLimit(policy, matchedKind.kind);
+    const kindTotalSize = kindTotalSizes.get(matchedKind.kind) ?? 0;
+    if (kindTotalSizeLimit !== undefined && kindTotalSize + input.file.size > kindTotalSizeLimit) {
+      rejected.push(
+        createRejection(
+          input,
+          "total_size_exceeded",
+          `${formatKindTotalSizeLabel(matchedKind.kind)}总大小超过 ${formatMegabyteLimit(kindTotalSizeLimit)} 限制`,
+          matchedKind.kind,
+        ),
+      );
+      continue;
+    }
+
     accepted.push({
       sourceType: input.sourceType,
       kind: matchedKind.kind,
@@ -274,6 +305,7 @@ export function normalizeBrowserFileAttachmentDrafts(
       size: input.file.size,
     });
     kindCounts.set(matchedKind.kind, kindCount + 1);
+    kindTotalSizes.set(matchedKind.kind, kindTotalSize + input.file.size);
   }
 
   return { accepted, rejected };

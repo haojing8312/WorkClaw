@@ -2,7 +2,7 @@ mod helpers;
 
 use base64::Engine;
 use runtime_lib::commands::chat::{
-    normalize_send_message_parts_with_pool, SendMessagePart, SendMessageRequest,
+    SendMessagePart, SendMessageRequest, normalize_send_message_parts_with_pool,
 };
 use runtime_lib::commands::chat_attachment_policy::default_attachment_policy;
 use runtime_lib::commands::chat_attachment_resolution::resolve_attachment_input;
@@ -443,6 +443,32 @@ fn attachment_parts_normalize_text_documents_to_legacy_file_text_parts() {
 }
 
 #[test]
+fn attachment_parts_truncate_large_text_documents() {
+    let oversized_text = "A".repeat(200_001);
+    let parts =
+        runtime_lib::commands::chat::normalize_send_message_parts(&[SendMessagePart::Attachment {
+            attachment: runtime_lib::commands::chat::AttachmentInput {
+                id: "att-doc-large-1".to_string(),
+                kind: "document".to_string(),
+                source_type: "browser_file".to_string(),
+                name: "huge.md".to_string(),
+                declared_mime_type: Some("text/markdown".to_string()),
+                size_bytes: Some(oversized_text.len()),
+                source_payload: Some(oversized_text),
+                source_uri: None,
+                extracted_text: None,
+                truncated: Some(false),
+            },
+        }])
+        .expect("normalize oversized text attachment");
+
+    assert_eq!(parts[0]["type"].as_str(), Some("file_text"));
+    let text = parts[0]["text"].as_str().expect("text");
+    assert_eq!(text.len(), 200_000);
+    assert_eq!(parts[0]["truncated"].as_bool(), Some(true));
+}
+
+#[test]
 fn attachment_parts_normalize_pdf_documents_to_legacy_pdf_parts() {
     let pdf_data =
         base64::engine::general_purpose::STANDARD.encode(build_minimal_pdf_with_text("Hello PDF"));
@@ -465,10 +491,12 @@ fn attachment_parts_normalize_pdf_documents_to_legacy_pdf_parts() {
 
     assert_eq!(parts[0]["type"].as_str(), Some("pdf_file"));
     assert_eq!(parts[0]["name"].as_str(), Some("brief.pdf"));
-    assert!(parts[0]["extractedText"]
-        .as_str()
-        .expect("extracted text")
-        .contains("Hello PDF"));
+    assert!(
+        parts[0]["extractedText"]
+            .as_str()
+            .expect("extracted text")
+            .contains("Hello PDF")
+    );
 }
 
 #[test]
@@ -525,11 +553,13 @@ fn attachment_parts_preserve_binary_document_inputs_as_unified_attachment_parts(
         parts[0]["attachment"]["summary"].as_str(),
         Some("EXTRACTION_REQUIRED")
     );
-    assert!(parts[0]["attachment"]["warnings"]
-        .as_array()
-        .expect("warnings")
-        .iter()
-        .any(|warning| warning.as_str() == Some("document_extraction_pending")));
+    assert!(
+        parts[0]["attachment"]["warnings"]
+            .as_array()
+            .expect("warnings")
+            .iter()
+            .any(|warning| warning.as_str() == Some("document_extraction_pending"))
+    );
 }
 
 #[test]
@@ -557,10 +587,12 @@ fn attachment_parts_extract_docx_documents_to_text_parts() {
         .expect("normalize docx attachment");
 
     assert_eq!(parts[0]["type"].as_str(), Some("file_text"));
-    assert!(parts[0]["text"]
-        .as_str()
-        .expect("text")
-        .contains("WorkClaw 文档内容"));
+    assert!(
+        parts[0]["text"]
+            .as_str()
+            .expect("text")
+            .contains("WorkClaw 文档内容")
+    );
 }
 
 #[test]
@@ -740,6 +772,36 @@ fn validation_rejects_oversized_image_attachment_without_declared_size() {
 }
 
 #[test]
+fn validation_rejects_image_attachments_that_exceed_total_payload_budget() {
+    let payload = format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(vec![0_u8; 4 * 1024 * 1024])
+    );
+    let parts = (1..=3)
+        .map(|index| SendMessagePart::Attachment {
+            attachment: runtime_lib::commands::chat::AttachmentInput {
+                id: format!("att-image-total-{index}"),
+                kind: "image".to_string(),
+                source_type: "browser_file".to_string(),
+                name: format!("large-{index}.png"),
+                declared_mime_type: Some("image/png".to_string()),
+                size_bytes: Some(4 * 1024 * 1024),
+                source_payload: Some(payload.clone()),
+                source_uri: None,
+                extracted_text: None,
+                truncated: None,
+            },
+        })
+        .collect::<Vec<_>>();
+
+    let error = runtime_lib::commands::chat::normalize_send_message_parts(&parts)
+        .expect_err("image batch should respect the total payload budget");
+
+    assert!(error.contains("图片附件总大小"));
+    assert!(error.contains("10485760"));
+}
+
+#[test]
 fn validation_rejects_oversized_document_attachment() {
     let attachment = build_attachment_input(
         "document",
@@ -889,10 +951,12 @@ fn resolution_preserves_attachment_kind_and_mime_metadata_for_supported_inputs()
     assert_eq!(audio.kind, "audio");
     assert_eq!(audio.resolved_mime_type, "audio/mpeg");
     assert_eq!(audio.transcript.as_deref(), Some("TRANSCRIPTION_REQUIRED"));
-    assert!(audio
-        .warnings
-        .iter()
-        .any(|warning| warning == "transcription_pending"));
+    assert!(
+        audio
+            .warnings
+            .iter()
+            .any(|warning| warning == "transcription_pending")
+    );
 
     let video = resolve_attachment_input(
         &default_attachment_policy(),
@@ -910,10 +974,12 @@ fn resolution_preserves_attachment_kind_and_mime_metadata_for_supported_inputs()
     assert_eq!(video.kind, "video");
     assert_eq!(video.resolved_mime_type, "video/mp4");
     assert_eq!(video.summary.as_deref(), Some("SUMMARY_REQUIRED"));
-    assert!(video
-        .warnings
-        .iter()
-        .any(|warning| warning == "summary_pending"));
+    assert!(
+        video
+            .warnings
+            .iter()
+            .any(|warning| warning == "summary_pending")
+    );
 
     let no_audio_video = resolve_attachment_input(
         &default_attachment_policy(),
@@ -935,10 +1001,12 @@ fn resolution_preserves_attachment_kind_and_mime_metadata_for_supported_inputs()
         no_audio_video.summary.as_deref(),
         Some("VIDEO_NO_AUDIO_TRACK")
     );
-    assert!(no_audio_video
-        .warnings
-        .iter()
-        .any(|warning| warning == "video_no_audio_track"));
+    assert!(
+        no_audio_video
+            .warnings
+            .iter()
+            .any(|warning| warning == "video_no_audio_track")
+    );
 
     let binary_document = resolve_attachment_input(
         &default_attachment_policy(),
@@ -958,10 +1026,12 @@ fn resolution_preserves_attachment_kind_and_mime_metadata_for_supported_inputs()
         binary_document.summary.as_deref(),
         Some("EXTRACTION_REQUIRED")
     );
-    assert!(binary_document
-        .warnings
-        .iter()
-        .any(|warning| warning == "document_extraction_pending"));
+    assert!(
+        binary_document
+            .warnings
+            .iter()
+            .any(|warning| warning == "document_extraction_pending")
+    );
 }
 
 #[tokio::test]
@@ -1094,11 +1164,13 @@ async fn async_normalize_send_message_parts_keeps_pending_audio_without_audio_ro
         parts[0]["attachment"]["transcript"].as_str(),
         Some("TRANSCRIPTION_REQUIRED")
     );
-    assert!(parts[0]["attachment"]["warnings"]
-        .as_array()
-        .expect("warnings")
-        .iter()
-        .any(|warning| warning.as_str() == Some("transcription_pending")));
+    assert!(
+        parts[0]["attachment"]["warnings"]
+            .as_array()
+            .expect("warnings")
+            .iter()
+            .any(|warning| warning.as_str() == Some("transcription_pending"))
+    );
 }
 
 #[tokio::test]
@@ -1203,11 +1275,13 @@ async fn async_normalize_send_message_parts_marks_video_without_audio_track_expl
         parts[0]["attachment"]["summary"].as_str(),
         Some("VIDEO_NO_AUDIO_TRACK")
     );
-    assert!(parts[0]["attachment"]["warnings"]
-        .as_array()
-        .expect("warnings")
-        .iter()
-        .any(|warning| warning.as_str() == Some("video_no_audio_track")));
+    assert!(
+        parts[0]["attachment"]["warnings"]
+            .as_array()
+            .expect("warnings")
+            .iter()
+            .any(|warning| warning.as_str() == Some("video_no_audio_track"))
+    );
 }
 
 #[tokio::test]

@@ -116,6 +116,8 @@ function formatAttachmentRejection(rejection: AttachmentDraftRejection): string 
         return `PDF 文件 ${fileName} 超过 ${Math.floor(MAX_PDF_FILE_SIZE / 1024 / 1024)}MB 限制`;
       }
       return `文档文件 ${fileName} 超过 ${Math.floor(MAX_TEXT_FILE_SIZE / 1024 / 1024)}MB 限制`;
+    case "total_size_exceeded":
+      return rejection.message;
     case "unrecognized_file_type":
     case "kind_disabled":
       return `暂不支持附件类型 ${fileName}`;

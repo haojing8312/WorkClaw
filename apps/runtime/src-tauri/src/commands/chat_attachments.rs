@@ -1,8 +1,10 @@
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use regex::Regex;
 use reqwest::Client;
-use runtime_chat_app::{parse_fallback_chain_targets, ChatSettingsRepository, PreparedRouteCandidate};
-use serde_json::{json, Value};
+use runtime_chat_app::{
+    ChatSettingsRepository, PreparedRouteCandidate, parse_fallback_chain_targets,
+};
+use serde_json::{Value, json};
 use std::collections::{BTreeSet, HashMap};
 use std::io::{Cursor, Read};
 use std::path::PathBuf;
@@ -10,21 +12,19 @@ use std::process::Command;
 use zip::ZipArchive;
 
 use crate::agent::runtime::repo::PoolChatSettingsRepository;
-use crate::model_transport::{resolve_model_transport, ModelTransportKind};
+use crate::model_transport::{ModelTransportKind, resolve_model_transport};
 
 use super::chat::{AttachmentInput, SendMessagePart};
 use super::chat_attachment_policy::{
-    attachment_is_text_document, default_attachment_policy,
-    PHASE_ONE_MAX_PDF_EXTRACTED_TEXT_CHARS,
+    PHASE_ONE_MAX_PDF_EXTRACTED_TEXT_CHARS, attachment_is_text_document, default_attachment_policy,
 };
-use super::chat_attachment_resolution::{resolve_attachment_input, ResolvedAttachment};
+use super::chat_attachment_resolution::{ResolvedAttachment, resolve_attachment_input};
 use super::chat_attachment_validation::validate_attachment_inputs;
 
 const VIDEO_NO_AUDIO_TRACK: &str = "VIDEO_NO_AUDIO_TRACK";
 const VIDEO_AUDIO_EXTRACTION_UNAVAILABLE: &str = "VIDEO_AUDIO_EXTRACTION_UNAVAILABLE";
 const VIDEO_AUDIO_EXTRACTION_FAILED: &str = "VIDEO_AUDIO_EXTRACTION_FAILED";
-const VIDEO_VISUAL_SUMMARY_PROMPT: &str =
-    "请基于这些视频关键帧，用简洁中文总结视频里正在发生的事情、主要对象和场景。若信息有限，请明确说明。";
+const VIDEO_VISUAL_SUMMARY_PROMPT: &str = "请基于这些视频关键帧，用简洁中文总结视频里正在发生的事情、主要对象和场景。若信息有限，请明确说明。";
 
 pub(crate) fn normalize_message_parts(parts: &[SendMessagePart]) -> Result<Vec<Value>, String> {
     let policy = default_attachment_policy();
@@ -53,7 +53,8 @@ pub(crate) async fn normalize_message_parts_with_pool(
         .iter()
         .map(|part| match part {
             SendMessagePart::Attachment { attachment } => {
-                let normalized_attachment = prepared_by_id.get(&attachment.id).unwrap_or(attachment);
+                let normalized_attachment =
+                    prepared_by_id.get(&attachment.id).unwrap_or(attachment);
                 normalize_attachment_part(&policy, normalized_attachment)
             }
             _ => normalize_message_part(part, &policy),
@@ -103,7 +104,8 @@ async fn preprocess_attachment_inputs_with_pool(
 async fn resolve_audio_stt_route_candidate(
     pool: &sqlx::SqlitePool,
 ) -> Result<Option<PreparedRouteCandidate>, String> {
-    resolve_capability_route_candidate(pool, "audio_stt", supports_audio_stt_provider_candidate).await
+    resolve_capability_route_candidate(pool, "audio_stt", supports_audio_stt_provider_candidate)
+        .await
 }
 
 async fn resolve_vision_route_candidate(
@@ -201,7 +203,9 @@ async fn preprocess_audio_attachment_with_candidate(
         return Ok(attachment.clone());
     };
 
-    let Some(transcript) = transcribe_audio_attachment_with_candidate(attachment, payload, candidate).await? else {
+    let Some(transcript) =
+        transcribe_audio_attachment_with_candidate(attachment, payload, candidate).await?
+    else {
         return Ok(attachment.clone());
     };
 
@@ -297,7 +301,10 @@ async fn transcribe_audio_attachment_with_candidate(
         return Ok(None);
     }
     if normalized_base_url.eq_ignore_ascii_case("http://mock-audio-stt-error") {
-        return Err(format!("音频附件 {} 转写失败: mock upstream error", attachment.name));
+        return Err(format!(
+            "音频附件 {} 转写失败: mock upstream error",
+            attachment.name
+        ));
     }
 
     let bytes = decode_base64_payload_bytes(payload)
@@ -330,7 +337,10 @@ async fn transcribe_audio_bytes_with_candidate(
         return Ok(None);
     }
     if normalized_base_url.eq_ignore_ascii_case("http://mock-audio-stt-error") {
-        return Err(format!("音频附件 {} 转写失败: mock upstream error", display_name));
+        return Err(format!(
+            "音频附件 {} 转写失败: mock upstream error",
+            display_name
+        ));
     }
 
     let boundary = "workclaw-audio-stt-boundary";
@@ -341,7 +351,10 @@ async fn transcribe_audio_bytes_with_candidate(
         &candidate.model_name,
         bytes,
     );
-    let url = format!("{}/audio/transcriptions", normalized_base_url.trim_end_matches('/'));
+    let url = format!(
+        "{}/audio/transcriptions",
+        normalized_base_url.trim_end_matches('/')
+    );
     let response = Client::builder()
         .timeout(std::time::Duration::from_secs(120))
         .build()
@@ -371,7 +384,12 @@ async fn transcribe_audio_bytes_with_candidate(
 
     parse_audio_transcription_body(&body)
         .map(|transcript| Some(transcript))
-        .ok_or_else(|| format!("音频附件 {} 转写响应缺少 transcript/text 字段", display_name))
+        .ok_or_else(|| {
+            format!(
+                "音频附件 {} 转写响应缺少 transcript/text 字段",
+                display_name
+            )
+        })
 }
 
 fn parse_audio_transcription_body(body: &str) -> Option<String> {
@@ -386,7 +404,8 @@ fn parse_audio_transcription_body(body: &str) -> Option<String> {
             .and_then(Value::as_str)
             .or_else(|| value.get("transcript").and_then(Value::as_str))
             .or_else(|| {
-                value.get("result")
+                value
+                    .get("result")
                     .and_then(|result| result.get("text"))
                     .and_then(Value::as_str)
             })
@@ -558,7 +577,10 @@ async fn request_vision_summary_with_candidate(
         return Ok(None);
     }
     if normalized_base_url.eq_ignore_ascii_case("http://mock-vision-summary-error") {
-        return Err(format!("视频附件 {} 画面摘要失败: mock upstream error", display_name));
+        return Err(format!(
+            "视频附件 {} 画面摘要失败: mock upstream error",
+            display_name
+        ));
     }
 
     let transport = resolve_model_transport(
@@ -715,7 +737,7 @@ fn extract_text_from_openai_like_body(value: &Value) -> Option<String> {
             {
                 match content {
                     Value::String(text) if !text.trim().is_empty() => {
-                        return Some(text.trim().to_string())
+                        return Some(text.trim().to_string());
                     }
                     Value::Array(parts) => {
                         let collected = parts
@@ -754,7 +776,9 @@ fn resolve_ffmpeg_command_from_env_and_candidates(
         }
     }
     ordered.extend(candidates.iter().cloned());
-    ordered.into_iter().find(|candidate| probe_command_available(candidate))
+    ordered
+        .into_iter()
+        .find(|candidate| probe_command_available(candidate))
 }
 
 fn probe_command_available(command: &PathBuf) -> bool {
@@ -791,7 +815,12 @@ fn collect_ffmpeg_command_candidates() -> Vec<PathBuf> {
                     .join("Links")
                     .join("ffmpeg.exe"),
             );
-            candidates.push(base.join("Programs").join("ffmpeg").join("bin").join("ffmpeg.exe"));
+            candidates.push(
+                base.join("Programs")
+                    .join("ffmpeg")
+                    .join("bin")
+                    .join("ffmpeg.exe"),
+            );
         }
         if let Some(user_profile) = std::env::var_os("USERPROFILE") {
             let base = PathBuf::from(user_profile);
@@ -1074,13 +1103,16 @@ fn normalize_resolved_document_attachment(
                 attachment.name
             )
         })?;
+    let (text, text_truncated) =
+        truncate_plain_text_excerpt(text, policy.document.max_extracted_text_chars);
+    let truncated = attachment.truncated || text_truncated;
     Ok(json!({
         "type": "file_text",
         "name": attachment.name,
         "mimeType": attachment.resolved_mime_type,
         "size": attachment.size_bytes.unwrap_or(0),
         "text": text,
-        "truncated": attachment.truncated,
+        "truncated": truncated,
     }))
 }
 
@@ -1095,6 +1127,25 @@ fn truncate_text_excerpt(content: &str, max_chars: usize) -> (String, bool) {
 
     if normalized.is_empty() {
         return ("未提取到可读的 PDF 文本内容。".to_string(), false);
+    }
+
+    let mut iter = normalized.chars();
+    let excerpt: String = iter.by_ref().take(max_chars).collect();
+    let truncated = iter.next().is_some();
+    (excerpt, truncated)
+}
+
+fn truncate_plain_text_excerpt(content: &str, max_chars: usize) -> (String, bool) {
+    let normalized = content
+        .lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string();
+
+    if normalized.is_empty() {
+        return (String::new(), false);
     }
 
     let mut iter = normalized.chars();
@@ -1148,8 +1199,7 @@ fn extract_binary_document_text(
         || extension == "docx"
     {
         Some(extract_docx_text_from_bytes(&bytes)?)
-    } else if normalized_mime
-        == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    } else if normalized_mime == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         || extension == "xlsx"
     {
         Some(extract_xlsx_text_from_bytes(&bytes)?)
@@ -1222,7 +1272,8 @@ fn read_zip_entry_as_string<R: Read + std::io::Seek>(
         .by_name(name)
         .map_err(|err| format!("读取压缩文档内容失败 {name}: {err}"))?;
     let mut text = String::new();
-    entry.read_to_string(&mut text)
+    entry
+        .read_to_string(&mut text)
         .map_err(|err| format!("读取压缩文档文本失败 {name}: {err}"))?;
     Ok(text)
 }
@@ -1241,13 +1292,14 @@ fn extract_xlsx_text_from_bytes(bytes: &[u8]) -> Result<String, String> {
             entry.read_to_string(&mut text).ok().map(|_| text)
         });
 
-    let relation_re =
-        Regex::new(r#"<Relationship[^>]*Id="([^"]+)"[^>]*Target="([^"]+)""#).map_err(|e| e.to_string())?;
-    let sheet_re = Regex::new(r#"<sheet[^>]*name="([^"]+)"[^>]*r:id="([^"]+)""#)
+    let relation_re = Regex::new(r#"<Relationship[^>]*Id="([^"]+)"[^>]*Target="([^"]+)""#)
         .map_err(|e| e.to_string())?;
-    let cell_re =
-        Regex::new(r#"(?s)<c[^>]*r="([^"]+)"[^>]*?(?:t="([^"]+)")?[^>]*>(.*?)</c>"#).map_err(|e| e.to_string())?;
-    let value_re = Regex::new(r#"(?s)<v[^>]*>(.*?)</v>|<t[^>]*>(.*?)</t>"#).map_err(|e| e.to_string())?;
+    let sheet_re =
+        Regex::new(r#"<sheet[^>]*name="([^"]+)"[^>]*r:id="([^"]+)""#).map_err(|e| e.to_string())?;
+    let cell_re = Regex::new(r#"(?s)<c[^>]*r="([^"]+)"[^>]*?(?:t="([^"]+)")?[^>]*>(.*?)</c>"#)
+        .map_err(|e| e.to_string())?;
+    let value_re =
+        Regex::new(r#"(?s)<v[^>]*>(.*?)</v>|<t[^>]*>(.*?)</t>"#).map_err(|e| e.to_string())?;
     let shared_string_re = Regex::new(r#"(?s)<si[^>]*>(.*?)</si>"#).map_err(|e| e.to_string())?;
 
     let mut relationship_targets = HashMap::new();
@@ -1336,7 +1388,9 @@ fn extract_legacy_office_text_from_bytes(bytes: &[u8]) -> Option<String> {
         .filter(|line| {
             let trimmed = line.trim();
             trimmed.chars().count() >= 2
-                && trimmed.chars().any(|ch| ch.is_alphanumeric() || ('\u{4e00}'..='\u{9fff}').contains(&ch))
+                && trimmed
+                    .chars()
+                    .any(|ch| ch.is_alphanumeric() || ('\u{4e00}'..='\u{9fff}').contains(&ch))
         })
         .collect::<Vec<_>>();
 
@@ -1391,7 +1445,10 @@ fn extract_ascii_strings(bytes: &[u8]) -> Vec<String> {
     for byte in bytes {
         let ch = char::from(*byte);
         let keep = ch.is_ascii_alphanumeric()
-            || matches!(ch, ' ' | '_' | '-' | ':' | '/' | '.' | ',' | '(' | ')' | '[' | ']');
+            || matches!(
+                ch,
+                ' ' | '_' | '-' | ':' | '/' | '.' | ',' | '(' | ')' | '[' | ']'
+            );
         if keep {
             current.push(ch);
         } else if current.trim().len() >= 4 {
@@ -1416,7 +1473,7 @@ mod tests {
         resolve_ffmpeg_command_from_env_and_candidates, supports_audio_stt_provider_candidate,
     };
     use crate::commands::chat::SendMessagePart;
-    use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+    use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
     use sqlx::SqlitePool;
     use std::fs;
     use std::path::PathBuf;
@@ -1563,10 +1620,12 @@ mod tests {
 
         assert_eq!(parts[0]["type"].as_str(), Some("pdf_file"));
         assert_eq!(parts[0]["name"].as_str(), Some("brief.pdf"));
-        assert!(parts[0]["extractedText"]
-            .as_str()
-            .expect("extracted text")
-            .contains("Hello PDF"));
+        assert!(
+            parts[0]["extractedText"]
+                .as_str()
+                .expect("extracted text")
+                .contains("Hello PDF")
+        );
     }
 
     #[test]
@@ -1584,20 +1643,23 @@ mod tests {
     #[tokio::test]
     async fn normalize_message_parts_with_pool_transcribes_audio_when_audio_route_exists() {
         let pool = setup_audio_route_test_db(Some("http://mock-audio-stt-success")).await;
-        let parts = normalize_message_parts_with_pool(&[SendMessagePart::Attachment {
-            attachment: crate::commands::chat::AttachmentInput {
-                id: "att-audio-1".to_string(),
-                kind: "audio".to_string(),
-                source_type: "browser_file".to_string(),
-                name: "memo.mp3".to_string(),
-                declared_mime_type: Some("audio/mpeg".to_string()),
-                size_bytes: Some(128),
-                source_payload: Some("ZmFrZQ==".to_string()),
-                source_uri: None,
-                extracted_text: None,
-                truncated: None,
-            },
-        }], &pool)
+        let parts = normalize_message_parts_with_pool(
+            &[SendMessagePart::Attachment {
+                attachment: crate::commands::chat::AttachmentInput {
+                    id: "att-audio-1".to_string(),
+                    kind: "audio".to_string(),
+                    source_type: "browser_file".to_string(),
+                    name: "memo.mp3".to_string(),
+                    declared_mime_type: Some("audio/mpeg".to_string()),
+                    size_bytes: Some(128),
+                    source_payload: Some("ZmFrZQ==".to_string()),
+                    source_uri: None,
+                    extracted_text: None,
+                    truncated: None,
+                },
+            }],
+            &pool,
+        )
         .await
         .expect("normalize audio attachment");
 
@@ -1618,20 +1680,23 @@ mod tests {
     #[tokio::test]
     async fn normalize_message_parts_with_pool_keeps_pending_audio_when_audio_route_missing() {
         let pool = setup_audio_route_test_db(None).await;
-        let parts = normalize_message_parts_with_pool(&[SendMessagePart::Attachment {
-            attachment: crate::commands::chat::AttachmentInput {
-                id: "att-audio-2".to_string(),
-                kind: "audio".to_string(),
-                source_type: "browser_file".to_string(),
-                name: "call.mp3".to_string(),
-                declared_mime_type: Some("audio/mpeg".to_string()),
-                size_bytes: Some(128),
-                source_payload: Some("ZmFrZQ==".to_string()),
-                source_uri: None,
-                extracted_text: None,
-                truncated: None,
-            },
-        }], &pool)
+        let parts = normalize_message_parts_with_pool(
+            &[SendMessagePart::Attachment {
+                attachment: crate::commands::chat::AttachmentInput {
+                    id: "att-audio-2".to_string(),
+                    kind: "audio".to_string(),
+                    source_type: "browser_file".to_string(),
+                    name: "call.mp3".to_string(),
+                    declared_mime_type: Some("audio/mpeg".to_string()),
+                    size_bytes: Some(128),
+                    source_payload: Some("ZmFrZQ==".to_string()),
+                    source_uri: None,
+                    extracted_text: None,
+                    truncated: None,
+                },
+            }],
+            &pool,
+        )
         .await
         .expect("normalize pending audio attachment");
 
@@ -1639,11 +1704,13 @@ mod tests {
             parts[0]["attachment"]["transcript"].as_str(),
             Some("TRANSCRIPTION_REQUIRED")
         );
-        assert!(parts[0]["attachment"]["warnings"]
-            .as_array()
-            .expect("warnings")
-            .iter()
-            .any(|warning| warning.as_str() == Some("transcription_pending")));
+        assert!(
+            parts[0]["attachment"]["warnings"]
+                .as_array()
+                .expect("warnings")
+                .iter()
+                .any(|warning| warning.as_str() == Some("transcription_pending"))
+        );
     }
 
     #[tokio::test]
@@ -1655,20 +1722,23 @@ mod tests {
             "paraformer-v2",
         )
         .await;
-        let parts = normalize_message_parts_with_pool(&[SendMessagePart::Attachment {
-            attachment: crate::commands::chat::AttachmentInput {
-                id: "att-audio-qwen-1".to_string(),
-                kind: "audio".to_string(),
-                source_type: "browser_file".to_string(),
-                name: "meeting.wav".to_string(),
-                declared_mime_type: Some("audio/wav".to_string()),
-                size_bytes: Some(128),
-                source_payload: Some("ZmFrZQ==".to_string()),
-                source_uri: None,
-                extracted_text: None,
-                truncated: None,
-            },
-        }], &pool)
+        let parts = normalize_message_parts_with_pool(
+            &[SendMessagePart::Attachment {
+                attachment: crate::commands::chat::AttachmentInput {
+                    id: "att-audio-qwen-1".to_string(),
+                    kind: "audio".to_string(),
+                    source_type: "browser_file".to_string(),
+                    name: "meeting.wav".to_string(),
+                    declared_mime_type: Some("audio/wav".to_string()),
+                    size_bytes: Some(128),
+                    source_payload: Some("ZmFrZQ==".to_string()),
+                    source_uri: None,
+                    extracted_text: None,
+                    truncated: None,
+                },
+            }],
+            &pool,
+        )
         .await
         .expect("normalize qwen audio attachment");
 

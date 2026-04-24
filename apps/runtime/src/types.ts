@@ -1111,6 +1111,7 @@ export type AttachmentDraftRejectionReason =
   | "unrecognized_file_type"
   | "kind_disabled"
   | "size_exceeded"
+  | "total_size_exceeded"
   | "kind_limit_exceeded"
   | "batch_limit_exceeded";
 

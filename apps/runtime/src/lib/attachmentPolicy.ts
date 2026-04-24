@@ -9,6 +9,7 @@ export interface AttachmentFileTypePolicy {
 export interface AttachmentCapabilityPolicy {
   enabled: boolean;
   maxCount?: number;
+  maxTotalSizeBytes?: number;
   fileTypes: readonly AttachmentFileTypePolicy[];
 }
 
@@ -20,6 +21,7 @@ export interface AttachmentPolicy {
 export const MAX_FILES = 5;
 export const MAX_IMAGE_FILES = 3;
 export const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
+export const MAX_TOTAL_IMAGE_SIZE = 10 * 1024 * 1024;
 export const MAX_TEXT_FILE_SIZE = 20 * 1024 * 1024;
 export const MAX_PDF_FILE_SIZE = 20 * 1024 * 1024;
 export const MAX_TEXT_PREVIEW_CHARS = 200_000;
@@ -72,6 +74,7 @@ export const DEFAULT_ATTACHMENT_POLICY: AttachmentPolicy = {
     image: {
       enabled: true,
       maxCount: MAX_IMAGE_FILES,
+      maxTotalSizeBytes: MAX_TOTAL_IMAGE_SIZE,
       fileTypes: [
         {
           mimeTypes: ["image/*"],

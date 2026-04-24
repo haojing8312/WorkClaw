@@ -4,6 +4,7 @@ pub const PHASE_ONE_GLOBAL_MAX_ATTACHMENTS: usize = 5;
 pub const PHASE_ONE_MAX_IMAGE_ATTACHMENTS: usize = 3;
 pub const PHASE_ONE_MAX_DOCUMENT_ATTACHMENTS: usize = 5;
 pub const PHASE_ONE_MAX_IMAGE_BYTES: usize = 5 * 1024 * 1024;
+pub const PHASE_ONE_MAX_TOTAL_IMAGE_BYTES: usize = 10 * 1024 * 1024;
 pub const PHASE_ONE_MAX_TEXT_DOCUMENT_BYTES: usize = 20 * 1024 * 1024;
 pub const PHASE_ONE_MAX_PDF_BYTES: usize = 20 * 1024 * 1024;
 pub const PHASE_ONE_MAX_PDF_EXTRACTED_TEXT_CHARS: usize = 200_000;
@@ -13,6 +14,7 @@ pub struct AttachmentCapabilityPolicy {
     pub enabled: bool,
     pub max_attachments: usize,
     pub max_bytes: usize,
+    pub max_total_bytes: usize,
     pub allow_sources: &'static [&'static str],
     pub fallback_behavior: &'static str,
 }
@@ -44,6 +46,7 @@ pub fn default_attachment_policy() -> AttachmentPolicy {
             enabled: true,
             max_attachments: PHASE_ONE_MAX_IMAGE_ATTACHMENTS,
             max_bytes: PHASE_ONE_MAX_IMAGE_BYTES,
+            max_total_bytes: PHASE_ONE_MAX_TOTAL_IMAGE_BYTES,
             allow_sources: &["browser_file"],
             fallback_behavior: "native",
         },
@@ -51,6 +54,7 @@ pub fn default_attachment_policy() -> AttachmentPolicy {
             enabled: true,
             max_attachments: 2,
             max_bytes: 25 * 1024 * 1024,
+            max_total_bytes: 50 * 1024 * 1024,
             allow_sources: &["browser_file"],
             fallback_behavior: "transcribe",
         },
@@ -58,6 +62,7 @@ pub fn default_attachment_policy() -> AttachmentPolicy {
             enabled: true,
             max_attachments: 1,
             max_bytes: 100 * 1024 * 1024,
+            max_total_bytes: 100 * 1024 * 1024,
             allow_sources: &["browser_file"],
             fallback_behavior: "summarize",
         },

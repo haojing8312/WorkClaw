@@ -162,4 +162,31 @@ describe("normalizeBrowserFileAttachmentDrafts", () => {
       }),
     ]);
   });
+
+  test("rejects image files once their cumulative size exceeds the policy budget", () => {
+    const policy = buildPolicy();
+    policy.kinds.image = {
+      ...policy.kinds.image,
+      maxCount: 3,
+      maxTotalSizeBytes: 10 * 1024 * 1024,
+    };
+
+    const result = normalizeBrowserFileAttachmentDrafts(
+      [
+        { sourceType: "browser_file", file: { name: "first.png", type: "image/png", size: 4 * 1024 * 1024 } },
+        { sourceType: "browser_file", file: { name: "second.png", type: "image/png", size: 4 * 1024 * 1024 } },
+        { sourceType: "browser_file", file: { name: "third.png", type: "image/png", size: 4 * 1024 * 1024 } },
+      ],
+      policy,
+    );
+
+    expect(result.accepted).toHaveLength(2);
+    expect(result.rejected).toEqual([
+      expect.objectContaining({
+        kind: "image",
+        reason: "total_size_exceeded",
+        message: "图片附件总大小超过 10MB 限制",
+      }),
+    ]);
+  });
 });

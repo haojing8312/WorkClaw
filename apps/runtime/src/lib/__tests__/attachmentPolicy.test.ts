@@ -6,6 +6,7 @@ describe("DEFAULT_ATTACHMENT_POLICY", () => {
     expect(DEFAULT_ATTACHMENT_POLICY.maxFiles).toBe(5);
     expect(DEFAULT_ATTACHMENT_POLICY.kinds.image.enabled).toBe(true);
     expect(DEFAULT_ATTACHMENT_POLICY.kinds.image.maxCount).toBe(3);
+    expect(DEFAULT_ATTACHMENT_POLICY.kinds.image.maxTotalSizeBytes).toBe(10 * 1024 * 1024);
     expect(DEFAULT_ATTACHMENT_POLICY.kinds.audio.enabled).toBe(true);
     expect(DEFAULT_ATTACHMENT_POLICY.kinds.audio.maxCount).toBe(2);
     expect(DEFAULT_ATTACHMENT_POLICY.kinds.video.enabled).toBe(true);
