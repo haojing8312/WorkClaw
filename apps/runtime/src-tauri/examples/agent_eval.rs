@@ -110,7 +110,7 @@ fn parse_args(args: Vec<String>) -> Result<CliArgs, String> {
 
 fn print_usage() {
     eprintln!(
-        "Usage: cargo run --manifest-path apps/runtime/src-tauri/Cargo.toml --bin agent_eval -- --scenario <id> [--config <path>]"
+        "Usage: cargo run --manifest-path apps/runtime/src-tauri/Cargo.toml --example agent_eval -- --scenario <id> [--config <path>]"
     );
 }
 

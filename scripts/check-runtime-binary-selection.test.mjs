@@ -18,7 +18,7 @@ function readCargoToml() {
   return readFileSync(cargoTomlPath, "utf8");
 }
 
-test("desktop runtime package declares runtime as the default binary", () => {
+test("desktop runtime package declares runtime as the default binary and disables auto bin discovery", () => {
   const cargoToml = readCargoToml();
 
   assert.match(
@@ -26,9 +26,19 @@ test("desktop runtime package declares runtime as the default binary", () => {
     /^\[package\][\s\S]*?^default-run\s*=\s*"runtime"\s*$/m,
     "Expected Cargo package metadata to pin runtime as the default runnable binary for desktop packaging",
   );
+  assert.match(
+    cargoToml,
+    /^\[package\][\s\S]*?^autobins\s*=\s*false\s*$/m,
+    "Expected desktop packaging to avoid auto-discovering internal utility binaries",
+  );
+  assert.match(
+    cargoToml,
+    /^\[package\][\s\S]*?^autoexamples\s*=\s*false\s*$/m,
+    "Expected internal utility examples to be declared explicitly",
+  );
 });
 
-test("desktop runtime package declares explicit runtime and agent_eval binary targets", () => {
+test("desktop runtime package declares runtime binary and keeps eval harness out of app binaries", () => {
   const cargoToml = readCargoToml();
 
   assert.match(
@@ -38,8 +48,16 @@ test("desktop runtime package declares explicit runtime and agent_eval binary ta
   );
   assert.match(
     cargoToml,
-    /\[\[bin\]\][\s\S]*?name\s*=\s*"agent_eval"[\s\S]*?path\s*=\s*"src\/bin\/agent_eval\.rs"[\s\S]*?required-features\s*=\s*\["headless-evals"\]/m,
-    "Expected Cargo.toml to declare the eval harness binary explicitly without making it the packaged app entrypoint",
+    /\[\[example\]\][\s\S]*?name\s*=\s*"agent_eval"[\s\S]*?path\s*=\s*"examples\/agent_eval\.rs"[\s\S]*?required-features\s*=\s*\["headless-evals"\]/m,
+    "Expected Cargo.toml to keep the eval harness available as an example without making it a packaged app binary",
+  );
+  const binBlocks = cargoToml
+    .split(/\n(?=\[\[(?:bin|example)\]\])/)
+    .filter((block) => block.startsWith("[[bin]]"));
+  assert.deepEqual(
+    binBlocks.map((block) => block.match(/name\s*=\s*"([^"]+)"/)?.[1]),
+    ["runtime"],
+    "Expected runtime to be the only desktop binary target",
   );
 });
 

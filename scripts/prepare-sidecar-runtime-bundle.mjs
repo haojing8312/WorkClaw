@@ -147,6 +147,7 @@ export function readPnpmMajorVersion(
     cwd = projectRoot,
     env = process.env,
     spawn = spawnSync,
+    platform = process.platform,
   } = {},
 ) {
   const result = spawn(runner.command, [...runner.args, "--version"], {
@@ -154,7 +155,7 @@ export function readPnpmMajorVersion(
     encoding: "utf8",
     windowsHide: true,
     env,
-    shell: false,
+    shell: platform === "win32" && runner.command.toLowerCase().endsWith(".cmd"),
   });
 
   if (result.status !== 0) {
@@ -176,7 +177,7 @@ function runOrThrow(command, args, env = process.env) {
     encoding: "utf8",
     windowsHide: true,
     env,
-    shell: false,
+    shell: process.platform === "win32" && command.toLowerCase().endsWith(".cmd"),
   });
 
   if (result.stdout) {

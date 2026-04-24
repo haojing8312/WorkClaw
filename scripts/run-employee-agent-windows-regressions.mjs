@@ -15,14 +15,14 @@ const COMMANDS = [
     "run",
     "--manifest-path",
     "apps/runtime/src-tauri/Cargo.toml",
-    "--bin",
+    "--example",
     "employee_group_run_regression",
   ],
   [
     "run",
     "--manifest-path",
     "apps/runtime/src-tauri/Cargo.toml",
-    "--bin",
+    "--example",
     "employee_im_heavy_regression",
   ],
 ];

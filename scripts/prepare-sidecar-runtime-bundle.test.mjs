@@ -23,13 +23,14 @@ test("resolvePnpmRunner prefers npm_execpath when available", () => {
   assert.deepEqual(runner.args, ["C:\\Users\\builder\\AppData\\Roaming\\npm\\pnpm.cjs"]);
 });
 
-test("readPnpmMajorVersion shells out without Windows shell wrapping", () => {
+test("readPnpmMajorVersion shells out through cmd wrapping for pnpm.cmd on Windows", () => {
   const spawnCalls = [];
   const major = readPnpmMajorVersion(
     { command: "pnpm.cmd", args: [] },
     {
       env: { PATH: "C:\\pnpm" },
       cwd: "D:\\code\\WorkClaw",
+      platform: "win32",
       spawn(command, args, options) {
         spawnCalls.push({ command, args, options });
         return {
@@ -45,7 +46,7 @@ test("readPnpmMajorVersion shells out without Windows shell wrapping", () => {
   assert.equal(spawnCalls[0].command, "pnpm.cmd");
   assert.deepEqual(spawnCalls[0].args, ["--version"]);
   assert.equal(spawnCalls[0].options.cwd, "D:\\code\\WorkClaw");
-  assert.equal(spawnCalls[0].options.shell, false);
+  assert.equal(spawnCalls[0].options.shell, true);
   assert.deepEqual(spawnCalls[0].options.env, { PATH: "C:\\pnpm" });
 });
 

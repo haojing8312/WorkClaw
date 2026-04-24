@@ -3,7 +3,7 @@
 // Windows historical note:
 // The heavyweight IM employee-agent scenario family trips a pre-main libtest startup
 // failure (`0xc0000139`) on some local Windows environments. We keep deterministic
-// group-run coverage in `src/bin/employee_group_run_regression.rs`, and avoid pulling
+// group-run coverage in `examples/employee_group_run_regression.rs`, and avoid pulling
 // the heavyweight scenario modules into the Windows libtest binary so local `cargo test`
 // stays runnable for the lightweight employee-id regressions.
 #[cfg(not(target_os = "windows"))]

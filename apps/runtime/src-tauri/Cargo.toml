@@ -3,6 +3,8 @@ name = "runtime"
 version = "0.6.2"
 edition = "2021"
 default-run = "runtime"
+autobins = false
+autoexamples = false
 
 [features]
 default = []
@@ -16,10 +18,22 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 name = "runtime"
 path = "src/main.rs"
 
-[[bin]]
+[[example]]
 name = "agent_eval"
-path = "src/bin/agent_eval.rs"
+path = "examples/agent_eval.rs"
 required-features = ["headless-evals"]
+
+[[example]]
+name = "employee_group_real_regression"
+path = "examples/employee_group_real_regression.rs"
+
+[[example]]
+name = "employee_group_run_regression"
+path = "examples/employee_group_run_regression.rs"
+
+[[example]]
+name = "employee_im_heavy_regression"
+path = "examples/employee_im_heavy_regression.rs"
 
 [dependencies]
 tauri = { version = "2", features = ["test"] }

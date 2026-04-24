@@ -57,7 +57,7 @@ test("buildCargoArgs forwards scenario and config to rust binary", () => {
     "apps/runtime/src-tauri/Cargo.toml",
     "--features",
     "headless-evals",
-    "--bin",
+    "--example",
     "agent_eval",
     "--",
     "--scenario",
