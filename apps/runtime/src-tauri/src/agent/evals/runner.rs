@@ -1,3 +1,4 @@
+use super::scenario::EvalWorkspaceFile;
 use super::{CapabilityMapping, EvalScenario, LocalEvalConfig, ModelProviderProfile};
 use crate::agent::runtime::{
     RunRegistry, RunRegistryState, RuntimeObservability, RuntimeObservabilityState,
@@ -20,9 +21,11 @@ use crate::commands::session_runs::{
     export_session_run_trace_with_pool, list_session_runs_with_pool, SessionRunProjection,
 };
 use crate::commands::skills::{import_local_skills_to_pool, DbState};
+use crate::runtime_paths::RuntimePaths;
 use crate::session_journal::{SessionJournalState, SessionJournalStateHandle, SessionJournalStore};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde_json::Value;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tauri::test::{mock_context, noop_assets};
@@ -65,7 +68,8 @@ impl RealAgentEvalRunner {
             .build(mock_context(noop_assets()))
             .map_err(|e| format!("创建 headless runtime app 失败: {e}"))?;
 
-        let pool = crate::db::init_db(&app.handle())
+        let runtime_paths = RuntimePaths::new(output_root.join("runtime-state"));
+        let pool = crate::db::init_db_at_runtime_paths(&runtime_paths)
             .await
             .map_err(|e| format!("初始化评测数据库失败: {e}"))?;
         app.manage(DbState(pool.clone()));
@@ -99,7 +103,7 @@ impl RealAgentEvalRunner {
         app.manage(RunRegistryState(run_registry.clone()));
         app.manage(RuntimeObservabilityState(runtime_observability.clone()));
 
-        let journal_root = output_root.join("runtime-state").join("sessions");
+        let journal_root = runtime_paths.sessions_dir.clone();
         std::fs::create_dir_all(&journal_root)
             .map_err(|e| format!("创建评测 journal 目录失败: {e}"))?;
         let journal = Arc::new(SessionJournalStore::with_registry_and_observability(
@@ -129,20 +133,17 @@ impl RealAgentEvalRunner {
             .get(&scenario.capability_id)
             .ok_or_else(|| format!("未找到 capability_id 对应映射: {}", scenario.capability_id))?;
         let model_id = self.ensure_model_profile(config).await?;
-        let import_root = resolve_skill_import_root(capability)?;
-        let import_batch =
-            import_local_skills_to_pool(import_root.to_string_lossy().to_string(), &self.pool, &[])
-                .await?;
-        let skill_id = resolve_capability_skill_id(capability, &import_batch)?;
+        let skill_selection = resolve_scenario_skill_selection(capability, &self.pool).await?;
 
         let work_dir = PathBuf::from(&config.artifacts.output_dir)
             .join("workspaces")
             .join(&scenario.id);
         std::fs::create_dir_all(&work_dir).map_err(|e| format!("创建场景工作目录失败: {e}"))?;
+        materialize_workspace_files(&work_dir, &scenario.input.workspace_files)?;
 
         let session_id = create_session(
             self.app.handle().clone(),
-            skill_id.clone(),
+            skill_selection.skill_id.clone(),
             model_id.clone(),
             Some(work_dir.to_string_lossy().to_string()),
             None,
@@ -195,11 +196,11 @@ impl RealAgentEvalRunner {
             scenario_id: scenario.id.clone(),
             capability_id: scenario.capability_id.clone(),
             session_id,
-            skill_id,
+            skill_id: skill_selection.skill_id,
             model_id,
             work_dir,
-            imported_skill_count: import_batch.installed.len(),
-            missing_mcp: import_batch.missing_mcp,
+            imported_skill_count: skill_selection.imported_skill_count,
+            missing_mcp: skill_selection.missing_mcp,
             execution_error,
             session_runs,
             route_attempt_logs,
@@ -224,17 +225,27 @@ impl RealAgentEvalRunner {
         let (api_format, base_url) = resolve_model_connection_defaults(profile)?;
 
         let model_id = format!("eval-{}", sanitize_id_component(profile_id));
+        let supports_vision = api_format.trim().eq_ignore_ascii_case("openai");
         let model_config = ModelConfig {
             id: model_id.clone(),
             name: format!("Real Eval {}", profile_id),
-            api_format,
-            base_url,
+            api_format: api_format.clone(),
+            base_url: base_url.clone(),
             model_name: profile.model.clone(),
             is_default: true,
-            supports_vision: false,
+            supports_vision,
         };
 
         save_model_config_with_pool(&self.pool, model_config, api_key).await?;
+        ensure_eval_provider_route(
+            &self.pool,
+            profile_id,
+            profile,
+            &api_format,
+            &base_url,
+            supports_vision,
+        )
+        .await?;
         set_default_model_with_pool(&self.pool, &model_id).await?;
         Ok(model_id)
     }
@@ -257,6 +268,122 @@ impl RealAgentEvalRunner {
         }
         Ok(())
     }
+}
+
+struct ScenarioSkillSelection {
+    skill_id: String,
+    imported_skill_count: usize,
+    missing_mcp: Vec<String>,
+}
+
+async fn resolve_scenario_skill_selection(
+    capability: &CapabilityMapping,
+    pool: &sqlx::SqlitePool,
+) -> Result<ScenarioSkillSelection, String> {
+    match capability.entry_kind.trim().to_ascii_lowercase().as_str() {
+        "builtin" | "builtin_skill" => {
+            let skill_id = capability.entry_name.trim();
+            if skill_id.is_empty() {
+                return Err("builtin capability mapping requires entry_name".to_string());
+            }
+            Ok(ScenarioSkillSelection {
+                skill_id: skill_id.to_string(),
+                imported_skill_count: 0,
+                missing_mcp: Vec::new(),
+            })
+        }
+        "workspace_skill" | "local_skill" => {
+            let import_root = resolve_skill_import_root(capability)?;
+            let import_batch =
+                import_local_skills_to_pool(import_root.to_string_lossy().to_string(), pool, &[])
+                    .await?;
+            let skill_id = resolve_capability_skill_id(capability, &import_batch)?;
+            Ok(ScenarioSkillSelection {
+                skill_id,
+                imported_skill_count: import_batch.installed.len(),
+                missing_mcp: import_batch.missing_mcp,
+            })
+        }
+        other => Err(format!(
+            "unsupported capability entry_kind for real-agent eval: {other}"
+        )),
+    }
+}
+
+fn materialize_workspace_files(work_dir: &Path, files: &[EvalWorkspaceFile]) -> Result<(), String> {
+    for file in files {
+        let relative_path = validate_workspace_fixture_path(&file.path)?;
+        let target = work_dir.join(relative_path);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("创建场景工作区文件目录失败 ({}): {e}", parent.display()))?;
+        }
+        let bytes = BASE64
+            .decode(file.data_base64.trim())
+            .map_err(|e| format!("解析场景工作区文件 base64 失败 ({}): {e}", file.path))?;
+        std::fs::write(&target, bytes)
+            .map_err(|e| format!("写入场景工作区文件失败 ({}): {e}", target.display()))?;
+    }
+    Ok(())
+}
+
+fn validate_workspace_fixture_path(raw: &str) -> Result<PathBuf, String> {
+    if raw.trim().is_empty() {
+        return Err("workspace fixture path cannot be empty".to_string());
+    }
+    let path = Path::new(raw);
+    if path.is_absolute() {
+        return Err(format!("workspace fixture path must be relative: {raw}"));
+    }
+    if path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir | Component::Prefix(_)))
+    {
+        return Err(format!("workspace fixture path escapes work dir: {raw}"));
+    }
+    Ok(path.to_path_buf())
+}
+
+async fn ensure_eval_provider_route(
+    pool: &sqlx::SqlitePool,
+    profile_id: &str,
+    profile: &ModelProviderProfile,
+    api_format: &str,
+    base_url: &str,
+    supports_vision: bool,
+) -> Result<(), String> {
+    let api_key = std::env::var(&profile.api_key_env)
+        .map_err(|_| format!("缺少真实评测所需环境变量: {}", profile.api_key_env))?;
+    let provider_id = format!("eval-{}-provider", sanitize_id_component(profile_id));
+    sqlx::query(
+        "INSERT OR REPLACE INTO provider_configs
+         (id, provider_key, display_name, protocol_type, base_url, auth_type, api_key_encrypted, org_id, extra_json, enabled, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 'bearer', ?, '', '{}', 1, datetime('now'), datetime('now'))",
+    )
+    .bind(&provider_id)
+    .bind(&profile.provider)
+    .bind(format!("Real Eval {}", profile_id))
+    .bind(api_format)
+    .bind(base_url)
+    .bind(api_key)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("写入真实评测 provider 配置失败: {e}"))?;
+
+    if supports_vision {
+        sqlx::query(
+            "INSERT OR REPLACE INTO routing_policies
+             (capability, primary_provider_id, primary_model, fallback_chain_json, timeout_ms, retry_count, enabled)
+             VALUES ('vision', ?, ?, '[]', 120000, 0, 1)",
+        )
+        .bind(&provider_id)
+        .bind(&profile.model)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("写入真实评测 vision 路由失败: {e}"))?;
+    }
+
+    Ok(())
 }
 
 async fn load_route_attempt_logs(
@@ -425,10 +552,12 @@ fn extract_final_output(messages: &[Value]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        resolve_capability_skill_id, resolve_model_connection_defaults, resolve_skill_import_root,
-        sanitize_id_component, validate_api_key_env_name,
+        materialize_workspace_files, resolve_capability_skill_id,
+        resolve_model_connection_defaults, resolve_skill_import_root, sanitize_id_component,
+        validate_api_key_env_name, validate_workspace_fixture_path,
     };
     use crate::agent::evals::config::ModelProviderProfile;
+    use crate::agent::evals::EvalWorkspaceFile;
     use crate::commands::skills::{LocalImportBatchResult, LocalImportInstalledItem};
     use chrono::Utc;
     use skillpack_rs::SkillManifest;
@@ -482,6 +611,29 @@ mod tests {
             resolve_capability_skill_id(&mapping, &batch).as_deref(),
             Ok("local-feishu-pm-hub")
         );
+    }
+
+    #[test]
+    fn workspace_fixture_paths_must_stay_relative() {
+        assert!(validate_workspace_fixture_path("images/a.png").is_ok());
+        assert!(validate_workspace_fixture_path("../a.png").is_err());
+        assert!(validate_workspace_fixture_path(r"C:\tmp\a.png").is_err());
+    }
+
+    #[test]
+    fn materialize_workspace_files_decodes_base64_into_work_dir() {
+        let temp = tempdir().expect("tempdir");
+        materialize_workspace_files(
+            temp.path(),
+            &[EvalWorkspaceFile {
+                path: "images/a.png".to_string(),
+                data_base64: "aGVsbG8=".to_string(),
+            }],
+        )
+        .expect("materialize fixture");
+
+        let bytes = std::fs::read(temp.path().join("images").join("a.png")).expect("read file");
+        assert_eq!(bytes, b"hello");
     }
 
     #[test]

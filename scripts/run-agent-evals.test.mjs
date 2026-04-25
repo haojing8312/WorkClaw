@@ -5,6 +5,8 @@ import path from "node:path";
 import {
   buildCargoArgs,
   parseAgentEvalArgs,
+  resolveAgentEvalTargetDir,
+  shouldReuseTarget,
 } from "./run-agent-evals.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
@@ -39,10 +41,12 @@ test("parseAgentEvalArgs enforces required scenario and optional config", () => 
     "pm_weekly_summary_xietao_2026_03_30_2026_04_04",
     "--config",
     "D:/secret/config.local.yaml",
+    "--reuse-target",
   ]);
 
   assert.equal(parsed.scenario, "pm_weekly_summary_xietao_2026_03_30_2026_04_04");
   assert.equal(parsed.config, "D:/secret/config.local.yaml");
+  assert.equal(parsed.reuseTarget, true);
 });
 
 test("buildCargoArgs forwards scenario and config to rust binary", () => {
@@ -65,4 +69,32 @@ test("buildCargoArgs forwards scenario and config to rust binary", () => {
     "--config",
     "D:/secret/config.local.yaml",
   ]);
+});
+
+test("resolveAgentEvalTargetDir defaults to isolated and can reuse shared target", () => {
+  const isolated = resolveAgentEvalTargetDir({
+    cwd: "D:/code/WorkClaw",
+    scenario: "workspace_image_set_vision_2026_04_25",
+    env: {},
+  });
+  assert.match(
+    isolated,
+    /[/\\]\.cargo-targets[/\\]isolated[/\\]agent-eval-workspace_image_set_vision_2026_04_25-/,
+  );
+
+  assert.equal(
+    resolveAgentEvalTargetDir({
+      cwd: "D:/code/WorkClaw",
+      scenario: "workspace_image_set_vision_2026_04_25",
+      reuseTarget: true,
+      env: {},
+    }),
+    path.join("D:/code/WorkClaw", ".cargo-targets", "workclaw"),
+  );
+  assert.equal(
+    shouldReuseTarget({
+      env: { WORKCLAW_AGENT_EVAL_REUSE_TARGET: "true" },
+    }),
+    true,
+  );
 });

@@ -26,6 +26,7 @@ pub struct EvalAssertionResults {
     pub route: String,
     pub execution: String,
     pub structured: String,
+    pub tools: String,
     pub output: String,
     pub thresholds: String,
 }
@@ -100,6 +101,7 @@ impl EvalReport {
                 route: "pass".to_string(),
                 execution: "pass".to_string(),
                 structured: "pass".to_string(),
+                tools: "pass".to_string(),
                 output: "pass".to_string(),
                 thresholds: "pass".to_string(),
             },

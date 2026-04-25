@@ -20,13 +20,27 @@ pub struct EvalScenario {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EvalScenarioInput {
     pub user_text: String,
+    #[serde(default)]
+    pub workspace_files: Vec<EvalWorkspaceFile>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EvalWorkspaceFile {
+    pub path: String,
+    pub data_base64: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EvalScenarioExpect {
-    pub route: EvalRouteExpect,
-    pub execution: EvalExecutionExpect,
-    pub structured: EvalStructuredExpect,
+    #[serde(default)]
+    pub route: Option<EvalRouteExpect>,
+    #[serde(default)]
+    pub execution: Option<EvalExecutionExpect>,
+    #[serde(default)]
+    pub structured: Option<EvalStructuredExpect>,
+    #[serde(default)]
+    pub tools: EvalToolExpect,
+    #[serde(default)]
     pub output: EvalOutputExpect,
 }
 
@@ -62,7 +76,17 @@ pub struct EvalStructuredEquals {
     pub extra: BTreeMap<String, serde_yaml::Value>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EvalToolExpect {
+    #[serde(default)]
+    pub called_all: Vec<String>,
+    #[serde(default)]
+    pub called_any: Vec<String>,
+    #[serde(default)]
+    pub not_called: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EvalOutputExpect {
     #[serde(default)]
     pub contains_all: Vec<String>,
@@ -102,9 +126,10 @@ mod tests {
         assert_eq!(scenario.capability_id, "pm_weekly_summary");
         assert_eq!(scenario.thresholds.pass_total_ms, 150_000);
         assert_eq!(scenario.thresholds.warn_total_ms, 180_000);
-        assert_eq!(scenario.expect.structured.equals.daily_count, Some(6));
-        assert_eq!(scenario.expect.structured.equals.plan_count, Some(6));
-        assert_eq!(scenario.expect.structured.equals.report_count, Some(5));
+        let structured = scenario.expect.structured.expect("structured assertions");
+        assert_eq!(structured.equals.daily_count, Some(6));
+        assert_eq!(structured.equals.plan_count, Some(6));
+        assert_eq!(structured.equals.report_count, Some(5));
     }
 
     #[test]
@@ -112,15 +137,48 @@ mod tests {
         let raw = fs::read_to_string(scenario_fixture_path()).expect("read scenario");
         let scenario: EvalScenario = serde_yaml::from_str(&raw).expect("parse scenario");
 
-        assert_eq!(scenario.expect.route.family, "feishu-pm");
-        assert_eq!(
-            scenario.expect.route.runner_not.as_deref(),
-            Some("OpenTaskRunner")
-        );
+        let route = scenario.expect.route.expect("route assertions");
+        assert_eq!(route.family, "feishu-pm");
+        assert_eq!(route.runner_not.as_deref(), Some("OpenTaskRunner"));
         assert_eq!(scenario.expect.output.contains_all.len(), 2);
         assert_eq!(
             scenario.record_metrics.last().map(String::as_str),
             Some("fallback_reason")
         );
+    }
+
+    #[test]
+    fn generic_runtime_scenario_can_omit_pm_specific_assertions() {
+        let raw = r#"
+id: workspace_image_set_vision_2026_04_25
+title: 工作区图片视觉分析
+capability_id: workspace_image_set_vision
+kind: real-agent
+mode: runtime-tool-routing
+side_effect: none
+enabled: true
+input:
+  user_text: 读取这些图片，并告诉我每个图片的内容
+  workspace_files:
+    - path: red-dot.png
+      data_base64: aGVsbG8=
+expect:
+  tools:
+    called_all:
+      - vision_analyze
+thresholds:
+  pass_total_ms: 150000
+  warn_total_ms: 180000
+  max_turn_count: 4
+  max_tool_count: 6
+"#;
+
+        let scenario: EvalScenario = serde_yaml::from_str(raw).expect("parse generic scenario");
+
+        assert!(scenario.expect.route.is_none());
+        assert!(scenario.expect.execution.is_none());
+        assert!(scenario.expect.structured.is_none());
+        assert_eq!(scenario.expect.tools.called_all, vec!["vision_analyze"]);
+        assert_eq!(scenario.input.workspace_files[0].path, "red-dot.png");
     }
 }

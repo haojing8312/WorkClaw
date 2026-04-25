@@ -7,6 +7,7 @@ export function parseAgentEvalArgs(argv) {
   const args = Array.from(argv);
   let scenario = null;
   let config = null;
+  let reuseTarget = false;
 
   for (let index = 0; index < args.length; ) {
     const current = args[index];
@@ -20,8 +21,13 @@ export function parseAgentEvalArgs(argv) {
       index += 2;
       continue;
     }
+    if (current === "--reuse-target") {
+      reuseTarget = true;
+      index += 1;
+      continue;
+    }
     if (current === "--help" || current === "-h") {
-      return { help: true, scenario: null, config: null };
+      return { help: true, scenario: null, config: null, reuseTarget: false };
     }
     throw new Error(`Unknown argument: ${current}`);
   }
@@ -30,7 +36,7 @@ export function parseAgentEvalArgs(argv) {
     throw new Error("Missing required --scenario <id>");
   }
 
-  return { help: false, scenario, config };
+  return { help: false, scenario, config, reuseTarget };
 }
 
 export function buildCargoArgs({ scenario, config }) {
@@ -52,9 +58,29 @@ export function buildCargoArgs({ scenario, config }) {
   return cargoArgs;
 }
 
+export function shouldReuseTarget({ reuseTarget = false, env = process.env } = {}) {
+  const envValue = env.WORKCLAW_AGENT_EVAL_REUSE_TARGET ?? "";
+  return reuseTarget || /^(1|true|yes)$/i.test(envValue.trim());
+}
+
+export function resolveAgentEvalTargetDir({
+  cwd,
+  scenario,
+  reuseTarget = false,
+  env = process.env,
+}) {
+  if (shouldReuseTarget({ reuseTarget, env })) {
+    return path.join(cwd, ".cargo-targets", "workclaw");
+  }
+  return buildIsolatedTargetDir({
+    cwd,
+    label: `agent-eval-${scenario}`,
+  });
+}
+
 function printUsage() {
   console.error(
-    "Usage: pnpm eval:agent-real --scenario <id> [--config <path-to-config.local.yaml>]",
+    "Usage: pnpm eval:agent-real --scenario <id> [--config <path-to-config.local.yaml>] [--reuse-target]",
   );
 }
 
@@ -73,9 +99,11 @@ function main() {
     process.exit(0);
   }
 
-  const targetDir = buildIsolatedTargetDir({
-    cwd: path.resolve(import.meta.dirname, ".."),
-    label: `agent-eval-${parsed.scenario}`,
+  const workspaceRoot = path.resolve(import.meta.dirname, "..");
+  const targetDir = resolveAgentEvalTargetDir({
+    cwd: workspaceRoot,
+    scenario: parsed.scenario,
+    reuseTarget: parsed.reuseTarget,
   });
   const env = {
     ...process.env,

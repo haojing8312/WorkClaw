@@ -1,0 +1,38 @@
+id: workspace_image_set_vision_2026_04_25
+title: 工作区图片集合视觉分析-固定回归
+capability_id: workspace_image_set_vision
+
+kind: real-agent
+mode: runtime-tool-routing
+side_effect: none
+enabled: true
+
+input:
+  user_text: 读取这些图片，并告诉我每个图片的内容
+  workspace_files:
+    - path: red-dot.png
+      data_base64: iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=
+    - path: blue-dot.png
+      data_base64: iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=
+
+expect:
+  tools:
+    called_all:
+      - vision_analyze
+    not_called:
+      - browser_open
+      - browser_navigate
+
+thresholds:
+  pass_total_ms: 150000
+  warn_total_ms: 180000
+  max_turn_count: 4
+  max_tool_count: 6
+
+record_metrics:
+  - selected_skill
+  - selected_runner
+  - called_tools
+  - total_duration_ms
+  - tool_count
+  - fallback_reason

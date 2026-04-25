@@ -52,6 +52,7 @@ pub fn evaluate_and_write_report(
         ),
         execution: evaluate_execution_assertions(scenario, run, &observations),
         structured: evaluate_structured_assertions(scenario, &observations),
+        tools: evaluate_tool_assertions(scenario, run),
         output: evaluate_output_assertions(scenario, run),
         thresholds: evaluate_thresholds(scenario, total_duration_ms, turn_count, tool_count),
     };
@@ -60,6 +61,7 @@ pub fn evaluate_and_write_report(
         assertions.route.as_str(),
         assertions.execution.as_str(),
         assertions.structured.as_str(),
+        assertions.tools.as_str(),
         assertions.output.as_str(),
         assertions.thresholds.as_str(),
     ]
@@ -192,7 +194,10 @@ fn evaluate_route_assertions(
     selected_skill: Option<&str>,
     selected_runner: Option<&str>,
 ) -> String {
-    let family = scenario.expect.route.family.trim();
+    let Some(route) = scenario.expect.route.as_ref() else {
+        return "pass".to_string();
+    };
+    let family = route.family.trim();
     let family_hit = (!family.is_empty())
         && (selected_skill
             .map(|skill| skill.contains(family))
@@ -204,8 +209,8 @@ fn evaluate_route_assertions(
     let runner_allowed = scenario
         .expect
         .route
-        .runner_not
-        .as_deref()
+        .as_ref()
+        .and_then(|route| route.runner_not.as_deref())
         .map(|blocked| selected_runner != Some(blocked))
         .unwrap_or(true);
 
@@ -221,18 +226,16 @@ fn evaluate_execution_assertions(
     run: &HeadlessEvalRun,
     observations: &[ToolOutputObservation],
 ) -> String {
-    let expected_exit_code = scenario.expect.execution.leaf_exit_code as i64;
+    let run_completed = run_completed(run);
+    let Some(execution) = scenario.expect.execution.as_ref() else {
+        return if run.execution_error.is_none() && run_completed {
+            "pass".to_string()
+        } else {
+            "fail".to_string()
+        };
+    };
+    let expected_exit_code = execution.leaf_exit_code as i64;
     let actual_exit_code = observations.iter().find_map(|item| item.exit_code);
-    let run_completed = run
-        .trace
-        .as_ref()
-        .map(|trace| trace.final_status == "completed")
-        .unwrap_or_else(|| {
-            run.session_runs
-                .last()
-                .map(|item| item.status == "completed")
-                .unwrap_or(false)
-        });
 
     if run.execution_error.is_none()
         && run_completed
@@ -244,12 +247,27 @@ fn evaluate_execution_assertions(
     }
 }
 
+fn run_completed(run: &HeadlessEvalRun) -> bool {
+    run.trace
+        .as_ref()
+        .map(|trace| trace.final_status == "completed")
+        .unwrap_or_else(|| {
+            run.session_runs
+                .last()
+                .map(|item| item.status == "completed")
+                .unwrap_or(false)
+        })
+}
+
 fn evaluate_structured_assertions(
     scenario: &EvalScenario,
     observations: &[ToolOutputObservation],
 ) -> String {
+    let Some(structured) = scenario.expect.structured.as_ref() else {
+        return "pass".to_string();
+    };
     let candidates = collect_structured_candidates(observations);
-    let expected = &scenario.expect.structured.equals;
+    let expected = &structured.equals;
 
     let employee_ok =
         find_string_value(&candidates, "employee").as_deref() == Some(expected.employee.as_str());
@@ -290,6 +308,59 @@ fn evaluate_structured_assertions(
     } else {
         "fail".to_string()
     }
+}
+
+fn evaluate_tool_assertions(scenario: &EvalScenario, run: &HeadlessEvalRun) -> String {
+    let called_tools = collect_called_tool_names(run);
+    let expected = &scenario.expect.tools;
+
+    let called_all_ok = expected
+        .called_all
+        .iter()
+        .all(|name| called_tools.iter().any(|called| called == name));
+    let called_any_ok = if expected.called_any.is_empty() {
+        true
+    } else {
+        expected
+            .called_any
+            .iter()
+            .any(|name| called_tools.iter().any(|called| called == name))
+    };
+    let not_called_ok = expected
+        .not_called
+        .iter()
+        .all(|name| !called_tools.iter().any(|called| called == name));
+
+    if called_all_ok && called_any_ok && not_called_ok {
+        "pass".to_string()
+    } else {
+        "fail".to_string()
+    }
+}
+
+fn collect_called_tool_names(run: &HeadlessEvalRun) -> Vec<String> {
+    let mut names = Vec::new();
+    if let Some(trace) = run.trace.as_ref() {
+        names.extend(trace.tools.iter().map(|tool| tool.tool_name.clone()));
+    }
+    for message in &run.messages {
+        let Some(items) = message.get("streamItems").and_then(Value::as_array) else {
+            continue;
+        };
+        for item in items {
+            let Some(name) = item
+                .get("toolCall")
+                .and_then(|tool_call| tool_call.get("name"))
+                .and_then(Value::as_str)
+            else {
+                continue;
+            };
+            if !names.iter().any(|existing| existing == name) {
+                names.push(name.to_string());
+            }
+        }
+    }
+    names
 }
 
 fn evaluate_output_assertions(scenario: &EvalScenario, run: &HeadlessEvalRun) -> String {
@@ -373,6 +444,12 @@ fn build_requested_metrics(
                 .unwrap_or(Value::Null),
             "turn_count" => Value::from(turn_count),
             "tool_count" => Value::from(tool_count),
+            "called_tools" => Value::Array(
+                collect_called_tool_names(run)
+                    .into_iter()
+                    .map(Value::String)
+                    .collect(),
+            ),
             "fallback_reason" => fallback_reason
                 .clone()
                 .map(Value::String)
@@ -1146,6 +1223,45 @@ diagnostics:
             crate::agent::evals::EvalReportStatus::Pass
         );
         assert_eq!(outcome.report.assertions.structured, "pass");
+    }
+
+    #[test]
+    fn evaluate_and_write_report_accepts_tool_only_runtime_scenario() {
+        let temp = tempdir().expect("tempdir");
+        let config = test_config(temp.path());
+        let mut scenario = load_scenario();
+        scenario.capability_id = "workspace_image_set_vision".to_string();
+        scenario.expect.route = None;
+        scenario.expect.execution = None;
+        scenario.expect.structured = None;
+        scenario.expect.output.contains_all.clear();
+        scenario.expect.output.contains_any.clear();
+        scenario.expect.tools.called_all = vec!["vision_analyze".to_string()];
+        scenario.record_metrics = vec!["called_tools".to_string()];
+        let mut run = build_run(90_000, 6);
+        run.skill_id = "builtin-general".to_string();
+        run.route_attempt_logs.clear();
+        if let Some(trace) = run.trace.as_mut() {
+            trace.tools[0].tool_name = "vision_analyze".to_string();
+        }
+        if let Some(name) = run.messages[0].pointer_mut("/streamItems/0/toolCall/name") {
+            *name = serde_json::json!("vision_analyze");
+        }
+
+        let outcome = evaluate_and_write_report(&config, &scenario, &run).expect("evaluate report");
+
+        assert_eq!(
+            outcome.report.status,
+            crate::agent::evals::EvalReportStatus::Pass
+        );
+        assert_eq!(outcome.report.assertions.route, "pass");
+        assert_eq!(outcome.report.assertions.execution, "pass");
+        assert_eq!(outcome.report.assertions.structured, "pass");
+        assert_eq!(outcome.report.assertions.tools, "pass");
+        assert_eq!(
+            outcome.report.metrics["called_tools"],
+            serde_json::json!(["vision_analyze"])
+        );
     }
 
     #[test]

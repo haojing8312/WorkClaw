@@ -27,6 +27,10 @@ capabilities:
     workspace_root: E:\\code\\work\\飞书多维表格自动化skill
     entry_kind: workspace_skill
     entry_name: feishu-pm-hub
+  workspace_image_set_vision:
+    workspace_root: D:\\code\\WorkClaw
+    entry_kind: builtin
+    entry_name: builtin-general
 
 diagnostics:
   export_journal: true
