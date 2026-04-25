@@ -8,6 +8,7 @@ use crate::agent::runtime::kernel::capability_snapshot::CapabilitySnapshot;
 use crate::agent::runtime::kernel::route_lane::RouteRunPlan;
 use crate::agent::runtime::kernel::session_profile::SessionExecutionProfile;
 use crate::agent::runtime::kernel::turn_state::TurnStateSnapshot;
+use crate::agent::runtime::resource_context::TurnResourceContext;
 use crate::agent::runtime::runtime_io::WorkspaceSkillRuntimeEntry;
 use crate::agent::runtime::skill_routing::index::SkillRouteIndex;
 use crate::agent::runtime::task_state::{TaskBackendKind, TaskIdentity, TaskKind, TaskSurfaceKind};
@@ -188,6 +189,7 @@ pub(crate) struct TurnContext {
     pub per_candidate_retry_count: usize,
     pub messages: Vec<Value>,
     pub continuation_preference: Option<ContinuationPreference>,
+    pub resource_context: Option<TurnResourceContext>,
 }
 
 impl TurnContext {
@@ -387,6 +389,7 @@ mod tests {
                     route_retry_count: Some(0),
                 },
             }),
+            resource_context: None,
         };
 
         assert_eq!(turn_context.requested_capability, "chat");

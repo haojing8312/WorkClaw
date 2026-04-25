@@ -14,6 +14,7 @@ use crate::agent::runtime::kernel::context_bundle::ContextBundle;
 use crate::agent::runtime::repo::{
     load_runtime_tool_policy_defaults, PoolChatEmployeeDirectory, PoolChatSettingsRepository,
 };
+use crate::agent::runtime::resource_context::resolve_turn_resource_context;
 use crate::agent::runtime::runtime_io as chat_io;
 use crate::agent::runtime::runtime_io::WorkspaceSkillRuntimeEntry;
 use crate::agent::runtime::skill_routing::index::SkillRouteIndex;
@@ -45,6 +46,7 @@ pub(crate) async fn prepare_local_turn(
 ) -> Result<(TurnContext, ExecutionContext), String> {
     let (skill_id, model_id, perm_str, work_dir, session_employee_id) =
         chat_io::load_session_runtime_inputs_with_pool(params.db, params.session_id).await?;
+    let resource_context = resolve_turn_resource_context(Some(&work_dir));
 
     let chat_repo = PoolChatSettingsRepository::new(params.db);
     let execution_request = ChatExecutionPreparationRequest {
@@ -288,6 +290,7 @@ pub(crate) async fn prepare_local_turn(
             .resolve_memory_bucket_employee_id(&prepared_execution_context),
         employee_collaboration_guidance: employee_collaboration_guidance.as_deref(),
         supplemental_runtime_notes: &continuation_runtime_notes,
+        resource_context: Some(&resource_context),
     })
     .await?;
 
@@ -348,6 +351,7 @@ pub(crate) async fn prepare_local_turn(
             per_candidate_retry_count,
             messages,
             continuation_preference,
+            resource_context: Some(resource_context),
         },
         execution_context,
     ))
@@ -404,6 +408,7 @@ pub(crate) fn prepare_hidden_child_turn(
             per_candidate_retry_count: 0,
             messages,
             continuation_preference: None,
+            resource_context: None,
         },
         ExecutionContext {
             session_profile: build_hidden_child_session_profile(),
@@ -486,6 +491,7 @@ pub(crate) fn prepare_employee_step_turn(
                 "content": user_prompt,
             })],
             continuation_preference: None,
+            resource_context: None,
         },
         ExecutionContext {
             session_profile: build_employee_step_session_profile(),

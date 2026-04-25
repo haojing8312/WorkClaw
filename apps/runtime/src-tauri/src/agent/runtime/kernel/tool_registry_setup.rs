@@ -5,7 +5,7 @@ use crate::agent::tools::{
     browser_compat::register_browser_compat_tool, browser_tools::register_browser_tools,
     register_tool_alias, AskUserTool, BashKillTool, BashOutputTool, BashTool, ClawhubRecommendTool,
     ClawhubSearchTool, CompactTool, EmployeeManageTool, ExecTool, GithubRepoDownloadTool,
-    MemoryTool, ProcessManager, SkillInvokeTool, TaskTool, WebSearchTool,
+    MemoryTool, ProcessManager, SkillInvokeTool, TaskTool, VisionAnalyzeTool, WebSearchTool,
 };
 use crate::agent::{AgentExecutor, Tool, ToolContext, ToolRegistry};
 use crate::session_journal::SessionJournalStateHandle;
@@ -336,6 +336,10 @@ pub(crate) async fn setup_runtime_tool_registry(
         .agent_executor
         .registry()
         .register(Arc::new(EmployeeManageTool::new(params.db.clone())));
+    params
+        .agent_executor
+        .registry()
+        .register(Arc::new(VisionAnalyzeTool::new(params.db.clone())));
 
     let search_cache = params.app.state::<SearchCacheState>().0.clone();
     let mut runtime_notes = Vec::new();

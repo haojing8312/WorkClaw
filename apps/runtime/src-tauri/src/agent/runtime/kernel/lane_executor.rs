@@ -1,3 +1,6 @@
+use crate::agent::browser_progress::BrowserProgressSnapshot;
+use crate::agent::context::build_tool_context;
+use crate::agent::run_guard::{ProgressFingerprint, RunBudgetPolicy, RunBudgetScope};
 use crate::agent::runtime::attempt_runner::{execute_route_candidates, RouteExecutionParams};
 use crate::agent::runtime::events::ToolConfirmResponder;
 use crate::agent::runtime::kernel::execution_plan::{
@@ -5,8 +8,15 @@ use crate::agent::runtime::kernel::execution_plan::{
 };
 use crate::agent::runtime::kernel::route_lane::{RouteRunOutcome, RouteRunPlan};
 use crate::agent::runtime::kernel::turn_state::TurnStateSnapshot;
+use crate::agent::runtime::resource_context::is_workspace_image_analysis_request;
 use crate::agent::runtime::skill_routing::runner::execute_planned_route;
+use crate::agent::runtime::tool_dispatch::{
+    dispatch_tool_call, ToolDispatchContext, ToolDispatchOutcome, ToolDispatchState,
+};
+use crate::agent::types::{ToolCall, ToolResult};
 use crate::agent::AgentExecutor;
+use serde_json::json;
+use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tauri::AppHandle;
@@ -58,10 +68,19 @@ pub(crate) async fn execute_execution_lane(
     params: LaneExecutionParams<'_>,
 ) -> Result<ExecutionOutcome, String> {
     let turn_state = decorate_turn_state(
-        params.turn_state,
+        params.turn_state.clone(),
         params.execution_plan,
         params.execution_context,
     );
+
+    if matches!(
+        params.execution_plan.route_plan,
+        RouteRunPlan::OpenTask { .. }
+    ) {
+        if let Some(output) = maybe_direct_dispatch_workspace_vision(&params, &turn_state).await? {
+            return Ok(ExecutionOutcome::DirectDispatch { output, turn_state });
+        }
+    }
 
     match execute_planned_route(
         params.app,
@@ -124,6 +143,96 @@ pub(crate) async fn execute_execution_lane(
                 turn_state,
             })
         }
+    }
+}
+
+async fn maybe_direct_dispatch_workspace_vision(
+    params: &LaneExecutionParams<'_>,
+    _turn_state: &TurnStateSnapshot,
+) -> Result<Option<String>, String> {
+    if !is_workspace_image_analysis_request(
+        params.turn_context.resource_context.as_ref(),
+        &params.turn_context.user_message,
+    ) {
+        return Ok(None);
+    }
+
+    if let Some(allowed_tools) = params.execution_context.allowed_tools() {
+        if !allowed_tools.iter().any(|tool| tool == "vision_analyze") {
+            return Ok(None);
+        }
+    }
+
+    let tool_ctx = build_tool_context(
+        Some(params.session_id),
+        params
+            .execution_context
+            .executor_work_dir
+            .as_ref()
+            .map(PathBuf::from),
+        params.execution_context.allowed_tools(),
+    )
+    .map_err(|error| error.to_string())?;
+    let call = ToolCall {
+        id: "resource-vision-analyze".to_string(),
+        name: "vision_analyze".to_string(),
+        input: json!({
+            "target": { "type": "workspace_image_set", "selection": "all" },
+            "prompt": params.turn_context.user_message,
+            "batch_size": 4
+        }),
+    };
+    let mut tool_results = Vec::<ToolResult>::new();
+    let mut repeated_failure_summary = None;
+    let mut tool_failure_streak = None;
+    let mut tool_call_history = Vec::<ProgressFingerprint>::new();
+    let mut tool_result_history = Vec::<ProgressFingerprint>::new();
+    let mut latest_browser_progress = None::<BrowserProgressSnapshot>;
+    let mut dispatch_state = ToolDispatchState {
+        tool_results: &mut tool_results,
+        repeated_failure_summary: &mut repeated_failure_summary,
+        tool_failure_streak: &mut tool_failure_streak,
+        tool_call_history: &mut tool_call_history,
+        tool_result_history: &mut tool_result_history,
+        latest_browser_progress: &mut latest_browser_progress,
+    };
+    let dispatch_context = ToolDispatchContext {
+        registry: params.agent_executor.registry(),
+        app_handle: Some(params.app),
+        session_id: Some(params.session_id),
+        persisted_run_id: Some(params.run_id),
+        active_task_identity: None,
+        active_task_kind: None,
+        active_task_surface: None,
+        active_task_backend: None,
+        active_task_continuation_mode: None,
+        active_task_continuation_source: None,
+        active_task_continuation_reason: None,
+        allowed_tools: params.execution_context.allowed_tools(),
+        effective_tool_plan: None,
+        permission_mode: params.execution_context.permission_mode,
+        tool_ctx: &tool_ctx,
+        tool_confirm_tx: Some(&params.tool_confirm_responder),
+        cancel_flag: Some(params.cancel_flag.clone()),
+        route_run_id: params.run_id,
+        route_node_timeout_secs: params.execution_context.node_timeout_seconds,
+        route_retry_count: params.execution_context.route_retry_count,
+        iteration: 1,
+        run_budget_policy: RunBudgetPolicy::for_scope(RunBudgetScope::GeneralChat),
+    };
+
+    match dispatch_tool_call(&dispatch_context, &mut dispatch_state, 0, &call)
+        .await
+        .map_err(|error| error.to_string())?
+    {
+        ToolDispatchOutcome::Cancelled => {
+            Err("CANCELLED: workspace vision analysis cancelled".to_string())
+        }
+        ToolDispatchOutcome::Continue => tool_results
+            .into_iter()
+            .next()
+            .map(|result| Some(result.content))
+            .ok_or_else(|| "vision_analyze returned no result".to_string()),
     }
 }
 

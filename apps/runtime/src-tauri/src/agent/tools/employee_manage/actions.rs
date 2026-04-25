@@ -1,5 +1,5 @@
 use super::support::{
-    default_employee_work_dir, dedupe_skill_ids, normalize_employee_id, parse_optional_bool,
+    dedupe_skill_ids, default_employee_work_dir, normalize_employee_id, parse_optional_bool,
     parse_optional_string, parse_profile_answers, parse_string_array, resolve_employee,
     DEFAULT_PRIMARY_SKILL_ID,
 };
@@ -190,8 +190,8 @@ pub(crate) async fn update_employee(
         parse_optional_string(&input, "feishu_open_id").unwrap_or(existing.feishu_open_id.clone());
     let feishu_app_id =
         parse_optional_string(&input, "feishu_app_id").unwrap_or(existing.feishu_app_id);
-    let feishu_app_secret = parse_optional_string(&input, "feishu_app_secret")
-        .unwrap_or(existing.feishu_app_secret);
+    let feishu_app_secret =
+        parse_optional_string(&input, "feishu_app_secret").unwrap_or(existing.feishu_app_secret);
     let default_work_dir = parse_optional_string(&input, "default_work_dir")
         .unwrap_or(existing.default_work_dir.clone());
     let enabled = parse_optional_bool(&input, "enabled").unwrap_or(existing.enabled);

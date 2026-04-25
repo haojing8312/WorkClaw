@@ -1,8 +1,8 @@
+use crate::agent::permissions::PermissionMode;
+use crate::agent::run_guard::{parse_run_stop_reason, RunStopReasonKind};
 use crate::agent::runtime::child_session_runtime::{
     run_hidden_child_session, ChildSessionRunRequest,
 };
-use crate::agent::permissions::PermissionMode;
-use crate::agent::run_guard::{parse_run_stop_reason, RunStopReasonKind};
 use crate::agent::types::{StreamDelta, Tool, ToolContext};
 use crate::agent::{AgentExecutor, ToolRegistry};
 use crate::session_journal::SessionJournalStore;
@@ -240,40 +240,43 @@ impl Tool for TaskTool {
         // 在闭包外保留副本，用于之后的格式化输出
         let agent_type_display = agent_type.clone();
 
-        let runtime = tokio::runtime::Runtime::new()
-            .map_err(|e| anyhow!("创建运行时失败: {}", e))?;
+        let runtime =
+            tokio::runtime::Runtime::new().map_err(|e| anyhow!("创建运行时失败: {}", e))?;
         let task_result = if let (Some(db), Some(journal), Some(parent_session_id)) = (
             self.db.as_ref(),
             self.journal.as_ref(),
             self.session_id.as_deref(),
         ) {
-            runtime.block_on(run_hidden_child_session(ChildSessionRunRequest {
-                parent_session_id,
-                prompt: &prompt,
-                agent_type: &agent_type,
-                delegate_display_name: &delegate_display_name,
-                registry: Arc::clone(&self.registry),
-                db,
-                journal,
-                api_format: &self.api_format,
-                base_url: &self.base_url,
-                api_key: &self.api_key,
-                model: &self.model,
-                allowed_tools: allowed_tools.clone(),
-                max_iterations: max_iter,
-                app_handle: self.app_handle.as_ref(),
-                parent_stream_session_id: self.session_id.as_deref(),
-                delegate_role_id: Some(delegate_role_id.as_str()),
-                delegate_role_name: Some(delegate_role_name.as_str()),
-                work_dir: _ctx
-                    .work_dir
-                    .as_ref()
-                    .map(|path| path.to_string_lossy().to_string()),
-            }))
-            .map(|outcome| vec![json!({
-                "role": "assistant",
-                "content": outcome.final_text,
-            })])
+            runtime
+                .block_on(run_hidden_child_session(ChildSessionRunRequest {
+                    parent_session_id,
+                    prompt: &prompt,
+                    agent_type: &agent_type,
+                    delegate_display_name: &delegate_display_name,
+                    registry: Arc::clone(&self.registry),
+                    db,
+                    journal,
+                    api_format: &self.api_format,
+                    base_url: &self.base_url,
+                    api_key: &self.api_key,
+                    model: &self.model,
+                    allowed_tools: allowed_tools.clone(),
+                    max_iterations: max_iter,
+                    app_handle: self.app_handle.as_ref(),
+                    parent_stream_session_id: self.session_id.as_deref(),
+                    delegate_role_id: Some(delegate_role_id.as_str()),
+                    delegate_role_name: Some(delegate_role_name.as_str()),
+                    work_dir: _ctx
+                        .work_dir
+                        .as_ref()
+                        .map(|path| path.to_string_lossy().to_string()),
+                }))
+                .map(|outcome| {
+                    vec![json!({
+                        "role": "assistant",
+                        "content": outcome.final_text,
+                    })]
+                })
         } else {
             runtime.block_on(Self::execute_direct_subagent(
                 Arc::clone(&self.registry),
@@ -290,7 +293,9 @@ impl Tool for TaskTool {
                 self.session_id.clone(),
                 allowed_tools.clone(),
                 max_iter,
-                _ctx.work_dir.as_ref().map(|path| path.to_string_lossy().to_string()),
+                _ctx.work_dir
+                    .as_ref()
+                    .map(|path| path.to_string_lossy().to_string()),
             ))
         };
 

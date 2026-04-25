@@ -1,14 +1,16 @@
 use super::runtime_io::insert_session_message_with_pool;
+#[cfg(test)]
+use crate::agent::runtime::runtime_io::finalize_run_success_with_pool;
 use crate::agent::runtime::task_backend::{
     HiddenChildTaskBackendPreparationRequest, TaskBackendPreparationRequest,
     TaskBackendTokenCallback,
 };
 use crate::agent::runtime::task_entry;
+#[cfg(test)]
+use crate::agent::runtime::task_entry::DelegatedTaskTerminalFinalizeEntryRequest;
 use crate::agent::runtime::task_entry::{
     DelegatedTaskBackendRunAndFinalizeRequest, DelegatedTaskEntryOutcome,
 };
-#[cfg(test)]
-use crate::agent::runtime::task_entry::DelegatedTaskTerminalFinalizeEntryRequest;
 #[cfg(test)]
 use crate::agent::runtime::task_execution::TaskExecutionOutcome;
 use crate::agent::runtime::task_lifecycle;
@@ -16,11 +18,9 @@ use crate::agent::runtime::task_lifecycle::TaskBeginParentContext;
 use crate::agent::runtime::task_record::TaskRecord;
 use crate::agent::runtime::task_state::TaskState;
 #[cfg(test)]
-use crate::agent::runtime::runtime_io::finalize_run_success_with_pool;
+use crate::agent::runtime::RuntimeTranscript;
 use crate::agent::types::StreamDelta;
 use crate::agent::{AgentExecutor, ToolRegistry};
-#[cfg(test)]
-use crate::agent::runtime::RuntimeTranscript;
 use crate::session_journal::SessionJournalStore;
 use anyhow::Result;
 use serde_json::json;

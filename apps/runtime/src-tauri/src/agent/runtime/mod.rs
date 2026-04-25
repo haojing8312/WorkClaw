@@ -11,6 +11,7 @@ pub(crate) mod kernel;
 pub(crate) mod observability;
 pub(crate) mod progress_guard;
 pub(crate) mod repo;
+pub(crate) mod resource_context;
 pub(crate) mod run_registry;
 pub mod runtime_io;
 pub(crate) mod session_runs;

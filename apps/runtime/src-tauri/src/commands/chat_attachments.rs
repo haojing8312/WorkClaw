@@ -1,10 +1,10 @@
-use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use regex::Regex;
 use reqwest::Client;
 use runtime_chat_app::{
-    ChatSettingsRepository, PreparedRouteCandidate, parse_fallback_chain_targets,
+    parse_fallback_chain_targets, ChatSettingsRepository, PreparedRouteCandidate,
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::collections::{BTreeSet, HashMap};
 use std::io::{Cursor, Read};
 use std::path::PathBuf;
@@ -12,13 +12,13 @@ use std::process::Command;
 use zip::ZipArchive;
 
 use crate::agent::runtime::repo::PoolChatSettingsRepository;
-use crate::model_transport::{ModelTransportKind, resolve_model_transport};
+use crate::model_transport::{resolve_model_transport, ModelTransportKind};
 
 use super::chat::{AttachmentInput, SendMessagePart};
 use super::chat_attachment_policy::{
-    PHASE_ONE_MAX_PDF_EXTRACTED_TEXT_CHARS, attachment_is_text_document, default_attachment_policy,
+    attachment_is_text_document, default_attachment_policy, PHASE_ONE_MAX_PDF_EXTRACTED_TEXT_CHARS,
 };
-use super::chat_attachment_resolution::{ResolvedAttachment, resolve_attachment_input};
+use super::chat_attachment_resolution::{resolve_attachment_input, ResolvedAttachment};
 use super::chat_attachment_validation::validate_attachment_inputs;
 
 const VIDEO_NO_AUDIO_TRACK: &str = "VIDEO_NO_AUDIO_TRACK";
@@ -108,7 +108,7 @@ async fn resolve_audio_stt_route_candidate(
         .await
 }
 
-async fn resolve_vision_route_candidate(
+pub(crate) async fn resolve_vision_route_candidate(
     pool: &sqlx::SqlitePool,
 ) -> Result<Option<PreparedRouteCandidate>, String> {
     resolve_capability_route_candidate(pool, "vision", supports_vision_provider_candidate).await
@@ -559,18 +559,58 @@ fn extract_video_frame_data_urls(
     }
 }
 
-async fn request_vision_summary_with_candidate(
+pub(crate) async fn request_vision_summary_with_candidate(
     display_name: &str,
     frame_data_urls: &[String],
+    candidate: &PreparedRouteCandidate,
+    prompt: &str,
+) -> Result<Option<String>, String> {
+    request_visual_summary_with_candidate(
+        "视频附件",
+        "画面摘要",
+        "frames",
+        display_name,
+        frame_data_urls,
+        candidate,
+        prompt,
+    )
+    .await
+}
+
+pub(crate) async fn request_image_vision_summary_with_candidate(
+    display_name: &str,
+    image_data_urls: &[String],
+    candidate: &PreparedRouteCandidate,
+    prompt: &str,
+) -> Result<Option<String>, String> {
+    request_visual_summary_with_candidate(
+        "图片",
+        "视觉分析",
+        "images",
+        display_name,
+        image_data_urls,
+        candidate,
+        prompt,
+    )
+    .await
+}
+
+async fn request_visual_summary_with_candidate(
+    subject_label: &str,
+    action_label: &str,
+    count_label: &str,
+    display_name: &str,
+    image_data_urls: &[String],
     candidate: &PreparedRouteCandidate,
     prompt: &str,
 ) -> Result<Option<String>, String> {
     let normalized_base_url = candidate.base_url.trim();
     if normalized_base_url.eq_ignore_ascii_case("http://mock-vision-summary-success") {
         return Ok(Some(format!(
-            "MOCK_VISION_SUMMARY: {} ({} frames)",
+            "MOCK_VISION_SUMMARY: {} ({} {})",
             display_name,
-            frame_data_urls.len()
+            image_data_urls.len(),
+            count_label
         )));
     }
     if normalized_base_url.eq_ignore_ascii_case("http://mock-vision-summary-empty") {
@@ -578,8 +618,7 @@ async fn request_vision_summary_with_candidate(
     }
     if normalized_base_url.eq_ignore_ascii_case("http://mock-vision-summary-error") {
         return Err(format!(
-            "视频附件 {} 画面摘要失败: mock upstream error",
-            display_name
+            "{subject_label} {display_name} {action_label}失败: mock upstream error"
         ));
     }
 
@@ -598,7 +637,7 @@ async fn request_vision_summary_with_candidate(
             build_video_vision_responses_request_body(
                 &candidate.model_name,
                 prompt,
-                frame_data_urls,
+                image_data_urls,
             ),
         ),
         ModelTransportKind::OpenAiCompletions => (
@@ -609,7 +648,7 @@ async fn request_vision_summary_with_candidate(
             build_video_vision_chat_completions_request_body(
                 &candidate.model_name,
                 prompt,
-                frame_data_urls,
+                image_data_urls,
             ),
         ),
         ModelTransportKind::AnthropicMessages => return Ok(None),
@@ -622,23 +661,22 @@ async fn request_vision_summary_with_candidate(
         .json(&body)
         .send()
         .await
-        .map_err(|err| format!("视频附件 {} 画面摘要请求失败: {err}", display_name))?;
+        .map_err(|err| format!("{subject_label} {display_name} {action_label}请求失败: {err}"))?;
     let status = response.status();
-    let body = response
-        .text()
-        .await
-        .map_err(|err| format!("视频附件 {} 画面摘要响应读取失败: {err}", display_name))?;
+    let body = response.text().await.map_err(|err| {
+        format!("{subject_label} {display_name} {action_label}响应读取失败: {err}")
+    })?;
     if !status.is_success() {
         let preview = body.chars().take(240).collect::<String>();
         return Err(format!(
-            "视频附件 {} 画面摘要失败: HTTP {} {}",
-            display_name, status, preview
+            "{subject_label} {display_name} {action_label}失败: HTTP {} {}",
+            status, preview
         ));
     }
 
     parse_vision_summary_body(&body)
         .map(Some)
-        .ok_or_else(|| format!("视频附件 {} 画面摘要响应缺少文本内容", display_name))
+        .ok_or_else(|| format!("{subject_label} {display_name} {action_label}响应缺少文本内容"))
 }
 
 fn build_video_vision_responses_request_body(
@@ -1473,7 +1511,7 @@ mod tests {
         resolve_ffmpeg_command_from_env_and_candidates, supports_audio_stt_provider_candidate,
     };
     use crate::commands::chat::SendMessagePart;
-    use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
+    use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
     use sqlx::SqlitePool;
     use std::fs;
     use std::path::PathBuf;
@@ -1620,12 +1658,10 @@ mod tests {
 
         assert_eq!(parts[0]["type"].as_str(), Some("pdf_file"));
         assert_eq!(parts[0]["name"].as_str(), Some("brief.pdf"));
-        assert!(
-            parts[0]["extractedText"]
-                .as_str()
-                .expect("extracted text")
-                .contains("Hello PDF")
-        );
+        assert!(parts[0]["extractedText"]
+            .as_str()
+            .expect("extracted text")
+            .contains("Hello PDF"));
     }
 
     #[test]
@@ -1704,13 +1740,11 @@ mod tests {
             parts[0]["attachment"]["transcript"].as_str(),
             Some("TRANSCRIPTION_REQUIRED")
         );
-        assert!(
-            parts[0]["attachment"]["warnings"]
-                .as_array()
-                .expect("warnings")
-                .iter()
-                .any(|warning| warning.as_str() == Some("transcription_pending"))
-        );
+        assert!(parts[0]["attachment"]["warnings"]
+            .as_array()
+            .expect("warnings")
+            .iter()
+            .any(|warning| warning.as_str() == Some("transcription_pending")));
     }
 
     #[tokio::test]

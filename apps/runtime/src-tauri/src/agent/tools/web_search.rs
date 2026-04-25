@@ -1,7 +1,7 @@
+use crate::agent::tool_manifest::{ToolCategory, ToolMetadata};
 use crate::agent::tools::search_providers::{
     cache::SearchCache, SearchItem, SearchParams, SearchProvider,
 };
-use crate::agent::tool_manifest::{ToolCategory, ToolMetadata};
 use crate::agent::types::{Tool, ToolContext};
 use anyhow::{anyhow, Result};
 use chrono::{Datelike, Duration, Local, NaiveDate, Weekday};
@@ -20,7 +20,9 @@ struct NormalizedSearchRequest {
 fn replace_all(query: &str, replacements: &[(&str, String)]) -> String {
     replacements
         .iter()
-        .fold(query.to_string(), |acc, (needle, value)| acc.replace(needle, value))
+        .fold(query.to_string(), |acc, (needle, value)| {
+            acc.replace(needle, value)
+        })
 }
 
 fn start_of_week(reference_date: NaiveDate) -> NaiveDate {
@@ -36,7 +38,10 @@ fn start_of_week(reference_date: NaiveDate) -> NaiveDate {
     reference_date - Duration::days(days_from_monday)
 }
 
-fn normalize_relative_date_query(query: &str, reference_date: NaiveDate) -> NormalizedSearchRequest {
+fn normalize_relative_date_query(
+    query: &str,
+    reference_date: NaiveDate,
+) -> NormalizedSearchRequest {
     let tomorrow = reference_date + Duration::days(1);
     let yesterday = reference_date - Duration::days(1);
     let week_start = start_of_week(reference_date);
@@ -59,18 +64,16 @@ fn normalize_relative_date_query(query: &str, reference_date: NaiveDate) -> Norm
     ];
     let normalized_query = replace_all(query, &replacements);
 
-    let inferred_freshness = if query.contains("今天")
-        || query.contains("昨天")
-        || query.contains("昨日")
-    {
-        Some("day".to_string())
-    } else if query.contains("这周") || query.contains("本周") {
-        Some("week".to_string())
-    } else if query.contains("这个月") || query.contains("本月") {
-        Some("month".to_string())
-    } else {
-        None
-    };
+    let inferred_freshness =
+        if query.contains("今天") || query.contains("昨天") || query.contains("昨日") {
+            Some("day".to_string())
+        } else if query.contains("这周") || query.contains("本周") {
+            Some("week".to_string())
+        } else if query.contains("这个月") || query.contains("本月") {
+            Some("month".to_string())
+        } else {
+            None
+        };
 
     NormalizedSearchRequest {
         query: normalized_query,
@@ -181,7 +184,10 @@ impl Tool for WebSearchTool {
 
 /// 将搜索结果列表格式化为可读文本
 fn format_results(items: &[SearchItem], provider_name: &str) -> String {
-    let mut output = format!("已使用搜索引擎：{}\n[搜索结果 - 来自 {}]\n\n", provider_name, provider_name);
+    let mut output = format!(
+        "已使用搜索引擎：{}\n[搜索结果 - 来自 {}]\n\n",
+        provider_name, provider_name
+    );
     for (i, item) in items.iter().enumerate() {
         if item.snippet.is_empty() {
             output.push_str(&format!("{}. {}\n   {}\n\n", i + 1, item.title, item.url));
@@ -212,10 +218,10 @@ fn truncate_output(output: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::NaiveDate;
     use crate::agent::tools::search_providers::{
         SearchItem, SearchParams, SearchProvider, SearchResponse,
     };
+    use chrono::NaiveDate;
     use std::time::Duration;
 
     /// 模拟搜索 Provider，始终返回固定结果

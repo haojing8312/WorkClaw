@@ -382,7 +382,11 @@ impl SkillInvokeTool {
         )
     }
 
-    pub fn resolve_invocation(&self, input: Value, ctx: &ToolContext) -> Result<SkillResolvedInvocation> {
+    pub fn resolve_invocation(
+        &self,
+        input: Value,
+        ctx: &ToolContext,
+    ) -> Result<SkillResolvedInvocation> {
         let raw_name = input["skill_name"]
             .as_str()
             .ok_or_else(|| anyhow!("BAD_REQUEST: 缺少 skill_name 参数"))?;

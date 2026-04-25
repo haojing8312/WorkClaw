@@ -2,10 +2,11 @@ use super::effective_tool_set::{
     resolve_effective_tool_set, session_tool_policy_input, skill_tool_policy_input,
     EffectiveToolPolicyInput, EffectiveToolSet,
 };
+use super::resource_context::TurnResourceContext;
 use super::runtime_io as chat_io;
 use super::tool_catalog::{
     build_tool_candidate_records, format_tool_candidate_record_hints, format_tool_discovery_index,
-    ToolDiscoveryCandidateRecord,
+    ToolDiscoveryCandidateRecord, ToolRecommendationStage,
 };
 use crate::agent::permissions::PermissionMode;
 use crate::agent::runtime::kernel::capability_snapshot::CapabilitySnapshot;
@@ -75,6 +76,7 @@ pub(crate) struct ToolSetupParams<'a> {
     pub memory_bucket_employee_id: &'a str,
     pub employee_collaboration_guidance: Option<&'a str>,
     pub supplemental_runtime_notes: &'a [String],
+    pub resource_context: Option<&'a TurnResourceContext>,
 }
 
 pub(crate) async fn prepare_runtime_tools(
@@ -150,21 +152,25 @@ pub(crate) async fn prepare_runtime_tools(
         eprintln!("[tooling] 生效工具来源统计: {source_summary}");
     }
 
-    let discovery_candidates = if let Some(discovery_query) = params.tool_discovery_query {
+    let mut discovery_candidates = if let Some(discovery_query) = params.tool_discovery_query {
         build_tool_candidate_records(&effective_tool_set.tool_manifest, discovery_query, 4)
     } else {
         Vec::new()
     };
+    append_resource_discovery_candidates(
+        &mut discovery_candidates,
+        &effective_tool_set.tool_manifest,
+        params.resource_context,
+    );
     effective_tool_set.apply_recommended_tools(&discovery_candidates);
 
+    let mut supplemental_runtime_notes = params.supplemental_runtime_notes.to_vec();
+    supplemental_runtime_notes.extend(resource_context_runtime_notes(params.resource_context));
     let capability_snapshot = CapabilitySnapshot::build_with_tool_plan(
         effective_tool_set.clone(),
         discovery_candidates.clone(),
         workspace_skill_context.skill_command_specs.clone(),
-        merge_runtime_notes(
-            registry_setup.runtime_notes,
-            params.supplemental_runtime_notes,
-        ),
+        merge_runtime_notes(registry_setup.runtime_notes, &supplemental_runtime_notes),
     );
     let memory_content = chat_io::load_memory_content(&registry_setup.memory_dir);
     let context_bundle = ContextBundle::build(
@@ -240,6 +246,52 @@ fn merge_runtime_notes(
     runtime_notes
 }
 
+pub(crate) fn resource_context_runtime_notes(context: Option<&TurnResourceContext>) -> Vec<String> {
+    let Some(context) = context else {
+        return Vec::new();
+    };
+    let Some(images) = context.workspace_images.as_ref() else {
+        return Vec::new();
+    };
+    let sample = if images.sample_names.is_empty() {
+        "无样例文件名".to_string()
+    } else {
+        images.sample_names.join(", ")
+    };
+    vec![format!(
+        "当前工作区包含 {} 个顶层图片文件，示例：{}。当用户要求查看、读取、分析、描述或比较这些图片时，使用 `vision_analyze`，target.type 设为 `workspace_image_set`，selection 设为 `all`。不要为了读取本地图片内容改用 browser 工具或 shell/Python。",
+        images.count, sample
+    )]
+}
+
+pub(crate) fn append_resource_discovery_candidates(
+    candidates: &mut Vec<ToolDiscoveryCandidateRecord>,
+    manifest: &[crate::agent::ToolManifestEntry],
+    context: Option<&TurnResourceContext>,
+) {
+    if context
+        .and_then(|context| context.workspace_images.as_ref())
+        .is_none()
+        || candidates
+            .iter()
+            .any(|candidate| candidate.name == "vision_analyze")
+    {
+        return;
+    }
+    let Some(entry) = manifest.iter().find(|entry| entry.name == "vision_analyze") else {
+        return;
+    };
+    candidates.push(ToolDiscoveryCandidateRecord {
+        name: entry.name.clone(),
+        category: entry.category,
+        source: entry.source,
+        score: 10_000,
+        stage: ToolRecommendationStage::Primary,
+        matched_terms: vec!["workspace_images".to_string()],
+        matched_fields: vec!["resource_context".to_string()],
+    });
+}
+
 fn should_embed_tool_discovery_scaffold(
     api_format: &str,
     base_url: &str,
@@ -265,11 +317,17 @@ fn should_embed_tool_discovery_scaffold(
 
 #[cfg(test)]
 mod tests {
-    use super::{merge_runtime_notes, should_embed_tool_discovery_scaffold, PreparedRuntimeTools};
+    use super::{
+        append_resource_discovery_candidates, merge_runtime_notes, resource_context_runtime_notes,
+        should_embed_tool_discovery_scaffold, PreparedRuntimeTools,
+    };
     use crate::agent::runtime::effective_tool_set::{
         EffectiveToolPolicySummary, EffectiveToolSet, EffectiveToolSetSource,
     };
     use crate::agent::runtime::kernel::capability_snapshot::CapabilitySnapshot;
+    use crate::agent::runtime::resource_context::{
+        TurnResourceContext, WorkspaceImageResourceSummary,
+    };
     use crate::agent::runtime::tool_catalog::{
         format_tool_candidate_hints, format_tool_discovery_index, ToolDiscoveryCandidateRecord,
         ToolRecommendationStage,
@@ -566,6 +624,58 @@ mod tests {
                 "若用户要求继续，应基于当前压缩后上下文直接继续执行".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn resource_context_runtime_notes_recommend_vision_analyze_for_workspace_images() {
+        let context = TurnResourceContext {
+            work_dir: Some("C:/workspace/images".to_string()),
+            workspace_images: Some(WorkspaceImageResourceSummary {
+                id: "workspace.images".to_string(),
+                source: "workspace_top_level".to_string(),
+                count: 3,
+                sample_names: vec!["a.png".to_string(), "b.jpg".to_string()],
+                total_bytes: 128,
+            }),
+        };
+
+        let notes = resource_context_runtime_notes(Some(&context));
+
+        assert_eq!(notes.len(), 1);
+        assert!(notes[0].contains("当前工作区包含 3 个顶层图片文件"));
+        assert!(notes[0].contains("vision_analyze"));
+        assert!(notes[0].contains("不要为了读取本地图片内容改用 browser 工具或 shell/Python"));
+    }
+
+    #[test]
+    fn append_resource_discovery_candidates_adds_primary_vision_tool() {
+        let mut candidates = Vec::new();
+        let manifest = vec![ToolManifestEntry::from_parts(
+            "vision_analyze",
+            "Analyze workspace images",
+            ToolMetadata {
+                category: ToolCategory::Other,
+                source: ToolSource::Runtime,
+                read_only: true,
+                ..ToolMetadata::default()
+            },
+        )];
+        let context = TurnResourceContext {
+            work_dir: Some("C:/workspace/images".to_string()),
+            workspace_images: Some(WorkspaceImageResourceSummary {
+                id: "workspace.images".to_string(),
+                source: "workspace_top_level".to_string(),
+                count: 1,
+                sample_names: vec!["a.png".to_string()],
+                total_bytes: 16,
+            }),
+        };
+
+        append_resource_discovery_candidates(&mut candidates, &manifest, Some(&context));
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].name, "vision_analyze");
+        assert_eq!(candidates[0].stage, ToolRecommendationStage::Primary);
     }
 
     #[test]

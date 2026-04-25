@@ -1,6 +1,6 @@
+use crate::agent::tool_manifest::{ToolCategory, ToolMetadata, ToolSource};
 use crate::agent::tools::process_manager::ProcessManager;
 use crate::agent::tools::tool_result;
-use crate::agent::tool_manifest::{ToolCategory, ToolMetadata, ToolSource};
 use crate::agent::types::{Tool, ToolContext};
 use crate::windows_process::hide_console_window;
 use anyhow::{anyhow, Result};
