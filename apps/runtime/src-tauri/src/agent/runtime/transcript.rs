@@ -5,12 +5,26 @@ use super::transcript_policy;
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct RuntimeTranscript;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ImagePayloadMode {
+    Preserve,
+    Placeholder,
+}
+
 impl RuntimeTranscript {
     pub fn new() -> Self {
         Self
     }
 
     pub(crate) fn build_current_turn_message(api_format: &str, parts: &[Value]) -> Option<Value> {
+        Self::build_user_message_from_parts(api_format, parts, ImagePayloadMode::Preserve)
+    }
+
+    fn build_user_message_from_parts(
+        api_format: &str,
+        parts: &[Value],
+        image_payload_mode: ImagePayloadMode,
+    ) -> Option<Value> {
         if parts.is_empty() {
             return None;
         }
@@ -28,6 +42,11 @@ impl RuntimeTranscript {
                     }
                 }
                 "image" => {
+                    if image_payload_mode == ImagePayloadMode::Placeholder {
+                        combined_text_parts.push(Self::historical_image_placeholder(part));
+                        continue;
+                    }
+
                     let mime_type = part
                         .get("mimeType")
                         .and_then(Value::as_str)
@@ -217,9 +236,11 @@ impl RuntimeTranscript {
                     if let Some(content_json) = content_json {
                         if let Ok(parts) = serde_json::from_str::<Value>(content_json) {
                             if let Some(parts_array) = parts.as_array() {
-                                if let Some(message) =
-                                    Self::build_current_turn_message(api_format, parts_array)
-                                {
+                                if let Some(message) = Self::build_user_message_from_parts(
+                                    api_format,
+                                    parts_array,
+                                    ImagePayloadMode::Placeholder,
+                                ) {
                                     return vec![message];
                                 }
                             }
@@ -548,6 +569,16 @@ impl RuntimeTranscript {
         }
     }
 
+    fn historical_image_placeholder(part: &Value) -> String {
+        let name = part
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("图片");
+        format!("[历史图片 {name} 已从模型上下文移除]")
+    }
+
     fn is_video_summary_status(text: &str) -> bool {
         matches!(
             text,
@@ -615,12 +646,12 @@ mod tests {
 
         let content = message["content"].as_array().expect("content array");
         assert_eq!(content[0]["type"].as_str(), Some("text"));
-        assert!(content[0]["text"].as_str().unwrap_or("").contains("附件上下文"));
+        assert!(content[0]["text"]
+            .as_str()
+            .unwrap_or("")
+            .contains("附件上下文"));
         assert_eq!(content[1]["type"].as_str(), Some("attachment"));
-        assert_eq!(
-            content[1]["attachment"]["kind"].as_str(),
-            Some("document")
-        );
+        assert_eq!(content[1]["attachment"]["kind"].as_str(), Some("document"));
         assert_eq!(
             content[1]["attachment"]["extractedText"].as_str(),
             Some("这是附件正文")
@@ -650,7 +681,7 @@ mod tests {
                         "name": "brief.docx",
                         "summary": "已提取文档内容"
                     }
-                })
+                }),
             ],
         )
         .expect("message");
@@ -680,6 +711,28 @@ mod tests {
         let text = message["content"][0]["text"].as_str().expect("text block");
         assert!(text.contains("摘要状态：VIDEO_NO_AUDIO_TRACK"));
         assert!(text.contains("警告：video_no_audio_track"));
+    }
+
+    #[test]
+    fn build_current_turn_message_preserves_openai_image_url() {
+        let message = RuntimeTranscript::build_current_turn_message(
+            "openai",
+            &[json!({
+                "type": "image",
+                "name": "screen.png",
+                "mimeType": "image/png",
+                "data": "aGVsbG8="
+            })],
+        )
+        .expect("message");
+
+        let content = message["content"].as_array().expect("content array");
+        assert_eq!(content.len(), 1);
+        assert_eq!(content[0]["type"].as_str(), Some("image_url"));
+        assert_eq!(
+            content[0]["image_url"]["url"].as_str(),
+            Some("data:image/png;base64,aGVsbG8=")
+        );
     }
 
     #[test]
@@ -835,7 +888,78 @@ mod tests {
             .as_str()
             .unwrap_or("")
             .contains("debug.ts"));
-        assert_eq!(content[1]["type"].as_str(), Some("image_url"));
+        assert!(content[0]["text"]
+            .as_str()
+            .unwrap_or("")
+            .contains("[历史图片 screen.png 已从模型上下文移除]"));
+        assert!(!content
+            .iter()
+            .any(|block| block["type"].as_str() == Some("image_url")));
+    }
+
+    #[test]
+    fn reconstruct_history_messages_replaces_user_images_with_placeholders() {
+        let history = vec![(
+            "user".to_string(),
+            "[图片 2 张]".to_string(),
+            Some(
+                serde_json::to_string(&vec![
+                    json!({
+                        "type": "image",
+                        "name": " screen.png ",
+                        "mimeType": "image/png",
+                        "data": "data:image/png;base64,aGVsbG8="
+                    }),
+                    json!({
+                        "type": "image",
+                        "name": "   ",
+                        "mimeType": "image/jpeg",
+                        "data": "data:image/jpeg;base64,d29ybGQ="
+                    }),
+                ])
+                .expect("serialize parts"),
+            ),
+        )];
+
+        let messages = RuntimeTranscript::reconstruct_history_messages(&history, "openai");
+
+        assert_eq!(messages.len(), 1);
+        let content = messages[0]["content"].as_array().expect("content array");
+        assert_eq!(content.len(), 1);
+        assert_eq!(content[0]["type"].as_str(), Some("text"));
+        let text = content[0]["text"].as_str().expect("text");
+        assert!(text.contains("[历史图片 screen.png 已从模型上下文移除]"));
+        assert!(text.contains("[历史图片 图片 已从模型上下文移除]"));
+        assert!(!content
+            .iter()
+            .any(|block| block["type"].as_str() == Some("image_url")));
+        assert!(!content
+            .iter()
+            .any(|block| block["type"].as_str() == Some("image")));
+    }
+
+    #[test]
+    fn reconstruct_history_messages_keeps_text_only_user_content_unchanged() {
+        let history = vec![(
+            "user".to_string(),
+            "fallback text".to_string(),
+            Some(
+                serde_json::to_string(&vec![json!({
+                    "type": "text",
+                    "text": "请继续分析"
+                })])
+                .expect("serialize parts"),
+            ),
+        )];
+
+        let messages = RuntimeTranscript::reconstruct_history_messages(&history, "openai");
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["role"].as_str(), Some("user"));
+        let content = messages[0]["content"].as_array().expect("content array");
+        assert_eq!(content.len(), 1);
+        assert_eq!(content[0]["type"].as_str(), Some("text"));
+        assert_eq!(content[0]["text"].as_str(), Some("请继续分析"));
     }
 
     #[test]

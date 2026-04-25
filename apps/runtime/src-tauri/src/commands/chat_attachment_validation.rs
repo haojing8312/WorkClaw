@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
-use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 
 use super::chat::AttachmentInput;
 use super::chat_attachment_policy::{
-    AttachmentCapabilityPolicy, AttachmentPolicy, attachment_is_pdf, attachment_is_text_document,
-    attachment_size_limit_bytes,
+    attachment_is_pdf, attachment_is_text_document, attachment_size_limit_bytes,
+    AttachmentCapabilityPolicy, AttachmentPolicy,
 };
 
 pub fn validate_attachment_input(
@@ -20,6 +20,8 @@ pub fn validate_attachment_input(
             if attachment.source_payload.is_none() {
                 return Err(format!("图片附件 {} 缺少 sourcePayload", attachment.name));
             }
+            validate_image_mime_type(attachment)?;
+            validate_image_source_payload(attachment)?;
             Ok(())
         }
         "document" => {
@@ -114,12 +116,41 @@ fn validate_total_image_payload_size(
         total_bytes = total_bytes.saturating_add(size_bytes);
         if total_bytes > policy.image.max_total_bytes {
             return Err(format!(
-                "图片附件总大小 {total_bytes} 超过 {} 字节限制",
+                "附件或图片过大：图片附件总大小 {total_bytes} 超过 {} 字节限制",
                 policy.image.max_total_bytes
             ));
         }
     }
     Ok(())
+}
+
+fn validate_image_mime_type(attachment: &AttachmentInput) -> Result<(), String> {
+    let Some(mime_type) = attachment.declared_mime_type.as_deref() else {
+        return Err(format!(
+            "图片附件 {} 需要 image/ MIME 类型",
+            attachment.name
+        ));
+    };
+    if mime_type.trim().to_lowercase().starts_with("image/") {
+        Ok(())
+    } else {
+        Err(format!(
+            "图片附件 {} 需要 image/ MIME 类型",
+            attachment.name
+        ))
+    }
+}
+
+fn validate_image_source_payload(attachment: &AttachmentInput) -> Result<(), String> {
+    let Some(payload) = attachment.source_payload.as_deref() else {
+        return Err(format!("图片附件 {} 缺少 sourcePayload", attachment.name));
+    };
+    decode_base64_payload_len(payload).map(|_| ()).map_err(|_| {
+        format!(
+            "图片附件 {} 的 sourcePayload 不是有效的 base64",
+            attachment.name
+        )
+    })
 }
 
 fn validate_document_enabled(
@@ -174,10 +205,17 @@ fn validate_size_limit(
     };
     let max_bytes = attachment_size_limit_bytes(policy, attachment)?;
     if size_bytes > max_bytes {
-        Err(format!(
-            "附件 {} 超过 {} 字节限制",
-            attachment.name, max_bytes
-        ))
+        if attachment.kind == "image" {
+            Err(format!(
+                "附件或图片过大：附件 {} 超过 {} 字节限制",
+                attachment.name, max_bytes
+            ))
+        } else {
+            Err(format!(
+                "附件 {} 超过 {} 字节限制",
+                attachment.name, max_bytes
+            ))
+        }
     } else {
         Ok(())
     }
@@ -198,7 +236,14 @@ fn derive_size_bytes_from_payload(attachment: &AttachmentInput) -> Result<Option
         "image" => attachment
             .source_payload
             .as_deref()
-            .map(decode_base64_payload_len)
+            .map(|payload| {
+                decode_base64_payload_len(payload).map_err(|_| {
+                    format!(
+                        "图片附件 {} 的 sourcePayload 不是有效的 base64",
+                        attachment.name
+                    )
+                })
+            })
             .transpose(),
         "document" if attachment_is_pdf(attachment) => {
             if let Some(payload) = attachment.source_payload.as_deref() {
