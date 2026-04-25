@@ -18,6 +18,18 @@ const MODEL_ERROR_DISPLAY_COPY: Record<ModelErrorKind, ModelErrorDisplayCopy> = 
     title: "请求过于频繁",
     message: "模型平台当前触发限流，请稍后重试或降低并发频率。",
   },
+  context_overflow: {
+    title: "上下文过长",
+    message: "当前会话内容超过了模型可处理的上下文。请减少历史内容、开启新会话，或使用更大上下文的模型。",
+  },
+  invalid_token_budget: {
+    title: "模型输出空间不足",
+    message: "模型请求没有剩余空间生成回复。请减少当前会话上下文、压缩图片，或使用更大上下文的模型后重试。",
+  },
+  media_too_large: {
+    title: "附件或图片过大",
+    message: "上传的图片或附件超过了当前模型请求限制。请压缩图片、减少附件数量，或移除不必要的附件后重试。",
+  },
   timeout: {
     title: "请求超时",
     message: "模型平台响应超时，请稍后重试，或检查网络和所选模型是否可用。",
@@ -37,6 +49,9 @@ export function isModelErrorKind(value: unknown): value is ModelErrorKind {
     value === "billing" ||
     value === "auth" ||
     value === "rate_limit" ||
+    value === "context_overflow" ||
+    value === "invalid_token_budget" ||
+    value === "media_too_large" ||
     value === "timeout" ||
     value === "network" ||
     value === "unknown"
@@ -84,6 +99,84 @@ function normalizeErrorSearchText(rawMessage: string): string {
   return rawMessage.toLowerCase();
 }
 
+function hasTpmRateLimitHint(lower: string): boolean {
+  const mentionsTpm =
+    lower.includes("tokens per minute") ||
+    lower.includes("token per minute") ||
+    lower.includes("tpm limit") ||
+    lower.includes("tpm");
+  const mentionsRateLimit =
+    lower.includes("limit exceeded") ||
+    lower.includes("rate limit") ||
+    lower.includes("too many requests");
+
+  return mentionsTpm && mentionsRateLimit;
+}
+
+function containsNumericCode(lower: string, code: string): boolean {
+  return new RegExp(`(^|\\D)${code}(\\D|$)`).test(lower);
+}
+
+function containsHttpStatusCode(lower: string, code: string): boolean {
+  if (!containsNumericCode(lower, code)) {
+    return false;
+  }
+
+  return (
+    new RegExp(`\\bhttp(?:\\s+status)?(?:\\s+code)?\\s*:?\\s*${code}\\b`).test(lower) ||
+    new RegExp(`\\bstatus(?:\\s+code)?\\s*:?\\s*${code}\\b`).test(lower)
+  );
+}
+
+function isRateLimitError(lower: string): boolean {
+  return (
+    lower.includes("rate limit") ||
+    lower.includes("rate_limit") ||
+    lower.includes("too many requests") ||
+    containsHttpStatusCode(lower, "429") ||
+    containsHttpStatusCode(lower, "529") ||
+    lower.includes("overloaded_error") ||
+    lower.includes("high traffic detected") ||
+    lower.includes("quota") ||
+    hasTpmRateLimitHint(lower)
+  );
+}
+
+function isContextOverflowError(lower: string): boolean {
+  return (
+    lower.includes("prompt is too long") ||
+    lower.includes("prompt too long") ||
+    lower.includes("input length and `max_tokens` exceed context limit") ||
+    lower.includes("input length and max_tokens exceed context limit") ||
+    lower.includes("exceed context limit") ||
+    lower.includes("exceeds context limit") ||
+    lower.includes("context length exceeded") ||
+    lower.includes("context limit exceeded")
+  );
+}
+
+function isInvalidTokenBudgetError(lower: string): boolean {
+  return (
+    lower.includes("max_tokens must be at least 1") ||
+    lower.includes("max tokens must be at least 1") ||
+    lower.includes("invalid max_tokens") ||
+    lower.includes("invalid max tokens") ||
+    /\bmax[_\s-]?tokens?\s+got\s*-\d+\b/.test(lower)
+  );
+}
+
+function isMediaTooLargeError(lower: string): boolean {
+  return (
+    lower.includes("image exceeds") ||
+    lower.includes("image too large") ||
+    lower.includes("media too large") ||
+    lower.includes("payload too large") ||
+    lower.includes("request entity too large") ||
+    lower.includes("content too large") ||
+    containsHttpStatusCode(lower, "413")
+  );
+}
+
 export function inferModelErrorKindFromMessage(rawMessage: string): ModelErrorKind | null {
   const lower = normalizeErrorSearchText(rawMessage);
 
@@ -114,16 +207,20 @@ export function inferModelErrorKindFromMessage(rawMessage: string): ModelErrorKi
     return "auth";
   }
 
-  if (
-    lower.includes("rate limit") ||
-    lower.includes("too many requests") ||
-    lower.includes("429") ||
-    lower.includes("529") ||
-    lower.includes("overloaded_error") ||
-    lower.includes("high traffic detected") ||
-    lower.includes("quota")
-  ) {
+  if (isRateLimitError(lower)) {
     return "rate_limit";
+  }
+
+  if (isContextOverflowError(lower)) {
+    return "context_overflow";
+  }
+
+  if (isInvalidTokenBudgetError(lower)) {
+    return "invalid_token_budget";
+  }
+
+  if (isMediaTooLargeError(lower)) {
+    return "media_too_large";
   }
 
   if (lower.includes("timeout") || lower.includes("timed out") || lower.includes("deadline")) {

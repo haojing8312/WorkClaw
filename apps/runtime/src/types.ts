@@ -130,7 +130,16 @@ export interface ProviderHealthInfo {
   message: string;
 }
 
-export type ModelErrorKind = "billing" | "auth" | "rate_limit" | "timeout" | "network" | "unknown";
+export type ModelErrorKind =
+  | "billing"
+  | "auth"
+  | "rate_limit"
+  | "context_overflow"
+  | "invalid_token_budget"
+  | "media_too_large"
+  | "timeout"
+  | "network"
+  | "unknown";
 
 export interface ModelConnectionTestResult {
   ok: boolean;
