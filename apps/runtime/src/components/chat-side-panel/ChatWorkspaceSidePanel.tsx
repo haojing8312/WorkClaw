@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { TaskPanel } from "./TaskPanel";
 import { WebSearchPanel } from "./WebSearchPanel";
@@ -38,6 +38,11 @@ export function ChatWorkspaceSidePanel({
 }: ChatWorkspaceSidePanelProps) {
   const [drawerWidth, setDrawerWidth] = useState(DEFAULT_DRAWER_WIDTH);
   const resizingRef = useRef(false);
+  const activePointerIdRef = useRef<number | null>(null);
+
+  const updateDrawerWidth = useCallback((clientX: number) => {
+    setDrawerWidth(clampDrawerWidth(window.innerWidth - clientX));
+  }, []);
 
   useEffect(() => {
     if (open) {
@@ -50,20 +55,33 @@ export function ChatWorkspaceSidePanel({
 
     const handleMouseMove = (event: MouseEvent) => {
       if (!resizingRef.current) return;
-      setDrawerWidth(clampDrawerWidth(window.innerWidth - event.clientX));
+      updateDrawerWidth(event.clientX);
+    };
+
+    const handlePointerMove = (event: PointerEvent) => {
+      if (!resizingRef.current) return;
+      if (activePointerIdRef.current !== null && event.pointerId !== activePointerIdRef.current) return;
+      updateDrawerWidth(event.clientX);
     };
 
     const stopResizing = () => {
       resizingRef.current = false;
+      activePointerIdRef.current = null;
     };
 
     window.addEventListener("mousemove", handleMouseMove);
     window.addEventListener("mouseup", stopResizing);
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", stopResizing);
+    window.addEventListener("pointercancel", stopResizing);
     return () => {
       window.removeEventListener("mousemove", handleMouseMove);
       window.removeEventListener("mouseup", stopResizing);
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", stopResizing);
+      window.removeEventListener("pointercancel", stopResizing);
     };
-  }, [open]);
+  }, [open, updateDrawerWidth]);
 
   return (
     <AnimatePresence>
@@ -81,11 +99,17 @@ export function ChatWorkspaceSidePanel({
             type="button"
             aria-label="调整面板宽度"
             data-testid="chat-workspace-drawer-resize-handle"
+            onPointerDown={(event) => {
+              event.preventDefault();
+              resizingRef.current = true;
+              activePointerIdRef.current = event.pointerId;
+              event.currentTarget.setPointerCapture?.(event.pointerId);
+            }}
             onMouseDown={(event) => {
               event.preventDefault();
               resizingRef.current = true;
             }}
-            className="absolute left-0 top-0 h-full w-2 cursor-col-resize bg-transparent"
+            className="absolute -left-1 top-0 z-20 h-full w-3 cursor-col-resize bg-transparent"
           />
           <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-white/50">
             <div className="flex items-center gap-2">

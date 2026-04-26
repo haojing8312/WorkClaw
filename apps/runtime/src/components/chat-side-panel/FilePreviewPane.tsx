@@ -3,7 +3,7 @@ import remarkGfm from "remark-gfm";
 
 export type WorkspaceFilePreview = {
   path: string;
-  kind: "text" | "markdown" | "html" | "binary" | "directory" | "docx";
+  kind: "text" | "markdown" | "html" | "image" | "binary" | "directory" | "docx";
   source?: string;
   size?: number;
   truncated?: boolean;
@@ -62,13 +62,14 @@ export function FilePreviewPane({
   const renderedModeLabel = preview.kind === "html" ? "页面预览" : "渲染预览";
   const htmlSource = buildHtmlPreviewSource(workspace, preview);
   const shouldFallbackToSource = preview.kind === "html" && mode === "rendered" && Boolean(preview.previewError);
+  const kindLabel = preview.kind === "docx" ? "文本预览" : preview.kind === "image" ? "图片预览" : preview.kind;
 
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between gap-3 border-b border-gray-200 px-4 py-3">
         <div className="min-w-0">
           <div className="truncate text-sm font-semibold text-gray-800">{preview.path}</div>
-          <div className="text-xs text-gray-500">{preview.kind === "docx" ? "文本预览" : preview.kind}</div>
+          <div className="text-xs text-gray-500">{kindLabel}</div>
         </div>
         <div className="flex items-center gap-2">
           {canRender && (
@@ -117,7 +118,19 @@ export function FilePreviewPane({
             {preview.previewError}
           </div>
         )}
-        {preview.kind === "binary" ? (
+        {preview.kind === "image" && source ? (
+          <div className="flex h-full min-h-[420px] items-center justify-center rounded-xl border border-gray-200 bg-gray-50 p-3">
+            <img
+              src={source}
+              alt={preview.path}
+              className="max-h-full max-w-full rounded-lg object-contain"
+            />
+          </div>
+        ) : preview.kind === "image" ? (
+          <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50 p-4 text-sm text-gray-500">
+            图片内容无法内嵌预览，请使用系统默认应用打开。
+          </div>
+        ) : preview.kind === "binary" ? (
           <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50 p-4 text-sm text-gray-500">
             该文件暂不支持内嵌预览，请使用系统默认应用打开。
           </div>
@@ -140,7 +153,7 @@ export function FilePreviewPane({
         ) : (
           <pre className="overflow-auto rounded-xl bg-gray-950 p-4 text-xs text-gray-100">{source}</pre>
         )}
-        {preview.kind !== "binary" && preview.kind !== "docx" && !source && (
+        {preview.kind !== "binary" && preview.kind !== "docx" && preview.kind !== "image" && !source && (
           <div className="text-sm text-gray-400">文件内容为空</div>
         )}
       </div>

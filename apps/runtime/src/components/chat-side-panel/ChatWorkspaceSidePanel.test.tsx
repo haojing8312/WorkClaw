@@ -98,4 +98,28 @@ describe("ChatWorkspaceSidePanel", () => {
 
     expect(screen.getByTestId("chat-workspace-drawer")).toHaveStyle({ width: "760px" });
   });
+
+  test("starts resizing from pointer down so the handle works in the desktop webview", () => {
+    render(
+      <ChatWorkspaceSidePanel
+        open
+        tab="tasks"
+        onTabChange={() => {}}
+        onClose={() => {}}
+        workspace="E:\\workspace\\session-side-panel-redesign"
+        touchedFiles={["conflict_report.html"]}
+        active
+        taskModel={taskModel}
+        webSearchEntries={webSearchEntries}
+      />,
+    );
+
+    fireEvent.pointerDown(screen.getByTestId("chat-workspace-drawer-resize-handle"), {
+      pointerId: 7,
+      clientX: 760,
+    });
+    fireEvent.mouseMove(window, { clientX: 240 });
+
+    expect(screen.getByTestId("chat-workspace-drawer")).toHaveStyle({ width: "784px" });
+  });
 });

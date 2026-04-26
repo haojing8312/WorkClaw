@@ -1,3 +1,4 @@
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde::Serialize;
 use std::fs;
 use std::io::Read;
@@ -5,6 +6,7 @@ use std::path::{Component, Path, PathBuf};
 use zip::ZipArchive;
 
 const MAX_PREVIEW_BYTES: usize = 256 * 1024;
+const MAX_IMAGE_PREVIEW_BYTES: u64 = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct WorkspaceFileEntry {
@@ -55,6 +57,17 @@ fn is_text_extension(ext: &str) -> bool {
     )
 }
 
+fn image_mime_type_for_extension(ext: &str) -> Option<&'static str> {
+    match ext {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "webp" => Some("image/webp"),
+        "gif" => Some("image/gif"),
+        "svg" => Some("image/svg+xml"),
+        _ => None,
+    }
+}
+
 fn preview_kind_for_path(path: &Path) -> String {
     match path
         .extension()
@@ -66,6 +79,7 @@ fn preview_kind_for_path(path: &Path) -> String {
         "docx" => "docx".to_string(),
         "md" | "markdown" => "markdown".to_string(),
         "html" | "htm" => "html".to_string(),
+        ext if image_mime_type_for_extension(ext).is_some() => "image".to_string(),
         ext if is_text_extension(ext) => "text".to_string(),
         _ => "binary".to_string(),
     }
@@ -221,10 +235,35 @@ pub fn read_workspace_file_preview_within(
     }
 
     let kind = preview_kind_for_path(&canonical);
-    let (source, truncated) = if kind == "binary" {
-        (None, false)
+    let (source, truncated, preview_error) = if kind == "binary" {
+        (None, false, None)
+    } else if kind == "image" {
+        if metadata.len() > MAX_IMAGE_PREVIEW_BYTES {
+            (
+                None,
+                false,
+                Some("图片超过 8 MB，暂不内嵌预览。".to_string()),
+            )
+        } else {
+            let bytes = fs::read(&canonical).map_err(|e| format!("读取图片失败: {}", e))?;
+            let ext = canonical
+                .extension()
+                .and_then(|value| value.to_str())
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            let mime_type = image_mime_type_for_extension(&ext).unwrap_or("image/png");
+            (
+                Some(format!(
+                    "data:{};base64,{}",
+                    mime_type,
+                    BASE64.encode(bytes)
+                )),
+                false,
+                None,
+            )
+        }
     } else if kind == "docx" {
-        (Some(extract_docx_text(&canonical)?), false)
+        (Some(extract_docx_text(&canonical)?), false, None)
     } else {
         let bytes = fs::read(&canonical).map_err(|e| format!("读取文件失败: {}", e))?;
         let is_truncated = bytes.len() > MAX_PREVIEW_BYTES;
@@ -232,6 +271,7 @@ pub fn read_workspace_file_preview_within(
         (
             Some(String::from_utf8_lossy(preview_bytes).to_string()),
             is_truncated,
+            None,
         )
     };
 
@@ -241,7 +281,7 @@ pub fn read_workspace_file_preview_within(
         source,
         size: metadata.len(),
         truncated,
-        preview_error: None,
+        preview_error,
     })
 }
 

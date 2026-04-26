@@ -40,6 +40,12 @@ describe("WorkspaceFilesPanel", () => {
             size: 8 * 1024,
             kind: "markdown",
           },
+          {
+            path: "reports/screen.png",
+            name: "screen.png",
+            size: 2048,
+            kind: "image",
+          },
           { path: "reports/conflict_brief.docx", name: "conflict_brief.docx", size: 17 * 1024, kind: "docx" },
         ]);
       }
@@ -60,6 +66,14 @@ describe("WorkspaceFilesPanel", () => {
             kind: "docx",
             source: "美国以色列伊朗冲突 Word 简报",
             size: 17408,
+          });
+        }
+        if (relativePath === "reports/screen.png") {
+          return Promise.resolve({
+            path: relativePath,
+            kind: "image",
+            source: "data:image/png;base64,aW1hZ2UtYnl0ZXM=",
+            size: 2048,
           });
         }
         return Promise.resolve({
@@ -169,6 +183,26 @@ describe("WorkspaceFilesPanel", () => {
       expect(screen.getByRole("button", { name: "源码预览" })).toBeInTheDocument();
       expect(screen.getByText("页面预览失败，已回退到源码预览。")).toBeInTheDocument();
       expect(screen.getByText(/<html><body><h1>Conflict Report<\/h1><\/body><\/html>/)).toBeInTheDocument();
+    });
+  });
+
+  test("renders image files inline in the preview pane", async () => {
+    render(
+      <WorkspaceFilesPanel
+        workspace="E:\\workspace\\session-side-panel-redesign"
+        touchedFiles={["reports/screen.png"]}
+        active
+      />
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "screen.png" }));
+
+    await waitFor(() => {
+      expect(screen.getByAltText("reports/screen.png")).toHaveAttribute(
+        "src",
+        "data:image/png;base64,aW1hZ2UtYnl0ZXM=",
+      );
+      expect(screen.queryByText("该文件暂不支持内嵌预览，请使用系统默认应用打开。")).not.toBeInTheDocument();
     });
   });
 });
