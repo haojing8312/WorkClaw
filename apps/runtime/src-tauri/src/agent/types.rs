@@ -175,6 +175,17 @@ pub struct ToolCallEvent {
     pub status: String, // "started" | "completed" | "error"
 }
 
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct BackgroundProcessEvent {
+    pub session_id: String,
+    pub process_id: String,
+    pub command: String,
+    pub status: String, // "completed" | "failed"
+    pub exit_code: Option<i32>,
+    pub output_file_path: String,
+    pub output_file_size: u64,
+}
+
 /// Agent 状态事件，用于前端展示当前执行阶段
 #[derive(serde::Serialize, Clone, Debug)]
 pub struct AgentStateEvent {
@@ -236,8 +247,8 @@ impl AgentStateEvent {
 
 #[cfg(test)]
 mod tests {
-    use super::{AgentStateEvent, ToolCallEvent};
-    use serde_json::{json, Value};
+    use super::{AgentStateEvent, BackgroundProcessEvent, ToolCallEvent};
+    use serde_json::{Value, json};
 
     #[test]
     fn tool_call_event_serializes_expected_shape() {
@@ -258,6 +269,33 @@ mod tests {
                 "tool_input": {"path":"README.md"},
                 "tool_output": "ok",
                 "status": "completed",
+            })
+        );
+    }
+
+    #[test]
+    fn background_process_event_serializes_expected_shape() {
+        let event = BackgroundProcessEvent {
+            session_id: "sess-1".to_string(),
+            process_id: "proc-1".to_string(),
+            command: "echo ok".to_string(),
+            status: "completed".to_string(),
+            exit_code: Some(0),
+            output_file_path: "C:\\Temp\\proc-1.log".to_string(),
+            output_file_size: 42,
+        };
+
+        let value = serde_json::to_value(event).expect("serialize event");
+        assert_eq!(
+            value,
+            json!({
+                "session_id": "sess-1",
+                "process_id": "proc-1",
+                "command": "echo ok",
+                "status": "completed",
+                "exit_code": 0,
+                "output_file_path": "C:\\Temp\\proc-1.log",
+                "output_file_size": 42,
             })
         );
     }

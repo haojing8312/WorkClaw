@@ -28,6 +28,6 @@ pub use registry::ToolRegistry;
 pub use tool_manifest::{ToolCategory, ToolManifestEntry, ToolMetadata, ToolSource};
 pub use tools::*;
 pub use types::{
-    AgentState, AgentStateEvent, LLMResponse, Tool, ToolCall, ToolCallEvent, ToolContext,
-    ToolResult,
+    AgentState, AgentStateEvent, BackgroundProcessEvent, LLMResponse, Tool, ToolCall,
+    ToolCallEvent, ToolContext, ToolResult,
 };

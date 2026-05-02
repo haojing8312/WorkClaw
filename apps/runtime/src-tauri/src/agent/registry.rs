@@ -1,9 +1,9 @@
+use super::tool_manifest::ToolManifestEntry;
 use super::tools::{
-    BashTool, EditTool, FileCopyTool, FileDeleteTool, FileMoveTool, FileStatTool, GlobTool,
-    GrepTool, ListDirTool, OpenInFolderTool, ReadFileTool, ScreenshotTool, TodoWriteTool,
+    BashTool, EditTool, ExecTool, FileCopyTool, FileDeleteTool, FileMoveTool, FileStatTool,
+    GlobTool, GrepTool, ListDirTool, OpenInFolderTool, ReadFileTool, ScreenshotTool, TodoWriteTool,
     WebFetchTool, WriteFileTool,
 };
-use super::tool_manifest::ToolManifestEntry;
 use super::types::Tool;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -36,6 +36,7 @@ impl ToolRegistry {
         registry.register(Arc::new(FileCopyTool));
         registry.register(Arc::new(TodoWriteTool::new()));
         registry.register(Arc::new(WebFetchTool));
+        registry.register(Arc::new(ExecTool::new()));
         registry.register(Arc::new(BashTool::new()));
         // L5 新增系统工具
         registry.register(Arc::new(ScreenshotTool));
@@ -59,7 +60,13 @@ impl ToolRegistry {
     }
 
     pub fn tool_names(&self) -> Vec<String> {
-        let mut names = self.tools.read().unwrap().keys().cloned().collect::<Vec<_>>();
+        let mut names = self
+            .tools
+            .read()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
         names.sort();
         names
     }
@@ -68,7 +75,9 @@ impl ToolRegistry {
         let tools = self.tools.read().unwrap();
         let mut entries = tools
             .iter()
-            .map(|(name, tool)| ToolManifestEntry::from_parts(name, tool.description(), tool.metadata()))
+            .map(|(name, tool)| {
+                ToolManifestEntry::from_parts(name, tool.description(), tool.metadata())
+            })
             .collect::<Vec<_>>();
         entries.sort_by(|left, right| left.name.cmp(&right.name));
         entries
@@ -78,6 +87,7 @@ impl ToolRegistry {
         vec![
             "bash",
             "edit",
+            "exec",
             "file_copy",
             "file_delete",
             "file_move",

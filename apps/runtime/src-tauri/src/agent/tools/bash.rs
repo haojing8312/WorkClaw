@@ -171,15 +171,16 @@ impl Tool for BashTool {
         if background {
             if let Some(ref pm) = self.process_manager {
                 let work_dir = ctx.work_dir.as_deref();
-                let id = pm.spawn(command, work_dir)?;
+                let handle = pm.spawn_handle(command, work_dir)?;
                 return tool_result::success(
                     self.name(),
-                    format!("后台进程已启动，process_id: {}", id),
+                    format!("后台进程已启动，process_id: {}", handle.id),
                     Self::enrich_execution_details(
                         json!({
                             "command": command,
                             "background": true,
-                            "process_id": id,
+                            "process_id": handle.id,
+                            "output_file_path": handle.output_file_path.to_string_lossy().to_string(),
                         }),
                         ctx,
                     ),

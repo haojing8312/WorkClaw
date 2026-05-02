@@ -73,6 +73,8 @@ fn matches_coding(entry: &crate::agent::ToolManifestEntry) -> bool {
                 | "bash_output"
                 | "bash_kill"
                 | "exec"
+                | "exec_output"
+                | "exec_kill"
         )
 }
 

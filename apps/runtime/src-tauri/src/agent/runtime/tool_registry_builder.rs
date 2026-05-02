@@ -2,8 +2,8 @@ use crate::agent::runtime::events::AskUserState;
 use crate::agent::tools::{
     browser_compat::register_browser_compat_tool, browser_tools::register_browser_tools,
     register_tool_alias, AskUserTool, BashKillTool, BashOutputTool, BashTool, ClawhubRecommendTool,
-    ClawhubSearchTool, CompactTool, EmployeeManageTool, GithubRepoDownloadTool, MemoryTool,
-    ProcessManager, SkillInvokeTool, TaskTool,
+    ClawhubSearchTool, CompactTool, EmployeeManageTool, ExecKillTool, ExecOutputTool, ExecTool,
+    GithubRepoDownloadTool, MemoryTool, ProcessManager, SkillInvokeTool, TaskTool,
 };
 use crate::agent::{Tool, ToolContext, ToolRegistry};
 use serde_json::{json, Map, Value};
@@ -209,6 +209,15 @@ impl<'a> RuntimeToolRegistryBuilder<'a> {
             .register(Arc::new(BashOutputTool::new(Arc::clone(&process_manager))));
         self.registry
             .register(Arc::new(BashKillTool::new(Arc::clone(&process_manager))));
+        self.registry
+            .register(Arc::new(ExecOutputTool::new(Arc::clone(&process_manager))));
+        self.registry
+            .register(Arc::new(ExecKillTool::new(Arc::clone(&process_manager))));
+        self.registry.unregister("exec");
+        self.registry
+            .register(Arc::new(ExecTool::with_process_manager(Arc::clone(
+                &process_manager,
+            ))));
         self.registry.unregister("bash");
         self.registry
             .register(Arc::new(BashTool::with_process_manager(process_manager)));
@@ -343,6 +352,9 @@ mod tests {
         builder.register_browser_and_alias_tools(DEFAULT_BROWSER_SIDECAR_URL);
 
         for tool_name in [
+            "exec",
+            "exec_output",
+            "exec_kill",
             "bash",
             "bash_output",
             "bash_kill",
@@ -358,6 +370,21 @@ mod tests {
                 "expected runtime registry to contain {tool_name}"
             );
         }
+
+        let exec = registry.get("exec").expect("exec tool");
+        let result = exec
+            .execute(
+                json!({
+                    "command": "echo exec_background_test",
+                    "background": true
+                }),
+                &ToolContext::default(),
+            )
+            .expect("runtime exec background should use the process manager");
+        let parsed: Value = serde_json::from_str(&result).expect("structured exec result");
+        assert_eq!(parsed["ok"], true);
+        assert_eq!(parsed["details"]["background"], true);
+        assert!(parsed["details"]["process_id"].as_str().is_some());
     }
 
     #[tokio::test]

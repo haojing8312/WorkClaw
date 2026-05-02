@@ -12,6 +12,7 @@ const TOOL_LABELS: Record<string, string> = {
   glob: "搜索文件",
   grep: "搜索内容",
   bash: "执行命令",
+  background_process: "后台进程",
   web_search: "网页搜索",
   web_fetch: "获取网页",
   task: "子任务",
@@ -31,6 +32,10 @@ function getParamSummary(tc: ToolCallInfo): string {
   if (tc.name === "glob") return String(tc.input.pattern || "");
   if (tc.name === "grep") return String(tc.input.pattern || "");
   if (tc.name === "bash") {
+    const cmd = String(tc.input.command || "");
+    return cmd.length > 30 ? cmd.slice(0, 30) + "..." : cmd;
+  }
+  if (tc.name === "background_process") {
     const cmd = String(tc.input.command || "");
     return cmd.length > 30 ? cmd.slice(0, 30) + "..." : cmd;
   }

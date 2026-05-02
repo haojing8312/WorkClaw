@@ -3,19 +3,19 @@ use crate::agent::runtime::runtime_io as chat_io;
 use crate::agent::tools::search_providers::create_provider;
 use crate::agent::tools::{
     AskUserTool, BashKillTool, BashOutputTool, BashTool, ClawhubRecommendTool, ClawhubSearchTool,
-    CompactTool, DocumentAnalyzeTool, EmployeeManageTool, ExecTool, GithubRepoDownloadTool,
-    MemoryTool, ProcessManager, SkillInvokeTool, TaskTool, VisionAnalyzeTool, WebSearchTool,
-    browser_compat::register_browser_compat_tool, browser_tools::register_browser_tools,
-    register_tool_alias,
+    CompactTool, DocumentAnalyzeTool, EmployeeManageTool, ExecKillTool, ExecOutputTool, ExecTool,
+    GithubRepoDownloadTool, MemoryTool, ProcessManager, SkillInvokeTool, TaskTool,
+    VisionAnalyzeTool, WebSearchTool, browser_compat::register_browser_compat_tool,
+    browser_tools::register_browser_tools, register_tool_alias,
 };
-use crate::agent::{AgentExecutor, Tool, ToolContext, ToolRegistry};
+use crate::agent::{AgentExecutor, BackgroundProcessEvent, Tool, ToolContext, ToolRegistry};
 use crate::runtime_environment::runtime_paths_from_app;
 use crate::session_journal::SessionJournalStateHandle;
 use runtime_chat_app::{ChatExecutionGuidance, ChatExecutionPreparationService};
 use serde_json::{Map, Value, json};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 fn standard_web_search_input_schema() -> Value {
     json!({
@@ -271,7 +271,29 @@ pub(crate) struct ToolRegistrySetupResult {
 pub(crate) async fn setup_runtime_tool_registry(
     params: ToolRegistrySetupParams<'_>,
 ) -> Result<ToolRegistrySetupResult, String> {
-    let process_manager = Arc::new(ProcessManager::new());
+    let app = params.app.clone();
+    let session_id = params.session_id.to_string();
+    let process_manager = Arc::new(ProcessManager::with_completion_notifier(Arc::new(
+        move |completion| {
+            let status = if completion.exit_code == Some(0) {
+                "completed"
+            } else {
+                "failed"
+            };
+            let _ = app.emit(
+                "background-process-event",
+                BackgroundProcessEvent {
+                    session_id: session_id.clone(),
+                    process_id: completion.process_id,
+                    command: completion.command,
+                    status: status.to_string(),
+                    exit_code: completion.exit_code,
+                    output_file_path: completion.output_file_path.to_string_lossy().to_string(),
+                    output_file_size: completion.output_file_size,
+                },
+            );
+        },
+    )));
     params
         .agent_executor
         .registry()
@@ -280,6 +302,14 @@ pub(crate) async fn setup_runtime_tool_registry(
         .agent_executor
         .registry()
         .register(Arc::new(BashKillTool::new(Arc::clone(&process_manager))));
+    params
+        .agent_executor
+        .registry()
+        .register(Arc::new(ExecOutputTool::new(Arc::clone(&process_manager))));
+    params
+        .agent_executor
+        .registry()
+        .register(Arc::new(ExecKillTool::new(Arc::clone(&process_manager))));
     params.agent_executor.registry().unregister("bash");
     params
         .agent_executor

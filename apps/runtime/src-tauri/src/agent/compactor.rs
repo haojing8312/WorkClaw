@@ -44,6 +44,154 @@ pub fn needs_auto_compact(estimated_tokens: usize) -> bool {
     estimated_tokens > AUTO_COMPACT_THRESHOLD
 }
 
+/// 从压缩后的消息中提取适合 UI / 运行状态展示的摘要正文。
+///
+/// `auto_compact` 会在模型摘要前附加本地 transcript 路径，便于后续恢复完整记录；
+/// 展示摘要只保留模型生成的结构化内容，避免把本地路径混入状态快照。
+pub fn extract_compaction_display_summary(compacted_messages: &[Value]) -> String {
+    let content = compacted_messages
+        .iter()
+        .find(|message| message["role"].as_str() == Some("user"))
+        .and_then(|message| message["content"].as_str())
+        .unwrap_or("")
+        .trim();
+
+    strip_compaction_transcript_header(content)
+        .trim_start()
+        .to_string()
+}
+
+/// 从压缩前消息中提取少量路径级上下文，帮助压缩后续跑保持方向。
+///
+/// 这里只恢复文件路径和工具动作，不恢复正文内容，避免把大文件重新塞回上下文。
+pub fn build_compaction_rehydration_context(messages: &[Value]) -> String {
+    let mut entries = Vec::new();
+    for message in messages {
+        collect_openai_file_tool_entries(message, &mut entries);
+        collect_anthropic_file_tool_entries(message, &mut entries);
+    }
+
+    const MAX_REHYDRATED_FILE_CONTEXT_ENTRIES: usize = 8;
+    let mut unique_recent = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for entry in entries.into_iter().rev() {
+        let key = format!("{}:{}", entry.tool_name, entry.path);
+        if seen.insert(key) {
+            unique_recent.push(entry);
+        }
+        if unique_recent.len() >= MAX_REHYDRATED_FILE_CONTEXT_ENTRIES {
+            break;
+        }
+    }
+    unique_recent.reverse();
+
+    if unique_recent.is_empty() {
+        return String::new();
+    }
+
+    let mut lines = vec![
+        "## 已恢复的近期文件上下文".to_string(),
+        "以下是压缩前最近的文件级工具线索，仅用于续跑定位；完整内容以当前磁盘文件为准。"
+            .to_string(),
+    ];
+    for entry in unique_recent {
+        lines.push(format!("- {}: {}", entry.tool_name, entry.path));
+    }
+    lines.join("\n")
+}
+
+fn strip_compaction_transcript_header(content: &str) -> &str {
+    let Some(rest) = content.strip_prefix("[对话已压缩。完整记录:") else {
+        return content;
+    };
+
+    let Some((_, summary)) = rest.split_once(']') else {
+        return content;
+    };
+
+    summary
+}
+
+#[derive(Debug)]
+struct FileToolEntry {
+    tool_name: String,
+    path: String,
+}
+
+fn collect_openai_file_tool_entries(message: &Value, entries: &mut Vec<FileToolEntry>) {
+    for tool_call in message["tool_calls"].as_array().into_iter().flatten() {
+        let tool_name = tool_call["function"]["name"].as_str().unwrap_or_default();
+        let Some(path) = extract_file_path_from_tool_input(&tool_call["function"]["arguments"])
+        else {
+            continue;
+        };
+        if is_rehydration_file_tool(tool_name) {
+            entries.push(FileToolEntry {
+                tool_name: tool_name.to_string(),
+                path,
+            });
+        }
+    }
+}
+
+fn collect_anthropic_file_tool_entries(message: &Value, entries: &mut Vec<FileToolEntry>) {
+    for block in message["content"].as_array().into_iter().flatten() {
+        if block["type"].as_str() != Some("tool_use") {
+            continue;
+        }
+        let tool_name = block["name"].as_str().unwrap_or_default();
+        let Some(path) = extract_file_path_from_tool_input(&block["input"]) else {
+            continue;
+        };
+        if is_rehydration_file_tool(tool_name) {
+            entries.push(FileToolEntry {
+                tool_name: tool_name.to_string(),
+                path,
+            });
+        }
+    }
+}
+
+fn is_rehydration_file_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "read_file"
+            | "write_file"
+            | "edit"
+            | "file_stat"
+            | "file_copy"
+            | "file_move"
+            | "file_delete"
+            | "document_analyze"
+            | "open_in_folder"
+    )
+}
+
+fn extract_file_path_from_tool_input(input: &Value) -> Option<String> {
+    let value = if let Some(text) = input.as_str() {
+        serde_json::from_str::<Value>(text).ok()?
+    } else {
+        input.clone()
+    };
+
+    for key in [
+        "path",
+        "file_path",
+        "target_path",
+        "source_path",
+        "absolute_path",
+    ] {
+        if let Some(path) = value[key]
+            .as_str()
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+        {
+            return Some(path.to_string());
+        }
+    }
+    None
+}
+
 /// 将完整对话记录以 JSONL 格式保存到磁盘
 ///
 /// 文件名格式：`{session_id}_{timestamp}.jsonl`
@@ -55,7 +203,11 @@ pub fn save_transcript(
 ) -> Result<PathBuf> {
     std::fs::create_dir_all(transcript_dir)?;
     let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
-    let filename = format!("{}_{}.jsonl", session_id, timestamp);
+    let filename = format!(
+        "{}_{}.jsonl",
+        transcript_filename_slug(session_id),
+        timestamp
+    );
     let path = transcript_dir.join(&filename);
 
     let content: String = messages
@@ -66,6 +218,22 @@ pub fn save_transcript(
 
     std::fs::write(&path, content)?;
     Ok(path)
+}
+
+fn transcript_filename_slug(session_id: &str) -> String {
+    let slug: String = session_id
+        .chars()
+        .map(|ch| match ch {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' => ch,
+            _ => '_',
+        })
+        .collect();
+    let slug = slug.trim_matches('_');
+    if slug.is_empty() {
+        "session".to_string()
+    } else {
+        slug.chars().take(96).collect()
+    }
 }
 
 /// 调用 LLM 生成结构化摘要，将 messages 替换为压缩版本
@@ -133,13 +301,20 @@ pub async fn auto_compact(
         super::types::LLMResponse::ToolCalls(_) => "摘要生成失败：LLM 返回了工具调用".to_string(),
     };
 
+    let rehydration_context = build_compaction_rehydration_context(messages);
+    let summary_with_context = if rehydration_context.trim().is_empty() {
+        summary
+    } else {
+        format!("{}\n\n{}", summary.trim(), rehydration_context)
+    };
+
     // 用摘要替换整个消息列表，保留完整记录路径的引用
     Ok(vec![
         json!({
             "role": "user",
             "content": format!(
                 "[对话已压缩。完整记录: {}]\n\n{}",
-                transcript_path, summary
+                transcript_path, summary_with_context
             )
         }),
         json!({

@@ -444,6 +444,13 @@ fn render_export_tool_output(
 
 fn compact_export_tool_details(details: &Value) -> Vec<String> {
     let mut lines = Vec::new();
+    if let Some(command) = details
+        .get("command")
+        .and_then(Value::as_str)
+        .filter(|v| !v.trim().is_empty())
+    {
+        lines.push(format!("command: {}", command.trim()));
+    }
     if let Some(path) = details
         .get("path")
         .and_then(Value::as_str)
@@ -460,6 +467,26 @@ fn compact_export_tool_details(details: &Value) -> Vec<String> {
     }
     if let Some(bytes_written) = details.get("bytes_written").and_then(Value::as_u64) {
         lines.push(format!("bytes_written: {}", bytes_written));
+    }
+    if let Some(timeout_ms) = details.get("timeout_ms").and_then(Value::as_u64) {
+        lines.push(format!("timeout_ms: {}", timeout_ms));
+    }
+    if let Some(timed_out) = details.get("timed_out").and_then(Value::as_bool) {
+        lines.push(format!("timed_out: {}", timed_out));
+    }
+    if let Some(platform_shell) = details
+        .get("platform_shell")
+        .and_then(Value::as_str)
+        .filter(|v| !v.trim().is_empty())
+    {
+        lines.push(format!("platform_shell: {}", platform_shell.trim()));
+    }
+    if let Some(work_dir) = details
+        .get("work_dir")
+        .and_then(Value::as_str)
+        .filter(|v| !v.trim().is_empty())
+    {
+        lines.push(format!("work_dir: {}", work_dir.trim()));
     }
     if let Some(exit_code) = details.get("exit_code").and_then(Value::as_i64) {
         lines.push(format!("exit_code: {}", exit_code));

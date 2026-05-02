@@ -221,6 +221,44 @@ describe("ChatView thinking block", () => {
     expect(screen.getByText("先分析需求，再组织输出。")).toBeInTheDocument();
   });
 
+  test("renders background process completion events for the active session", async () => {
+    renderChatView("sess-background");
+
+    act(() => {
+      emit("background-process-event", {
+        session_id: "other-session",
+        process_id: "ignored",
+        command: "echo ignored",
+        status: "completed",
+        exit_code: 0,
+        output_file_path: "C:\\Temp\\ignored.log",
+        output_file_size: 1,
+      });
+      emit("background-process-event", {
+        session_id: "sess-background",
+        process_id: "proc-42",
+        command: "echo background",
+        status: "completed",
+        exit_code: 0,
+        output_file_path: "C:\\Temp\\proc-42.log",
+        output_file_size: 24,
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("tool-island-summary")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId("tool-island-summary"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("tool-island-step-background-process-proc-42")).toBeInTheDocument();
+    });
+    expect(screen.getByText("后台进程")).toBeInTheDocument();
+    expect(screen.getByText("echo background")).toBeInTheDocument();
+    expect(screen.queryByText("echo ignored")).not.toBeInTheDocument();
+  });
+
   test("pauses auto-follow after the user scrolls away and shows a jump-to-latest arrow", async () => {
     renderChatView("sess-scroll-lock");
 

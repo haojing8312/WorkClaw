@@ -15,6 +15,7 @@ import {
   type AssistantReasoningDeltaEvent,
   type AssistantReasoningInterruptedEvent,
   type AssistantReasoningStartedEvent,
+  type BackgroundProcessEvent,
   type ContextCompactionEvent,
   type SessionToolManifestEvent,
   type StreamTokenEvent,
@@ -425,6 +426,59 @@ export function useChatStreamController({
         }
         return item;
       });
+      streamItemsRef.current = items;
+      setStreamItems([...items]);
+    });
+    return () => {
+      unsubscribe();
+    };
+  }, [sessionId]);
+
+  useEffect(() => {
+    const unsubscribe = subscribeChatStreamEvent("background-process-event", (payload: BackgroundProcessEvent) => {
+      if (payload.session_id !== sessionId) return;
+      const toolCallId = `background-process-${payload.process_id}`;
+      const completed = payload.status === "completed";
+      const output = JSON.stringify({
+        ok: completed,
+        tool: "background_process",
+        summary: completed
+          ? `后台进程 ${payload.process_id} 已完成`
+          : `后台进程 ${payload.process_id} 执行失败`,
+        details: {
+          process_id: payload.process_id,
+          command: payload.command,
+          status: payload.status,
+          exit_code: payload.exit_code,
+          output_file_path: payload.output_file_path,
+          output_file_size: payload.output_file_size,
+        },
+      });
+      const toolCall = {
+        id: toolCallId,
+        name: "background_process",
+        input: {
+          process_id: payload.process_id,
+          command: payload.command,
+        },
+        output,
+        status: (completed ? "completed" : "error") as "completed" | "error",
+      };
+      const existingIndex = streamItemsRef.current.findIndex(
+        (item) => item.type === "tool_call" && item.toolCall?.id === toolCallId,
+      );
+      const items = [...streamItemsRef.current];
+      if (existingIndex >= 0) {
+        items[existingIndex] = {
+          type: "tool_call",
+          toolCall,
+        };
+      } else {
+        items.push({
+          type: "tool_call",
+          toolCall,
+        });
+      }
       streamItemsRef.current = items;
       setStreamItems([...items]);
     });

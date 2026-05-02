@@ -8,17 +8,25 @@ use std::sync::Arc;
 /// 获取后台进程输出的工具
 pub struct BashOutputTool {
     process_manager: Arc<ProcessManager>,
+    tool_name: &'static str,
 }
 
 impl BashOutputTool {
     pub fn new(process_manager: Arc<ProcessManager>) -> Self {
-        Self { process_manager }
+        Self::with_name(process_manager, "bash_output")
+    }
+
+    fn with_name(process_manager: Arc<ProcessManager>, tool_name: &'static str) -> Self {
+        Self {
+            process_manager,
+            tool_name,
+        }
     }
 }
 
 impl Tool for BashOutputTool {
     fn name(&self) -> &str {
-        "bash_output"
+        self.tool_name
     }
 
     fn description(&self) -> &str {
@@ -68,8 +76,41 @@ impl Tool for BashOutputTool {
                 "stderr": output.stderr,
                 "exited": output.exited,
                 "exit_code": if output.exited { Value::from(exit_code) } else { Value::Null },
+                "output_file_path": output.output_file_path.to_string_lossy().to_string(),
+                "output_file_size": output.output_file_size,
                 "status_text": status,
             }),
         )
+    }
+}
+
+/// 获取 exec 后台进程输出的工具。
+pub struct ExecOutputTool {
+    inner: BashOutputTool,
+}
+
+impl ExecOutputTool {
+    pub fn new(process_manager: Arc<ProcessManager>) -> Self {
+        Self {
+            inner: BashOutputTool::with_name(process_manager, "exec_output"),
+        }
+    }
+}
+
+impl Tool for ExecOutputTool {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    fn description(&self) -> &str {
+        "获取 exec 后台进程的输出。可以选择阻塞等待进程完成或立即返回当前输出。返回结构化结果，其中 details 包含 stdout/stderr/exit_code/output_file_path。"
+    }
+
+    fn input_schema(&self) -> Value {
+        self.inner.input_schema()
+    }
+
+    fn execute(&self, input: Value, ctx: &ToolContext) -> Result<String> {
+        self.inner.execute(input, ctx)
     }
 }

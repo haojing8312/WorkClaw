@@ -35,6 +35,16 @@ export type ToolCallEvent = {
   status: string;
 };
 
+export type BackgroundProcessEvent = {
+  session_id: string;
+  process_id: string;
+  command: string;
+  status: "completed" | "failed" | string;
+  exit_code: number | null;
+  output_file_path: string;
+  output_file_size: number;
+};
+
 export type SessionToolManifestEvent = {
   session_id: string;
   manifest: Array<{
@@ -67,6 +77,7 @@ type EventMap = {
   "assistant-reasoning-completed": AssistantReasoningCompletedEvent;
   "assistant-reasoning-interrupted": AssistantReasoningInterruptedEvent;
   "tool-call-event": ToolCallEvent;
+  "background-process-event": BackgroundProcessEvent;
   "session-tool-manifest": SessionToolManifestEvent;
   "context-compaction-event": ContextCompactionEvent;
 };
@@ -97,6 +108,7 @@ const registry: { [K in EventName]: RegistryEntry<EventMap[K]> } = {
   "assistant-reasoning-completed": createEntry<AssistantReasoningCompletedEvent>(),
   "assistant-reasoning-interrupted": createEntry<AssistantReasoningInterruptedEvent>(),
   "tool-call-event": createEntry<ToolCallEvent>(),
+  "background-process-event": createEntry<BackgroundProcessEvent>(),
   "session-tool-manifest": createEntry<SessionToolManifestEvent>(),
   "context-compaction-event": createEntry<ContextCompactionEvent>(),
 };

@@ -69,12 +69,7 @@ pub(crate) async fn run_compaction(
 }
 
 fn extract_compaction_summary(compacted_messages: &[Value]) -> String {
-    compacted_messages
-        .iter()
-        .find(|message| message["role"].as_str() == Some("user"))
-        .and_then(|message| message["content"].as_str())
-        .unwrap_or("")
-        .to_string()
+    compactor::extract_compaction_display_summary(compacted_messages)
 }
 
 #[cfg(test)]

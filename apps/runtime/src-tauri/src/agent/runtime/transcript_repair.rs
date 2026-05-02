@@ -1,14 +1,14 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashSet;
 
 const SYNTHETIC_TOOL_RESULT_TEXT: &str = "[已执行]";
 
 pub(crate) fn repair_outbound_messages(messages: Vec<Value>, api_format: &str) -> Vec<Value> {
-    if api_format != "openai" {
-        return messages;
+    match api_format {
+        "openai" => repair_openai_outbound_messages(messages),
+        "anthropic" => repair_anthropic_outbound_messages(messages),
+        _ => messages,
     }
-
-    repair_openai_outbound_messages(messages)
 }
 
 fn repair_openai_outbound_messages(messages: Vec<Value>) -> Vec<Value> {
@@ -143,10 +143,113 @@ fn normalize_tool_result_content(content: Option<&Value>) -> Value {
     }
 }
 
+fn repair_anthropic_outbound_messages(messages: Vec<Value>) -> Vec<Value> {
+    let mut repaired = Vec::new();
+    let mut pending_tool_use_ids: Vec<String> = Vec::new();
+
+    for message in messages {
+        let role = message["role"].as_str().unwrap_or_default();
+        match role {
+            "assistant" => {
+                flush_anthropic_missing_tool_results(&mut repaired, &mut pending_tool_use_ids);
+                pending_tool_use_ids = collect_anthropic_tool_use_ids(&message);
+                repaired.push(message);
+            }
+            "user" if !pending_tool_use_ids.is_empty() => {
+                repaired.push(repair_anthropic_user_message_with_pending_results(
+                    message,
+                    &mut pending_tool_use_ids,
+                ));
+            }
+            _ => {
+                flush_anthropic_missing_tool_results(&mut repaired, &mut pending_tool_use_ids);
+                repaired.push(message);
+            }
+        }
+    }
+
+    flush_anthropic_missing_tool_results(&mut repaired, &mut pending_tool_use_ids);
+    repaired
+}
+
+fn collect_anthropic_tool_use_ids(message: &Value) -> Vec<String> {
+    message["content"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|block| block["type"].as_str() == Some("tool_use"))
+        .filter_map(|block| block["id"].as_str())
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn repair_anthropic_user_message_with_pending_results(
+    message: Value,
+    pending_tool_use_ids: &mut Vec<String>,
+) -> Value {
+    let mut content = match message["content"].as_array() {
+        Some(blocks) => blocks.clone(),
+        None => message["content"]
+            .as_str()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(|text| vec![json!({"type": "text", "text": text})])
+            .unwrap_or_default(),
+    };
+    let resolved_ids = content
+        .iter()
+        .filter(|block| block["type"].as_str() == Some("tool_result"))
+        .filter_map(|block| block["tool_use_id"].as_str())
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(ToString::to_string)
+        .collect::<HashSet<_>>();
+
+    for tool_use_id in pending_tool_use_ids.iter() {
+        if !resolved_ids.contains(tool_use_id) {
+            content.push(synthetic_anthropic_tool_result(tool_use_id));
+        }
+    }
+    pending_tool_use_ids.clear();
+
+    json!({
+        "role": "user",
+        "content": content,
+    })
+}
+
+fn flush_anthropic_missing_tool_results(
+    repaired: &mut Vec<Value>,
+    pending_tool_use_ids: &mut Vec<String>,
+) {
+    if pending_tool_use_ids.is_empty() {
+        return;
+    }
+    let content = pending_tool_use_ids
+        .iter()
+        .map(|tool_use_id| synthetic_anthropic_tool_result(tool_use_id))
+        .collect::<Vec<_>>();
+    pending_tool_use_ids.clear();
+    repaired.push(json!({
+        "role": "user",
+        "content": content,
+    }));
+}
+
+fn synthetic_anthropic_tool_result(tool_use_id: &str) -> Value {
+    json!({
+        "type": "tool_result",
+        "tool_use_id": tool_use_id,
+        "content": SYNTHETIC_TOOL_RESULT_TEXT,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::repair_outbound_messages;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     #[test]
     fn drops_openai_tool_calls_without_name() {

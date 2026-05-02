@@ -1,3 +1,4 @@
+use crate::agent::tool_manifest::{ToolCategory, ToolMetadata, ToolSource};
 use crate::agent::tools::process_manager::ProcessManager;
 use crate::agent::tools::tool_result;
 use crate::agent::types::{Tool, ToolContext};
@@ -74,6 +75,17 @@ impl Tool for ExecTool {
         })
     }
 
+    fn metadata(&self) -> ToolMetadata {
+        ToolMetadata {
+            display_name: Some("Exec".to_string()),
+            category: ToolCategory::Shell,
+            destructive: true,
+            requires_approval: true,
+            source: ToolSource::Runtime,
+            ..ToolMetadata::default()
+        }
+    }
+
     fn execute(&self, input: Value, ctx: &ToolContext) -> Result<String> {
         let command = input["command"]
             .as_str()
@@ -101,15 +113,16 @@ impl Tool for ExecTool {
             if let Some(ref pm) = self.process_manager {
                 let work_dir = ctx.work_dir.as_deref();
                 let (shell, shell_args, shell_label) = Self::get_shell();
-                let id = pm.spawn_with_shell(command, work_dir, shell, shell_args)?;
+                let handle = pm.spawn_with_shell_handle(command, work_dir, shell, shell_args)?;
                 return tool_result::success(
                     self.name(),
-                    format!("后台进程已启动，process_id: {}", id),
+                    format!("后台进程已启动，process_id: {}", handle.id),
                     BashTool::enrich_execution_details_with_shell(
                         json!({
                             "command": command,
                             "background": true,
-                            "process_id": id,
+                            "process_id": handle.id,
+                            "output_file_path": handle.output_file_path.to_string_lossy().to_string(),
                         }),
                         ctx,
                         shell_label,

@@ -1,8 +1,10 @@
 use crate::windows_process::hide_console_window;
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use std::collections::HashMap;
+use std::fs::{self, File, OpenOptions};
+use std::io::Write;
 use std::io::{BufRead, BufReader};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -15,7 +17,28 @@ pub struct ProcessOutput {
     pub stderr: String,
     pub exited: bool,
     pub exit_code: Option<i32>,
+    pub output_file_path: PathBuf,
+    pub output_file_size: u64,
 }
+
+/// 后台进程启动结果。
+#[derive(Debug, Clone)]
+pub struct ProcessHandle {
+    pub id: String,
+    pub output_file_path: PathBuf,
+}
+
+/// 后台进程完成通知。
+#[derive(Debug, Clone)]
+pub struct ProcessCompletion {
+    pub process_id: String,
+    pub command: String,
+    pub exit_code: Option<i32>,
+    pub output_file_path: PathBuf,
+    pub output_file_size: u64,
+}
+
+pub type ProcessCompletionNotifier = Arc<dyn Fn(ProcessCompletion) + Send + Sync + 'static>;
 
 /// 单个后台进程的内部状态
 struct BackgroundProcess {
@@ -29,6 +52,8 @@ struct BackgroundProcess {
     stderr_buf: Arc<Mutex<Vec<String>>>,
     /// 进程退出状态（None = 仍在运行）
     exit_status: Arc<Mutex<Option<i32>>>,
+    /// 持久化输出文件路径
+    output_file_path: PathBuf,
 }
 
 /// 每个缓冲区最多保留的行数
@@ -40,12 +65,21 @@ const MAX_COMPLETED_PROCESSES: usize = 30;
 /// 后台进程管理器，管理所有 spawn 出来的后台 shell 进程
 pub struct ProcessManager {
     processes: Arc<Mutex<HashMap<String, BackgroundProcess>>>,
+    completion_notifier: Option<ProcessCompletionNotifier>,
 }
 
 impl ProcessManager {
     pub fn new() -> Self {
         Self {
             processes: Arc::new(Mutex::new(HashMap::new())),
+            completion_notifier: None,
+        }
+    }
+
+    pub fn with_completion_notifier(notifier: ProcessCompletionNotifier) -> Self {
+        Self {
+            processes: Arc::new(Mutex::new(HashMap::new())),
+            completion_notifier: Some(notifier),
         }
     }
 
@@ -62,8 +96,12 @@ impl ProcessManager {
 
     /// 启动一个后台进程，返回 process_id（UUID 前 8 位）
     pub fn spawn(&self, command: &str, work_dir: Option<&Path>) -> Result<String> {
+        Ok(self.spawn_handle(command, work_dir)?.id)
+    }
+
+    pub fn spawn_handle(&self, command: &str, work_dir: Option<&Path>) -> Result<ProcessHandle> {
         let (shell, flag) = Self::get_shell();
-        self.spawn_with_shell(command, work_dir, shell, &[flag])
+        self.spawn_with_shell_handle(command, work_dir, shell, &[flag])
     }
 
     pub fn spawn_with_shell(
@@ -73,7 +111,25 @@ impl ProcessManager {
         shell: &str,
         shell_args: &[&str],
     ) -> Result<String> {
+        Ok(self
+            .spawn_with_shell_handle(command, work_dir, shell, shell_args)?
+            .id)
+    }
+
+    pub fn spawn_with_shell_handle(
+        &self,
+        command: &str,
+        work_dir: Option<&Path>,
+        shell: &str,
+        shell_args: &[&str],
+    ) -> Result<ProcessHandle> {
         let id = uuid::Uuid::new_v4().to_string()[..8].to_string();
+        let output_file_path = background_output_file_path(&id)?;
+        let output_file = Arc::new(Mutex::new(open_background_output_file(&output_file_path)?));
+        let command_for_completion = command.to_string();
+        let process_id_for_completion = id.clone();
+        let output_file_path_for_completion = output_file_path.clone();
+        let completion_notifier = self.completion_notifier.clone();
 
         let mut cmd = Command::new(shell);
         cmd.args(shell_args)
@@ -96,12 +152,14 @@ impl ProcessManager {
         // 在后台线程中读取 stdout
         let stdout_pipe = child.stdout.take();
         let stdout_buf_clone = Arc::clone(&stdout_buf);
+        let stdout_file = Arc::clone(&output_file);
         thread::spawn(move || {
             if let Some(pipe) = stdout_pipe {
                 let reader = BufReader::new(pipe);
                 for line in reader.lines() {
                     match line {
                         Ok(l) => {
+                            write_background_output_line(&stdout_file, "stdout", &l);
                             let mut buf = stdout_buf_clone.lock().unwrap();
                             buf.push(l);
                             // 超过上限时截断前面的行
@@ -119,12 +177,14 @@ impl ProcessManager {
         // 在后台线程中读取 stderr
         let stderr_pipe = child.stderr.take();
         let stderr_buf_clone = Arc::clone(&stderr_buf);
+        let stderr_file = Arc::clone(&output_file);
         thread::spawn(move || {
             if let Some(pipe) = stderr_pipe {
                 let reader = BufReader::new(pipe);
                 for line in reader.lines() {
                     match line {
                         Ok(l) => {
+                            write_background_output_line(&stderr_file, "stderr", &l);
                             let mut buf = stderr_buf_clone.lock().unwrap();
                             buf.push(l);
                             if buf.len() > MAX_BUFFER_LINES {
@@ -143,10 +203,36 @@ impl ProcessManager {
         let exit_status_clone = Arc::clone(&exit_status);
         thread::spawn(move || match child.wait() {
             Ok(status) => {
-                *exit_status_clone.lock().unwrap() = Some(status.code().unwrap_or(-1));
+                let exit_code = Some(status.code().unwrap_or(-1));
+                *exit_status_clone.lock().unwrap() = exit_code;
+                notify_process_completion(
+                    completion_notifier.as_ref(),
+                    ProcessCompletion {
+                        process_id: process_id_for_completion,
+                        command: command_for_completion,
+                        exit_code,
+                        output_file_size: fs::metadata(&output_file_path_for_completion)
+                            .map(|metadata| metadata.len())
+                            .unwrap_or(0),
+                        output_file_path: output_file_path_for_completion,
+                    },
+                );
             }
             Err(_) => {
-                *exit_status_clone.lock().unwrap() = Some(-1);
+                let exit_code = Some(-1);
+                *exit_status_clone.lock().unwrap() = exit_code;
+                notify_process_completion(
+                    completion_notifier.as_ref(),
+                    ProcessCompletion {
+                        process_id: process_id_for_completion,
+                        command: command_for_completion,
+                        exit_code,
+                        output_file_size: fs::metadata(&output_file_path_for_completion)
+                            .map(|metadata| metadata.len())
+                            .unwrap_or(0),
+                        output_file_path: output_file_path_for_completion,
+                    },
+                );
             }
         });
 
@@ -156,13 +242,17 @@ impl ProcessManager {
             stdout_buf,
             stderr_buf,
             exit_status,
+            output_file_path: output_file_path.clone(),
         };
 
         self.processes
             .lock()
             .unwrap()
             .insert(id.clone(), bg_process);
-        Ok(id)
+        Ok(ProcessHandle {
+            id,
+            output_file_path,
+        })
     }
 
     /// 获取指定进程的输出
@@ -174,12 +264,14 @@ impl ProcessManager {
         let exit_status_arc;
         let stdout_buf_arc;
         let stderr_buf_arc;
+        let output_file_path;
         {
             let procs = self.processes.lock().unwrap();
             let proc = procs.get(id).ok_or_else(|| anyhow!("进程 {} 不存在", id))?;
             exit_status_arc = Arc::clone(&proc.exit_status);
             stdout_buf_arc = Arc::clone(&proc.stdout_buf);
             stderr_buf_arc = Arc::clone(&proc.stderr_buf);
+            output_file_path = proc.output_file_path.clone();
         }
 
         if block {
@@ -197,12 +289,17 @@ impl ProcessManager {
         let stderr = stderr_buf_arc.lock().unwrap().join("\n");
         let exit_status = *exit_status_arc.lock().unwrap();
         let exited = exit_status.is_some();
+        let output_file_size = fs::metadata(&output_file_path)
+            .map(|metadata| metadata.len())
+            .unwrap_or(0);
 
         Ok(ProcessOutput {
             stdout,
             stderr,
             exited,
             exit_code: exit_status,
+            output_file_path,
+            output_file_size,
         })
     }
 
@@ -275,5 +372,31 @@ impl ProcessManager {
                 procs.remove(id);
             }
         }
+    }
+}
+
+fn background_output_file_path(id: &str) -> Result<PathBuf> {
+    let dir = std::env::temp_dir().join("workclaw-background-processes");
+    fs::create_dir_all(&dir)?;
+    Ok(dir.join(format!("{id}.log")))
+}
+
+fn open_background_output_file(path: &Path) -> Result<File> {
+    Ok(OpenOptions::new().create(true).append(true).open(path)?)
+}
+
+fn write_background_output_line(output_file: &Arc<Mutex<File>>, stream: &str, line: &str) {
+    if let Ok(mut file) = output_file.lock() {
+        let _ = writeln!(file, "{stream}: {line}");
+        let _ = file.flush();
+    }
+}
+
+fn notify_process_completion(
+    notifier: Option<&ProcessCompletionNotifier>,
+    completion: ProcessCompletion,
+) {
+    if let Some(notifier) = notifier {
+        notifier(completion);
     }
 }

@@ -1,4 +1,6 @@
-use runtime_lib::agent::{BashTool, ExecTool, Tool, ToolContext};
+use runtime_lib::agent::execution_caps::detect_execution_caps;
+use runtime_lib::agent::system_prompts::tool_policy::TOOL_USAGE_POLICY;
+use runtime_lib::agent::{BashTool, ExecTool, Tool, ToolContext, ToolRegistry};
 use serde_json::json;
 use std::path::PathBuf;
 use tempfile::tempdir;
@@ -244,4 +246,32 @@ fn test_exec_includes_execution_context_metadata() {
             "bash"
         }
     );
+}
+
+#[test]
+fn test_standard_registry_exposes_exec_as_stable_command_entry() {
+    let registry = ToolRegistry::with_standard_tools();
+
+    assert!(registry.get("exec").is_some());
+    assert!(ToolRegistry::standard_tool_names().contains(&"exec"));
+}
+
+#[test]
+fn test_execution_caps_prefer_shell_matching_exec_tool() {
+    let caps = detect_execution_caps();
+
+    assert_eq!(
+        caps.preferred_shell.as_deref(),
+        if cfg!(target_os = "windows") {
+            Some("powershell")
+        } else {
+            Some("bash")
+        }
+    );
+}
+
+#[test]
+fn test_tool_policy_prefers_exec_for_commands() {
+    assert!(TOOL_USAGE_POLICY.contains("执行命令用 `exec`"));
+    assert!(!TOOL_USAGE_POLICY.contains("执行命令用 `bash`"));
 }

@@ -36,10 +36,10 @@ pub mod web_fetch;
 mod web_search;
 mod write_file;
 
-pub use ask_user::{AskUserResponder, AskUserTool, new_responder};
+pub use ask_user::{new_responder, AskUserResponder, AskUserTool};
 pub use bash::BashTool;
-pub use bash_kill::BashKillTool;
-pub use bash_output::BashOutputTool;
+pub use bash_kill::{BashKillTool, ExecKillTool};
+pub use bash_output::{BashOutputTool, ExecOutputTool};
 pub use clawhub::{ClawhubRecommendTool, ClawhubSearchTool};
 pub use compact_tool::CompactTool;
 pub use document_analyze::DocumentAnalyzeTool;

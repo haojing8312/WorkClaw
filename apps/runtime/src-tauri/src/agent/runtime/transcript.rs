@@ -337,10 +337,7 @@ impl RuntimeTranscript {
         Ok(hydrated)
     }
 
-    pub(crate) fn sanitize_reconstructed_messages(
-        messages: Vec<Value>,
-        api_format: &str,
-    ) -> Vec<Value> {
+    pub fn sanitize_reconstructed_messages(messages: Vec<Value>, api_format: &str) -> Vec<Value> {
         transcript_policy::sanitize_outbound_messages(messages, api_format)
     }
 

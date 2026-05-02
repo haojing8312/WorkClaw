@@ -665,9 +665,12 @@ async fn export_session_recovery_renders_structured_tool_event_outputs_readably(
         "sess-structured-run-events",
         SessionRunEvent::ToolStarted {
             run_id: "run-structured-tool-events".into(),
-            tool_name: "write_file".into(),
+            tool_name: "exec".into(),
             call_id: "call-1".into(),
-            input: json!({}),
+            input: json!({
+                "command": "python -m markitdown big.pptx",
+                "timeout_ms": 30000
+            }),
             task_identity: None,
             task_continuation: None,
         },
@@ -681,17 +684,27 @@ async fn export_session_recovery_renders_structured_tool_event_outputs_readably(
         "sess-structured-run-events",
         SessionRunEvent::ToolCompleted {
             run_id: "run-structured-tool-events".into(),
-            tool_name: "write_file".into(),
+            tool_name: "exec".into(),
             call_id: "call-1".into(),
-            input: json!({}),
+            input: json!({
+                "command": "python -m markitdown big.pptx",
+                "timeout_ms": 30000
+            }),
             output: json!({
                 "ok": false,
-                "tool": "write_file",
-                "summary": "写入失败",
-                "error_code": "MISSING_PATH",
-                "error_message": "缺少 path 参数",
+                "tool": "exec",
+                "summary": "命令执行超时（30000ms），已终止",
+                "error_code": "COMMAND_TIMEOUT",
+                "error_message": "命令执行超时（30000ms），已终止",
                 "details": {
-                    "path": "C:\\Users\\36443\\WorkClaw\\workspace\\brief.md"
+                    "command": "python -m markitdown big.pptx",
+                    "timeout_ms": 30000,
+                    "timed_out": true,
+                    "platform_shell": "powershell",
+                    "work_dir": "E:\\work\\demo",
+                    "exit_code": null,
+                    "stdout": "",
+                    "stderr": "processing large pptx"
                 }
             })
             .to_string(),
@@ -710,7 +723,7 @@ async fn export_session_recovery_renders_structured_tool_event_outputs_readably(
         SessionRunEvent::RunFailed {
             run_id: "run-structured-tool-events".into(),
             error_kind: "tool_error".into(),
-            error_message: "write_file 执行失败".into(),
+            error_message: "exec 执行失败".into(),
             turn_state: None,
         },
     )
@@ -722,7 +735,11 @@ async fn export_session_recovery_renders_structured_tool_event_outputs_readably(
             .await
             .expect("export markdown");
 
-    assert!(markdown.contains("写入失败"));
-    assert!(markdown.contains("缺少 path 参数"));
-    assert!(markdown.contains("brief.md"));
+    assert!(markdown.contains("命令执行超时（30000ms），已终止"));
+    assert!(markdown.contains("command: python -m markitdown big.pptx"));
+    assert!(markdown.contains("timeout_ms: 30000"));
+    assert!(markdown.contains("timed_out: true"));
+    assert!(markdown.contains("platform_shell: powershell"));
+    assert!(markdown.contains("work_dir: E:\\work\\demo"));
+    assert!(markdown.contains("stderr: processing large pptx"));
 }

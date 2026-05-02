@@ -8,17 +8,25 @@ use std::sync::Arc;
 /// 终止后台进程的工具
 pub struct BashKillTool {
     process_manager: Arc<ProcessManager>,
+    tool_name: &'static str,
 }
 
 impl BashKillTool {
     pub fn new(process_manager: Arc<ProcessManager>) -> Self {
-        Self { process_manager }
+        Self::with_name(process_manager, "bash_kill")
+    }
+
+    fn with_name(process_manager: Arc<ProcessManager>, tool_name: &'static str) -> Self {
+        Self {
+            process_manager,
+            tool_name,
+        }
     }
 }
 
 impl Tool for BashKillTool {
     fn name(&self) -> &str {
-        "bash_kill"
+        self.tool_name
     }
 
     fn description(&self) -> &str {
@@ -52,5 +60,36 @@ impl Tool for BashKillTool {
                 "process_id": process_id,
             }),
         )
+    }
+}
+
+/// 终止 exec 后台进程的工具。
+pub struct ExecKillTool {
+    inner: BashKillTool,
+}
+
+impl ExecKillTool {
+    pub fn new(process_manager: Arc<ProcessManager>) -> Self {
+        Self {
+            inner: BashKillTool::with_name(process_manager, "exec_kill"),
+        }
+    }
+}
+
+impl Tool for ExecKillTool {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    fn description(&self) -> &str {
+        "终止指定的 exec 后台进程。返回结构化结果，其中 details 包含 process_id。"
+    }
+
+    fn input_schema(&self) -> Value {
+        self.inner.input_schema()
+    }
+
+    fn execute(&self, input: Value, ctx: &ToolContext) -> Result<String> {
+        self.inner.execute(input, ctx)
     }
 }

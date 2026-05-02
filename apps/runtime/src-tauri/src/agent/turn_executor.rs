@@ -600,14 +600,24 @@ mod tests {
         assert_eq!(
             caps.preferred_shell.as_deref(),
             Some(if cfg!(target_os = "windows") {
-                "cmd"
+                "powershell"
             } else {
                 "bash"
             })
         );
         assert!(caps.python_candidates.is_empty());
         assert!(caps.node_candidates.is_empty());
-        assert_eq!(caps.notes, vec!["static P0 detection".to_string()]);
+        assert_eq!(
+            caps.notes,
+            vec![format!(
+                "static P0 detection; command execution should prefer exec ({})",
+                if cfg!(target_os = "windows") {
+                    "powershell"
+                } else {
+                    "bash"
+                }
+            )]
+        );
         assert!(ctx.file_task_caps.is_none());
     }
 
