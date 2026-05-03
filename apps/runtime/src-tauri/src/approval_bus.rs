@@ -422,6 +422,20 @@ pub async fn recover_approved_pending_work_with_pool(
             .clone()
             .filter(|value| !value.trim().is_empty())
         {
+            if tool_completed_event_exists_with_pool(
+                pool,
+                &payload.session_id,
+                &run_id,
+                &payload.call_id,
+                &payload.tool_name,
+            )
+            .await?
+            {
+                mark_approval_resumed_with_pool(pool, &row.id).await?;
+                recovered += 1;
+                continue;
+            }
+
             let tool_result = if let Some(tool) = registry.get(&payload.tool_name) {
                 let ctx = ToolContext {
                     work_dir: payload.work_dir.as_deref().map(PathBuf::from),
@@ -475,19 +489,297 @@ pub async fn recover_approved_pending_work_with_pool(
             .await?;
         }
 
-        sqlx::query(
-            "UPDATE approvals
-             SET resumed_at = ?, updated_at = ?
-             WHERE id = ?",
-        )
-        .bind(&now)
-        .bind(&now)
-        .bind(&row.id)
-        .execute(pool)
-        .await
-        .map_err(|e| format!("更新 approval 恢复时间失败: {e}"))?;
+        mark_approval_resumed_at_with_pool(pool, &row.id, &now).await?;
         recovered += 1;
     }
 
     Ok(recovered)
+}
+
+pub(crate) async fn mark_approved_tool_completion_resumed_with_pool(
+    pool: &SqlitePool,
+    session_id: &str,
+    run_id: &str,
+    call_id: &str,
+    tool_name: &str,
+) -> Result<(), String> {
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        "UPDATE approvals
+         SET resumed_at = ?, updated_at = ?
+         WHERE status = 'approved'
+           AND resumed_at IS NULL
+           AND session_id = ?
+           AND run_id = ?
+           AND call_id = ?
+           AND tool_name = ?",
+    )
+    .bind(&now)
+    .bind(&now)
+    .bind(session_id.trim())
+    .bind(run_id.trim())
+    .bind(call_id.trim())
+    .bind(tool_name.trim())
+    .execute(pool)
+    .await
+    .map_err(|e| format!("标记 approval 工具完成失败: {e}"))?;
+
+    Ok(())
+}
+
+async fn mark_approval_resumed_with_pool(
+    pool: &SqlitePool,
+    approval_id: &str,
+) -> Result<(), String> {
+    let now = Utc::now().to_rfc3339();
+    mark_approval_resumed_at_with_pool(pool, approval_id, &now).await
+}
+
+async fn mark_approval_resumed_at_with_pool(
+    pool: &SqlitePool,
+    approval_id: &str,
+    resumed_at: &str,
+) -> Result<(), String> {
+    sqlx::query(
+        "UPDATE approvals
+         SET resumed_at = ?, updated_at = ?
+         WHERE id = ?",
+    )
+    .bind(resumed_at)
+    .bind(resumed_at)
+    .bind(approval_id.trim())
+    .execute(pool)
+    .await
+    .map_err(|e| format!("更新 approval 恢复时间失败: {e}"))?;
+
+    Ok(())
+}
+
+async fn tool_completed_event_exists_with_pool(
+    pool: &SqlitePool,
+    session_id: &str,
+    run_id: &str,
+    call_id: &str,
+    tool_name: &str,
+) -> Result<bool, String> {
+    let rows = sqlx::query_as::<_, (String,)>(
+        "SELECT payload_json
+         FROM session_run_events
+         WHERE session_id = ?
+           AND run_id = ?
+           AND event_type = 'tool_completed'
+         ORDER BY created_at ASC, id ASC",
+    )
+    .bind(session_id.trim())
+    .bind(run_id.trim())
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("读取工具完成事件失败: {e}"))?;
+
+    Ok(rows.into_iter().any(|(payload_json,)| {
+        matches!(
+            serde_json::from_str::<SessionRunEvent>(&payload_json),
+            Ok(SessionRunEvent::ToolCompleted {
+                call_id: event_call_id,
+                tool_name: event_tool_name,
+                ..
+            }) if event_call_id == call_id.trim() && event_tool_name == tool_name.trim()
+        )
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{recover_approved_pending_work_with_pool, ApprovalResumePayload};
+    use crate::agent::{Tool, ToolContext, ToolRegistry};
+    use crate::session_journal::{SessionJournalStore, SessionRunEvent};
+    use anyhow::Result;
+    use serde_json::{json, Value};
+    use sqlx::sqlite::SqlitePoolOptions;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use tempfile::tempdir;
+
+    struct CountingTool {
+        executions: Arc<AtomicUsize>,
+    }
+
+    impl Tool for CountingTool {
+        fn name(&self) -> &str {
+            "counting_tool"
+        }
+
+        fn description(&self) -> &str {
+            "counts executions"
+        }
+
+        fn input_schema(&self) -> Value {
+            json!({})
+        }
+
+        fn execute(&self, _input: Value, _ctx: &ToolContext) -> Result<String> {
+            self.executions.fetch_add(1, Ordering::SeqCst);
+            Ok("counted".to_string())
+        }
+    }
+
+    async fn setup_approval_recovery_pool() -> sqlx::SqlitePool {
+        let db_dir = tempdir().expect("create db dir");
+        let db_url = format!(
+            "sqlite://{}?mode=rwc",
+            db_dir.path().join("approval-recovery.db").to_string_lossy()
+        );
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect(&db_url)
+            .await
+            .expect("connect sqlite");
+
+        sqlx::query(
+            "CREATE TABLE session_runs (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                user_message_id TEXT NOT NULL DEFAULT '',
+                assistant_message_id TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'queued',
+                buffered_text TEXT NOT NULL DEFAULT '',
+                error_kind TEXT NOT NULL DEFAULT '',
+                error_message TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create session_runs");
+
+        sqlx::query(
+            "CREATE TABLE session_run_events (
+                id TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create session_run_events");
+
+        sqlx::query(
+            "CREATE TABLE approvals (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                run_id TEXT NOT NULL,
+                call_id TEXT NOT NULL DEFAULT '',
+                tool_name TEXT NOT NULL,
+                input_json TEXT NOT NULL DEFAULT '{}',
+                summary TEXT NOT NULL DEFAULT '',
+                impact TEXT NOT NULL DEFAULT '',
+                irreversible INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'pending',
+                decision TEXT NOT NULL DEFAULT '',
+                notify_targets_json TEXT NOT NULL DEFAULT '[]',
+                resume_payload_json TEXT NOT NULL DEFAULT '{}',
+                resolved_by_surface TEXT NOT NULL DEFAULT '',
+                resolved_by_user TEXT NOT NULL DEFAULT '',
+                resolved_at TEXT,
+                resumed_at TEXT,
+                expires_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create approvals");
+
+        pool
+    }
+
+    #[tokio::test]
+    async fn recovery_does_not_replay_when_tool_completed_event_already_exists() {
+        let pool = setup_approval_recovery_pool().await;
+        let journal_dir = tempdir().expect("create journal dir");
+        let journal = SessionJournalStore::new(journal_dir.path().to_path_buf());
+        let executions = Arc::new(AtomicUsize::new(0));
+        let registry = ToolRegistry::new();
+        registry.register(Arc::new(CountingTool {
+            executions: Arc::clone(&executions),
+        }));
+
+        let payload = ApprovalResumePayload {
+            session_id: "session-approval-recovery".to_string(),
+            run_id: Some("run-approval-recovery".to_string()),
+            call_id: "call-approval-recovery".to_string(),
+            tool_name: "counting_tool".to_string(),
+            input: json!({"value": 1}),
+            work_dir: None,
+            task_continuation: None,
+        };
+
+        sqlx::query(
+            "INSERT INTO approvals (
+                id, session_id, run_id, call_id, tool_name, input_json, summary, impact,
+                irreversible, status, decision, notify_targets_json, resume_payload_json,
+                resolved_by_surface, resolved_by_user, resolved_at, resumed_at, expires_at,
+                created_at, updated_at
+             ) VALUES (
+                'approval-recovery-1', ?, ?, ?, ?, ?, 'Run counting tool', '',
+                0, 'approved', 'allow_once', '[]', ?, 'desktop', 'tester',
+                '2026-05-03T00:00:00Z', NULL, NULL,
+                '2026-05-03T00:00:00Z', '2026-05-03T00:00:00Z'
+             )",
+        )
+        .bind(&payload.session_id)
+        .bind(payload.run_id.as_deref().unwrap_or_default())
+        .bind(&payload.call_id)
+        .bind(&payload.tool_name)
+        .bind(payload.input.to_string())
+        .bind(serde_json::to_string(&payload).expect("serialize resume payload"))
+        .execute(&pool)
+        .await
+        .expect("insert approval");
+
+        let completed_event = SessionRunEvent::ToolCompleted {
+            run_id: payload.run_id.clone().expect("run id"),
+            tool_name: payload.tool_name.clone(),
+            call_id: payload.call_id.clone(),
+            task_identity: None,
+            task_continuation: None,
+            input: payload.input.clone(),
+            output: "already counted".to_string(),
+            is_error: false,
+        };
+        sqlx::query(
+            "INSERT INTO session_run_events (id, run_id, session_id, event_type, payload_json, created_at)
+             VALUES ('event-tool-completed-1', ?, ?, 'tool_completed', ?, '2026-05-03T00:00:01Z')",
+        )
+        .bind(payload.run_id.as_deref().unwrap_or_default())
+        .bind(&payload.session_id)
+        .bind(serde_json::to_string(&completed_event).expect("serialize completed event"))
+        .execute(&pool)
+        .await
+        .expect("insert completed event");
+
+        let recovered = recover_approved_pending_work_with_pool(&pool, &journal, &registry)
+            .await
+            .expect("recover approvals");
+
+        assert_eq!(recovered, 1);
+        assert_eq!(
+            executions.load(Ordering::SeqCst),
+            0,
+            "completed approvals must not replay tools during recovery"
+        );
+        let resumed_at = sqlx::query_as::<_, (Option<String>,)>(
+            "SELECT resumed_at FROM approvals WHERE id = 'approval-recovery-1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("load approval")
+        .0;
+        assert!(resumed_at.is_some());
+    }
 }

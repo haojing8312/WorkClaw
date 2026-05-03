@@ -1,5 +1,6 @@
 use crate::agent::runtime::session_runs::append_session_run_event_with_pool;
 use crate::agent::runtime::RunRegistryState;
+use crate::approval_bus::mark_approved_tool_completion_resumed_with_pool;
 use crate::commands::skills::DbState;
 use crate::session_journal::{SessionJournalStateHandle, SessionRunEvent};
 use anyhow::{anyhow, Result};
@@ -37,9 +38,33 @@ pub(super) async fn append_tool_run_event(
         .try_state::<SessionJournalStateHandle>()
         .ok_or_else(|| anyhow!("SessionJournalStateHandle unavailable"))?;
 
+    let completed_tool = match &event {
+        SessionRunEvent::ToolCompleted {
+            run_id,
+            tool_name,
+            call_id,
+            ..
+        } => Some((run_id.clone(), tool_name.clone(), call_id.clone())),
+        _ => None,
+    };
+
     append_session_run_event_with_pool(&db_state.0, journal_state.0.as_ref(), session_id, event)
         .await
-        .map_err(|err| anyhow!(err))
+        .map_err(|err| anyhow!(err))?;
+
+    if let Some((run_id, tool_name, call_id)) = completed_tool {
+        mark_approved_tool_completion_resumed_with_pool(
+            &db_state.0,
+            session_id,
+            &run_id,
+            &call_id,
+            &tool_name,
+        )
+        .await
+        .map_err(|err| anyhow!(err))?;
+    }
+
+    Ok(())
 }
 
 pub(super) async fn append_run_guard_warning_event(
