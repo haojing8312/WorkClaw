@@ -36,6 +36,7 @@ fn test_bash_includes_execution_context_metadata() {
     let task_temp_dir = tempdir().expect("task temp dir");
     let ctx = ToolContext {
         work_dir: Some(PathBuf::from(work_dir.path())),
+        path_access: Default::default(),
         allowed_tools: None,
         session_id: None,
         task_temp_dir: Some(PathBuf::from(task_temp_dir.path())),
@@ -73,6 +74,7 @@ fn test_bash_failure_includes_execution_context_metadata() {
     let task_temp_dir = tempdir().expect("task temp dir");
     let ctx = ToolContext {
         work_dir: Some(PathBuf::from(work_dir.path())),
+        path_access: Default::default(),
         allowed_tools: None,
         session_id: None,
         task_temp_dir: Some(PathBuf::from(task_temp_dir.path())),
@@ -218,6 +220,7 @@ fn test_exec_includes_execution_context_metadata() {
     let task_temp_dir = tempdir().expect("task temp dir");
     let ctx = ToolContext {
         work_dir: Some(PathBuf::from(work_dir.path())),
+        path_access: Default::default(),
         allowed_tools: None,
         session_id: None,
         task_temp_dir: Some(PathBuf::from(task_temp_dir.path())),

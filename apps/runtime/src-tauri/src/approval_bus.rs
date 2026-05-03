@@ -439,6 +439,7 @@ pub async fn recover_approved_pending_work_with_pool(
             let tool_result = if let Some(tool) = registry.get(&payload.tool_name) {
                 let ctx = ToolContext {
                     work_dir: payload.work_dir.as_deref().map(PathBuf::from),
+                    path_access: Default::default(),
                     allowed_tools: None,
                     session_id: None,
                     task_temp_dir: None,

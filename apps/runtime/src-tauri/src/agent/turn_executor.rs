@@ -728,6 +728,7 @@ mod tests {
         });
         let tool_ctx = ToolContext {
             work_dir: Some(PathBuf::from(work_dir.path())),
+            path_access: Default::default(),
             allowed_tools: None,
             session_id: Some("sess-approval".to_string()),
             task_temp_dir: Some(PathBuf::from(std::env::temp_dir())),

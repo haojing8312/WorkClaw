@@ -14,6 +14,7 @@ pub(crate) fn build_tool_context(
     };
     Ok(ToolContext {
         work_dir,
+        path_access: Default::default(),
         allowed_tools: allowed_tools.map(|tools| tools.to_vec()),
         session_id: session_id.map(str::to_string),
         task_temp_dir,

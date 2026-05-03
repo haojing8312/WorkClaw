@@ -24,6 +24,7 @@ fn test_delete_file() {
     let tool = FileDeleteTool;
     let ctx = ToolContext {
         work_dir: Some(work_dir.clone()),
+        path_access: Default::default(),
         allowed_tools: None,
         session_id: None,
         task_temp_dir: None,
@@ -57,6 +58,7 @@ fn test_delete_empty_directory() {
     let tool = FileDeleteTool;
     let ctx = ToolContext {
         work_dir: Some(work_dir.clone()),
+        path_access: Default::default(),
         allowed_tools: None,
         session_id: None,
         task_temp_dir: None,
@@ -89,6 +91,7 @@ fn test_delete_nonempty_dir_without_recursive() {
     let tool = FileDeleteTool;
     let ctx = ToolContext {
         work_dir: Some(work_dir.clone()),
+        path_access: Default::default(),
         allowed_tools: None,
         session_id: None,
         task_temp_dir: None,
@@ -128,6 +131,7 @@ fn test_delete_nonempty_dir_with_recursive() {
     let tool = FileDeleteTool;
     let ctx = ToolContext {
         work_dir: Some(work_dir.clone()),
+        path_access: Default::default(),
         allowed_tools: None,
         session_id: None,
         task_temp_dir: None,
@@ -159,6 +163,7 @@ fn test_delete_nonexistent_path() {
     let tool = FileDeleteTool;
     let ctx = ToolContext {
         work_dir: Some(work_dir.clone()),
+        path_access: Default::default(),
         allowed_tools: None,
         session_id: None,
         task_temp_dir: None,

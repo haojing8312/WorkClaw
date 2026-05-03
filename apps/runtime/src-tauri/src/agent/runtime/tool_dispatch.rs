@@ -1593,6 +1593,7 @@ mod tests {
 
         let tool_ctx = ToolContext {
             work_dir: None,
+            path_access: Default::default(),
             allowed_tools: Some(vec!["skill".to_string(), "exec".to_string()]),
             session_id: Some("sess-1".to_string()),
             task_temp_dir: None,

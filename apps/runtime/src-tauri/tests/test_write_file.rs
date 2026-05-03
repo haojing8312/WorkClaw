@@ -1,7 +1,8 @@
-use runtime_lib::agent::{Tool, ToolContext, WriteFileTool};
+use runtime_lib::agent::{PathAccessPolicy, Tool, ToolContext, WriteFileTool};
 use serde_json::json;
 use std::fs;
 use std::path::PathBuf;
+use tempfile::tempdir;
 
 fn setup_work_dir(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("test_write_file_{}", name));
@@ -72,10 +73,12 @@ fn test_write_file_missing_params() {
     let input = json!({"path": "test.txt"});
     let result = tool.execute(input, &ctx);
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("缺少 content 参数"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("缺少 content 参数")
+    );
 }
 
 #[test]
@@ -88,6 +91,7 @@ fn test_write_file_allows_absolute_nested_path_within_work_dir() {
         .join("brief.md");
     let ctx = ToolContext {
         work_dir: Some(work_dir.clone()),
+        path_access: PathAccessPolicy::WorkspaceOnly,
         allowed_tools: None,
         session_id: None,
         task_temp_dir: None,
@@ -107,4 +111,32 @@ fn test_write_file_allows_absolute_nested_path_within_work_dir() {
     assert_eq!(fs::read_to_string(&target).unwrap(), "# brief");
 
     fs::remove_dir_all(&work_dir).unwrap();
+}
+
+#[test]
+fn test_write_file_allows_absolute_path_outside_work_dir_in_full_access() {
+    let tool = WriteFileTool;
+    let work_dir = tempdir().expect("create work dir");
+    let outside_dir = tempdir().expect("create outside dir");
+    let target = outside_dir.path().join("artifact.md");
+    let ctx = ToolContext {
+        work_dir: Some(work_dir.path().to_path_buf()),
+        path_access: PathAccessPolicy::FullAccessWithSensitiveGuards,
+        allowed_tools: None,
+        session_id: None,
+        task_temp_dir: None,
+        execution_caps: None,
+        file_task_caps: None,
+    };
+
+    let input = json!({
+        "path": target.to_str().unwrap(),
+        "content": "# outside"
+    });
+
+    let result = tool.execute(input, &ctx).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(parsed["ok"], true);
+    assert_eq!(parsed["details"]["bytes_written"], 9);
+    assert_eq!(fs::read_to_string(&target).unwrap(), "# outside");
 }

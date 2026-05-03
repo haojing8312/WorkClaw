@@ -9,6 +9,7 @@ pub mod execution_caps;
 pub mod executor;
 pub mod file_task_preflight;
 pub mod group_orchestrator;
+pub mod path_access;
 pub mod permissions;
 pub mod progress;
 pub mod registry;
@@ -28,6 +29,6 @@ pub use registry::ToolRegistry;
 pub use tool_manifest::{ToolCategory, ToolManifestEntry, ToolMetadata, ToolSource};
 pub use tools::*;
 pub use types::{
-    AgentState, AgentStateEvent, BackgroundProcessEvent, LLMResponse, Tool, ToolCall,
-    ToolCallEvent, ToolContext, ToolResult,
+    AgentState, AgentStateEvent, BackgroundProcessEvent, LLMResponse, PathAccessPolicy, Tool,
+    ToolCall, ToolCallEvent, ToolContext, ToolResult,
 };

@@ -1,3 +1,4 @@
+use super::path_access::is_sensitive_path;
 use super::tool_manifest::ToolMetadata;
 use crate::agent::run_guard::RunStopReason;
 use anyhow::Result;
@@ -5,11 +6,25 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::{Component, Path, PathBuf};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathAccessPolicy {
+    WorkspaceOnly,
+    FullAccessWithSensitiveGuards,
+}
+
+impl Default for PathAccessPolicy {
+    fn default() -> Self {
+        Self::WorkspaceOnly
+    }
+}
+
 /// 工具执行上下文
 #[derive(Debug, Clone, Default)]
 pub struct ToolContext {
     /// 工作目录路径，如有值则所有文件操作限制在此目录下
     pub work_dir: Option<PathBuf>,
+    /// 文件工具路径访问策略
+    pub path_access: PathAccessPolicy,
     /// 当前回合允许调用的工具集合（已规范化工具名）
     pub allowed_tools: Option<Vec<String>>,
     /// 当前会话标识，便于工具层记录和诊断
@@ -71,9 +86,10 @@ impl ToolContext {
         Ok(normalized)
     }
 
-    /// 检查路径是否在工作目录范围内，返回规范化后的绝对路径
+    /// 检查路径是否符合访问策略，返回规范化后的绝对路径
     pub fn check_path(&self, path: &str) -> anyhow::Result<PathBuf> {
         let target = std::path::Path::new(path);
+        let target_is_relative = !target.is_absolute();
         let canonical = if target.is_absolute() {
             target.to_path_buf()
         } else if let Some(ref wd) = self.work_dir {
@@ -82,13 +98,43 @@ impl ToolContext {
             std::env::current_dir()?.join(target)
         };
 
+        let check_path = Self::normalize_for_scope_check(&canonical)?;
+
         if let Some(ref wd) = self.work_dir {
-            let check_path = Self::normalize_for_scope_check(&canonical)?;
             let wd_canonical = Self::normalize_for_scope_check(wd)?;
             if !check_path.starts_with(&wd_canonical) {
-                anyhow::bail!("路径 {} 不在工作目录 {} 范围内", path, wd.display());
+                if target_is_relative {
+                    anyhow::bail!(
+                        "路径 {} 不在工作目录 {} 范围内；相对路径不能越过工作目录",
+                        path,
+                        wd.display()
+                    );
+                }
+                match self.path_access {
+                    PathAccessPolicy::WorkspaceOnly => {
+                        anyhow::bail!(
+                            "路径 {} 不在工作目录 {} 范围内；切换到 full_access 后可访问普通外部路径",
+                            path,
+                            wd.display()
+                        );
+                    }
+                    PathAccessPolicy::FullAccessWithSensitiveGuards => {
+                        if is_sensitive_path(&check_path) {
+                            anyhow::bail!("full_access 仍会保护敏感路径，拒绝访问该位置: {}", path);
+                        }
+                    }
+                }
             }
         }
+
+        if matches!(
+            self.path_access,
+            PathAccessPolicy::FullAccessWithSensitiveGuards
+        ) && is_sensitive_path(&check_path)
+        {
+            anyhow::bail!("full_access 仍会保护敏感路径，拒绝访问该位置: {}", path);
+        }
+
         Ok(canonical)
     }
 }
@@ -247,8 +293,11 @@ impl AgentStateEvent {
 
 #[cfg(test)]
 mod tests {
-    use super::{AgentStateEvent, BackgroundProcessEvent, ToolCallEvent};
+    use super::{
+        AgentStateEvent, BackgroundProcessEvent, PathAccessPolicy, ToolCallEvent, ToolContext,
+    };
     use serde_json::{Value, json};
+    use tempfile::tempdir;
 
     #[test]
     fn tool_call_event_serializes_expected_shape() {
@@ -337,5 +386,108 @@ mod tests {
         assert!(!object.contains_key("stop_reason_title"));
         assert!(!object.contains_key("stop_reason_message"));
         assert!(!object.contains_key("stop_reason_last_completed_step"));
+    }
+
+    #[test]
+    fn workspace_only_rejects_absolute_path_outside_work_dir() {
+        let work_dir = tempdir().expect("create work dir");
+        let outside_dir = tempdir().expect("create outside dir");
+        let outside_file = outside_dir.path().join("outside.txt");
+        let ctx = ToolContext {
+            work_dir: Some(work_dir.path().to_path_buf()),
+            path_access: PathAccessPolicy::WorkspaceOnly,
+            ..Default::default()
+        };
+
+        let err = ctx
+            .check_path(&outside_file.to_string_lossy())
+            .expect_err("outside path should be rejected");
+
+        assert!(err.to_string().contains("不在工作目录"));
+    }
+
+    #[test]
+    fn full_access_allows_ordinary_absolute_path_outside_work_dir() {
+        let work_dir = tempdir().expect("create work dir");
+        let outside_dir = tempdir().expect("create outside dir");
+        let outside_file = outside_dir.path().join("outside.txt");
+        let ctx = ToolContext {
+            work_dir: Some(work_dir.path().to_path_buf()),
+            path_access: PathAccessPolicy::FullAccessWithSensitiveGuards,
+            ..Default::default()
+        };
+
+        let checked = ctx
+            .check_path(&outside_file.to_string_lossy())
+            .expect("ordinary outside path should be allowed");
+
+        assert_eq!(checked, outside_file);
+    }
+
+    #[test]
+    fn full_access_rejects_sensitive_absolute_path_outside_work_dir() {
+        let work_dir = tempdir().expect("create work dir");
+        let outside_dir = tempdir().expect("create outside dir");
+        let sensitive_file = outside_dir.path().join(".ssh").join("config");
+        let ctx = ToolContext {
+            work_dir: Some(work_dir.path().to_path_buf()),
+            path_access: PathAccessPolicy::FullAccessWithSensitiveGuards,
+            ..Default::default()
+        };
+
+        let err = ctx
+            .check_path(&sensitive_file.to_string_lossy())
+            .expect_err("sensitive outside path should be rejected");
+
+        assert!(err.to_string().contains("敏感路径"));
+    }
+
+    #[test]
+    fn full_access_rejects_sensitive_path_inside_work_dir() {
+        let work_dir = tempdir().expect("create work dir");
+        let sensitive_file = work_dir.path().join(".ssh").join("config");
+        let ctx = ToolContext {
+            work_dir: Some(work_dir.path().to_path_buf()),
+            path_access: PathAccessPolicy::FullAccessWithSensitiveGuards,
+            ..Default::default()
+        };
+
+        let err = ctx
+            .check_path(&sensitive_file.to_string_lossy())
+            .expect_err("sensitive path inside work dir should be rejected");
+
+        assert!(err.to_string().contains("敏感路径"));
+    }
+
+    #[test]
+    fn full_access_rejects_relative_path_escape() {
+        let parent_dir = tempdir().expect("create parent dir");
+        let work_dir = parent_dir.path().join("workspace");
+        std::fs::create_dir_all(&work_dir).expect("create work dir");
+        let ctx = ToolContext {
+            work_dir: Some(work_dir),
+            path_access: PathAccessPolicy::FullAccessWithSensitiveGuards,
+            ..Default::default()
+        };
+
+        let err = ctx
+            .check_path("../outside.txt")
+            .expect_err("relative path escape should be rejected");
+
+        assert!(err.to_string().contains("不在工作目录"));
+    }
+
+    #[test]
+    fn relative_paths_still_resolve_under_work_dir_in_full_access() {
+        let work_dir = tempdir().expect("create work dir");
+        let ctx = ToolContext {
+            work_dir: Some(work_dir.path().to_path_buf()),
+            path_access: PathAccessPolicy::FullAccessWithSensitiveGuards,
+            ..Default::default()
+        };
+
+        let checked = ctx.check_path("nested/report.md").expect("relative path");
+
+        assert_eq!(checked, work_dir.path().join("nested").join("report.md"));
     }
 }

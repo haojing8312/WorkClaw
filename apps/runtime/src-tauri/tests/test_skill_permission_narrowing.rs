@@ -21,6 +21,7 @@ fn skill_tool_returns_narrowed_allowed_tools() {
     let tool = SkillInvokeTool::new("sess-1".to_string(), vec![tmp.path().to_path_buf()]);
     let ctx = ToolContext {
         work_dir: None,
+        path_access: Default::default(),
         allowed_tools: Some(vec!["read_file".to_string(), "glob".to_string()]),
         session_id: None,
         task_temp_dir: None,
@@ -48,6 +49,7 @@ fn skill_tool_only_denies_explicit_dispatch_when_parent_scope_blocks_target_tool
     let tool = SkillInvokeTool::new("sess-1".to_string(), vec![tmp.path().to_path_buf()]);
     let ctx = ToolContext {
         work_dir: None,
+        path_access: Default::default(),
         allowed_tools: Some(vec!["read_file".to_string()]),
         session_id: None,
         task_temp_dir: None,
@@ -78,6 +80,7 @@ fn skill_tool_resolve_invocation_reports_dispatch_mode() {
     let tool = SkillInvokeTool::new("sess-1".to_string(), vec![tmp.path().to_path_buf()]);
     let ctx = ToolContext {
         work_dir: None,
+        path_access: Default::default(),
         allowed_tools: Some(vec!["exec".to_string(), "read_file".to_string()]),
         session_id: None,
         task_temp_dir: None,
@@ -110,6 +113,7 @@ fn skill_tool_keeps_prompt_skill_even_when_declared_tools_do_not_overlap_parent_
     let tool = SkillInvokeTool::new("sess-1".to_string(), vec![tmp.path().to_path_buf()]);
     let ctx = ToolContext {
         work_dir: None,
+        path_access: Default::default(),
         allowed_tools: Some(vec!["read_file".to_string()]),
         session_id: None,
         task_temp_dir: None,
@@ -136,6 +140,7 @@ fn skill_tool_accepts_display_name_via_frontmatter_mapping() {
     let tool = SkillInvokeTool::new("sess-1".to_string(), vec![tmp.path().to_path_buf()]);
     let ctx = ToolContext {
         work_dir: None,
+        path_access: Default::default(),
         allowed_tools: None,
         session_id: None,
         task_temp_dir: None,
@@ -162,6 +167,7 @@ fn skill_tool_accepts_skill_md_path_within_search_roots() {
     let tool = SkillInvokeTool::new("sess-1".to_string(), vec![actual_root.path().to_path_buf()]);
     let ctx = ToolContext {
         work_dir: None,
+        path_access: Default::default(),
         allowed_tools: None,
         session_id: None,
         task_temp_dir: None,
@@ -193,6 +199,7 @@ fn skill_tool_rejects_skill_md_path_outside_search_roots() {
     );
     let ctx = ToolContext {
         work_dir: None,
+        path_access: Default::default(),
         allowed_tools: None,
         session_id: None,
         task_temp_dir: None,

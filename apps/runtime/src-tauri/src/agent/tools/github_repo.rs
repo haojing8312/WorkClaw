@@ -147,6 +147,7 @@ mod tests {
                 }),
                 &ToolContext {
                     work_dir: Some(workspace.path().to_path_buf()),
+                    path_access: Default::default(),
                     allowed_tools: None,
                     session_id: None,
                     task_temp_dir: None,
@@ -192,6 +193,7 @@ mod tests {
                 }),
                 &ToolContext {
                     work_dir: None,
+                    path_access: Default::default(),
                     allowed_tools: None,
                     session_id: None,
                     task_temp_dir: None,

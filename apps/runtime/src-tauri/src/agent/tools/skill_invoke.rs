@@ -526,6 +526,7 @@ mod tests {
         let tool = SkillInvokeTool::new("sess-1".to_string(), vec![tmp.path().to_path_buf()]);
         let ctx = ToolContext {
             work_dir: None,
+            path_access: Default::default(),
             allowed_tools: None,
             session_id: None,
             task_temp_dir: None,
@@ -552,6 +553,7 @@ mod tests {
         let tool = SkillInvokeTool::new("sess-1".to_string(), vec![tmp.path().to_path_buf()]);
         let ctx = ToolContext {
             work_dir: None,
+            path_access: Default::default(),
             allowed_tools: Some(vec!["read_file".to_string()]),
             session_id: None,
             task_temp_dir: None,
@@ -578,6 +580,7 @@ mod tests {
         let tool = SkillInvokeTool::new("sess-1".to_string(), vec![tmp.path().to_path_buf()]);
         let ctx = ToolContext {
             work_dir: None,
+            path_access: Default::default(),
             allowed_tools: Some(vec!["read_file".to_string()]),
             session_id: None,
             task_temp_dir: None,
@@ -604,6 +607,7 @@ mod tests {
         let tool = SkillInvokeTool::new("sess-1".to_string(), vec![tmp.path().to_path_buf()]);
         let ctx = ToolContext {
             work_dir: None,
+            path_access: Default::default(),
             allowed_tools: Some(vec!["exec".to_string(), "read_file".to_string()]),
             session_id: None,
             task_temp_dir: None,
@@ -631,6 +635,7 @@ mod tests {
         let tool = SkillInvokeTool::new("sess-1".to_string(), vec![tmp.path().to_path_buf()]);
         let ctx = ToolContext {
             work_dir: None,
+            path_access: Default::default(),
             allowed_tools: Some(vec!["read_file".to_string(), "glob".to_string()]),
             session_id: None,
             task_temp_dir: None,
@@ -662,6 +667,7 @@ mod tests {
         let tool = SkillInvokeTool::new("sess-1".to_string(), vec![tmp.path().to_path_buf()]);
         let ctx = ToolContext {
             work_dir: None,
+            path_access: Default::default(),
             allowed_tools: Some(vec!["exec".to_string(), "read_file".to_string()]),
             session_id: None,
             task_temp_dir: None,
@@ -702,6 +708,7 @@ mod tests {
         let tool = SkillInvokeTool::new("sess-1".to_string(), vec![tmp.path().to_path_buf()]);
         let ctx = ToolContext {
             work_dir: None,
+            path_access: Default::default(),
             allowed_tools: None,
             session_id: None,
             task_temp_dir: None,
@@ -749,6 +756,7 @@ mod tests {
         );
         let ctx = ToolContext {
             work_dir: None,
+            path_access: Default::default(),
             allowed_tools: None,
             session_id: None,
             task_temp_dir: None,
@@ -775,6 +783,7 @@ mod tests {
         let tool = SkillInvokeTool::new("sess-1".to_string(), vec![tmp.path().to_path_buf()]);
         let ctx = ToolContext {
             work_dir: None,
+            path_access: Default::default(),
             allowed_tools: Some(vec!["read_file".to_string()]),
             session_id: None,
             task_temp_dir: None,
