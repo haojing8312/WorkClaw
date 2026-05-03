@@ -65,7 +65,9 @@ export function DesktopRuntimeSection({
             />
             <span>
               <span className="block font-medium text-gray-800">全自动模式</span>
-              <span className="mt-1 block text-gray-500">所有操作自动执行，适合可信任务与熟悉环境。</span>
+              <span className="mt-1 block text-gray-500">
+                所有操作自动执行，文件工具可访问会话目录外的普通路径；敏感路径仍会被保护。
+              </span>
             </span>
           </label>
         </section>
@@ -134,8 +136,8 @@ export function DesktopRuntimeSection({
         open={showPermissionModeConfirm}
         level="high"
         title="切换到全自动模式"
-        summary="全自动模式会允许智能体自动执行所有本地操作。"
-        impact="这会显著降低人工确认频率，适合可信任务与受控环境。"
+        summary="全自动模式会允许智能体自动执行本地操作，并让文件工具访问会话目录外的普通路径。"
+        impact="这会显著降低人工确认频率；敏感路径仍会被保护，但请只在可信任务与受控环境中使用。"
         irreversible={false}
         confirmLabel="切换为全自动模式"
         cancelLabel="暂不切换"
