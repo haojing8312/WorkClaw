@@ -1,5 +1,5 @@
 use crate::agent::browser_progress::BrowserProgressSnapshot;
-use crate::agent::context::build_tool_context;
+use crate::agent::context::build_tool_context_with_permission_mode;
 use crate::agent::run_guard::{ProgressFingerprint, RunBudgetPolicy, RunBudgetScope};
 use crate::agent::runtime::attempt_runner::{execute_route_candidates, RouteExecutionParams};
 use crate::agent::runtime::events::ToolConfirmResponder;
@@ -163,7 +163,7 @@ async fn maybe_direct_dispatch_workspace_vision(
         }
     }
 
-    let tool_ctx = build_tool_context(
+    let tool_ctx = build_tool_context_with_permission_mode(
         Some(params.session_id),
         params
             .execution_context
@@ -171,6 +171,7 @@ async fn maybe_direct_dispatch_workspace_vision(
             .as_ref()
             .map(PathBuf::from),
         params.execution_context.allowed_tools(),
+        params.execution_context.permission_mode,
     )
     .map_err(|error| error.to_string())?;
     let call = ToolCall {

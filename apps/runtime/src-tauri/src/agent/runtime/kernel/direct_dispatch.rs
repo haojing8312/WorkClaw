@@ -1,4 +1,4 @@
-use crate::agent::context::build_tool_context;
+use crate::agent::context::build_tool_context_with_permission_mode;
 use crate::agent::run_guard::{RunBudgetPolicy, RunBudgetScope};
 use crate::agent::runtime::kernel::execution_plan::ExecutionContext;
 use crate::agent::runtime::kernel::route_lane::RoutedSkillToolSetup;
@@ -21,13 +21,14 @@ pub(crate) async fn execute_direct_dispatch_skill(
     cancel_flag: Arc<AtomicBool>,
     tool_confirm_responder: &crate::agent::runtime::events::ToolConfirmResponder,
 ) -> Result<String, String> {
-    let tool_ctx = build_tool_context(
+    let tool_ctx = build_tool_context_with_permission_mode(
         Some(session_id),
         execution_context
             .executor_work_dir
             .as_ref()
             .map(std::path::PathBuf::from),
         setup.skill_allowed_tools.as_deref(),
+        execution_context.permission_mode,
     )
     .map_err(|err| err.to_string())?;
     let dispatch_context = ToolDispatchContext {

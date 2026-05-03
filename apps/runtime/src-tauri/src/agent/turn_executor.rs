@@ -4,7 +4,9 @@ use super::approval_flow::{
     ToolConfirmationDecision,
 };
 use super::browser_progress::BrowserProgressSnapshot;
+#[cfg(test)]
 use super::context::build_tool_context;
+use super::context::build_tool_context_with_permission_mode;
 use super::event_bridge::{append_run_guard_warning_event, resolve_current_session_run_id};
 #[cfg(test)]
 use super::execution_caps::detect_execution_caps;
@@ -61,10 +63,13 @@ impl AgentExecutor {
             super::runtime::compaction_pipeline::RuntimeCompactionOutcome,
         > = None;
 
-        let tool_ctx = build_tool_context(session_id, work_dir.map(PathBuf::from), allowed_tools)
-            .map_err(|error| {
-            AgentTurnExecutionError::from_error(error, compaction_outcome.clone())
-        })?;
+        let tool_ctx = build_tool_context_with_permission_mode(
+            session_id,
+            work_dir.map(PathBuf::from),
+            allowed_tools,
+            permission_mode,
+        )
+        .map_err(|error| AgentTurnExecutionError::from_error(error, compaction_outcome.clone()))?;
         let max_iterations = max_iterations_override.unwrap_or(self.max_iterations);
         let mut run_budget_policy = RunBudgetPolicy::for_scope(RunBudgetScope::GeneralChat);
         run_budget_policy.max_turns = max_iterations;

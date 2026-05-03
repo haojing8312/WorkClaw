@@ -1,5 +1,5 @@
 use super::events::ToolConfirmResponder;
-use crate::agent::context::build_tool_context;
+use crate::agent::context::build_tool_context_with_permission_mode;
 use crate::agent::run_guard::{RunBudgetPolicy, RunBudgetScope};
 use crate::agent::runtime::kernel::execution_plan::ExecutionContext;
 use crate::agent::runtime::kernel::turn_preparation::parse_user_skill_command;
@@ -54,13 +54,14 @@ impl SessionRuntime {
             return Ok(None);
         };
 
-        let tool_ctx = build_tool_context(
+        let tool_ctx = build_tool_context_with_permission_mode(
             Some(session_id),
             execution_context
                 .executor_work_dir
                 .as_ref()
                 .map(PathBuf::from),
             execution_context.allowed_tools(),
+            execution_context.permission_mode,
         )
         .map_err(|err| SkillCommandDispatchError {
             error: err.to_string(),
