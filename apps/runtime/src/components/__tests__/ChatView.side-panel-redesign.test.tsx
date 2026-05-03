@@ -665,6 +665,39 @@ describe("ChatView side panel redesign", () => {
     expect(screen.getByText("文本")).toBeInTheDocument();
   });
 
+  test("adds dropped files through the same attachment intake", async () => {
+    renderEmptyChat();
+
+    const composerShell = screen.getByTestId("chat-composer-shell");
+    const droppedFile = new File(["drop-notes"], "dropped.md", { type: "text/markdown" });
+
+    fireEvent.drop(composerShell, {
+      dataTransfer: {
+        files: [droppedFile],
+      },
+    });
+
+    expect(await screen.findByText("dropped.md")).toBeInTheDocument();
+    expect(screen.getByText("文本")).toBeInTheDocument();
+  });
+
+  test("adds pasted files through the same attachment intake", async () => {
+    renderEmptyChat();
+
+    const textarea = screen.getByPlaceholderText("输入消息，Shift+Enter 换行...");
+    const pastedFile = new File(["paste-image"], "pasted.png", { type: "image/png" });
+
+    fireEvent.paste(textarea, {
+      clipboardData: {
+        files: [pastedFile],
+        items: [],
+      },
+    });
+
+    expect(await screen.findByText("pasted.png")).toBeInTheDocument();
+    expect(screen.getByText("图片")).toBeInTheDocument();
+  });
+
   test("shows pdf attachment previews", async () => {
     renderEmptyChat();
 

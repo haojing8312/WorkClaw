@@ -1,4 +1,4 @@
-import { memo, type ChangeEvent, type KeyboardEvent, type RefObject } from "react";
+import { memo, type ChangeEvent, type ClipboardEvent, type DragEvent, type KeyboardEvent, type RefObject } from "react";
 
 import { buildFileInputAccept, DEFAULT_ATTACHMENT_POLICY } from "../../lib/attachmentPolicy";
 import { buildPendingAttachmentMeta } from "../../lib/chatAttachments";
@@ -10,6 +10,7 @@ type ChatComposerProps = {
   streaming: boolean;
   sendContent: (request: string) => Promise<void> | void;
   attachedFiles: PendingAttachment[];
+  onFilesAdd: (files: File[]) => Promise<void> | void;
   onFileSelect: (event: ChangeEvent<HTMLInputElement>) => void;
   composerError: string | null;
   input: string;
@@ -29,6 +30,7 @@ function ChatComposerImpl({
   streaming,
   sendContent,
   attachedFiles,
+  onFilesAdd,
   onFileSelect,
   composerError,
   input,
@@ -41,11 +43,46 @@ function ChatComposerImpl({
   onRemoveAttachment,
   onCancel,
 }: ChatComposerProps) {
+  const addTransferredFiles = (files: File[]) => {
+    if (files.length === 0) {
+      return false;
+    }
+    void onFilesAdd(files);
+    return true;
+  };
+
+  const handleDragOver = (event: DragEvent<HTMLDivElement>) => {
+    if (Array.from(event.dataTransfer.types).includes("Files")) {
+      event.preventDefault();
+    }
+  };
+
+  const handleDrop = (event: DragEvent<HTMLDivElement>) => {
+    const files = Array.from(event.dataTransfer.files || []);
+    if (addTransferredFiles(files)) {
+      event.preventDefault();
+    }
+  };
+
+  const handlePaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const filesFromList = Array.from(event.clipboardData.files || []);
+    const filesFromItems = Array.from(event.clipboardData.items || [])
+      .filter((item) => item.kind === "file")
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => Boolean(file));
+    const files = filesFromList.length > 0 ? filesFromList : filesFromItems;
+    if (addTransferredFiles(files)) {
+      event.preventDefault();
+    }
+  };
+
   return (
     <div className="border-t border-slate-200/80 bg-[#f4f4f1]/92 px-4 py-3 sm:px-6 xl:px-8">
       <div className="mx-auto w-full max-w-[76rem]">
         <div
           data-testid="chat-composer-shell"
+          onDragOver={handleDragOver}
+          onDrop={handleDrop}
           className="mx-auto max-w-3xl rounded-[26px] border border-[var(--sm-border)] bg-white px-4 pt-4 pb-3 shadow-[0_8px_24px_-20px_rgba(59,130,246,0.35)] transition-all focus-within:border-[var(--sm-primary)] focus-within:shadow-[var(--sm-focus-ring)]"
         >
           {operationPermissionMode === "full_access" && (
@@ -152,6 +189,7 @@ function ChatComposerImpl({
             ref={textareaRef}
             value={input}
             onChange={(event) => onInputChange(event.target.value)}
+            onPaste={handlePaste}
             onKeyDown={(event: KeyboardEvent<HTMLTextAreaElement>) => {
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();

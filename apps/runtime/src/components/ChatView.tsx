@@ -207,6 +207,7 @@ export function ChatView({
     setComposerError,
     textareaRef,
     handleComposerInputChange,
+    addFiles,
     handleFileSelect,
     removeAttachedFile,
     clearComposerState,
@@ -1375,6 +1376,7 @@ export function ChatView({
           streaming={streaming}
           sendContent={sendContent}
           attachedFiles={attachedFiles}
+          onFilesAdd={addFiles}
           onFileSelect={handleFileSelect}
           composerError={composerError}
           input={input}

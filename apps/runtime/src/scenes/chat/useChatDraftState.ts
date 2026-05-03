@@ -49,8 +49,10 @@ export function useChatDraftState({
     }
   }, [consumeInitialAttachmentsImmediately, initialAttachments, onInitialAttachmentsConsumed, sessionId]);
 
-  const handleFileSelect = async (e: ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []);
+  const addFiles = async (files: File[]) => {
+    if (files.length === 0) {
+      return;
+    }
     try {
       const { accepted, rejectionMessage } = await normalizePendingAttachmentsFromBrowserFiles({
         files,
@@ -66,6 +68,11 @@ export function useChatDraftState({
       console.error("处理附件失败:", error);
       setComposerError("附件读取失败，请重试");
     }
+  };
+
+  const handleFileSelect = async (e: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    await addFiles(files);
     e.target.value = "";
   };
 
@@ -92,6 +99,7 @@ export function useChatDraftState({
     setComposerError,
     textareaRef,
     handleComposerInputChange,
+    addFiles,
     handleFileSelect,
     removeAttachedFile,
     clearComposerState,
