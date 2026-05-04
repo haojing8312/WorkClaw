@@ -1,5 +1,11 @@
 import type { ReactNode } from "react";
-import type { ModelConfig, SessionRunProjection, StreamItem } from "../../types";
+import type {
+  ChatRuntimeAgentState,
+  ChatRuntimeCompactionStatus,
+  ModelConfig,
+  SessionRunProjection,
+  StreamItem,
+} from "../../types";
 import type { PendingApprovalView } from "../../scenes/chat/useChatSessionController";
 import type { TaskJourneyViewModel } from "../chat-side-panel/view-model";
 import {
@@ -322,4 +328,105 @@ export function renderAgentStateSecondaryText(agentState: {
       ))}
     </div>
   );
+}
+
+function getAgentStateLabel(agentState: ChatRuntimeAgentState | null) {
+  if (!agentState) return "";
+  if (agentState.state === "thinking") return "正在分析任务";
+  if (agentState.state === "retrying") {
+    return agentState.detail || "网络异常，正在自动重试";
+  }
+  if (agentState.state === "tool_calling") {
+    return agentState.detail ? `正在处理步骤：${agentState.detail}` : "正在处理步骤";
+  }
+  if (agentState.state === "stopped") {
+    return agentState.stopReasonTitle || agentState.stopReasonMessage || agentState.detail || "任务已停止";
+  }
+  if (agentState.state === "error") {
+    return `执行异常：${agentState.detail || "未知错误"}`;
+  }
+  return agentState.detail || agentState.state;
+}
+
+function getCompactionBannerLabel(compactionStatus: ChatRuntimeCompactionStatus | null) {
+  if (!compactionStatus) return "";
+  if (compactionStatus.phase === "started") {
+    return compactionStatus.detail || "正在压缩上下文";
+  }
+  if (compactionStatus.phase === "completed") {
+    if (
+      typeof compactionStatus.originalTokens === "number" &&
+      typeof compactionStatus.compactedTokens === "number"
+    ) {
+      return `上下文压缩完成：${compactionStatus.originalTokens} -> ${compactionStatus.compactedTokens}，继续执行中`;
+    }
+    return compactionStatus.detail || "上下文压缩完成，继续执行中";
+  }
+  return compactionStatus.detail || "上下文压缩失败，已继续使用原始上下文";
+}
+
+function renderCompactionBannerSecondary(compactionStatus: ChatRuntimeCompactionStatus | null) {
+  if (!compactionStatus) return null;
+  const lines: string[] = [];
+  if (compactionStatus.phase === "started") {
+    lines.push("为保留任务连续性，系统会先压缩历史上下文，再继续当前执行。");
+  } else if (compactionStatus.phase === "completed") {
+    if ((compactionStatus.summary || "").trim()) {
+      lines.push(`压缩摘要：${compactionStatus.summary?.trim()}`);
+    }
+    lines.push("系统会基于压缩后的上下文继续当前任务。");
+  } else if ((compactionStatus.detail || "").trim()) {
+    lines.push(compactionStatus.detail!.trim());
+  }
+  if (lines.length === 0) return null;
+
+  return (
+    <div className="flex min-w-0 flex-col gap-0.5 text-[11px] text-blue-700">
+      {lines.map((line) => (
+        <span key={line} className="whitespace-pre-wrap">
+          {line}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+export function buildChatAgentBannerViewModel({
+  agentState,
+  compactionStatus,
+  failedSessionRuns,
+}: {
+  agentState: ChatRuntimeAgentState | null;
+  compactionStatus: ChatRuntimeCompactionStatus | null;
+  failedSessionRuns: SessionRunProjection[];
+}) {
+  const shouldShowAgentStateBanner = !(
+    agentState?.state === "error" &&
+    failedSessionRuns.some((run) => {
+      if (run.status !== "failed") {
+        return false;
+      }
+      if (isModelErrorKind(run.error_kind)) {
+        return true;
+      }
+      const errorMessage = (run.error_message || "").trim();
+      return errorMessage ? inferModelErrorKindFromMessage(errorMessage) !== null : false;
+    })
+  );
+  const activeBannerState = compactionStatus
+    ? {
+        state: compactionStatus.phase === "failed" ? "error" : "retrying",
+      }
+    : agentState;
+  const label = compactionStatus ? getCompactionBannerLabel(compactionStatus) : getAgentStateLabel(agentState);
+  const secondary = compactionStatus
+    ? renderCompactionBannerSecondary(compactionStatus)
+    : renderAgentStateSecondaryText(agentState);
+  return {
+    visible: Boolean(compactionStatus) || Boolean(agentState && agentState.state !== "thinking" && shouldShowAgentStateBanner),
+    state: activeBannerState?.state,
+    label,
+    indicator: renderAgentStateIndicator(activeBannerState),
+    secondary,
+  };
 }

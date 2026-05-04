@@ -5,10 +5,11 @@ import remarkGfm from "remark-gfm";
 
 import { ThinkingBlock } from "../ThinkingBlock";
 import { TaskJourneySummary } from "../chat-journey/TaskJourneySummary";
-import type { ChatMessagePart, Message, SessionRunProjection, SessionToolManifestEntry, StreamItem } from "../../types";
+import type { Message, SessionRunProjection, SessionToolManifestEntry, StreamItem } from "../../types";
 import { ChatAskUserActionCard } from "./ChatAskUserActionCard";
 import { createChatMarkdownComponents } from "./chatMarkdownComponents";
 import { ChatStreamingAssistantBubble } from "./ChatStreamingAssistantBubble";
+import { renderUserContentParts } from "./renderUserContentParts";
 import {
   getRunFailureTechnicalToggleLabel,
   renderChatRunFailureCard,
@@ -34,7 +35,6 @@ type ChatMessageRailProps = {
   failedRunsByUserMessageId: Map<string, SessionRunProjection[]>;
   renderInstallCandidates: (candidates: unknown[]) => React.ReactNode;
   extractInstallCandidates: (items: StreamItem[], text: string) => unknown[];
-  renderUserContentParts: (parts: ChatMessagePart[]) => React.ReactNode;
   copiedAssistantMessageKey: string | null;
   onCopyAssistantMessage: (messageKey: string, content: string) => Promise<void> | void;
   CopyActionIcon: (props: { copied: boolean }) => React.ReactNode;
@@ -85,7 +85,6 @@ function ChatMessageRailImpl({
   failedRunsByUserMessageId,
   renderInstallCandidates,
   extractInstallCandidates,
-  renderUserContentParts,
   copiedAssistantMessageKey,
   onCopyAssistantMessage,
   CopyActionIcon,

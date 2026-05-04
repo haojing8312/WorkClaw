@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { SkillManifest, ModelConfig, PendingAttachment, ChatMessagePart, SendMessageRequest, EmployeeGroupRunSnapshot, PersistedChatRuntimeState, ChatDelegationCardState } from "../types";
+import { SkillManifest, ModelConfig, PendingAttachment, SendMessageRequest, EmployeeGroupRunSnapshot, PersistedChatRuntimeState, ChatDelegationCardState } from "../types";
 import { ChatWorkspaceSidePanel } from "./chat-side-panel/ChatWorkspaceSidePanel";
 import { ChatActionDialogs } from "./chat/ChatActionDialogs";
 import { ChatExecutionContextBar } from "./chat/ChatExecutionContextBar";
@@ -9,9 +9,10 @@ import { ChatComposer } from "./chat/ChatComposer";
 import { ChatCollaborationStatusPanel } from "./chat/ChatCollaborationStatusPanel";
 import { ChatEmployeeAssistantContext } from "./chat/ChatEmployeeAssistantContext";
 import { ChatAgentStateBanner } from "./chat/ChatAgentStateBanner";
-import { ChatInstallCandidatesPanel } from "./chat/ChatInstallCandidatesPanel";
 import { ChatLinkToast } from "./chat/ChatLinkToast";
 import { ChatMessageRail } from "./chat/ChatMessageRail";
+import { useChatInstallCandidatesController } from "./chat/useChatInstallCandidatesController";
+import { useChatLinkActions } from "./chat/useChatLinkActions";
 import { useChatDerivedViewModels } from "./chat/useChatDerivedViewModels";
 import { ChatScrollJumpButton } from "./chat/ChatScrollJumpButton";
 import { useChatViewportController } from "./chat/useChatViewportController";
@@ -20,14 +21,11 @@ import { ChatShell } from "./chat/ChatShell";
 import {
   buildApprovalImpactText,
   buildApprovalReasonText,
-  ClawhubInstallCandidate,
+  buildChatAgentBannerViewModel,
   CopyActionIcon,
   extractInstallCandidates,
-  extractInstallCandidatesWithContent,
   getRunFailureDisplay,
   getThinkingSupport,
-  renderAgentStateIndicator,
-  renderAgentStateSecondaryText,
   shouldRenderCompletedJourneySummary,
   TOOL_ACTION_LABELS,
 } from "./chat/chatViewHelpers";
@@ -39,34 +37,19 @@ import {
   readSessionDraft,
 } from "../scenes/chat/chatRuntimeState";
 import { useChatDraftState } from "../scenes/chat/useChatDraftState";
-import {
-  buildTaskJourneyViewModel,
-} from "./chat-side-panel/view-model";
+import { buildTaskJourneyViewModel } from "./chat-side-panel/view-model";
 import type { TaskJourneyViewModel } from "./chat-side-panel/view-model";
 import { getDefaultModel } from "../lib/default-model";
-import {
-  answerUserQuestion,
-  cancelAgent,
-} from "../services/chat/chatSessionService";
-import {
-  resolveApproval as resolvePendingApproval,
-} from "../services/chat/chatApprovalService";
+import { answerUserQuestion, cancelAgent } from "../services/chat/chatSessionService";
+import { resolveApproval as resolvePendingApproval } from "../services/chat/chatApprovalService";
 import { useChatSessionController, type PendingApprovalView } from "../scenes/chat/useChatSessionController";
 import { useChatCollaborationController } from "../scenes/chat/useChatCollaborationController";
 import {
   buildMessageParts,
-  getAttachmentPhaseOneDisplayKind,
   useChatSendController,
 } from "../scenes/chat/useChatSendController";
 import { useLocalChatCommandRunner } from "../scenes/chat/useLocalChatCommandRunner";
-import {
-  getModelErrorDisplay,
-  inferModelErrorKindFromMessage,
-  isModelErrorKind,
-} from "../lib/model-error-display";
 import { useChatStreamController } from "../scenes/chat/useChatStreamController";
-import { useImmersiveTranslation } from "../hooks/useImmersiveTranslation";
-import { openExternalUrl } from "../utils/openExternalUrl";
 
 type ChatSessionTimelineItem = {
   eventId?: string;
@@ -93,12 +76,6 @@ type ChatSessionExecutionContext = {
   sourceEmployeeId?: string;
   assigneeEmployeeId?: string;
   sourceStepTimeline?: ChatSessionTimelineItem[];
-};
-
-type ChatLinkToastState = {
-  variant: "success" | "error";
-  message: string;
-  url: string;
 };
 
 const CONTINUE_MESSAGE_TEXT = "继续";
@@ -172,24 +149,8 @@ export function ChatView({
   sessionSourceLabel,
   operationPermissionMode = "standard",
 }: Props) {
-  const parseDuplicateSkillName = (error: unknown): string | null => {
-    const message =
-      typeof error === "string"
-        ? error
-        : error instanceof Error
-        ? error.message
-        : String(error ?? "");
-    const prefix = "DUPLICATE_SKILL_NAME:";
-    if (!message.includes(prefix)) return null;
-    return message.split(prefix)[1]?.trim() || null;
-  };
   const initialRuntimeState = clonePersistedChatRuntimeState(persistedRuntimeState);
   const [expandedRunDetailIds, setExpandedRunDetailIds] = useState<string[]>([]);
-  const [pendingInstallSkill, setPendingInstallSkill] = useState<ClawhubInstallCandidate | null>(null);
-  const [showInstallConfirm, setShowInstallConfirm] = useState(false);
-  const [installingSlug, setInstallingSlug] = useState<string | null>(null);
-  const [installError, setInstallError] = useState<string | null>(null);
-  const installInFlightRef = useRef(false);
   const [mainRoleName, setMainRoleName] = useState(initialRuntimeState.mainRoleName);
   const [mainSummaryDelivered, setMainSummaryDelivered] = useState(initialRuntimeState.mainSummaryDelivered);
   const [delegationCards, setDelegationCards] = useState<ChatDelegationCardState[]>(initialRuntimeState.delegationCards);
@@ -275,22 +236,18 @@ export function ChatView({
   const [sidePanelOpen, setSidePanelOpen] = useState(false);
   const [sidePanelTab, setSidePanelTab] = useState<"tasks" | "files" | "websearch">("tasks");
   const [expandedThinkingKeys, setExpandedThinkingKeys] = useState<string[]>([]);
-  const [copiedAssistantMessageKey, setCopiedAssistantMessageKey] = useState<string | null>(null);
-  const [chatLinkToast, setChatLinkToast] = useState<ChatLinkToastState | null>(null);
+  const {
+    copiedAssistantMessageKey,
+    chatLinkToast,
+    handleCopyAssistantMessage,
+    handleOpenChatExternalLink,
+    handleCopyChatLink,
+    closeChatLinkToast,
+  } = useChatLinkActions();
 
   const toggleThinkingBlock = (key: string) => {
     setExpandedThinkingKeys((prev) => (prev.includes(key) ? prev.filter((item) => item !== key) : [...prev, key]));
   };
-
-  useEffect(() => {
-    if (chatLinkToast?.variant !== "success") {
-      return;
-    }
-    const timer = window.setTimeout(() => {
-      setChatLinkToast((current) => (current?.variant === "success" ? null : current));
-    }, 1200);
-    return () => window.clearTimeout(timer);
-  }, [chatLinkToast]);
 
   const collaborationControllerState = {
     resetForSessionSwitch: () => {},
@@ -452,169 +409,6 @@ export function ChatView({
   pendingApprovalsSnapshotRef.current = pendingApprovals;
   resolvingApprovalSnapshotRef.current = resolvingApprovalId;
 
-  const renderUserContentParts = (parts: ChatMessagePart[]) => {
-    const describeAttachmentCard = (
-      part: Exclude<ChatMessagePart, { type: "text" | "image" | "file_text" | "pdf_file" }>,
-    ): { label: string; detail?: string } => {
-      const attachmentDisplayKind = getAttachmentPhaseOneDisplayKind(part.attachment);
-      const warnings = part.attachment.warnings ?? [];
-      if (attachmentDisplayKind === "pdf") {
-        return {
-          label: "PDF 附件",
-          detail: part.attachment.truncated ? "已截断" : undefined,
-        };
-      }
-      if (attachmentDisplayKind === "text") {
-        return {
-          label: "文本附件",
-          detail: part.attachment.truncated ? "已截断" : undefined,
-        };
-      }
-      if (part.attachment.kind === "audio") {
-        const transcriptPending =
-          part.attachment.transcript === "TRANSCRIPTION_REQUIRED" ||
-          warnings.includes("transcription_pending");
-        return {
-          label: "音频附件",
-          detail: transcriptPending ? "待转写" : "已转写",
-        };
-      }
-      if (part.attachment.kind === "video") {
-        if (
-          part.attachment.summary === "VIDEO_NO_AUDIO_TRACK" ||
-          warnings.includes("video_no_audio_track")
-        ) {
-          return {
-            label: "视频附件",
-            detail: "无音轨",
-          };
-        }
-        if (
-          part.attachment.summary === "VIDEO_AUDIO_EXTRACTION_UNAVAILABLE" ||
-          warnings.includes("video_audio_extraction_unavailable")
-        ) {
-          return {
-            label: "视频附件",
-            detail: "缺少转写环境",
-          };
-        }
-        if (
-          part.attachment.summary === "VIDEO_AUDIO_EXTRACTION_FAILED" ||
-          warnings.includes("video_audio_extraction_failed")
-        ) {
-          return {
-            label: "视频附件",
-            detail: "提取失败",
-          };
-        }
-        const summaryPending =
-          part.attachment.summary === "SUMMARY_REQUIRED" ||
-          warnings.includes("summary_pending");
-        return {
-          label: "视频附件",
-          detail: summaryPending ? "待摘要" : "已摘要",
-        };
-      }
-      if (part.attachment.kind === "document") {
-        const extractionPending =
-          part.attachment.summary === "EXTRACTION_REQUIRED" ||
-          warnings.includes("document_extraction_pending");
-        return {
-          label: "文档附件",
-          detail: extractionPending ? "待提取" : "已提取",
-        };
-      }
-      return {
-        label: "附件暂不支持预览",
-      };
-    };
-
-    const textParts = parts.filter((part): part is Extract<ChatMessagePart, { type: "text" }> => part.type === "text");
-    const attachmentParts = parts.filter((part) => part.type !== "text");
-    return (
-      <div className="space-y-3">
-        {textParts.map((part, index) => (
-          <div key={`text-${index}`} className="whitespace-pre-wrap break-words">
-            {part.text}
-          </div>
-        ))}
-        {attachmentParts.length > 0 && (
-          <div className="space-y-2">
-            {attachmentParts.map((part, index) => {
-              if (part.type === "image") {
-                const hasInlineData = Boolean(part.data?.trim());
-                return (
-                  <div
-                    key={`attachment-${part.name}-${index}`}
-                    className="rounded-xl border border-white/20 bg-white/10 p-2 text-xs"
-                  >
-                    {hasInlineData ? (
-                      <img
-                        src={part.data}
-                        alt={part.name}
-                        className="max-h-56 w-full rounded-lg object-cover"
-                      />
-                    ) : (
-                      <div className="rounded-lg border border-white/15 bg-white/10 p-3">
-                        <div className="font-medium">{part.name}</div>
-                        <div className="mt-1 opacity-80">图片附件 · 已保存</div>
-                      </div>
-                    )}
-                    {hasInlineData && <div className="mt-2 opacity-90">{part.name}</div>}
-                  </div>
-                );
-              }
-
-              if (part.type === "attachment" && getAttachmentPhaseOneDisplayKind(part.attachment) === "image") {
-                return (
-                  <div
-                    key={`attachment-${part.attachment.name}-${index}`}
-                    className="rounded-xl border border-white/20 bg-white/10 p-2"
-                  >
-                    <img
-                      src={part.attachment.sourcePayload || ""}
-                      alt={part.attachment.name}
-                      className="max-h-56 w-full rounded-lg object-cover"
-                    />
-                    <div className="mt-2 text-xs opacity-90">{part.attachment.name}</div>
-                  </div>
-                );
-              }
-
-              const attachmentName = part.type === "attachment" ? part.attachment.name : part.name;
-              const attachmentMeta =
-                part.type === "attachment"
-                  ? describeAttachmentCard(part)
-                  : {
-                      label: part.type === "pdf_file" ? "PDF 附件" : "文本附件",
-                      detail: part.mediaRef
-                        ? part.truncated
-                          ? "已保存 · 已截断"
-                          : "已保存"
-                        : part.truncated
-                          ? "已截断"
-                          : undefined,
-                    };
-
-              return (
-                <div
-                  key={`attachment-${attachmentName}-${index}`}
-                  className="rounded-xl border border-white/20 bg-white/10 p-3 text-xs"
-                >
-                  <div className="font-medium">{attachmentName}</div>
-                  <div className="mt-1 opacity-80">
-                    {attachmentMeta.label}
-                    {attachmentMeta.detail ? ` · ${attachmentMeta.detail}` : ""}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-    );
-  };
-
   const {
     highlightedMessageIndex,
     highlightedGroupRunStepId,
@@ -690,7 +484,6 @@ export function ChatView({
     [models, sessionModelId],
   );
   const thinkingSupport = useMemo(() => getThinkingSupport(currentModel), [currentModel]);
-  const installedSkillSet = new Set(installedSkillIds);
   const {
     renderedMessages,
     virtualWindow,
@@ -761,6 +554,17 @@ export function ChatView({
     sessionDisplayTitle,
     sessionDisplaySubtitle,
   ]);
+  const {
+    parseDuplicateSkillName,
+    renderInstallCandidates,
+    setInstallError,
+    installDialog,
+  } = useChatInstallCandidatesController({
+    messages,
+    streamItems,
+    installedSkillIds,
+    onSkillInstalled,
+  });
   const handleLocalSendRequest = useLocalChatCommandRunner({
     hasAttachments: attachedFiles.length > 0,
     installedSkillIds,
@@ -961,81 +765,6 @@ export function ChatView({
     });
   }, [liveBlockingStatus, onSessionBlockingStateChange]);
 
-  const candidateTranslationTexts = useMemo(
-    () => [
-      ...messages.flatMap((m) =>
-        extractInstallCandidatesWithContent(m.streamItems, m.content).flatMap((candidate) => [
-          candidate.name,
-          candidate.description ?? "",
-        ]),
-      ),
-      ...extractInstallCandidates(streamItems).flatMap((candidate) => [
-        candidate.name,
-        candidate.description ?? "",
-      ]),
-    ],
-    [messages, streamItems],
-  );
-  const { renderDisplayText: renderCandidateText } = useImmersiveTranslation(
-    candidateTranslationTexts,
-    {
-      scene: "experts-finder",
-      batchSize: 40,
-    },
-  );
-
-  function renderInstallCandidates(rawCandidates: unknown[]) {
-    return (
-      <ChatInstallCandidatesPanel
-        candidates={rawCandidates as ClawhubInstallCandidate[]}
-        installError={installError}
-        installedSkillSet={installedSkillSet}
-        installingSlug={installingSlug}
-        renderCandidateText={renderCandidateText}
-        onInstallRequest={(candidate) => {
-          setInstallError(null);
-          setPendingInstallSkill(candidate);
-          setShowInstallConfirm(true);
-        }}
-      />
-    );
-  }
-
-  async function handleConfirmInstall() {
-    if (!pendingInstallSkill || installInFlightRef.current) return;
-    installInFlightRef.current = true;
-    setInstallError(null);
-    setInstallingSlug(pendingInstallSkill.slug);
-    try {
-      const result = await invoke<{ manifest: { id: string } }>("install_clawhub_skill", {
-        slug: pendingInstallSkill.slug,
-        githubUrl: pendingInstallSkill.githubUrl ?? pendingInstallSkill.sourceUrl ?? null,
-      });
-      if (result?.manifest?.id) {
-        await onSkillInstalled?.(result.manifest.id);
-      }
-      setShowInstallConfirm(false);
-      setPendingInstallSkill(null);
-    } catch (e) {
-      const duplicateName = parseDuplicateSkillName(e);
-      if (duplicateName) {
-        setInstallError(`技能名称冲突：已存在「${duplicateName}」，请先重命名后再安装。`);
-      } else {
-        setInstallError("安装失败，请重试。");
-      }
-      console.error("安装技能库技能失败:", e);
-    } finally {
-      installInFlightRef.current = false;
-      setInstallingSlug(null);
-    }
-  }
-
-  function handleCancelInstallConfirm() {
-    if (installInFlightRef.current) return;
-    setShowInstallConfirm(false);
-    setPendingInstallSkill(null);
-  }
-
   function handleComposerWorkdirClick() {
     invoke<string | null>("select_directory", {
       defaultPath: workspace || undefined,
@@ -1048,115 +777,6 @@ export function ChatView({
 
   function handleComposerRemoveAttachment(fileId: string) {
     removeAttachedFile(fileId);
-  }
-
-  async function handleCopyAssistantMessage(messageKey: string, content: string) {
-    const trimmed = content.trim();
-    if (!trimmed) return;
-    await globalThis.navigator?.clipboard?.writeText?.(trimmed);
-    setCopiedAssistantMessageKey(messageKey);
-    window.setTimeout(() => {
-      setCopiedAssistantMessageKey((current) => (current === messageKey ? null : current));
-    }, 1600);
-  }
-
-  async function handleOpenChatExternalLink(url: string) {
-    try {
-      await openExternalUrl(url);
-      setChatLinkToast({
-        variant: "success",
-        message: "已在浏览器打开",
-        url,
-      });
-    } catch (error) {
-      console.error("打开会话外链失败:", error);
-      setChatLinkToast({
-        variant: "error",
-        message: "链接打开失败",
-        url,
-      });
-    }
-  }
-
-  async function handleCopyChatLink(url: string) {
-    const trimmed = url.trim();
-    if (!trimmed) return;
-    try {
-      await globalThis.navigator?.clipboard?.writeText?.(trimmed);
-      setChatLinkToast({
-        variant: "success",
-        message: "链接已复制",
-        url: trimmed,
-      });
-    } catch (error) {
-      console.error("复制会话外链失败:", error);
-      setChatLinkToast({
-        variant: "error",
-        message: "复制链接失败",
-        url: trimmed,
-      });
-    }
-  }
-
-  function getAgentStateLabel() {
-    if (!agentState) return "";
-    if (agentState.state === "thinking") return "正在分析任务";
-    if (agentState.state === "retrying") {
-      return agentState.detail || "网络异常，正在自动重试";
-    }
-    if (agentState.state === "tool_calling") {
-      return agentState.detail ? `正在处理步骤：${agentState.detail}` : "正在处理步骤";
-    }
-    if (agentState.state === "stopped") {
-      return agentState.stopReasonTitle || agentState.stopReasonMessage || agentState.detail || "任务已停止";
-    }
-    if (agentState.state === "error") {
-      return `执行异常：${agentState.detail || "未知错误"}`;
-    }
-    return agentState.detail || agentState.state;
-  }
-
-  function getCompactionBannerLabel() {
-    if (!compactionStatus) return "";
-    if (compactionStatus.phase === "started") {
-      return compactionStatus.detail || "正在压缩上下文";
-    }
-    if (compactionStatus.phase === "completed") {
-      if (
-        typeof compactionStatus.originalTokens === "number" &&
-        typeof compactionStatus.compactedTokens === "number"
-      ) {
-        return `上下文压缩完成：${compactionStatus.originalTokens} -> ${compactionStatus.compactedTokens}，继续执行中`;
-      }
-      return compactionStatus.detail || "上下文压缩完成，继续执行中";
-    }
-    return compactionStatus.detail || "上下文压缩失败，已继续使用原始上下文";
-  }
-
-  function renderCompactionBannerSecondary() {
-    if (!compactionStatus) return null;
-    const lines: string[] = [];
-    if (compactionStatus.phase === "started") {
-      lines.push("为保留任务连续性，系统会先压缩历史上下文，再继续当前执行。");
-    } else if (compactionStatus.phase === "completed") {
-      if ((compactionStatus.summary || "").trim()) {
-        lines.push(`压缩摘要：${compactionStatus.summary?.trim()}`);
-      }
-      lines.push("系统会基于压缩后的上下文继续当前任务。");
-    } else if ((compactionStatus.detail || "").trim()) {
-      lines.push(compactionStatus.detail!.trim());
-    }
-    if (lines.length === 0) return null;
-
-    return (
-      <div className="flex min-w-0 flex-col gap-0.5 text-[11px] text-blue-700">
-        {lines.map((line) => (
-          <span key={line} className="whitespace-pre-wrap">
-            {line}
-          </span>
-        ))}
-      </div>
-    );
   }
 
   function handleViewFilesFromDelivery() {
@@ -1177,32 +797,11 @@ export function ChatView({
     return isContinuationText(part.text);
   }
 
-  const shouldShowAgentStateBanner = !(
-    agentState?.state === "error" &&
-    failedSessionRuns.some((run) => {
-      if (run.status !== "failed") {
-        return false;
-      }
-      if (isModelErrorKind(run.error_kind)) {
-        return true;
-      }
-      const errorMessage = (run.error_message || "").trim();
-      return errorMessage ? inferModelErrorKindFromMessage(errorMessage) !== null : false;
-    })
-  );
-  const activeBannerState = compactionStatus
-    ? {
-        state: compactionStatus.phase === "failed" ? "error" : "retrying",
-      }
-    : agentState;
-  const activeBannerLabel = compactionStatus ? getCompactionBannerLabel() : getAgentStateLabel();
-  const activeBannerSecondary = compactionStatus
-    ? renderCompactionBannerSecondary()
-    : renderAgentStateSecondaryText(agentState);
-  const shouldShowCompactionBanner = Boolean(compactionStatus);
-  const shouldShowRuntimeAgentStateBanner = Boolean(
-    agentState && agentState.state !== "thinking" && shouldShowAgentStateBanner,
-  );
+  const agentBanner = buildChatAgentBannerViewModel({
+    agentState,
+    compactionStatus,
+    failedSessionRuns,
+  });
   return (
     <ChatShell
       header={
@@ -1237,11 +836,11 @@ export function ChatView({
         <div data-testid="chat-content-rail" className="mx-auto flex w-full max-w-[76rem] flex-col gap-5">
         <ChatEmployeeAssistantContext employeeAssistantContext={employeeAssistantContext} />
         <ChatAgentStateBanner
-          visible={shouldShowCompactionBanner || shouldShowRuntimeAgentStateBanner}
-          state={activeBannerState?.state}
-          label={activeBannerLabel}
-          indicator={renderAgentStateIndicator(activeBannerState)}
-          secondary={activeBannerSecondary}
+          visible={agentBanner.visible}
+          state={agentBanner.state}
+          label={agentBanner.label}
+          indicator={agentBanner.indicator}
+          secondary={agentBanner.secondary}
         />
         <ChatCollaborationStatusPanel
           mainRoleName={mainRoleName}
@@ -1299,7 +898,6 @@ export function ChatView({
           failedRunsByUserMessageId={failedRunsByUserMessageId}
           renderInstallCandidates={renderInstallCandidates}
           extractInstallCandidates={extractInstallCandidates}
-          renderUserContentParts={renderUserContentParts}
           copiedAssistantMessageKey={copiedAssistantMessageKey}
           onCopyAssistantMessage={handleCopyAssistantMessage}
           CopyActionIcon={CopyActionIcon}
@@ -1328,7 +926,7 @@ export function ChatView({
           toast={chatLinkToast}
           onRetry={(url) => void handleOpenChatExternalLink(url)}
           onCopy={(url) => void handleCopyChatLink(url)}
-          onClose={() => setChatLinkToast(null)}
+          onClose={closeChatLinkToast}
         />
         <ChatActionDialogs
           approvalOpen={Boolean(activePendingApproval)}
@@ -1337,16 +935,12 @@ export function ChatView({
           onAllowOnce={() => void handleResolveApproval("allow_once")}
           onAllowAlways={() => void handleResolveApproval("allow_always")}
           onDeny={() => void handleResolveApproval("deny")}
-          installOpen={showInstallConfirm && Boolean(pendingInstallSkill)}
-          installSummary={
-            pendingInstallSkill
-              ? `是否安装「${renderCandidateText(pendingInstallSkill.name)}」？`
-              : "是否安装该技能？"
-          }
-          installImpact={pendingInstallSkill ? `slug: ${pendingInstallSkill.slug}` : undefined}
-          installLoading={Boolean(installingSlug)}
-          onConfirmInstall={handleConfirmInstall}
-          onCancelInstall={handleCancelInstallConfirm}
+          installOpen={installDialog.open}
+          installSummary={installDialog.summary}
+          installImpact={installDialog.impact}
+          installLoading={installDialog.loading}
+          onConfirmInstall={installDialog.onConfirm}
+          onCancelInstall={installDialog.onCancel}
         />
         <div ref={bottomRef} />
         </div>
