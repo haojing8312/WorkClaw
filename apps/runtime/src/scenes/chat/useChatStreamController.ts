@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 
 import type {
@@ -9,6 +9,7 @@ import type {
   StreamItem,
 } from "../../types";
 import { confirmLegacyToolExecution, resolveApproval } from "../../services/chat/chatApprovalService";
+import { mergeStreamingTextChunk } from "./streamingText";
 import {
   subscribeChatStreamEvent,
   type AssistantReasoningCompletedEvent,
@@ -21,57 +22,13 @@ import {
   type StreamTokenEvent,
   type ToolCallEvent,
 } from "../../lib/chat-stream-events";
-import type { PendingApprovalView } from "./useChatSessionController";
-
-export type ChatStreamReasoningState = {
-  status: "thinking" | "completed" | "interrupted";
-  content: string;
-  durationMs?: number;
-} | null;
-
-type PendingApprovalEventPayload = {
-  approval_id?: string;
-  session_id: string;
-  tool_name: string;
-  tool_input?: Record<string, unknown>;
-  input?: Record<string, unknown>;
-  title?: string;
-  summary?: string;
-  impact?: string | null;
-  irreversible?: boolean;
-  status?: string;
-};
-
-type AskUserEventPayload = {
-  session_id: string;
-  question: string;
-  options: string[];
-};
-
-type AgentStateEventPayload = {
-  session_id: string;
-  state: string;
-  detail: string | null;
-  iteration: number;
-  stop_reason_kind?: string | null;
-  stop_reason_title?: string | null;
-  stop_reason_message?: string | null;
-  stop_reason_last_completed_step?: string | null;
-};
-
-type UseChatStreamControllerArgs = {
-  sessionId: string;
-  suppressAskUserPrompt: boolean;
-  initialRuntimeState: PersistedChatRuntimeState;
-  loadMessages: (sessionId: string) => Promise<void>;
-  loadSessionRuns: (sessionId: string) => Promise<void>;
-  pendingApprovalsRef: RefObject<PendingApprovalView[]>;
-  resolvingApprovalIdRef: RefObject<string | null>;
-  buildPendingApproval: (payload: PendingApprovalEventPayload) => PendingApprovalView;
-  upsertPendingApproval: (approval: PendingApprovalView) => void;
-  removePendingApproval: (approvalId: string) => void;
-  onResetForSessionSwitch: () => void;
-};
+import type {
+  AgentStateEventPayload,
+  AskUserEventPayload,
+  ChatStreamReasoningState,
+  PendingApprovalEventPayload,
+  UseChatStreamControllerArgs,
+} from "./chatStreamControllerTypes";
 
 export function useChatStreamController({
   sessionId,
@@ -523,20 +480,4 @@ export function useChatStreamController({
     interruptStreaming,
     clearAskUserPrompt,
   };
-}
-
-function mergeStreamingTextChunk(currentText: string, incomingText: string): string {
-  if (!incomingText) return currentText;
-  if (!currentText) return incomingText;
-  if (currentText.endsWith(incomingText)) return currentText;
-  if (incomingText.startsWith(currentText)) return incomingText;
-
-  const maxOverlap = Math.min(currentText.length, incomingText.length);
-  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
-    if (currentText.slice(-overlap) === incomingText.slice(0, overlap)) {
-      return currentText + incomingText.slice(overlap);
-    }
-  }
-
-  return currentText + incomingText;
 }

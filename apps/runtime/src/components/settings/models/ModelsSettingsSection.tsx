@@ -1,8 +1,11 @@
 import { useEffect, useState } from "react";
+import { Eye, EyeOff } from "lucide-react";
 import { DEFAULT_MODEL_PROVIDER_ID, MODEL_PROVIDER_CATALOG, getModelProviderCatalogItem } from "../../../model-provider-catalog";
 import { getModelErrorDisplay } from "../../../lib/model-error-display";
 import { openExternalUrl } from "../../../utils/openExternalUrl";
 import type { ModelConfig, ProviderConfig } from "../../../types";
+import { ModelSetupDevTools } from "./ModelSetupDevTools";
+import { ModelsSettingsConfiguredList } from "./ModelsSettingsConfiguredList";
 import {
   deleteModelConfig,
   listModelConfigs,
@@ -19,22 +22,6 @@ import {
   validateModelForm,
   type ModelFormState,
 } from "./modelSettingsService";
-
-function EyeOpenIcon() {
-  return (
-    <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-      <path d="M10 3C5 3 1.73 6.11.25 10c1.48 3.89 4.75 7 9.75 7s8.27-3.11 9.75-7C18.27 6.11 15 3 10 3Zm0 12c-3.21 0-5.84-1.8-7.41-5C4.16 6.8 6.79 5 10 5s5.84 1.8 7.41 5C15.84 13.2 13.21 15 10 15Zm0-8a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z" />
-    </svg>
-  );
-}
-
-function EyeSlashIcon() {
-  return (
-    <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-      <path d="M3.28 2.22 2.22 3.28l2.08 2.08C2.6 6.94 1.44 8.53.25 10c1.48 3.89 4.75 7 9.75 7 1.66 0 3.1-.28 4.35-.78l2.42 2.42 1.06-1.06L3.28 2.22Zm6.72 12.78a5 5 0 0 1-5-5c0-.69.14-1.34.38-1.95l1.49 1.49a3 3 0 0 0 3.58 3.58l1.49 1.49c-.61.24-1.26.38-1.94.38Zm0-8a3 3 0 0 1 3 3c0 .68-.14 1.33-.38 1.94l-4.56-4.56c.61-.24 1.26-.38 1.94-.38Zm0-2c5 0 8.27 3.11 9.75 7-.57 1.5-1.41 2.89-2.49 4.09l-1.12-1.12A13.6 13.6 0 0 0 18.75 10C17.19 6.8 14.56 5 11.35 5c-.71 0-1.4.08-2.05.23L8.11 4.04c.7-.14 1.43-.21 2.18-.21Zm-9.1 1.35 1.12 1.12A13.6 13.6 0 0 0 1.25 10c1.56 3.2 4.19 5 7.4 5 .71 0 1.4-.08 2.05-.23l1.19 1.19c-.7.14-1.43.21-2.18.21C4.7 16.17 1.43 13.06 0 10c.58-1.51 1.4-2.88 2.5-4.09Z" />
-    </svg>
-  );
-}
 
 interface ModelsSettingsSectionProps {
   models: ModelConfig[];
@@ -263,48 +250,13 @@ export function ModelsSettingsSection({
 
   return (
     <>
-      {models.length > 0 && (
-        <div className="mb-6 space-y-2">
-          <div className="text-xs text-gray-500 mb-2">已配置模型</div>
-          {models.map((model) => (
-            <div
-              key={model.id}
-              className={
-                "flex items-center justify-between bg-white rounded-lg px-4 py-2.5 text-sm border transition-colors " +
-                (editingModelId === model.id ? "border-blue-400 ring-1 ring-blue-400" : "border-transparent hover:border-gray-200")
-              }
-            >
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="font-medium text-gray-800">{model.name}</span>
-                  {model.is_default && (
-                    <span className="text-[10px] bg-blue-500 text-white px-1.5 py-0.5 rounded">默认</span>
-                  )}
-                  {model.supports_vision && (
-                    <span className="text-[10px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded">图片理解</span>
-                  )}
-                </div>
-                <div className="text-xs text-gray-400 mt-0.5 truncate">
-                  {model.model_name} · {model.api_format === "anthropic" ? "Anthropic" : "OpenAI 兼容"} · {model.base_url}
-                </div>
-              </div>
-              <div className="flex items-center gap-2 flex-shrink-0 ml-3">
-                {!model.is_default && (
-                  <button onClick={() => void handleSetDefaultModel(model.id)} className="text-blue-400 hover:text-blue-500 text-xs">
-                    设为默认
-                  </button>
-                )}
-                <button onClick={() => handleEditModel(model)} className="text-blue-500 hover:text-blue-600 text-xs">
-                  编辑
-                </button>
-                <button onClick={() => void handleDelete(model.id)} className="text-red-400 hover:text-red-500 text-xs">
-                  删除
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+      <ModelsSettingsConfiguredList
+        models={models}
+        editingModelId={editingModelId}
+        onSetDefault={(id) => void handleSetDefaultModel(id)}
+        onEdit={handleEditModel}
+        onDelete={(id) => void handleDelete(id)}
+      />
 
       <div className="bg-white rounded-lg p-4 space-y-3">
         <div className="flex items-center justify-between mb-2">
@@ -487,7 +439,7 @@ export function ModelsSettingsSection({
               className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-1"
               title={showApiKey ? "隐藏" : "显示"}
             >
-              {showApiKey ? <EyeSlashIcon /> : <EyeOpenIcon />}
+              {showApiKey ? <EyeOff className="h-4 w-4" aria-hidden="true" /> : <Eye className="h-4 w-4" aria-hidden="true" />}
             </button>
           </div>
         </div>
@@ -532,31 +484,11 @@ export function ModelsSettingsSection({
         <div className="text-xs text-gray-400">保存后会自动同步到默认路由和健康检查，无需重复配置。</div>
       </div>
 
-      {showDevModelSetupTools && (
-        <div data-testid="model-setup-dev-tools" className="mt-4 rounded-2xl border border-amber-200 bg-amber-50/80 p-4">
-          <div className="text-xs font-semibold uppercase tracking-[0.14em] text-amber-700">Dev Only</div>
-          <div className="mt-1 text-sm font-medium text-amber-950">首次引导调试入口</div>
-          <div className="mt-1 text-xs leading-5 text-amber-800/80">
-            用于在开发阶段反复测试首次连接引导，不会在正式环境展示。
-          </div>
-          <div className="mt-3 grid gap-2 sm:grid-cols-2">
-            <button
-              type="button"
-              onClick={onDevResetFirstUseOnboarding}
-              className="sm-btn rounded-xl border border-amber-300 bg-white px-4 py-2 text-sm text-amber-900 hover:bg-amber-100"
-            >
-              重置首次引导状态
-            </button>
-            <button
-              type="button"
-              onClick={onDevOpenQuickModelSetup}
-              className="sm-btn rounded-xl border border-amber-300 bg-white px-4 py-2 text-sm text-amber-900 hover:bg-amber-100"
-            >
-              打开首次配置弹层
-            </button>
-          </div>
-        </div>
-      )}
+      <ModelSetupDevTools
+        show={showDevModelSetupTools}
+        onResetFirstUseOnboarding={onDevResetFirstUseOnboarding}
+        onOpenQuickModelSetup={onDevOpenQuickModelSetup}
+      />
     </>
   );
 }
